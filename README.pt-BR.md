@@ -2,15 +2,17 @@
 **Idiomas:** [English](README.md) | Português (Brasil)
 
 
-> **Status:** protótipo experimental, M2.5 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS, com um perfil de hardware do console, executam de 1,1 a 1,85 milhão de instruções do EE e param na primeira leitura da RAM do IOP (o IOP não é modelado). Nada é renderizado.
+> **Status:** protótipo experimental, M2.5 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS, com um perfil de hardware do console, executam de 15,8 a 17,7 milhões de instruções do EE (com o IOP executando o próprio caminho de boot) e param onde o IOP precisa da configuração da NVM do MECHACON, que é de cada console e não está disponível. Nada é renderizado.
 
-## Novidades da M2.5 — bloqueio do MCH/RDRAM superado
+## Novidades da M2.5 — MCH/RDRAM superado, IOP no caminho de boot
 
-- **Avanço com BIOS real:** SCPH-70012 e SCPH-77008 chegam a 1.845.848/1.845.866 instruções e o dump japonês de 2006-09 a 1.111.255 (antes ~637.600, em `0x1000F410`). Imprimem `# Initialize memory (rev:3.70, ... detected)` e param no `LW 0xBC0003F0`, a tabela de modos de boot do IOP consultada pela inicialização de memória. Os traces do interpretador e do híbrido são idênticos.
+- **Avanço com BIOS real:** SCPH-70012, SCPH-77008 e o dump japonês de 2006-09 chegam a 17.685.811 / 17.685.893 / 15.816.643 instruções do EE (antes ~637.600, em `0x1000F410`). A BIOS conclui a configuração de memória (inclusive o início/polling real do `F410`), imprime `Total accessable memory size: 32 MB`, configura a TLB, inicia o kernel em RAM e imprime `Initialize Start.` / `Initialize GS ...`. As três param no `LW 0xBC0003C0`: o `EECONF` do IOP precisa de `ReadConfig` (comando S `0x41` do MECHACON), cujos bytes estão na NVM de cada console. Interpretador e híbrido são idênticos.
+- **IOP (R3000A) no caminho de boot:** mesmo vetor de reset, PRId do perfil, relógio EE/8 (fato) a 1 instrução/ciclo (hipótese), execução preguiçosa até o tempo do EE; load delay slots, `IsC`, propagação de valores desconhecidos com origem, códigos POST, controlador de interrupções, registradores de interrupção e canais de DMA (transferências recusadas), status N do CDVD e interface de comandos S do MECHACON (`OpenConfig` respondido, leituras da NVM recusadas).
+- **EE:** `I_MASK` do INTC (escrita inverte bits; leitura de `I_STAT` recusada), MMI `PAND`/`PXOR`/`POR`/`PNOR` e dois blocos sem documentação escritos pelo kernel (`0x1F801900`, `0x1A000000`), guardados com leitura recusada.
 - **Perfis de hardware (`--console=MODELO[:PLACA]`):** `D_ENABLER` (`0x1000F520`) vem da placa, nunca de um valor global. SCPH-77008 é medido (`0x4111`); SCPH-70012 GH-032 e SCPH-90000/90006 usam valores medidos em consoles com as mesmas revisões de chip (hipóteses marcadas); SCPH-70012 GH-035 continua desconhecido e recusado. Um perfil é recusado com BIOS de outro ROMVER.
 - **Registradores de controle do MCH** `F400`–`F4C0` como latches e a operação do `F410` (só o bit 31, ocupado por 16 SCK; hipótese), a inicialização dos pinos SIO (`SOP 1110`, hipótese) e a codificação de opcodes das Direct RDRAM posteriores (`CLRR` = `1011`).
 - **RDRAM:** registradores programados antes do primeiro `SETR` e mantidos por ele (hipótese), novos layouts (`DEVID`, `CCA/CCB`, `NAPX`, `PDNXA/B`, `TPARM`, `SKIP`, registradores de teste) e `SRD` sem resposta lendo 0 (hipótese).
-- **20/20 testes** aprovados localmente (MSVC). [Evidências, hipóteses e o bloqueio do IOP](docs/M2.5-STATUS.md).
+- **21/21 testes** aprovados localmente (MSVC e clang). [Evidências, hipóteses e o bloqueio da NVM](docs/M2.5-STATUS.md).
 
 ## M2.4 — registradores de temporização da RDRAM e transações concluídas no tempo certo
 
@@ -180,4 +182,4 @@ A API permanece uniforme por plataforma. Consultar [M2.5](docs/M2.5-STATUS.md), 
 
 **Licença:** BSD-3-Clause apenas para o código original deste protótipo. Código GPL de projetos de referência não foi incorporado. Consulte `docs/LICENSE-DECISION.md` antes de integrar bibliotecas de terceiros.
 
-Próxima tarefa objetiva: [continuação da M2.5: o IOP no caminho de boot](docs/NEXT-TASK.md).
+Próxima tarefa objetiva: [continuação da M2.5: a configuração da NVM do MECHACON](docs/NEXT-TASK.md).
