@@ -1,0 +1,141 @@
+name: Launcher - Qt 6 desktop UI (six native targets)
+
+# The desktop launcher is optional: the core workflow builds without Qt
+# (PS2N_LAUNCHER=AUTO skips it). Here Qt 6 is installed and the launcher is
+# required, built and exercised headlessly (offscreen platform, software
+# Quick backend): import, identification, every page, diagnostic, restore.
+# Qt modules used are LGPL-3.0 and linked dynamically; nothing is published.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "launcher/**"
+      - "src/**"
+      - "include/**"
+      - "tests/frontend_tests.cpp"
+      - "tests/iso_image.hpp"
+      - "tests/make_fixture.cpp"
+      - "tools/ps2n-boot.cpp"
+      - "cmake/**"
+      - "CMakeLists.txt"
+      - "docs/assets/ps2-native-banner.webp"
+      - ".github/workflows/launcher.yml"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  launcher:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x86-64 (Qt 6.8.3)
+            os: windows-2025
+            arch: x64
+          - name: Windows ARM64 (Qt 6.8.3)
+            os: windows-11-arm
+            arch: ARM64
+          - name: Linux x86-64 (Ubuntu Qt 6.4)
+            os: ubuntu-24.04
+            arch: x64
+          - name: Linux ARM64 (Ubuntu Qt 6.4)
+            os: ubuntu-24.04-arm
+            arch: ARM64
+          - name: macOS Intel x86-64 (Homebrew Qt)
+            os: macos-15-intel
+            arch: x64
+          - name: macOS Apple Silicon ARM64 (Homebrew Qt)
+            os: macos-15
+            arch: ARM64
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      QT_QUICK_BACKEND: software
+    steps:
+      # actions/checkout v4.2.2 pinned by commit SHA.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Install Qt 6 (Ubuntu packages)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build libgl-dev \
+            qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-declarative-dev-tools qt6-svg-dev \
+            qt6-qpa-plugins qt6-image-formats-plugins \
+            qml6-module-qtqml-workerscript qml6-module-qtquick qml6-module-qtquick-controls \
+            qml6-module-qtquick-dialogs qml6-module-qtquick-layouts qml6-module-qtquick-templates \
+            qml6-module-qtquick-window qml6-module-qtquick-shapes qml6-module-qtqml-models \
+            qml6-module-qt-labs-folderlistmodel
+          echo "QT_PREFIX=/usr" >> "$GITHUB_ENV"
+
+      - name: Install Qt 6 (Homebrew)
+        if: runner.os == 'macOS'
+        run: |
+          brew install qt ninja
+          echo "QT_PREFIX=$(brew --prefix qt)" >> "$GITHUB_ENV"
+
+      - name: Install Qt 6.8.3 (official archives, SHA-1 verified)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $sevenZip = Get-Command 7z -ErrorAction SilentlyContinue
+          $repo = "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_683/qt6_683"
+          $version = "6.8.3-0-202503201308"
+          $root = Join-Path $env:RUNNER_TEMP "qt"
+          function Get-QtPackage([string]$package, [string]$suffix, [string[]]$modules) {
+            foreach ($module in $modules) {
+              $name = "$version$module-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-$suffix.7z"
+              $url = "$repo/$package/$name"
+              $file = Join-Path $env:RUNNER_TEMP "$module-$suffix.7z"
+              Invoke-WebRequest -Uri $url -OutFile $file
+              $expected = ((Invoke-WebRequest -Uri "$url.sha1").Content -as [string]).Trim().Split(" ")[0]
+              $actual = (Get-FileHash -Algorithm SHA1 $file).Hash
+              if ($actual -ne $expected.ToUpperInvariant()) { throw "SHA-1 mismatch for $name" }
+              New-Item -ItemType Directory -Force $root | Out-Null
+              if ($sevenZip) { & 7z x -y -bd "-o$root" $file | Out-Null } else { tar -xf $file -C $root }
+              if ($LASTEXITCODE -ne 0) { throw "Cannot extract $name" }
+            }
+          }
+          $modules = @("qtbase", "qtdeclarative", "qtsvg")
+          # x64 Qt: the target on x64, the host tools (moc, qmlcachegen...) on ARM64.
+          Get-QtPackage "qt.qt6.683.win64_msvc2022_64" "X86_64" $modules
+          Get-QtPackage "qt.qt6.683.addons.qtimageformats.win64_msvc2022_64" "X86_64" @("qtimageformats")
+          $x64 = Join-Path $root "6.8.3/msvc2022_64"
+          if ("${{ matrix.arch }}" -eq "ARM64") {
+            Get-QtPackage "qt.qt6.683.win64_msvc2022_arm64_cross_compiled" "ARM64" $modules
+            Get-QtPackage "qt.qt6.683.addons.qtimageformats.win64_msvc2022_arm64_cross_compiled" "ARM64" @("qtimageformats")
+            "QT_PREFIX=$(Join-Path $root '6.8.3/msvc2022_arm64')" >> $env:GITHUB_ENV
+            "QT_HOST=$x64" >> $env:GITHUB_ENV
+          } else {
+            "QT_PREFIX=$x64" >> $env:GITHUB_ENV
+          }
+
+      - name: Configure (Unix / Ninja)
+        if: runner.os != 'Windows'
+        run: cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_LAUNCHER=ON "-DCMAKE_PREFIX_PATH=$QT_PREFIX"
+
+      - name: Configure (Windows / MSVC)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $extra = @()
+          if ($env:QT_HOST) { $extra += "-DQT_HOST_PATH=$env:QT_HOST" }
+          cmake -S . -B out/build -G "Visual Studio 18 2026" -A "${{ matrix.arch }}" -DPS2N_LAUNCHER=ON "-DCMAKE_PREFIX_PATH=$env:QT_PREFIX" @extra
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build launcher and its tools
+        run: cmake --build out/build --config Release --parallel 2 --target ps2-native ps2n-boot ps2n-frontend-tests ps2n-launcher-fixtures
+
+      - name: Test launcher core and UI
+        run: ctest --test-dir out/build -C Release -R "^launcher-" --output-on-failure
+
+# Developer-only proof of concept. No publishing or release automation.
