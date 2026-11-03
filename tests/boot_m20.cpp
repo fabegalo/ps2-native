@@ -5,6 +5,7 @@
 // must retire the same instructions, produce the same trace (engine aside),
 // reach the same final state and stop at the same unmodeled device access.
 #include "bios_program.hpp"
+#include "boot_checks.hpp"
 
 #include "ps2native/aot_runtime.hpp"
 #include "ps2native/core.hpp"
@@ -19,42 +20,10 @@
 
 namespace {
 using namespace ps2native;
+using namespace boot_checks;
 
-void require(bool ok, const std::string& reason) {
-    if (!ok) throw std::runtime_error("M2.0 assertion failed: " + reason);
-}
-template <typename F>
-void rejects(F&& action, const std::string& diagnostic) {
-    try { action(); }
-    catch (const std::exception& error) {
-        if (std::string(error.what()).find(diagnostic) != std::string::npos) return;
-        throw std::runtime_error("Wrong rejection reason for '" + diagnostic + "': " + error.what());
-    }
-    throw std::runtime_error("Expected explicit rejection: " + diagnostic);
-}
-template <typename F>
-void bus_fault(F&& action, BusFault fault, const std::string& diagnostic) {
-    try { action(); }
-    catch (const BusError& error) {
-        require(error.fault == fault, std::string("bus fault kind for ") + diagnostic + ": " + error.what());
-        require(std::string(error.what()).find(diagnostic) != std::string::npos,
-                "bus fault text '" + diagnostic + "': " + error.what());
-        return;
-    }
-    throw std::runtime_error("Expected bus fault: " + diagnostic);
-}
-bool contains(const std::vector<std::string>& lines, const std::string& text) {
-    return std::any_of(lines.begin(), lines.end(),
-                       [&](const std::string& line) { return line.find(text) != std::string::npos; });
-}
 void put32(std::vector<std::uint8_t>& rom, std::size_t at, std::uint32_t value) {
     for (unsigned n = 0; n < 4; ++n) rom.at(at + n) = static_cast<std::uint8_t>(value >> (8u * n));
-}
-std::string hex8(std::uint32_t value) {
-    static constexpr char kDigits[] = "0123456789ABCDEF";
-    std::string out;
-    for (int shift = 28; shift >= 0; shift -= 4) out.push_back(kDigits[(value >> shift) & 15u]);
-    return out;
 }
 
 void check_sha256() {
@@ -208,16 +177,6 @@ void check_interpreter_stops(const std::vector<std::uint8_t>& rom) {
     started(0x42000001u, "unsupported", "TLBR of entry 0, undefined since reset");
 }
 
-std::vector<std::string> normalized(const std::vector<std::string>& trace) {
-    std::vector<std::string> lines;
-    for (const auto& line : trace) {
-        if (line.starts_with("E ")) continue; // engine changes only
-        if (line.starts_with("I ")) lines.push_back(line.substr(0, 13) + "*" + line.substr(16));
-        else if (line.starts_with("STOP")) continue;
-        else lines.push_back(line);
-    }
-    return lines;
-}
 
 void check_final_state(const EEState& state, const Memory& memory, const m20::Firmware& fw, const std::string& run) {
     const auto checksum = m20::table_checksum();

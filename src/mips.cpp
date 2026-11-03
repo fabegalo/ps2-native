@@ -263,8 +263,10 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
             case 0x29: return make(MipsOpcode::Sh);
             case 0x2b: return make(MipsOpcode::Sw);
             case 0x2f: return make(MipsOpcode::Cache);
+            case 0x31: return make(MipsOpcode::Lwc1);
             case 0x33: return make(MipsOpcode::Pref);
             case 0x37: return make(MipsOpcode::Ld);
+            case 0x39: return make(MipsOpcode::Swc1);
             case 0x3f: return make(MipsOpcode::Sd);
             default: break;
         }

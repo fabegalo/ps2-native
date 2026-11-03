@@ -177,6 +177,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
         }
     }
     report.retired = state.retired_instructions - start_retired;
+    report.sio_output = memory.sio_output();
     tracer.finish();
     std::ostringstream stop;
     stop << "STOP " << boot_outcome_name(report.outcome);

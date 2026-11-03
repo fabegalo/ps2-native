@@ -116,6 +116,8 @@ public:
     void set_observer(BusObserver* observer) noexcept { observer_ = observer; }
     // EE cycle counter used by the timed EE registers (boot mapping only).
     void set_clock(const std::uint64_t* ee_cycles) noexcept { registers_.set_clock(ee_cycles); }
+    [[nodiscard]] const GsRegisters& gs() const noexcept { return registers_.gs(); }
+    [[nodiscard]] const std::string& sio_output() const noexcept { return registers_.sio_output(); }
 
 private:
     struct Target {

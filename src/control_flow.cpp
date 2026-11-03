@@ -160,6 +160,46 @@ std::optional<std::uint32_t> window_entry(const std::set<std::uint32_t>& entries
     if (inside != entries.end() && *inside <= jump_site) return *inside;
     return std::nullopt;
 }
+
+// Proves that the JR register is one constant on every path reaching the JR:
+//   lui r, %hi ; [ori r, r, imm | addiu r, r, imm]... ; jr r
+// over straight-line, discovered instructions, where nothing else writes r.
+// The LUI must not sit in a delay slot (a nullified likely slot would skip it);
+// entries between the LUI and the JR are rejected by the caller.
+std::variant<AotConstantJump, std::string> prove_constant_target(const AotControlFlow& graph,
+                                                                 std::uint32_t jump_site) {
+    const auto reg = graph.instructions.at(jump_site).rs;
+    std::optional<std::uint32_t> lui_site;
+    for (std::uint32_t distance = 1; distance <= kMaxBoundDistance && jump_site >= 4u * distance; ++distance) {
+        const auto pc = jump_site - 4u * distance;
+        const auto found = graph.instructions.find(pc);
+        if (found == graph.instructions.end() || found->second.has_delay_slot()) break;
+        if (found->second.opcode == MipsOpcode::Lui && found->second.rt == reg) {
+            lui_site = pc;
+            break;
+        }
+    }
+    if (!lui_site) return std::string("no LUI of the JR register in the straight-line code before it");
+    if (*lui_site >= 4u) {
+        const auto previous = graph.instructions.find(*lui_site - 4u);
+        if (previous != graph.instructions.end() && previous->second.has_delay_slot())
+            return "LUI at " + hex(*lui_site) + " is a branch delay slot";
+    }
+    auto value = (graph.instructions.at(*lui_site).word & 0xffffu) << 16;
+    for (auto pc = *lui_site + 4u; pc < jump_site; pc += 4u) {
+        const auto& instruction = graph.instructions.at(pc);
+        const auto written = instruction.written_gpr();
+        if (!written || *written != reg) continue;
+        if (instruction.opcode == MipsOpcode::Ori && instruction.rs == reg)
+            value |= instruction.word & 0xffffu;
+        else if (instruction.opcode == MipsOpcode::Addiu && instruction.rs == reg)
+            value += static_cast<std::uint32_t>(mips_sign_extended_imm(instruction.word));
+        else
+            return "JR register rewritten by " + std::string(mips_opcode_name(instruction.opcode)) + " at " +
+                   hex(pc);
+    }
+    return AotConstantJump{jump_site, *lui_site, value};
+}
 } // namespace
 
 AotControlFlow analyze_control_flow(
@@ -346,7 +386,29 @@ AotControlFlow analyze_control_flow(
             attempted.insert(jump_site);
             const auto proof = prove_bounded_table(graph, jump_site);
             if (const auto* reason = std::get_if<std::string>(&proof)) {
-                graph.unresolved_jumps.push_back({jump_site, *reason});
+                const auto constant = prove_constant_target(graph, jump_site);
+                if (const auto* why = std::get_if<std::string>(&constant)) {
+                    graph.unresolved_jumps.push_back({jump_site, *reason + "; not a constant target: " + *why});
+                    continue;
+                }
+                const auto& jump = std::get<AotConstantJump>(constant);
+                if (const auto entry = window_entry(entry_points(graph), jump.lui_site, jump_site)) {
+                    graph.unresolved_jumps.push_back(
+                        {jump_site, "constant target window is entered at " + hex(*entry) + ", bypassing the LUI"});
+                    continue;
+                }
+                try {
+                    (void)image.instruction_at(jump.target);
+                } catch (const std::exception& error) {
+                    graph.unresolved_jumps.push_back({jump_site, "constant target " + hex(jump.target) +
+                                                                     " is not code in the image: " + error.what()});
+                    continue;
+                }
+                graph.constant_jumps.push_back(jump);
+                seed(jump.target, false);
+                graph.indirect_entries.insert(jump.target);
+                graph.resolved_indirect_targets.push_back({jump_site, jump.target, "constant LUI/ORI JR"});
+                grew = true;
                 continue;
             }
             const auto& table = std::get<TableProof>(proof);
@@ -407,6 +469,11 @@ AotControlFlow analyze_control_flow(
             throw std::runtime_error("Jump table at JR " + hex(table.jump_site) +
                                      ": bound proof invalidated by entry " + hex(*entry) +
                                      " discovered later");
+    }
+    for (const auto& jump : graph.constant_jumps) {
+        if (const auto entry = window_entry(entries, jump.lui_site, jump.jump_site))
+            throw std::runtime_error("Constant JR " + hex(jump.jump_site) + ": proof invalidated by entry " +
+                                     hex(*entry) + " discovered later");
     }
     return graph;
 }

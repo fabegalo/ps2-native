@@ -15,6 +15,18 @@ std::string hex(std::uint32_t value, int digits = 8) {
 constexpr std::uint32_t kTimersBase = 0x10000000u;
 constexpr std::uint32_t kTimersEnd = 0x10002000u;
 constexpr std::uint32_t kF500 = 0x1000F500u;
+// Memory controller (MCH) / RDRAM ASIC cell registers 0x1000F400..0x1000F4FF.
+// The BIOS memory setup uses F400-F4C0: F410 as a command register written with
+// bit 31 set and polled until it clears, F430 (MCH_RICM) and F440 (MCH_DRD) as
+// the Direct RDRAM serial-chain interface, F480 read back. No public document
+// describes them (PCSX2 keeps F410 as an unknown register reading 0), so every
+// access fails explicitly.
+constexpr std::uint32_t kMchBase = 0x1000F400u;
+constexpr std::uint32_t kMchEnd = 0x1000F500u;
+std::string mch_refusal(std::uint32_t physical) {
+    return "MCH (RDRAM controller) register " + hex(physical) +
+           " is not modeled: its command/completion semantics are undocumented";
+}
 
 // Tn_MODE fields (ps2tek).
 constexpr std::uint32_t kModeClock = 3u << 0;
@@ -30,13 +42,16 @@ const char* timer_reg_name(unsigned reg) {
     return reg < 4u ? kNames[reg] : "?";
 }
 
-// Clock source period in EE cycles: BUSCLK, BUSCLK/16, BUSCLK/256, HBLANK.
-std::uint64_t timer_period(std::uint32_t mode) {
+constexpr std::uint32_t kModeHblank = 3u;
+
+// Clock edges for BUSCLK, BUSCLK/16 and BUSCLK/256 occur at fixed multiples
+// of the period since reset; HBLANK edges come from the GS line clock.
+GsRegisters::LineClock timer_clock(std::uint32_t mode, const GsRegisters& gs) {
     switch (mode & kModeClock) {
-        case 0: return kEeCyclesPerBusCycle;
-        case 1: return kEeCyclesPerBusCycle * 16u;
-        case 2: return kEeCyclesPerBusCycle * 256u;
-        default: return kEeCyclesPerBusCycle * kBusCyclesPerNtscLine;
+        case 0: return {0u, kEeCyclesPerBusCycle};
+        case 1: return {0u, kEeCyclesPerBusCycle * 16u};
+        case 2: return {0u, kEeCyclesPerBusCycle * 256u};
+        default: return gs.line_clock();
     }
 }
 } // namespace
@@ -45,6 +60,10 @@ void EeRegisters::reset() {
     // Hypothesis: counters, modes (disabled) and the latch are zero/unset after reset.
     timers_ = {};
     f500_.reset();
+    dev9_147x_ = {};
+    sio_setup_ = {};
+    sio_output_.clear();
+    gs_.reset(0u);
 }
 
 std::uint64_t EeRegisters::now() const {
@@ -54,9 +73,10 @@ std::uint64_t EeRegisters::now() const {
 
 std::uint16_t EeRegisters::timer_count(const Timer& timer) const {
     if ((timer.mode & kModeEnable) == 0u) return timer.count_at_anchor;
-    // Clock edges occur at fixed multiples of the period since reset.
-    const auto period = timer_period(timer.mode);
-    const auto ticks = now() / period - timer.anchor_cycle / period;
+    // The anchor never precedes the clock epoch: a GS line clock change is
+    // refused while a timer counts HBLANK (see write()).
+    const auto clock = timer_clock(timer.mode, gs_);
+    const auto ticks = (now() - clock.epoch) / clock.period - (timer.anchor_cycle - clock.epoch) / clock.period;
     return static_cast<std::uint16_t>(timer.count_at_anchor + ticks);
 }
 
@@ -76,6 +96,7 @@ void EeRegisters::write_timer(unsigned index, unsigned reg, std::uint32_t value)
                     throw DeviceRefusal(name + " " + hex(value) + ": timer interrupts need the INTC, not modeled");
                 if (value & kModeClearOnCompare)
                     throw DeviceRefusal(name + " " + hex(value) + ": clear-on-compare is not modeled");
+                if ((value & kModeClock) == kModeHblank) (void)gs_.line_clock(); // refuses without HBLANK
             }
             // The counter keeps its value across the mode change and continues
             // from it with the new clock source (or stops when disabled).
@@ -118,6 +139,7 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
                                 hex(offset, 3) + " is not modeled (32-bit Tn_COUNT/MODE/COMP only)");
         return read_timer((physical >> 11) & 3u, offset / 16u);
     }
+    if (physical >= kGsPrivilegedBase && physical < kGsPrivilegedEnd) return gs_.read(physical, bytes);
     if (physical == kF500) {
         // Unidentified register; what reads return has not been verified.
         throw DeviceRefusal("0x1000F500 read: an unidentified register; its read value is not verified");
@@ -128,6 +150,19 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
                                 " byte(s) is not modeled (8-bit read only)");
         return kRetailToolBoardId; // no tool board (retail value: hypothesis)
     }
+    if (physical == kDev9Reg1470 || physical == kDev9Reg1472)
+        throw DeviceRefusal("DEV9 " + hex(physical) + " read: an undocumented register; its read value is not verified");
+    if (physical >= kMchBase && physical < kMchEnd) throw DeviceRefusal(mch_refusal(physical));
+    if (physical == kSioIsr) {
+        if (bytes != 4u) throw DeviceRefusal("SIO_ISR read of " + std::to_string(bytes) + " byte(s) is not modeled");
+        // Bits 12-15: TX FIFO level, 0 because transmission is instantaneous;
+        // bits 8-11: RX FIFO level, 0 because nothing is received; bits 0-2:
+        // interrupt status, 0 with interrupts disabled (hypothesis, as PCSX2,
+        // which notes it is not hardware tested).
+        return 0u;
+    }
+    if (physical >= kSioLcr && physical < kSioTxFifo + 0x80u)
+        throw DeviceRefusal("EE SIO read: only SIO_ISR is modeled (LSR/RX FIFO status and receive are not)");
     throw DeviceRefusal("no register model");
 }
 
@@ -140,6 +175,15 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
         write_timer((physical >> 11) & 3u, offset / 16u, static_cast<std::uint32_t>(value));
         return;
     }
+    if (physical >= kGsPrivilegedBase && physical < kGsPrivilegedEnd) {
+        gs_.write(physical, bytes, value, now(), [this] {
+            for (unsigned n = 0; n < timers_.size(); ++n)
+                if ((timers_[n].mode & kModeEnable) != 0u && (timers_[n].mode & kModeClock) == kModeHblank)
+                    throw DeviceRefusal("changing the GS line clock while T" + std::to_string(n) +
+                                        " counts HBLANK is not modeled");
+        });
+        return;
+    }
     if (physical == kF500 && bytes == 4u) {
         // Written by the BIOS reset code before the RDRAM setup. Its function
         // is undocumented (PCSX2 keeps it as plain storage): the value is
@@ -149,6 +193,39 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
     }
     if (physical == kToolBoardIdPhysical)
         throw DeviceRefusal("tool board id write: no evidence of what a write does");
+    if (physical == kDev9Reg1470 || physical == kDev9Reg1472) {
+        if (bytes != 2u)
+            throw DeviceRefusal("DEV9 " + hex(physical) + " write of " + std::to_string(bytes) +
+                                " byte(s) is not modeled (16-bit stores only)");
+        // Undocumented (PCSX2 stores it as an unknown DEV9 write): latched,
+        // no modeled effect; DEV9 itself is not modeled, so nothing can
+        // observe a missing effect without failing explicitly.
+        dev9_147x_[physical == kDev9Reg1472 ? 1u : 0u] = static_cast<std::uint16_t>(value);
+        return;
+    }
+    if (physical == kSioTxFifo) {
+        if (bytes != 1u)
+            throw DeviceRefusal("SIO TX FIFO write of " + std::to_string(bytes) +
+                                " byte(s) is not modeled (byte stores only)");
+        sio_output_.push_back(static_cast<char>(value));
+        return;
+    }
+    if (physical == kSioIer) {
+        if (bytes != 4u || value != 0u)
+            throw DeviceRefusal("SIO_IER " + hex(static_cast<std::uint32_t>(value)) +
+                                ": SIO interrupts need the INTC, not modeled (only 32-bit 0 is accepted)");
+        return;
+    }
+    if (physical == kSioLcr || physical == kSioFcr || physical == kSioBgr) {
+        if (bytes != 4u)
+            throw DeviceRefusal("EE SIO setup write of " + std::to_string(bytes) + " byte(s) is not modeled");
+        // Line format, FIFO control and baud rate only shape the serial
+        // signal; with instantaneous transmission they are latched as written.
+        // The FIFO reset bits have nothing to clear (TX drains at once, RX is empty).
+        sio_setup_[physical == kSioLcr ? 0u : physical == kSioFcr ? 1u : 2u] = static_cast<std::uint32_t>(value);
+        return;
+    }
+    if (physical >= kMchBase && physical < kMchEnd) throw DeviceRefusal(mch_refusal(physical));
     throw DeviceRefusal("no register model");
 }
 } // namespace ps2native

@@ -38,6 +38,15 @@ struct AotRecognizedJumpTable {
     std::uint32_t entries{};
     std::string evidence;
 };
+// A JR whose register holds one constant on every path that reaches it:
+//   LUI r ; [ORI r, r | ADDIU r, r] ; straight-line code not writing r ; JR r
+// with no entry point between the LUI and the JR. The target is still checked
+// against the verified indirect entries at runtime, like every JR.
+struct AotConstantJump {
+    std::uint32_t jump_site{};
+    std::uint32_t lui_site{};
+    std::uint32_t target{};
+};
 // A JR (other than JR $ra) whose targets could not be proven statically.
 // It still runs, but only to verified indirect entries (checked at runtime).
 struct AotUnresolvedJump {
@@ -60,6 +69,7 @@ struct AotControlFlow {
     std::vector<AotResolvedTarget> resolved_indirect_targets;
     std::vector<AotRejectedTarget> rejected_indirect_targets;
     std::vector<AotRecognizedJumpTable> jump_tables;
+    std::vector<AotConstantJump> constant_jumps;
     std::vector<AotUnresolvedJump> unresolved_jumps;
     std::vector<AotInterpreterBoundary> interpreter_boundaries;
 };

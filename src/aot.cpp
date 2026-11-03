@@ -88,6 +88,7 @@ std::string generate_aot_cpp(const ElfImage& image, const AotOptions& options) {
         << "; rejected relocation candidates: " << graph.rejected_indirect_targets.size() << "\n"
         << "// Verified indirect entries: " << graph.indirect_entries.size()
         << "; proven jump tables: " << graph.jump_tables.size()
+        << "; constant JR targets: " << graph.constant_jumps.size()
         << "; unresolved JR sites (runtime-checked): " << graph.unresolved_jumps.size()
         << "; unpaired R_MIPS_LO16: " << image.unpaired_lo16_relocations << "\n";
     if (options.interpreter_boundaries)
@@ -100,6 +101,9 @@ std::string generate_aot_cpp(const ElfImage& image, const AotOptions& options) {
         out << "// Jump table: JR " << hex32(table.jump_site) << ", table " << hex32(table.table_address)
             << ", " << table.entries << " entries, bound at " << hex32(table.bound_site)
             << " (" << table.evidence << ")\n";
+    for (const auto& jump : graph.constant_jumps)
+        out << "// Constant JR " << hex32(jump.jump_site) << " -> " << hex32(jump.target) << " (LUI at "
+            << hex32(jump.lui_site) << ")\n";
     for (const auto& jump : graph.unresolved_jumps)
         out << "// Unresolved JR " << hex32(jump.site) << ": " << jump.reason << "\n";
     for (const auto& rejected : graph.rejected_indirect_targets)

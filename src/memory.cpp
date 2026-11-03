@@ -36,7 +36,7 @@ std::string access_name(bool write, std::size_t size, const char* what) {
 // Register regions handled (or refused) by EeRegisters.
 bool is_ee_register_region(BusRegion region) {
     return (region >= BusRegion::EeTimers && region <= BusRegion::EeRegisters) ||
-           region == BusRegion::IopRegisters;
+           region == BusRegion::GsRegisters || region == BusRegion::IopRegisters;
 }
 BusError device_refusal(BusFault fault, bool write, std::size_t size, std::uint32_t address,
                         std::uint32_t physical, BusRegion region, const char* what, const std::string& detail) {

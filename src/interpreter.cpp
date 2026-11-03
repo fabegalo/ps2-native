@@ -194,6 +194,17 @@ public:
         event(std::string("CACHE ") + name + " " + hex32(address) + " (no cache model: memory coherent)");
     }
 
+    // LWC1/SWC1 move a raw 32-bit word between memory and an FPU register.
+    void cop1_transfer(bool store, std::uint32_t word) {
+        if ((s_.cp0(Cop0::Status) & kStatusCU1) == 0u)
+            stop(StopKind::GuestException, std::string(store ? "SWC1" : "LWC1") +
+                 " with Status.CU1 = 0: coprocessor unusable exception; vectoring is not modeled");
+        const auto address = ee::effective_address(s_, word);
+        auto& fpr = s_.fpr[ee::rt(word)];
+        if (store) m_.write32(address, fpr);
+        else fpr = m_.read32(address);
+    }
+
     EEState& s_;
     Memory& m_;
     SystemEventObserver* events_;
@@ -250,6 +261,8 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         case MipsOpcode::Di: cpu.interrupt_enable(false); break;
         case MipsOpcode::Cache: cpu.cache(word); break;
         case MipsOpcode::Pref: break; // A hint: no architectural effect.
+        case MipsOpcode::Lwc1: cpu.cop1_transfer(false, word); break;
+        case MipsOpcode::Swc1: cpu.cop1_transfer(true, word); break;
         case MipsOpcode::Syscall: case MipsOpcode::Break: break; // Stopped above.
     }
     (void)ee::retire(ctx, frame);

@@ -8,7 +8,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(ps2n_core STATIC
     src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
-    src/interpreter.cpp src/boot.cpp src/ee_registers.cpp)
+    src/interpreter.cpp src/boot.cpp src/ee_registers.cpp
+    src/gs_registers.cpp)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(MSVC)
     target_compile_options(ps2n_core PRIVATE /W4 /permissive-)
@@ -255,5 +256,22 @@ if(BUILD_TESTING)
     add_executable(ps2n-boot-m21 tests/boot_m21.cpp "${M21_AOT}")
     target_link_libraries(ps2n-boot-m21 PRIVATE ps2n_core)
     add_test(NAME native-m21-boot COMMAND ps2n-boot-m21 "${M21_ROM}")
+
+    # M2.2: GS privileged registers and line clock, DEV9 latches, EE SIO and
+    # LWC1/SWC1 in the synthetic ROM0, plus register-level unit checks.
+    set(M22_ROM "${FIXTURE_DIR}/synthetic-rom0-m22.bin")
+    set(M22_AOT "${FIXTURE_DIR}/synthetic_rom0_m22_aot.cpp")
+    add_custom_command(
+        OUTPUT "${M22_ROM}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M22_ROM}" bios-m22
+        DEPENDS ps2n-make-fixture VERBATIM)
+    add_custom_command(
+        OUTPUT "${M22_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M22_ROM}" "${M22_AOT}" --bios
+        DEPENDS ps2n-aot "${M22_ROM}" VERBATIM)
+    add_executable(ps2n-boot-m22 tests/boot_m22.cpp "${M22_AOT}")
+    target_link_libraries(ps2n-boot-m22 PRIVATE ps2n_core)
+    add_test(NAME native-m22-boot COMMAND ps2n-boot-m22 "${M22_ROM}")
 
 endif()

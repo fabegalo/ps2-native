@@ -5,6 +5,7 @@
 // and the M2.1 variant of the synthetic ROM0 booted interpreter-only and
 // hybrid (AOT translation of the same ROM0 compiled into this executable).
 #include "bios_program.hpp"
+#include "boot_checks.hpp"
 
 #include "ps2native/aot_runtime.hpp"
 #include "ps2native/core.hpp"
@@ -21,34 +22,8 @@
 
 namespace {
 using namespace ps2native;
+using namespace boot_checks;
 
-void require(bool ok, const std::string& reason) {
-    if (!ok) throw std::runtime_error("M2.1 assertion failed: " + reason);
-}
-template <typename F>
-void rejects(F&& action, const std::string& diagnostic) {
-    try { action(); }
-    catch (const std::exception& error) {
-        if (std::string(error.what()).find(diagnostic) != std::string::npos) return;
-        throw std::runtime_error("Wrong rejection reason for '" + diagnostic + "': " + error.what());
-    }
-    throw std::runtime_error("Expected explicit rejection: " + diagnostic);
-}
-template <typename F>
-void device_refused(F&& action, const std::string& diagnostic) {
-    try { action(); }
-    catch (const BusError& error) {
-        require(error.fault == BusFault::Device, std::string("device refusal for ") + diagnostic + ": " + error.what());
-        require(std::string(error.what()).find(diagnostic) != std::string::npos,
-                "refusal text '" + diagnostic + "': " + error.what());
-        return;
-    }
-    throw std::runtime_error("Expected device refusal: " + diagnostic);
-}
-bool contains(const std::vector<std::string>& lines, const std::string& text) {
-    return std::any_of(lines.begin(), lines.end(),
-                       [&](const std::string& line) { return line.find(text) != std::string::npos; });
-}
 std::uint32_t word_of(void (*emit)(m20::Assembler&)) {
     m20::Assembler a(0u);
     emit(a);
@@ -188,15 +163,6 @@ void check_registers(const std::vector<std::uint8_t>& rom) {
     device_refused([&] { (void)m.fetch32(0xBF803204u); }, "instruction fetch from device registers");
 }
 
-std::vector<std::string> normalized(const std::vector<std::string>& trace) {
-    std::vector<std::string> lines;
-    for (const auto& line : trace) {
-        if (line.starts_with("E ") || line.starts_with("STOP")) continue;
-        if (line.starts_with("I ")) lines.push_back(line.substr(0, 13) + "*" + line.substr(16));
-        else lines.push_back(line);
-    }
-    return lines;
-}
 
 std::array<std::uint32_t, 4> padduw_lanes() {
     std::array<std::uint32_t, 4> lanes{};
@@ -295,9 +261,9 @@ int main(int argc, char** argv) {
     try {
         if (argc != 2) throw std::runtime_error("Usage: ps2n-boot-m21 <synthetic-rom0-m21.bin>");
         const auto rom = read_file(std::filesystem::path(argv[1]));
-        const auto fw = m20::build_firmware(true);
+        const auto fw = m20::build_firmware(m20::Stage::M21);
         require(rom == fw.rom, "fixture file matches the synthetic M2.1 firmware definition");
-        require(m20::build_firmware(false).rom != fw.rom, "M2.1 variant differs from the M2.0 firmware");
+        require(m20::build_firmware().rom != fw.rom, "M2.1 variant differs from the M2.0 firmware");
         check_decode();
         check_semantics();
         check_registers(rom);

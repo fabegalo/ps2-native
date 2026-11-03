@@ -2,6 +2,8 @@
 // Convenience umbrella; individual public module contracts are separate headers.
 #include "ps2native/io.hpp"
 #include "ps2native/elf.hpp"
+#include "ps2native/device_timing.hpp"
+#include "ps2native/gs_registers.hpp"
 #include "ps2native/ee_registers.hpp"
 #include "ps2native/memory.hpp"
 #include "ps2native/ee.hpp"

@@ -37,6 +37,7 @@ struct BootReport {
     std::uint64_t aot_instructions{};
     std::uint64_t interpreted_instructions{};
     std::uint64_t engine_switches{};
+    std::string sio_output; // EE SIO TX bytes since reset (BIOS console output)
     std::vector<std::string> trace;
     std::vector<std::string> tail;
 };

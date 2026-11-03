@@ -24,6 +24,7 @@ inline constexpr std::uint32_t kStatusIM7 = 1u << 15;
 inline constexpr std::uint32_t kStatusEIE = 1u << 16;
 inline constexpr std::uint32_t kStatusEDI = 1u << 17;
 inline constexpr std::uint32_t kStatusBEV = 1u << 22;
+inline constexpr std::uint32_t kStatusCU1 = 1u << 29;
 // Bits that exist in the R5900 Status register; the rest read as zero.
 inline constexpr std::uint32_t kStatusWritable = 0xF0C79C1Fu;
 
@@ -35,6 +36,9 @@ struct EEState {
     std::uint64_t hi{};
     std::uint64_t lo1{};
     std::uint64_t hi1{};
+    // COP1 (FPU) registers as raw 32-bit words. Cleared at reset like every
+    // register (hypothesis: their power-on contents are not documented).
+    std::array<std::uint32_t, 32> fpr{};
     std::uint32_t pc{};
     bool delay_pending{};
     std::uint32_t delay_target{};

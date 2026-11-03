@@ -110,6 +110,17 @@ int boot_main(int argc, Character** argv) {
         } else {
             for (const auto& line : report.trace) std::cout << line << '\n';
         }
+        if (!report.sio_output.empty()) {
+            // Printable ASCII as is; everything else as \xNN, one line per guest line.
+            std::cout << "# EE SIO output (" << report.sio_output.size() << " bytes)\n# | ";
+            for (const unsigned char c : report.sio_output) {
+                if (c == '\n') std::cout << "\n# | ";
+                else if (c >= 0x20u && c < 0x7Fu) std::cout << static_cast<char>(c);
+                else if (c != '\r') std::cout << "\\x" << std::hex << std::setw(2) << std::setfill('0')
+                                              << static_cast<unsigned>(c) << std::dec;
+            }
+            std::cout << '\n';
+        }
         std::cout << "# last " << report.tail.size() << " instructions\n";
         for (const auto& line : report.tail) std::cout << line << '\n';
         std::cout << "# result " << ps2native::boot_outcome_name(report.outcome)

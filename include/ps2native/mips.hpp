@@ -21,11 +21,12 @@ namespace ps2native {
     X(J) X(Jal) X(Jr) X(Jalr) \
     X(Mult1) X(Multu1) X(Div1) X(Divu1) X(Mfhi1) X(Mflo1) X(Mthi1) X(Mtlo1) X(Padduw)
 // System instructions executed only by the interpreter (boot path): COP0
-// moves, TLB maintenance, ERET, EI/DI, CACHE, PREF and the trap-style
+// moves, TLB maintenance, ERET, EI/DI, CACHE, PREF, the COP1 word loads and
+// stores LWC1/SWC1 (FPU arithmetic is not decoded) and the trap-style
 // exceptions SYSCALL/BREAK, which stop with a diagnostic (no vectoring yet).
 #define PS2N_R5900_SYSTEM_OPCODES(X) \
     X(Mfc0) X(Mtc0) X(Tlbr) X(Tlbwi) X(Tlbwr) X(Tlbp) X(Eret) X(Ei) X(Di) \
-    X(Cache) X(Pref) X(Syscall) X(Break)
+    X(Cache) X(Pref) X(Syscall) X(Break) X(Lwc1) X(Swc1)
 
 enum class MipsOpcode : std::uint8_t {
 #define PS2N_OPCODE_ENUMERATOR(name) name,

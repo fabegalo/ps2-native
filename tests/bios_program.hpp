@@ -45,6 +45,23 @@ constexpr std::uint32_t kM21T0Result = kM21ResultRam + 0x88u;      // T0_COUNT a
 constexpr std::uint32_t kM21BoardIdResult = kM21ResultRam + 0x8Cu; // LBU of the tool board id
 constexpr std::uint32_t kM21ScratchpadAlias = 0x70010000u;          // TLB entry 2: S bit, PageMask 0
 
+// M2.2 variant: GS privileged registers, the GS line clock, DEV9, EE SIO, COP1 transfers.
+constexpr std::uint32_t kM22ResultRam = 0x80000300u;
+constexpr std::uint32_t kM22FirstLineResult = kM22ResultRam;        // Count from the sync restart to HBLANK
+constexpr std::uint32_t kM22T0Result = kM22ResultRam + 4u;          // T0_COUNT at that edge
+constexpr std::uint32_t kM22FpuResult = kM22ResultRam + 8u;         // SWC1 of the word LWC1 loaded
+// Synthetic SMODE1 values: CMOD 2 (NTSC) with PRST | SINT (sync held), then CMOD 2 alone.
+constexpr std::uint64_t kM22Smode1Held = 0x34000u;
+constexpr std::uint64_t kM22Smode1Run = 0x4000u;
+constexpr std::uint64_t kM22Synch1 = 0x1234u;
+constexpr std::uint64_t kM22Synch2 = 0x0567u;
+constexpr std::uint64_t kM22Syncv = 0x0000002400000789ull;
+constexpr std::uint64_t kM22Smode2 = 3u;
+constexpr std::uint64_t kM22Srfsh = 8u;
+constexpr char kM22SioText[] = "M2.2 SIO\n";
+
+enum class Stage { M20, M21, M22 };
+
 enum Reg : unsigned {
     zero = 0, at = 1, v0 = 2, v1 = 3, a0 = 4, a1 = 5, a2 = 6, a3 = 7, t0 = 8, t1 = 9, t2 = 10, t3 = 11,
     t4 = 12, t5 = 13, t6 = 14, t7 = 15, s0 = 16, t9 = 25, k0 = 26, ra = 31
@@ -77,9 +94,14 @@ public:
     void lui(unsigned rt, std::uint32_t imm) { i(0x0fu, 0u, rt, imm); }
     void addiu(unsigned rt, unsigned rs, std::uint32_t imm) { i(0x09u, rs, rt, imm); }
     void ori(unsigned rt, unsigned rs, std::uint32_t imm) { i(0x0du, rs, rt, imm); }
+    void andi(unsigned rt, unsigned rs, std::uint32_t imm) { i(0x0cu, rs, rt, imm); }
     void sltiu(unsigned rt, unsigned rs, std::uint32_t imm) { i(0x0bu, rs, rt, imm); }
     void lw(unsigned rt, std::int32_t offset, unsigned base) { i(0x23u, base, rt, static_cast<std::uint32_t>(offset)); }
     void lbu(unsigned rt, std::int32_t offset, unsigned base) { i(0x24u, base, rt, static_cast<std::uint32_t>(offset)); }
+    void sb(unsigned rt, std::int32_t offset, unsigned base) { i(0x28u, base, rt, static_cast<std::uint32_t>(offset)); }
+    void sh(unsigned rt, std::int32_t offset, unsigned base) { i(0x29u, base, rt, static_cast<std::uint32_t>(offset)); }
+    void lwc1(unsigned ft, std::int32_t offset, unsigned base) { i(0x31u, base, ft, static_cast<std::uint32_t>(offset)); }
+    void swc1(unsigned ft, std::int32_t offset, unsigned base) { i(0x39u, base, ft, static_cast<std::uint32_t>(offset)); }
     void sw(unsigned rt, std::int32_t offset, unsigned base) { i(0x2bu, base, rt, static_cast<std::uint32_t>(offset)); }
     void sd(unsigned rt, std::int32_t offset, unsigned base) { i(0x3fu, base, rt, static_cast<std::uint32_t>(offset)); }
     void addu(unsigned rd, unsigned rs, unsigned rt) { r(rs, rt, rd, 0u, 0x21u); }
@@ -259,6 +281,140 @@ inline void emit_m21_core(Assembler& a, std::uint32_t table_rom) {
     a.lbu(t0, 0x3204, t5);           // tool board id, as the RDRAM module reads it
     a.sw(t0, low(kM21BoardIdResult), a1);
 }
+// M2.2, still at error level: T0 stopped before the GS is retimed, a CSR
+// reset, SMODE1 with sync held (PRST | SINT), the sync/refresh registers, the
+// CSR event acknowledge bits, sync restarted (CMOD 2) and the first HBLANK
+// measured with Count; a DEV9 latch pulse; text through the EE SIO TX FIFO
+// (waiting on SIO_ISR like a polled putc); LWC1/SWC1 with Status.CU1 set.
+inline void emit_m22_core(Assembler& a, std::uint32_t table_rom) {
+    const auto low = [](std::uint32_t address) { return static_cast<std::int32_t>(address & 0xffffu); };
+    a.label("m22_gs");
+    a.lui(a0, 0xB000u);
+    a.sw(zero, 0x10, a0);            // T0_MODE = 0: no HBLANK count while the GS is retimed
+    a.sw(zero, 0, a0);               // T0_COUNT = 0
+    a.lui(t5, 0xB200u);              // GS privileged registers through KSEG1
+    a.addiu(t0, zero, 0x200u);
+    a.sw(t0, 0x1000, t5);            // CSR.RESET (32-bit store)
+    a.lui(t0, static_cast<std::uint32_t>(kM22Smode1Held >> 16));
+    a.ori(t0, t0, static_cast<std::uint32_t>(kM22Smode1Held & 0xffffu));
+    a.sd(t0, 0x10, t5);              // SMODE1: sync held
+    a.addiu(t1, zero, static_cast<std::uint32_t>(kM22Synch1));
+    a.sd(t1, 0x40, t5);
+    a.addiu(t1, zero, static_cast<std::uint32_t>(kM22Synch2));
+    a.sd(t1, 0x50, t5);
+    a.addiu(t1, zero, static_cast<std::uint32_t>(kM22Syncv >> 32));
+    a.dsll32(t1, t1, 0u);
+    a.ori(t1, t1, static_cast<std::uint32_t>(kM22Syncv & 0xffffu));
+    a.sd(t1, 0x60, t5);
+    a.addiu(t1, zero, static_cast<std::uint32_t>(kM22Smode2));
+    a.sd(t1, 0x20, t5);
+    a.addiu(t1, zero, static_cast<std::uint32_t>(kM22Srfsh));
+    a.sd(t1, 0x30, t5);
+    a.addiu(t0, zero, 0x1Fu);
+    a.sw(t0, 0x1000, t5);            // CSR: SIGNAL | FINISH | HSINT | VSINT | EDWINT
+    a.ori(t0, zero, static_cast<std::uint32_t>(kM22Smode1Run));
+    a.sd(t0, 0x10, t5);              // SMODE1: sync restarts, lines start now
+    a.mtc0(zero, Count);
+    a.addiu(t0, zero, 0x83u);
+    a.sw(t0, 0x10, a0);              // T0: HBLANK clock, counting from 0
+    a.label("m22_first_line");
+    a.lw(t1, 0, a0);
+    a.beq(t1, zero, "m22_first_line");
+    a.nop();
+    a.mfc0(t2, Count);
+    a.lui(a1, 0x8000u);
+    a.sw(t2, low(kM22FirstLineResult), a1);
+    a.sw(t1, low(kM22T0Result), a1);
+    a.sw(zero, 0x10, a0);            // T0 stopped again
+    a.label("m22_dev9");
+    a.lui(t5, 0xBF80u);
+    a.addiu(t0, zero, 1u);
+    a.sh(t0, 0x1472, t5);
+    a.sh(zero, 0x1470, t5);
+    a.label("m22_sio");
+    a.lui(t5, 0xB001u);              // 0x1000F100.. through negative offsets
+    a.addiu(t0, zero, 3u);
+    a.sw(t0, -0x0F00, t5);           // LCR
+    a.sw(zero, -0x0EC0, t5);         // FCR
+    a.addiu(t0, zero, 0x10u);
+    a.sw(t0, -0x0EB0, t5);           // BGR
+    a.sw(zero, -0x0EE0, t5);         // IER = 0: polled
+    for (std::size_t n = 0; kM22SioText[n] != '\0'; ++n) {
+        const auto wait = "m22_tx" + std::to_string(n);
+        a.label(wait);
+        a.lw(t1, -0x0ED0, t5);       // SIO_ISR
+        a.andi(t1, t1, 0x8000u);     // TX FIFO full
+        a.bne(t1, zero, wait);
+        a.nop();
+        a.addiu(t0, zero, static_cast<std::uint8_t>(kM22SioText[n]));
+        a.sb(t0, -0x0E80, t5);       // TX FIFO
+    }
+    a.label("m22_fpu");
+    a.lui(t0, 0x3040u);
+    a.ori(t0, t0, 0x0004u);          // CU1 | CU0 | BEV | ERL
+    a.mtc0(t0, Status);
+    a.la(a0, table_rom);
+    a.lwc1(1u, 8, a0);               // $f1 = SYNDATA[2]
+    a.swc1(1u, low(kM22FpuResult), a1);
+    a.lui(t0, 0x1040u);
+    a.ori(t0, t0, 0x0004u);          // CU1 cleared again
+    a.mtc0(t0, Status);
+    // Constant JR shapes for the AOT proof, all executed at run time. Only the
+    // first is provable; the never-taken branches make the code after the
+    // other three discoverable without that proof.
+    a.label("m22_jumps");
+    a.bne(zero, zero, "m22_rewritten_target");
+    a.nop();
+    a.bne(zero, zero, "m22_entered_target");
+    a.nop();
+    a.bne(zero, zero, "m22_slot_target");
+    a.nop();
+    const auto constant_target = a.here() + 20u;
+    a.lui(t0, constant_target >> 16);
+    a.ori(t0, t0, constant_target & 0xffffu);
+    a.label("m22_const_jr");
+    a.jr(t0);
+    a.nop();
+    a.brk();                         // never reached: the JR skips it
+    a.label("m22_const_target");
+    const auto rewritten_target = a.here() + 24u;
+    a.lui(t1, rewritten_target >> 16);
+    a.ori(t1, t1, rewritten_target & 0xffffu);
+    a.addu(t1, t1, zero);            // same value, but not a LUI/ORI/ADDIU step
+    a.label("m22_rewritten_jr");
+    a.jr(t1);
+    a.nop();
+    a.brk();
+    a.label("m22_rewritten_target");
+    const auto entered_target = a.here() + 28u;
+    a.bne(zero, zero, "m22_entered_jr"); // an entry between the LUI and the JR
+    a.nop();
+    a.lui(t2, entered_target >> 16);
+    a.ori(t2, t2, entered_target & 0xffffu);
+    a.label("m22_entered_jr");
+    a.jr(t2);
+    a.nop();
+    a.brk();
+    a.label("m22_entered_target");
+    const auto slot_target = a.here() + 24u;
+    a.bne(zero, zero, "fail");
+    a.lui(t3, slot_target >> 16);    // LUI in a branch delay slot
+    a.ori(t3, t3, slot_target & 0xffffu);
+    a.label("m22_slot_jr");
+    a.jr(t3);
+    a.nop();
+    a.brk();
+    a.label("m22_slot_target");
+    a.beq(zero, zero, "m22_jumps_done");
+    a.nop();
+    a.lui(t4, kPayloadRam >> 16);    // never executed: a constant target outside the ROM image
+    a.ori(t4, t4, kPayloadRam & 0xffffu);
+    a.label("m22_outside_jr");
+    a.jr(t4);
+    a.nop();
+    a.label("m22_jumps_done");
+}
+
 // M2.1, after ERET: a scratchpad entry written like the real BIOS does
 // (PageMask 0, S bit) still spans the whole 16 KiB.
 inline void emit_m21_scratchpad(Assembler& a) {
@@ -282,10 +438,12 @@ inline void emit_m21_scratchpad(Assembler& a) {
     a.nop();
 }
 
-// m21 = true adds the M2.1 blocks (MMI, COP0 Count, EE timers, 0x1000F500 before
-// ERET, where the AOT reaches them; a PageMask-0 scratchpad entry after it).
-// The default (M2.0) firmware is unchanged.
-inline Firmware build_firmware(bool m21 = false) {
+// Stage::M21 adds the M2.1 blocks (MMI, COP0 Count, EE timers, 0x1000F500 before
+// ERET, where the AOT reaches them; a PageMask-0 scratchpad entry after it);
+// Stage::M22 also the M2.2 block before ERET. The default (M2.0) firmware is unchanged.
+inline Firmware build_firmware(Stage stage = Stage::M20) {
+    const bool m21 = stage != Stage::M20;
+    const bool m22 = stage == Stage::M22;
     std::vector<File> files;
     files.push_back({"RESET", {}, {}});
     files.push_back({"ROMDIR", {}, {}});
@@ -401,6 +559,7 @@ inline Firmware build_firmware(bool m21 = false) {
     a.bne(a2, zero, "copy_loop");
     a.nop();
     if (m21) emit_m21_core(a, fw.table_rom);
+    if (m22) emit_m22_core(a, fw.table_rom);
     a.label("leave_error_level");
     a.la(t0, 0u);                    // patched below: ErrorEPC = after_eret
     a.mtc0(t0, ErrorEPC);
@@ -441,6 +600,11 @@ inline Firmware build_firmware(bool m21 = false) {
                  {"iop_path", a.at("iop_path")}};
     if (m21)
         for (const char* name : {"m21_mmi", "m21_count", "m21_edge", "m21_edges", "m21_scratchpad"})
+            fw.labels.emplace(name, a.at(name));
+    if (m22)
+        for (const char* name : {"m22_gs", "m22_first_line", "m22_dev9", "m22_sio", "m22_fpu", "m22_const_jr",
+                                 "m22_const_target", "m22_rewritten_jr", "m22_rewritten_target", "m22_entered_jr",
+                                 "m22_entered_target", "m22_slot_jr", "m22_slot_target", "m22_outside_jr"})
             fw.labels.emplace(name, a.at(name));
 
     // ROMDIR: name[10], EXTINFO size (u16), file size (u32); zero terminator.
