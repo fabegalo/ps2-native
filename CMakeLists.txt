@@ -9,7 +9,7 @@ add_library(ps2n_core STATIC
     src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
     src/interpreter.cpp src/boot.cpp src/ee_registers.cpp
-    src/gs_registers.cpp src/rdram.cpp src/mch.cpp)
+    src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(MSVC)
     target_compile_options(ps2n_core PRIVATE /W4 /permissive-)
@@ -307,5 +307,23 @@ if(BUILD_TESTING)
     add_executable(ps2n-boot-m24 tests/boot_m24.cpp "${M24_AOT}")
     target_link_libraries(ps2n-boot-m24 PRIVATE ps2n_core)
     add_test(NAME native-m24-boot COMMAND ps2n-boot-m24 "${M24_ROM}")
+
+    # M2.5: MCH control registers (F400..F4C0 latches, the F410 operation),
+    # D_ENABLER from a console profile, SIO pin initialization, SETR keeping the
+    # RDRAM registers and the chain enumeration end, plus unit checks.
+    set(M25_ROM "${FIXTURE_DIR}/synthetic-rom0-m25.bin")
+    set(M25_AOT "${FIXTURE_DIR}/synthetic_rom0_m25_aot.cpp")
+    add_custom_command(
+        OUTPUT "${M25_ROM}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M25_ROM}" bios-m25
+        DEPENDS ps2n-make-fixture VERBATIM)
+    add_custom_command(
+        OUTPUT "${M25_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M25_ROM}" "${M25_AOT}" --bios
+        DEPENDS ps2n-aot "${M25_ROM}" VERBATIM)
+    add_executable(ps2n-boot-m25 tests/boot_m25.cpp "${M25_AOT}")
+    target_link_libraries(ps2n-boot-m25 PRIVATE ps2n_core)
+    add_test(NAME native-m25-boot COMMAND ps2n-boot-m25 "${M25_ROM}")
 
 endif()

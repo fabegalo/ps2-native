@@ -28,17 +28,19 @@ std::uint32_t i(unsigned op, unsigned rs, unsigned rt, std::int16_t imm) {
 
 template <typename Character>
 int fixture_main(int argc, Character** argv) {
-    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym|jump-table|jump-table-nosym|m13|m13-stripped|bios|bios-m21|bios-m22|bios-m23|bios-m24]\n"; return 2; }
+    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym|jump-table|jump-table-nosym|m13|m13-stripped|bios|bios-m21|bios-m22|bios-m23|bios-m24|bios-m25]\n"; return 2; }
     constexpr std::uint32_t start = 0x00100000u;
 
-    // Synthetic M2.0 (and M2.1-M2.4 variants) boot firmware in the ROM0 container format (not Sony code).
+    // Synthetic M2.0 (and M2.1-M2.5 variants) boot firmware in the ROM0 container format (not Sony code).
     if (argc == 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("bios") ||
                       std::filesystem::path(argv[2]) == std::filesystem::path("bios-m21") ||
                       std::filesystem::path(argv[2]) == std::filesystem::path("bios-m22") ||
                       std::filesystem::path(argv[2]) == std::filesystem::path("bios-m23") ||
-                      std::filesystem::path(argv[2]) == std::filesystem::path("bios-m24"))) {
+                      std::filesystem::path(argv[2]) == std::filesystem::path("bios-m24") ||
+                      std::filesystem::path(argv[2]) == std::filesystem::path("bios-m25"))) {
         const std::filesystem::path mode(argv[2]);
-        const auto firmware = m20::build_firmware(mode == std::filesystem::path("bios-m24")   ? m20::Stage::M24
+        const auto firmware = m20::build_firmware(mode == std::filesystem::path("bios-m25")   ? m20::Stage::M25
+                                                  : mode == std::filesystem::path("bios-m24") ? m20::Stage::M24
                                                   : mode == std::filesystem::path("bios-m23") ? m20::Stage::M23
                                                   : mode == std::filesystem::path("bios-m22") ? m20::Stage::M22
                                                   : mode == std::filesystem::path("bios-m21") ? m20::Stage::M21

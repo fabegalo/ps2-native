@@ -175,13 +175,11 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     m.write8(0xB000F180u, 'k');
     require(m.sio_output() == "ok", "SIO TX bytes in order");
 
-    // MCH / RDRAM controller: the undocumented registers stay refused, named
-    // (MCH_RICM/MCH_DRD are modeled since M2.3, see boot_m23.cpp).
-    device_refused([&] { m.write32(0xB000F410u, 0u); }, "MCH (RDRAM controller) register 0x1000F410 is not modeled");
-    device_refused([&] { (void)m.read32(0xB000F410u); }, "register 0x1000F410 is not modeled");
-    device_refused([&] { m.write32(0xB000F420u, 0u); }, "register 0x1000F420 is not modeled");
-    device_refused([&] { (void)m.read32(0xB000F460u); }, "register 0x1000F460 is not modeled");
-    device_refused([&] { (void)m.read16(0xB000F480u); }, "register 0x1000F480 is not modeled");
+    // MCH / RDRAM controller: offsets the BIOS never touches stay refused, named
+    // (MCH_RICM/MCH_DRD since M2.3, the control latches since M2.5: boot_m23/m25).
+    device_refused([&] { m.write32(0xB000F470u, 0u); }, "MCH (RDRAM controller) register 0x1000F470 is not modeled");
+    device_refused([&] { (void)m.read32(0xB000F4E0u); }, "register 0x1000F4E0 is not modeled");
+    device_refused([&] { (void)m.read32(0xB000F460u); }, "MCH 0x1000F460 read before any write");
 
     m.reset_for_boot(rom);
     require(m.sio_output().empty() && !m.gs().latched(kGsSmode1) && !m.gs().latched(kGsSynch1),

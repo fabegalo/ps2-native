@@ -41,6 +41,7 @@ void refused_unchanged(RdramChain& chain, const RdramSerialRequest& r, const std
 // InitDev for `devices` RDRAMs, numbered 0..n-1.
 void init_dev(RdramChain& chain) {
     chain.power_on();
+    chain.sio_pin_initialization();
     (void)chain.transact(request(kRdramSetr, true, 0u));
     (void)chain.transact(request(kRdramClrr, true, 0u));
     (void)chain.transact(request(kRdramSetf, true, 0u));
@@ -61,8 +62,9 @@ void check_registers() {
     refused_unchanged(chain, request(kRdramSwr, true, 0u, kRdramTrdly, 0x0003u),
                       "RDRAM TRDLY write 0x0003 exceeds the largest value the data sheet allows (0x0002)");
     refused_unchanged(chain, request(kRdramSwr, true, 0u, kRdramTest77, 0x0001u), "RDRAM TEST77 write 0x0001 sets bits");
-    // TPARM's field positions are not reliable in the data sheet text; the rest of the map is not modeled.
-    refused_unchanged(chain, request(kRdramSwr, true, 0u, 0x048u, 0x0000u), "control register 0x048 is not modeled");
+    // TPARM (TCAS/TCLS/TDAC, M2.5) has seven bits; the rest of the map is not modeled.
+    refused_unchanged(chain, request(kRdramSwr, true, 0u, kRdramTparm, 0x0080u), "RDRAM TPARM write 0x0080 sets bits");
+    refused_unchanged(chain, request(kRdramSwr, true, 0u, 0x041u, 0x0000u), "control register 0x041 is not modeled");
     refused_unchanged(chain, request(kRdramSrd, false, 0u, 0x035u), "control register 0x035 is not modeled");
 
     (void)chain.transact(request(kRdramSwr, true, 0u, kRdramTcycle, 0x3FFFu));
@@ -76,30 +78,36 @@ void check_registers() {
             chain.transact(request(kRdramSrd, false, 0u, kRdramTest77)) == std::optional<std::uint16_t>{0x0000u},
             "TRDLY and TEST77 read back");
     refused_unchanged(chain, request(kRdramSrd, false, 0u, kRdramTfrm), "RDRAM 0 TFRM read before any write");
-    // SETR: reset values of the timing registers are undefined again.
+    // SETR resets INIT only; the timing registers keep their contents (hypothesis, rdram.hpp).
+    const auto before_setr = chain.devices();
     (void)chain.transact(request(kRdramSetr, true, 0u));
-    for (const auto& device : chain.devices()) require(device.timing.empty(), "SETR forgets timing registers");
+    for (std::size_t n = 0; n < before_setr.size(); ++n)
+        require(chain.devices()[n].registers == before_setr[n].registers && chain.devices()[n].registers.size() == 3u &&
+                chain.devices()[n].init == kRdramInitReset, "SETR keeps the timing registers");
     (void)chain.transact(request(kRdramClrr, true, 0u));
     RdramChain single(1u);
     init_dev(single);
     (void)single.transact(request(kRdramSwr, true, 0u, kRdramTfrm, 0x0007u));
     (void)single.transact(request(kRdramSetr, true, 0u));
     (void)single.transact(request(kRdramClrr, true, 0u));
-    refused_unchanged(single, request(kRdramSrd, false, 0x1Fu, kRdramTfrm), "TFRM read before any write");
+    require(single.transact(request(kRdramSrd, false, 0x1Fu, kRdramTfrm)) == std::optional<std::uint16_t>{0x0007u},
+            "TFRM survives SETR/CLRR");
 }
 
 // The chain and the SRD data change when the transaction completes, not when it starts.
 void check_commit() {
     MchRegisters mch;
     mch.reset();
-    mch.write(kMchDrd, 4u, 0u, 0u);
-    mch.write(kMchRicm, 4u, mch_ricm(kRdramSetr, true, 0u, 0u), 0u);
-    require(!mch.chain(0u).devices()[0].reset_applied && !mch.chain(kShortBusy - 1u).devices()[1].reset_applied,
+    mch.write(kMchRicm, 4u, mch_ricm(kMchSioPinInit, true, 0u, 0u), 0u);
+    const auto s = kShortBusy; // SIO pin initialization complete
+    mch.write(kMchDrd, 4u, 0u, s);
+    mch.write(kMchRicm, 4u, mch_ricm(kRdramSetr, true, 0u, 0u), s);
+    require(!mch.chain(s).devices()[0].reset_applied && !mch.chain(s + kShortBusy - 1u).devices()[1].reset_applied,
             "SETR not applied while busy");
-    require(mch.chain(kShortBusy).devices()[0].reset_bit && mch.chain(kShortBusy).devices()[1].reset_bit,
+    require(mch.chain(s + kShortBusy).devices()[0].reset_bit && mch.chain(s + kShortBusy).devices()[1].reset_bit,
             "SETR applied when it completes");
     // No access since the SETR: the next start is still validated against the completed state.
-    auto t = kShortBusy + kShortBusy;
+    auto t = s + kShortBusy + kShortBusy;
     mch.write(kMchRicm, 4u, mch_ricm(kRdramClrr, true, 0u, 0u), t);
     require(mch.chain(t).devices()[0].reset_bit && !mch.chain(t + kShortBusy).devices()[0].reset_bit, "CLRR on completion");
     t += kShortBusy;
@@ -110,8 +118,8 @@ void check_commit() {
     t += kLongBusy;
     mch.write(kMchDrd, 4u, 0x0027u, t);
     mch.write(kMchRicm, 4u, mch_ricm(kRdramSwr, true, 0u, kRdramTcycle), t);
-    require(mch.chain(t).devices()[0].timing.empty() &&
-            mch.chain(t + kLongBusy).devices()[0].timing == std::map<std::uint16_t, std::uint16_t>{{kRdramTcycle, 0x0027u}},
+    require(mch.chain(t).devices()[0].registers.empty() &&
+            mch.chain(t + kLongBusy).devices()[0].registers == std::map<std::uint16_t, std::uint16_t>{{kRdramTcycle, 0x0027u}},
             "TCYCLE write lands at the end of the SWR");
     t += kLongBusy;
     mch.write(kMchRicm, 4u, mch_ricm(kRdramSrd, false, 0x1Fu, kRdramTcycle), t);
@@ -120,7 +128,7 @@ void check_commit() {
     // A refused start keeps the completed state and data.
     t += kLongBusy;
     rejects([&] { mch.write(kMchRicm, 4u, mch_ricm(kRdramSrd, false, 0x1Fu, kRdramTfrm), t); }, "TFRM read before any write");
-    require(mch.read(kMchDrd, 4u, t) == 0x0027u && mch.chain(t).devices()[0].timing.size() == 1u, "refusal keeps state");
+    require(mch.read(kMchDrd, 4u, t) == 0x0027u && mch.chain(t).devices()[0].registers.size() == 1u, "refusal keeps state");
     // Reset drops a transaction in flight.
     mch.write(kMchDrd, 4u, 0u, t);
     mch.write(kMchRicm, 4u, mch_ricm(kRdramSetr, true, 0u, 0u), t);
@@ -138,7 +146,7 @@ void check_results(const EEState& state, const Memory& memory, const std::string
     const std::map<std::uint16_t, std::uint16_t> expected{
         {kRdramTfrm, m20::kM24Tfrm}, {kRdramTrdly, m20::kM24Trdly}, {kRdramTcycle, m20::kM24Tcycle}, {kRdramTest77, 0u}};
     for (const auto& device : memory.mch().chain(state.retired_instructions).devices())
-        require(device.timing == expected && !device.reset_bit && device.fast_clock, run + ": RDRAM registers");
+        require(device.registers == expected && !device.reset_bit && device.fast_clock, run + ": RDRAM registers");
 }
 
 void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {

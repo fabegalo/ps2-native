@@ -43,7 +43,8 @@ GsRegisters::LineClock timer_clock(std::uint32_t mode, const GsRegisters& gs) {
 }
 } // namespace
 
-void EeRegisters::reset() {
+void EeRegisters::reset(const ConsoleHardware* hardware) {
+    hardware_ = hardware;
     // Hypothesis: counters, modes (disabled) and the latch are zero/unset after reset.
     timers_ = {};
     f500_.reset();
@@ -131,6 +132,19 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
     if (physical == kF500) {
         // Unidentified register; what reads return has not been verified.
         throw DeviceRefusal("0x1000F500 read: an unidentified register; its read value is not verified");
+    }
+    if (physical == kDmacEnabler) {
+        if (bytes != 4u)
+            throw DeviceRefusal("D_ENABLER read of " + std::to_string(bytes) + " byte(s) is not modeled (32-bit only)");
+        if (hardware_ == nullptr)
+            throw DeviceRefusal("D_ENABLER read: no console hardware profile selected; its value identifies the "
+                                "mainboard and is not in ROM0 (select one, e.g. --console=SCPH-77008)");
+        if (!hardware_->d_enabler)
+            throw DeviceRefusal("D_ENABLER read: the value of " + std::string(hardware_->model) + ":" +
+                                std::string(hardware_->mainboard) + " has not been measured (" +
+                                std::string(hardware_->source) + ")");
+        // Constant: D_ENABLEW writes, which would change CPND, are refused.
+        return *hardware_->d_enabler;
     }
     if (physical == kToolBoardIdPhysical) {
         if (bytes != 1u)

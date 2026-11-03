@@ -1,5 +1,6 @@
-// M2.3: the Direct RDRAM serial control chain (Rambus data sheet: SETR, CLRR,
-// SETF, SWR/SRD of INIT, SIO repeater daisy chain) behind the MCH serial
+// M2.3: the Direct RDRAM serial control chain (Rambus data sheet: SIO pin
+// initialization, SETR, CLRR, SETF, SWR/SRD of INIT, SIO repeater daisy chain;
+// opcodes in the later encoding since M2.5) behind the MCH serial
 // interface MCH_RICM/MCH_DRD, demonstrated on synthetic inputs only (no Sony
 // content). The M2.3 variant of the synthetic ROM0 runs Algorithm InitDev for
 // two devices interpreter-only and hybrid, and both runs must agree.
@@ -48,14 +49,22 @@ void check_chain() {
 
     RdramChain chain(2u);
     chain.power_on();
-    // Power-on: registers undefined until a broadcast SETR.
-    refused_unchanged(chain, request(kRdramSwr, true, 0u, 0x1Fu), "RDRAM 0 has not received SETR since power-on");
-    refused_unchanged(chain, request(kRdramClrr, true), "has not received SETR since power-on");
-    refused_unchanged(chain, request(kRdramSetr, false, 0x1Fu), "non-broadcast SETR before any SETR");
-    // Opcodes the 64/72-Mbit sheet does not define (the PS2 BIOS sends 0xB and 0xE).
+    // Power-on: SIO pin directions undefined until the SIO pin initialization.
+    refused_unchanged(chain, request(kRdramSetr, true), "RDRAM 0: SIO pin directions are undefined since power-on");
+    refused_unchanged(chain, request(kRdramSwr, true, 0u, 0x1Fu), "SIO pin directions are undefined");
+    chain.sio_pin_initialization();
+    for (const auto& device : chain.devices())
+        require(device.sio_ready && !device.reset_applied && device.init_defined == 0u, "SIO pin initialization");
+    refused_unchanged(chain, request(kRdramClrr, true), "CLRR without a preceding SETR");
+    refused_unchanged(chain, request(kRdramSetf, true), "SETF before the SETR/CLRR reset");
+    refused_unchanged(chain, request(kRdramSetr, false, 0x1Fu), "non-broadcast SETR/CLRR/SETF is not modeled");
+    refused_unchanged(chain, request(kRdramSwr, false, 0x1Fu, 0x1Fu), "while its SDEVID is undefined");
+    // Encodings reserved in the later Direct RDRAM serial encoding (the 64-Mbit
+    // CLRR and TCEN/TCAL codes among them); 0xE only exists at the MCH.
+    refused_unchanged(chain, request(0x3u, true), "serial opcode 0x3 is reserved");
+    refused_unchanged(chain, request(0x5u, true), "serial opcode 0x5 is reserved");
     refused_unchanged(chain, request(0xEu, true), "serial opcode 0xE is reserved");
-    refused_unchanged(chain, request(0xBu, true), "serial opcode 0xB is reserved");
-    refused_unchanged(chain, request(kRdramTcen, true), "temperature calibration (TCEN/TCAL) is not modeled");
+    refused_unchanged(chain, request(0xFu, true), "serial NOP is not modeled");
 
     require(!chain.transact(request(kRdramSetr, true)), "SETR returns no data");
     for (const auto& device : chain.devices())
@@ -70,7 +79,7 @@ void check_chain() {
     refused_unchanged(chain, request(kRdramSrd, false, 0x1Fu), "several devices driving SIO0");
     refused_unchanged(chain, request(kRdramSwr, true, 0u, 0x0020u), "sets bits defined as 0");
     refused_unchanged(chain, request(kRdramSwr, true, 0u, 0x8000u), "sets bits defined as 0");
-    refused_unchanged(chain, request(kRdramSwr, true, 0u, 0u, 0x040u), "control register 0x040 is not modeled");
+    refused_unchanged(chain, request(kRdramSwr, true, 0u, 0u, 0x041u), "control register 0x041 is not modeled");
     refused_unchanged(chain, request(kRdramSrd, false, 0x20u), "exceeds 5 bits");
 
     // InitDev step 6: broadcast INIT = SRP 0, SDEVID 0x1F reaches both devices
@@ -82,7 +91,8 @@ void check_chain() {
             "only device 0 answers SDEV 0x1F");
     (void)chain.transact(request(kRdramSwr, false, 1u, 0x0081u)); // SDEV 1 is nobody yet: no effect
     require(chain.devices()[0].init == 0x001Fu && chain.devices()[1].init == 0x001Fu, "write to absent SDEV");
-    refused_unchanged(chain, request(kRdramSrd, false, 1u), "no device answered");
+    require(chain.transact(request(kRdramSrd, false, 1u)) == std::optional<std::uint16_t>{0u},
+            "SRD that selects no device reads 0");
     // Steps 8-10.
     (void)chain.transact(request(kRdramSwr, false, 0x1Fu, 0x0080u));
     require(chain.devices()[0].init == 0x0080u && chain.devices()[1].init == 0x001Fu, "device 0 numbered");
@@ -91,7 +101,8 @@ void check_chain() {
     (void)chain.transact(request(kRdramSwr, false, 0x1Fu, 0x0081u));
     require(chain.transact(request(kRdramSrd, false, 0u)) == std::optional<std::uint16_t>{0x0080u}, "SDEV 0");
     require(chain.transact(request(kRdramSrd, false, 1u)) == std::optional<std::uint16_t>{0x0081u}, "SDEV 1");
-    refused_unchanged(chain, request(kRdramSrd, false, 0x1Fu), "SRD to SDEV 0x1F: no device answered");
+    require(chain.transact(request(kRdramSrd, false, 0x1Fu)) == std::optional<std::uint16_t>{0u},
+            "SDEV 0x1F is nobody once both devices are numbered");
     refused_unchanged(chain, request(kRdramSrd, true), "several devices driving SIO0");
     // A broadcast SETR resets every reachable device again.
     (void)chain.transact(request(kRdramSetr, true));
@@ -100,14 +111,15 @@ void check_chain() {
     // Undefined INIT fields after SETR make the read value unknown.
     RdramChain single(1u);
     single.power_on();
+    single.sio_pin_initialization();
     (void)single.transact(request(kRdramSetr, true));
     (void)single.transact(request(kRdramClrr, true));
-    refused_unchanged(single, request(kRdramSrd, false, 0x1Fu), "PSX/NSR/PSR/LSR are undefined");
+    refused_unchanged(single, request(kRdramSrd, false, 0x1Fu), "fields other than SDEVID/SRP are undefined");
     (void)single.transact(request(kRdramSwr, false, 0x1Fu, kRdramInitReset | kRdramInitPsx));
     require(single.transact(request(kRdramSrd, false, 0x1Fu)) == std::optional<std::uint16_t>{0x00DFu},
             "INIT read after write");
     single.power_on();
-    require(!single.devices()[0].reset_applied, "power-on forgets everything");
+    require(!single.devices()[0].reset_applied && !single.devices()[0].sio_ready, "power-on forgets everything");
 }
 
 void check_mch() {
@@ -119,8 +131,7 @@ void check_mch() {
     require(mch.chain(0u).devices().size() == kPs2RdramDevices, "two RDRAMs");
     require(mch.read(kMchRicm, 4u, 0u) == 0u, "idle after reset");
     rejects([&] { (void)mch.read(kMchDrd, 4u, 0u); }, "MCH_DRD read without a completed SRD");
-    for (const auto reg : {0x1000F400u, 0x1000F410u, 0x1000F420u, 0x1000F450u, 0x1000F460u, 0x1000F480u,
-                           0x1000F490u, 0x1000F4A0u, 0x1000F4C0u}) {
+    for (const auto reg : {0x1000F470u, 0x1000F4B0u, 0x1000F4F0u}) {
         rejects([&] { (void)mch.read(reg, 4u, 0u); }, "register 0x" + hex8(reg) + " is not modeled");
         rejects([&] { mch.write(reg, 4u, 0u, 0u); }, "register 0x" + hex8(reg) + " is not modeled");
     }
@@ -128,23 +139,30 @@ void check_mch() {
     rejects([&] { mch.write(kMchDrd, 8u, 0u, 0u); }, "8 byte(s) is not modeled");
     rejects([&] { mch.write(kMchRicm, 4u, 0x000000A0u, 0u); }, "without bit 31");
     rejects([&] { mch.write(kMchRicm, 4u, 0x800008A0u, 0u); }, "outside the SRQ/SA fields");
-    rejects([&] { mch.write(kMchRicm, 4u, 0x900000A0u, 0u); }, "outside the SRQ/SA fields");
+    rejects([&] { mch.write(kMchRicm, 4u, 0xC00000A0u, 0u); }, "outside the SRQ/SA fields");
     rejects([&] { mch.write(kMchRicm, 4u, 0x800004BFu, 0u); }, "SDEV5 is beyond");
     rejects([&] { mch.write(kMchRicm, 4u, mch_ricm(kRdramSwr, true, 0u, kRdramInit), 0u); }, "without serial data");
-    rejects([&] { mch.write(kMchRicm, 4u, mch_ricm(0xEu, true, 0u, 0u), 0u); }, "serial opcode 0xE is reserved");
+    rejects([&] { mch.write(kMchRicm, 4u, mch_ricm(0x3u, true, 0u, 0u), 0u); }, "serial opcode 0x3 is reserved");
+    rejects([&] { mch.write(kMchRicm, 4u, mch_ricm(kRdramSetr, true, 0u, 0u), 0u); }, "SIO pin directions are undefined");
     rejects([&] { mch.write(kMchDrd, 4u, 0x10000u, 0u); }, "serial data is 16 bits");
     require(mch.read(kMchRicm, 4u, 0u) == 0u, "refused starts leave the MCH idle");
 
+    // InitDev step 1, the SIO pin initialization: one 16-SCK sequence.
+    mch.write(kMchRicm, 4u, mch_ricm(kMchSioPinInit, true, 0u, 0u), 0u);
+    require(mch.read(kMchRicm, 4u, kShortBusy - 1u) == 0x800003A0u, "SIO pin initialization busy");
+    require(!mch.chain(kShortBusy - 1u).devices()[1].sio_ready && mch.chain(kShortBusy).devices()[1].sio_ready,
+            "SIO pin directions set when the sequence completes");
+    constexpr std::uint64_t kSetrStart = kShortBusy + 100u;
     // SETR: busy for 16 SCK cycles, fields readable with bit 31.
-    mch.write(kMchDrd, 4u, 0u, 100u);
-    mch.write(kMchRicm, 4u, mch_ricm(kRdramSetr, true, 0u, 0u), 100u);
-    require(mch.read(kMchRicm, 4u, 100u) == 0x800000A0u, "busy at start");
-    require(mch.read(kMchRicm, 4u, 100u + kShortBusy - 1u) == 0x800000A0u, "busy until the last cycle");
-    rejects([&] { mch.write(kMchRicm, 4u, mch_ricm(kRdramClrr, true, 0u, 0u), 100u + kShortBusy - 1u); },
+    mch.write(kMchDrd, 4u, 0u, kSetrStart);
+    mch.write(kMchRicm, 4u, mch_ricm(kRdramSetr, true, 0u, 0u), kSetrStart);
+    require(mch.read(kMchRicm, 4u, kSetrStart) == 0x800000A0u, "busy at start");
+    require(mch.read(kMchRicm, 4u, kSetrStart + kShortBusy - 1u) == 0x800000A0u, "busy until the last cycle");
+    rejects([&] { mch.write(kMchRicm, 4u, mch_ricm(kRdramClrr, true, 0u, 0u), kSetrStart + kShortBusy - 1u); },
             "while a serial transaction is in progress");
-    rejects([&] { mch.write(kMchDrd, 4u, 0u, 100u); }, "while a serial transaction is in progress");
-    rejects([&] { (void)mch.read(kMchDrd, 4u, 100u); }, "MCH_DRD read while a serial transaction is in progress");
-    const auto setr_done = 100u + kShortBusy;
+    rejects([&] { mch.write(kMchDrd, 4u, 0u, kSetrStart); }, "while a serial transaction is in progress");
+    rejects([&] { (void)mch.read(kMchDrd, 4u, kSetrStart); }, "MCH_DRD read while a serial transaction is in progress");
+    const auto setr_done = kSetrStart + kShortBusy;
     require(mch.read(kMchRicm, 4u, setr_done) == 0x000000A0u, "idle when the SETR completes");
     require(mch.chain(setr_done).devices()[1].reset_bit, "SETR reached both devices");
     // InitDev step 3: 16 SCK cycles between SETR and CLRR.
@@ -165,9 +183,12 @@ void check_mch() {
     rejects([&] { (void)mch.read(kMchDrd, 4u, t + kLongBusy - 1u); }, "in progress");
     t += kLongBusy;
     require(mch.read(kMchDrd, 4u, t) == 0x001Fu && mch.read(kMchDrd, 4u, t) == 0x001Fu, "SRD data in MCH_DRD");
-    rejects([&] { mch.write(kMchRicm, 4u, mch_ricm(kRdramSrd, false, 3u, kRdramInit), t); }, "no device answered");
+    rejects([&] { mch.write(kMchRicm, 4u, mch_ricm(kRdramSrd, false, 0x1Fu, 0x041u), t); }, "0x041 is not modeled");
     require(mch.read(kMchRicm, 4u, t) == 0x0021001Fu && mch.read(kMchDrd, 4u, t) == 0x001Fu,
             "a refused SRD keeps the previous transaction");
+    mch.write(kMchRicm, 4u, mch_ricm(kRdramSrd, false, 3u, kRdramInit), t);
+    t += kLongBusy;
+    require(mch.read(kMchDrd, 4u, t) == 0u, "an SRD no device answers reads 0");
     mch.write(kMchDrd, 4u, 0x0080u, t);
     rejects([&] { (void)mch.read(kMchDrd, 4u, t); }, "without a completed SRD");
     mch.reset();
@@ -180,14 +201,16 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     std::uint64_t cycles = 10u;
     m.set_clock(&cycles);
     require(m.read32(0xB000F430u) == 0u, "MCH_RICM through KSEG1");
+    m.write32(0xB000F430u, mch_ricm(kMchSioPinInit, true, 0u, 0u));
+    cycles += kShortBusy;
     m.write32(0xB000F440u, 0u);
     m.write32(0xB000F430u, mch_ricm(kRdramSetr, true, 0u, 0u));
     require(m.read32(0xB000F430u) == 0x800000A0u, "busy through the bus");
     cycles += kShortBusy;
     require(m.read32(0xB000F430u) == 0x000000A0u && m.mch().chain(cycles).devices()[0].reset_bit, "SETR through the bus");
-    device_refused([&] { m.write32(0xB000F410u, 0u); }, "MCH (RDRAM controller) register 0x1000F410 is not modeled");
-    device_refused([&] { (void)m.read16(0xB000F480u); }, "register 0x1000F480 is not modeled");
-    device_refused([&] { m.write32(0xB000F430u, mch_ricm(0xBu, true, 0u, 0u)); }, "serial opcode 0xB is reserved");
+    device_refused([&] { m.write32(0xB000F470u, 0u); }, "MCH (RDRAM controller) register 0x1000F470 is not modeled");
+    device_refused([&] { (void)m.read16(0xB000F480u); }, "MCH 0x1000F480 read before any write");
+    device_refused([&] { m.write32(0xB000F430u, mch_ricm(0x3u, true, 0u, 0u)); }, "serial opcode 0x3 is reserved");
     device_refused([&] { (void)m.read16(0xB000F430u); }, "(32-bit only)");
     m.reset_for_boot(rom);
     require(!m.mch().chain(cycles).devices()[0].reset_applied && m.read32(0xB000F430u) == 0u, "boot reset powers RDRAM on");
@@ -231,8 +254,9 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
         require(report->outcome == BootOutcome::BlockPoint && report->pc == mmio &&
                 report->reason.find("0xB000F000 (physical 0x1000F000, INTC)") != std::string::npos,
                 name + " block point at the INTC load: " + report->reason);
-        for (const char* line : {"  M W32 v=B000F430 p=1000F430 MCH (RDRAM controller) = 800000A0", // SETR
-                                 "  M W32 v=B000F430 p=1000F430 MCH (RDRAM controller) = 800000E0", // CLRR
+        for (const char* line : {"  M W32 v=B000F430 p=1000F430 MCH (RDRAM controller) = 800003A0", // SIO init
+                                 "  M W32 v=B000F430 p=1000F430 MCH (RDRAM controller) = 800000A0", // SETR
+                                 "  M W32 v=B000F430 p=1000F430 MCH (RDRAM controller) = 800002E0", // CLRR
                                  "  M W32 v=B000F430 p=1000F430 MCH (RDRAM controller) = 80000120", // SETF
                                  "  M W32 v=B000F440 p=1000F440 MCH (RDRAM controller) = 0000001F",
                                  "  M W32 v=B000F430 p=1000F430 MCH (RDRAM controller) = 80210060", // SWR broadcast

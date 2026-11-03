@@ -1,0 +1,39 @@
+#pragma once
+// Console hardware profiles: per-mainboard values the firmware reads from the
+// hardware itself, which no ROM0 carries. A profile is tied to one model, one
+// mainboard family and the ROMVER of the BIOS shipped with it (PS2Ident
+// database), so a profile is never used with another revision's firmware.
+//
+// D_ENABLER (0x1000F520): the BIOS memory setup reads it right after reset and
+// looks the full 32-bit word up in a table of MCH generations (keys 0x1201 ..
+// 0x4322); a missing key fails the memory setup. Bit 16 (CPND) is the only bit
+// the EE User's Manual defines; the BIOS lookup needs it 0 at that point. The
+// low half differs between mainboards that share one BIOS (SCPH-70012 ships on
+// GH-032 with EE 3.1 and on GH-035 with EE 4.2), so it belongs to the board.
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <string_view>
+
+namespace ps2native {
+enum class ProfileEvidence : std::uint8_t {
+    Measured,         // read on a console of this model (PS2Ident log)
+    SameChipRevision, // measured on other models with the same EE and GS revisions (hypothesis)
+    Unknown           // no measurement: the firmware's read of it is refused
+};
+
+struct ConsoleHardware {
+    std::string_view model;      // e.g. "SCPH-77008"
+    std::string_view mainboard;  // mainboard family, e.g. "GH-051"
+    std::string_view romver;     // ROMVER of the BIOS this console ships with
+    std::optional<std::uint32_t> d_enabler; // D_ENABLER after reset; empty: not measured
+    ProfileEvidence evidence{ProfileEvidence::Measured};
+    std::string_view source;     // where the value comes from
+};
+
+[[nodiscard]] std::span<const ConsoleHardware> known_console_hardware() noexcept;
+// "MODEL" (only when the model has a single profile) or "MODEL:MAINBOARD";
+// nullptr when no profile matches.
+[[nodiscard]] const ConsoleHardware* find_console_hardware(std::string_view name) noexcept;
+[[nodiscard]] const char* profile_evidence_name(ProfileEvidence evidence) noexcept;
+} // namespace ps2native

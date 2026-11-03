@@ -45,7 +45,10 @@ struct BootReport {
 // Power-on state for ROM0: RAM/scratchpad cleared, ROM0 mapped, TLB undefined,
 // EE at the reset vector. A hybrid AOT module must have been generated from
 // this exact ROM0 (same SHA-256); a translation of another revision is refused.
-void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state, Memory& memory);
+// `hardware` is the console the ROM0 runs on (nullptr: none, so board-specific
+// registers refuse reads); its ROMVER must be the ROM0's, or the boot is refused.
+void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state, Memory& memory,
+                     const ConsoleHardware* hardware = nullptr);
 
 // Runs the EE from its current state: AOT blocks where the module has a block
 // for the exact PC, the interpreter (explicitly traced) everywhere else. Never

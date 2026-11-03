@@ -85,7 +85,29 @@ constexpr std::uint16_t kM24Tcycle = 0x0027u;               // 39 x 64 ps = 2.5 
 constexpr std::uint16_t kM24Tfrm = 0x0007u;                 // 7 tCYCLE (data sheet value)
 constexpr std::uint16_t kM24Trdly = 0x0002u;
 
-enum class Stage { M20, M21, M22, M23, M24 };
+// M2.5: the MCH control registers and the RDRAM order of the real memory setup,
+// with synthetic values: D_ENABLER read from the console profile, F410
+// cleared, F480/F490 written, F400 read-modify-written from its reset value,
+// the F410 operation started and polled with Count, F480 read back with LHU;
+// then TPARM written before a second SETR/CLRR that keeps the timing
+// registers, the chain renumbered with INIT bit 11, and an SRD of SDEV 0x1F
+// that no device answers (reads 0) ends the enumeration.
+constexpr std::uint32_t kM25ResultRam = 0x80000600u;
+constexpr std::uint32_t kM25DEnabler = kM25ResultRam;          // LW of D_ENABLER
+constexpr std::uint32_t kM25ConfigRead = kM25ResultRam + 4u;   // F400 after the read-modify-write
+constexpr std::uint32_t kM25ControlBusy = kM25ResultRam + 8u;  // Count over the F410 operation
+constexpr std::uint32_t kM25F480Read = kM25ResultRam + 0xCu;   // LHU of F480
+constexpr std::uint32_t kM25EndRead = kM25ResultRam + 0x10u;   // SRD INIT of SDEV 0x1F after numbering
+constexpr std::uint32_t kM25Init1Read = kM25ResultRam + 0x14u; // SRD INIT of SDEV 1
+constexpr std::uint32_t kM25TcycleRead = kM25ResultRam + 0x18u; // SRD TCYCLE of SDEV 0 (kept across SETR)
+constexpr std::uint32_t kM25TparmRead = kM25ResultRam + 0x1Cu; // SRD TPARM of SDEV 1
+constexpr std::uint32_t kM25F480 = 0x00031234u;
+constexpr std::uint32_t kM25F490 = 0x00000005u;
+constexpr std::uint32_t kM25F410Timing = 0x00000123u;
+constexpr std::uint32_t kM25F400Bit18 = 1u << 18;
+constexpr std::uint16_t kM25Tparm = 0x0035u;
+
+enum class Stage { M20, M21, M22, M23, M24, M25 };
 
 enum Reg : unsigned {
     zero = 0, at = 1, v0 = 2, v1 = 3, a0 = 4, a1 = 5, a2 = 6, a3 = 7, t0 = 8, t1 = 9, t2 = 10, t3 = 11,
@@ -122,6 +144,7 @@ public:
     void andi(unsigned rt, unsigned rs, std::uint32_t imm) { i(0x0cu, rs, rt, imm); }
     void sltiu(unsigned rt, unsigned rs, std::uint32_t imm) { i(0x0bu, rs, rt, imm); }
     void lw(unsigned rt, std::int32_t offset, unsigned base) { i(0x23u, base, rt, static_cast<std::uint32_t>(offset)); }
+    void lhu(unsigned rt, std::int32_t offset, unsigned base) { i(0x25u, base, rt, static_cast<std::uint32_t>(offset)); }
     void lbu(unsigned rt, std::int32_t offset, unsigned base) { i(0x24u, base, rt, static_cast<std::uint32_t>(offset)); }
     void sb(unsigned rt, std::int32_t offset, unsigned base) { i(0x28u, base, rt, static_cast<std::uint32_t>(offset)); }
     void sh(unsigned rt, std::int32_t offset, unsigned base) { i(0x29u, base, rt, static_cast<std::uint32_t>(offset)); }
@@ -468,7 +491,7 @@ inline void emit_mch_serial(Assembler& a, const std::string& label, std::uint8_t
     wait_idle(label + "_post");
 }
 
-// M2.3, before ERET (AOT-reachable): InitDev steps 2-10 for two devices through
+// M2.3, before ERET (AOT-reachable): InitDev steps 1-10 for two devices through
 // emit_mch_serial, with SRD reads of INIT along the way and the SETR and SWR
 // durations measured with Count.
 inline void emit_m23_core(Assembler& a) {
@@ -486,6 +509,7 @@ inline void emit_m23_core(Assembler& a) {
     a.label("m23_mch");
     a.lui(t6, 0xB001u);
     a.lui(a1, 0x8000u);
+    serial(0xEu, true, 0u, 0u);                             // step 1: SIO pin initialization
     serial(2u, true, 0u, 0u, [&] { a.mtc0(zero, Count); }); // SETR
     a.mfc0(t2, Count);
     a.sw(t2, low(kM23SetrResult), a1);
@@ -494,7 +518,7 @@ inline void emit_m23_core(Assembler& a) {
     a.sltiu(t1, t1, kM23ClrrWait);
     a.bne(t1, zero, "m23_setr_wait");
     a.nop();
-    serial(3u, true, 0u, 0u);                               // CLRR
+    serial(0xBu, true, 0u, 0u);                             // CLRR
     serial(4u, true, 0u, 0u);                               // SETF
     serial(1u, true, 0u, 0x001Fu, [&] { a.mtc0(zero, Count); }); // SWR INIT: SRP 0, SDEVID 0x1F
     a.mfc0(t2, Count);
@@ -529,6 +553,72 @@ inline void emit_m24_core(Assembler& a) {
     a.label("m24_done");
 }
 
+// M2.5, after the M2.4 block (see the constants above).
+constexpr std::int32_t kMchConfigOffset = -0x0C00;  // 0x1000F400 from 0xB0010000
+constexpr std::int32_t kMchControlOffset = -0x0BF0; // 0x1000F410
+constexpr std::int32_t kMchF480Offset = -0x0B80;
+constexpr std::int32_t kMchF490Offset = -0x0B70;
+constexpr std::int32_t kDEnablerOffset = -0x0AE0;   // 0x1000F520
+inline void emit_m25_core(Assembler& a) {
+    const auto low = [](std::uint32_t address) { return static_cast<std::int32_t>(address & 0xffffu); };
+    a.label("m25_control");
+    a.lw(t2, kDEnablerOffset, t6);
+    a.sw(t2, low(kM25DEnabler), a1);
+    a.sw(zero, kMchControlOffset, t6);
+    a.lui(t0, kM25F480 >> 16);
+    a.ori(t0, t0, kM25F480 & 0xffffu);
+    a.sw(t0, kMchF480Offset, t6);
+    a.ori(t0, zero, kM25F490);
+    a.sw(t0, kMchF490Offset, t6);
+    a.lw(t0, kMchConfigOffset, t6);
+    a.lui(t1, kM25F400Bit18 >> 16);
+    a.addu(t0, t0, t1);
+    a.sw(t0, kMchConfigOffset, t6);
+    a.lw(t2, kMchConfigOffset, t6);
+    a.sw(t2, low(kM25ConfigRead), a1);
+    a.lui(t0, 0x8000u);
+    a.mtc0(zero, Count);
+    a.sw(t0, kMchControlOffset, t6);
+    a.sync_p();
+    a.label("m25_control_wait");
+    a.lw(t1, kMchControlOffset, t6);
+    a.bltz(t1, "m25_control_wait");
+    a.nop();
+    a.mfc0(t2, Count);
+    a.sw(t2, low(kM25ControlBusy), a1);
+    a.ori(t0, zero, kM25F410Timing);
+    a.sw(t0, kMchControlOffset, t6);
+    a.lhu(t2, kMchF480Offset, t6);
+    a.sw(t2, low(kM25F480Read), a1);
+
+    unsigned serial_count = 0;
+    const auto serial = [&](std::uint8_t sop, bool broadcast, std::uint8_t sdev, std::uint16_t sa, std::uint16_t sd,
+                            const std::function<void()>& before_start = {}) {
+        emit_mch_serial(a, "m25_s" + std::to_string(serial_count++), sop, broadcast, sdev, sa, sd, before_start);
+    };
+    const auto read = [&](std::uint8_t sdev, std::uint16_t sa, std::uint32_t result) {
+        serial(0u, false, sdev, sa, 0u);
+        a.lw(t2, kMchDrdOffset, t6);
+        a.sw(t2, low(result), a1);
+    };
+    serial(1u, true, 0u, 0x048u, kM25Tparm);                            // TPARM before SETR
+    serial(2u, true, 0u, 0u, 0u, [&] { a.mtc0(zero, Count); });         // SETR
+    a.label("m25_setr_wait");
+    a.mfc0(t1, Count);
+    a.sltiu(t1, t1, kM23ClrrWait);
+    a.bne(t1, zero, "m25_setr_wait");
+    a.nop();
+    serial(0xBu, true, 0u, 0u, 0u);                                     // CLRR
+    serial(1u, true, 0u, 0x021u, 0x081Fu);                              // INIT: bit 11, SRP 0, SDEVID 0x1F
+    serial(1u, false, 0x1Fu, 0x021u, 0x0880u);                          // device 0
+    serial(1u, false, 0x1Fu, 0x021u, 0x0881u);                          // device 1
+    read(0x1Fu, 0x021u, kM25EndRead);                                   // nobody: end of the chain
+    read(1u, 0x021u, kM25Init1Read);
+    read(0u, 0x04Cu, kM25TcycleRead);
+    read(1u, 0x048u, kM25TparmRead);
+    a.label("m25_done");
+}
+
 // M2.1, after ERET: a scratchpad entry written like the real BIOS does
 // (PageMask 0, S bit) still spans the whole 16 KiB.
 inline void emit_m21_scratchpad(Assembler& a) {
@@ -555,12 +645,14 @@ inline void emit_m21_scratchpad(Assembler& a) {
 // Stage::M21 adds the M2.1 blocks (MMI, COP0 Count, EE timers, 0x1000F500 before
 // ERET, where the AOT reaches them; a PageMask-0 scratchpad entry after it);
 // Stage::M22 also the M2.2 block before ERET; Stage::M23 adds the M2.3 block
-// after it and Stage::M24 the M2.4 block after that. The default (M2.0) firmware is unchanged.
+// after it, Stage::M24 the M2.4 block after that and Stage::M25 the M2.5 block
+// after that. The default (M2.0) firmware is unchanged.
 inline Firmware build_firmware(Stage stage = Stage::M20) {
     const bool m21 = stage != Stage::M20;
-    const bool m22 = stage == Stage::M22 || stage == Stage::M23 || stage == Stage::M24;
-    const bool m23 = stage == Stage::M23 || stage == Stage::M24;
-    const bool m24 = stage == Stage::M24;
+    const bool m22 = stage == Stage::M22 || stage == Stage::M23 || stage == Stage::M24 || stage == Stage::M25;
+    const bool m23 = stage == Stage::M23 || stage == Stage::M24 || stage == Stage::M25;
+    const bool m24 = stage == Stage::M24 || stage == Stage::M25;
+    const bool m25 = stage == Stage::M25;
     std::vector<File> files;
     files.push_back({"RESET", {}, {}});
     files.push_back({"ROMDIR", {}, {}});
@@ -679,6 +771,7 @@ inline Firmware build_firmware(Stage stage = Stage::M20) {
     if (m22) emit_m22_core(a, fw.table_rom);
     if (m23) emit_m23_core(a);
     if (m24) emit_m24_core(a);
+    if (m25) emit_m25_core(a);
     a.label("leave_error_level");
     a.la(t0, 0u);                    // patched below: ErrorEPC = after_eret
     a.mtc0(t0, ErrorEPC);
@@ -729,6 +822,8 @@ inline Firmware build_firmware(Stage stage = Stage::M20) {
         for (const char* name : {"m23_mch", "m23_setr_wait", "m23_done"}) fw.labels.emplace(name, a.at(name));
     if (m24)
         for (const char* name : {"m24_timing", "m24_done"}) fw.labels.emplace(name, a.at(name));
+    if (m25)
+        for (const char* name : {"m25_control", "m25_control_wait", "m25_done"}) fw.labels.emplace(name, a.at(name));
 
     // ROMDIR: name[10], EXTINFO size (u16), file size (u32); zero terminator.
     auto& romdir = files[1].data;

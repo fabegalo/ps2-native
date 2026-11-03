@@ -33,6 +33,7 @@ template <typename Character>
 int boot_main(int argc, Character** argv) {
     if (argc < 2) {
         std::cerr << "Usage: ps2n-boot <your-rom0.bin> [--expect-sha256=HEX] [--max-instructions=N]\n"
+                     "                 [--console=MODEL[:MAINBOARD]]\n"
                      "                 [--trace=events|full] [--trace-out=FILE] [--tail=N] [--stop-at=0xADDRESS]\n";
         return 2;
     }
@@ -40,6 +41,7 @@ int boot_main(int argc, Character** argv) {
         ps2native::BiosLoadOptions load;
         ps2native::BootOptions options;
         std::optional<std::filesystem::path> trace_out;
+        const ps2native::ConsoleHardware* hardware = nullptr;
         auto number = [](const std::string& text, const char* label) {
             std::size_t used = 0;
             std::uint64_t value = 0;
@@ -52,6 +54,14 @@ int boot_main(int argc, Character** argv) {
             const auto flag = std::filesystem::path(argv[i]).string();
             if (flag.starts_with("--expect-sha256=")) {
                 load.expected_sha256 = flag.substr(16);
+            } else if (flag.starts_with("--console=")) {
+                hardware = ps2native::find_console_hardware(flag.substr(10));
+                if (hardware == nullptr) {
+                    std::string known;
+                    for (const auto& profile : ps2native::known_console_hardware())
+                        known += std::string(" ") + std::string(profile.model) + ":" + std::string(profile.mainboard);
+                    throw std::runtime_error("Unknown or ambiguous console " + flag.substr(10) + "; known:" + known);
+                }
             } else if (flag.starts_with("--max-instructions=")) {
                 options.max_instructions = number(flag.substr(19), "--max-instructions");
             } else if (flag == "--trace=events") {
@@ -81,8 +91,14 @@ int boot_main(int argc, Character** argv) {
                << std::setw(2) << std::setfill('0') << bios.version.minor << std::setfill(' ')
                << ", region " << bios.version.region << " (" << bios.version.region_code << "), "
                << bios.version.kind << ", built " << bios.version.date << "\n"
-               << "# romdir " << hex32(bios.romdir_offset) << ", " << bios.modules.size() << " files\n"
-               << "# engine " << (module != nullptr ? "hybrid: AOT blocks " + std::to_string(module->block_count) +
+               << "# romdir " << hex32(bios.romdir_offset) << ", " << bios.modules.size() << " files\n";
+        if (hardware != nullptr)
+            header << "# console " << hardware->model << ':' << hardware->mainboard << ", D_ENABLER "
+                   << (hardware->d_enabler ? hex32(*hardware->d_enabler) : std::string("unknown")) << " ("
+                   << ps2native::profile_evidence_name(hardware->evidence) << ": " << hardware->source << ")\n";
+        else
+            header << "# console none selected\n";
+        header << "# engine " << (module != nullptr ? "hybrid: AOT blocks " + std::to_string(module->block_count) +
                                                           " + interpreter fallback"
                                                     : std::string("interpreter only")) << "\n"
                << "# max-instructions " << options.max_instructions << ", trace "
@@ -98,7 +114,7 @@ int boot_main(int argc, Character** argv) {
 
         ps2native::EEState state;
         ps2native::Memory memory;
-        ps2native::prepare_ee_boot(bios, module, state, memory);
+        ps2native::prepare_ee_boot(bios, module, state, memory, hardware);
         const auto report = ps2native::run_ee_boot(state, memory, module, options);
 
         if (trace_out) {

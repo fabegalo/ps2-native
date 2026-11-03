@@ -6,6 +6,7 @@
 // 0x1F800000..0x1F9FFFFF, only the tool board id byte. Each register documents what is known and what
 // is a hypothesis; every other address, access size or mode still fails with a
 // reason.
+#include "ps2native/console.hpp"
 #include "ps2native/device_timing.hpp"
 #include "ps2native/gs_registers.hpp"
 #include "ps2native/mch.hpp"
@@ -38,11 +39,16 @@ inline constexpr std::uint32_t kSioIsr = 0x1000F130u;
 inline constexpr std::uint32_t kSioFcr = 0x1000F140u;
 inline constexpr std::uint32_t kSioBgr = 0x1000F150u;
 inline constexpr std::uint32_t kSioTxFifo = 0x1000F180u;
+// DMAC D_ENABLER (EE User's Manual): read-only view of D_ENABLEW; its low half
+// identifies the board (see console.hpp).
+inline constexpr std::uint32_t kDmacEnabler = 0x1000F520u;
 
 class EeRegisters {
 public:
-    // State after a hardware reset; the clock is attached separately.
-    void reset();
+    // State after a hardware reset of the console `hardware` (nullptr: none
+    // selected, so board-specific registers refuse reads); the clock is
+    // attached separately.
+    void reset(const ConsoleHardware* hardware = nullptr);
     // EE cycle counter (EEState::retired_instructions during boot).
     void set_clock(const std::uint64_t* ee_cycles) noexcept { clock_ = ee_cycles; }
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes);
@@ -77,5 +83,6 @@ private:
     std::array<std::optional<std::uint32_t>, 3> sio_setup_{};
     std::string sio_output_;
     const std::uint64_t* clock_{};
+    const ConsoleHardware* hardware_{};
 };
 } // namespace ps2native

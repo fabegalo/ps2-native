@@ -12,14 +12,18 @@ std::string hex(std::uint32_t value) {
     return stream.str();
 }
 
-std::string refusal(std::uint32_t physical) {
-    // The BIOS memory setup also writes F400, F420, F450, F460, F490, F4A0 and
-    // F4C0, writes F410 with bit 31 set and polls it, and reads F480 back. No
-    // public document describes them (PCSX2 keeps F410 as an unknown register
-    // reading 0).
-    return "MCH (RDRAM controller) register " + hex(physical) +
-           " is not modeled: its command/completion semantics are undocumented";
+// Control registers the BIOS memory setup uses (see mch.hpp).
+bool is_control_register(std::uint32_t physical) {
+    switch (physical) {
+        case kMchConfig: case kMchControl: case 0x1000F420u: case 0x1000F450u: case 0x1000F460u:
+        case 0x1000F480u: case 0x1000F490u: case 0x1000F4A0u: case 0x1000F4C0u:
+            return true;
+        default:
+            return false;
+    }
 }
+
+std::size_t control_index(std::uint32_t physical) { return (physical - kMchBase) / 0x10u; }
 } // namespace
 
 void MchRegisters::settle(std::uint64_t now) {
@@ -39,12 +43,30 @@ void MchRegisters::reset() {
     write_data_.reset();
     read_data_.reset();
     setr_done_.reset();
+    control_ = {};
+    // F400 reset value 0 (hypothesis): the BIOS reads it once, before writing
+    // it, only to set bit 18 if clear and clear it again after a delay, and
+    // then rewrites the whole register; no other bit of that value is used.
+    control_[control_index(kMchConfig)] = 0u;
+    control_busy_until_ = 0u;
 }
 
 std::uint64_t MchRegisters::read(std::uint32_t physical, std::size_t bytes, std::uint64_t now) {
-    if (physical != kMchRicm && physical != kMchDrd) throw DeviceRefusal(refusal(physical));
-    if (bytes != 4u) throw DeviceRefusal("MCH access of " + std::to_string(bytes) + " byte(s) is not modeled (32-bit only)");
+    const bool control = is_control_register(physical);
+    if (!control && physical != kMchRicm && physical != kMchDrd)
+        throw DeviceRefusal("MCH (RDRAM controller) register " + hex(physical) +
+                            " is not modeled: the BIOS memory setup does not use it");
+    // The BIOS also reads the low half of F480 with LHU.
+    if (bytes != 4u && !(control && bytes == 2u))
+        throw DeviceRefusal("MCH access of " + std::to_string(bytes) + " byte(s) is not modeled (32-bit only)");
     settle(now);
+    if (control) {
+        const auto& latch = control_[control_index(physical)];
+        if (!latch) throw DeviceRefusal("MCH " + hex(physical) + " read before any write: its reset value is unknown");
+        const bool busy = physical == kMchControl && now < control_busy_until_;
+        const auto word = *latch | (busy ? kMchRicmBusy : 0u);
+        return bytes == 2u ? word & 0xFFFFu : word;
+    }
     const bool busy = now < busy_until_;
     if (physical == kMchRicm) return ricm_ | (busy ? kMchRicmBusy : 0u);
     if (busy) throw DeviceRefusal("MCH_DRD read while a serial transaction is in progress");
@@ -53,11 +75,26 @@ std::uint64_t MchRegisters::read(std::uint32_t physical, std::size_t bytes, std:
 }
 
 void MchRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value, std::uint64_t now) {
-    if (physical != kMchRicm && physical != kMchDrd) throw DeviceRefusal(refusal(physical));
+    const bool control = is_control_register(physical);
+    if (!control && physical != kMchRicm && physical != kMchDrd)
+        throw DeviceRefusal("MCH (RDRAM controller) register " + hex(physical) +
+                            " is not modeled: the BIOS memory setup does not use it");
     if (bytes != 4u) throw DeviceRefusal("MCH access of " + std::to_string(bytes) + " byte(s) is not modeled (32-bit only)");
     settle(now);
     const auto word = static_cast<std::uint32_t>(value);
     if (now < busy_until_) throw DeviceRefusal("MCH write of " + hex(physical) + " while a serial transaction is in progress");
+    if (now < control_busy_until_)
+        throw DeviceRefusal("MCH write of " + hex(physical) + " while the F410 operation is in progress");
+    if (control) {
+        if (physical == kMchControl && (word & kMchRicmBusy) != 0u) {
+            if (word != kMchRicmBusy)
+                throw DeviceRefusal("MCH F410 write " + hex(word) +
+                                    ": bit 31 with other bits set is not verified (the BIOS writes bit 31 alone)");
+            control_busy_until_ = now + mch_busy_cycles(kMchControlBusySck);
+        }
+        control_[control_index(physical)] = word & ~(physical == kMchControl ? kMchRicmBusy : 0u);
+        return;
+    }
     if (physical == kMchDrd) {
         if ((word & 0xFFFF0000u) != 0u)
             throw DeviceRefusal("MCH_DRD write " + hex(word) + ": serial data is 16 bits (SD15..SD0)");
@@ -67,7 +104,7 @@ void MchRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_
     }
     if ((word & kMchRicmBusy) == 0u)
         throw DeviceRefusal("MCH_RICM write " + hex(word) + " without bit 31: its effect is not verified");
-    if ((word & ~(kMchRicmFields | kMchRicmBusy)) != 0u)
+    if ((word & ~(kMchRicmFields | kMchRicmBusy | kMchRicmIgnored)) != 0u)
         throw DeviceRefusal("MCH_RICM write " + hex(word) + " sets bits outside the SRQ/SA fields");
     if ((word & kMchRicmSdevHigh) != 0u)
         throw DeviceRefusal("MCH_RICM write " + hex(word) + ": SDEV5 is beyond the 5-bit serial device id of the data sheet");
@@ -76,16 +113,25 @@ void MchRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_
     request.broadcast = (word & (1u << 5)) != 0u;
     request.sdev = static_cast<std::uint8_t>(word & 0x1Fu);
     request.sa = static_cast<std::uint16_t>((word >> 16) & 0xFFFu);
-    if (request.sop == kRdramSwr) {
-        if (!write_data_) throw DeviceRefusal("MCH SWR without serial data written to MCH_DRD");
-        request.sd = *write_data_;
-    }
-    if (request.sop == kRdramClrr && setr_done_ &&
-        now < *setr_done_ + mch_busy_cycles(kRdramSckSetrToClrr))
-        throw DeviceRefusal("MCH CLRR less than 16 SCK cycles after SETR (Algorithm InitDev step 3)");
     auto next = chain_;
-    const auto data = next.transact(request); // refuses before any change
-    const auto sck = RdramChain::sck_cycles(request.sop);
+    std::optional<std::uint16_t> data;
+    std::uint32_t sck = kRdramSckShort;
+    if (request.sop == kMchSioPinInit) {
+        if (!request.broadcast || request.sdev != 0u || request.sa != 0u)
+            throw DeviceRefusal("MCH_RICM write " + hex(word) +
+                                ": the SIO pin initialization is only verified in broadcast with SDEV and SA 0");
+        next.sio_pin_initialization();
+    } else {
+        if (request.sop == kRdramSwr) {
+            if (!write_data_) throw DeviceRefusal("MCH SWR without serial data written to MCH_DRD");
+            request.sd = *write_data_;
+        }
+        if (request.sop == kRdramClrr && setr_done_ &&
+            now < *setr_done_ + mch_busy_cycles(kRdramSckSetrToClrr))
+            throw DeviceRefusal("MCH CLRR less than 16 SCK cycles after SETR (Algorithm InitDev step 3)");
+        data = next.transact(request); // refuses before any change
+        sck = RdramChain::sck_cycles(request.sop);
+    }
     ricm_ = word & kMchRicmFields;
     busy_until_ = now + mch_busy_cycles(sck);
     pending_ = std::move(next);
