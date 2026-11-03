@@ -69,7 +69,7 @@ AotControlFlow analyze_control_flow(
             verified.emplace_back(source, target);
         }
         // Commit only when every entry is backed by valid executable data.
-        for (const auto [source, target] : verified) {
+        for (const auto& [source, target] : verified) {
             seed(target, true);
             graph.resolved_indirect_targets.push_back(
                 {source, target, "explicit jump table"});
