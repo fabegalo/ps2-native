@@ -72,3 +72,39 @@ Fontes adicionais:
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/MMI.cpp
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/HwWrite.cpp
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/ps2/Iop/IopHwRead.cpp
+
+## Consulta para a M2.2 — 03/11/2026
+
+Somente leitura de comportamento e de layouts; **nenhum trecho foi copiado ou traduzido**. O firmware do usuário foi executado e desmontado apenas localmente; nenhum byte, trace ou tradução dele entrou no repositório.
+
+- **ps2sdk** (AFL-2.0, consultado só como documentação):
+  - `common/include/gs_privileged.h`: endereços e campos de `SMODE1`, `SMODE2`, `SRFSH`, `SYNCH1/2`, `SYNCV` e `CSR`; os layouts definem os bits reservados recusados.
+  - `ee/graph/src/graph_mode.c`: sequência `SMODE1` com `PRST|SINT` e depois sem ambos para iniciar o modo de TV; CMOD 2 = NTSC, 3 = PAL.
+  - `ee/kernel/include/sio.h` e `ee/kernel/src/sio.c`: nomes e endereços do EE SIO, `putc` com espera no bit 15 de `SIO_ISR`.
+  - `common/include/dev9regs.h`: janela DEV9 `0x1F801460..0x1F80147F`, onde `0x1470/0x1472` aparecem só por endereço.
+- **ps2tek:** comprimento de linha NTSC (9370 BUSCLK) e PAL (9436 BUSCLK).
+- **PCSX2** (GPL-3.0+, só comportamento observável):
+  - `pcsx2/GS.cpp`: só `CSR` e `SIGLBLID` são legíveis, e `CSR.RESET` limpa os registradores privilegiados.
+  - `pcsx2/Counters.cpp`: sem eventos de HBLANK/VBLANK enquanto `SMODE1.SINT = 1`.
+  - `pcsx2/HwRead.cpp`/`HwWrite.cpp`:
+    - `SIO_ISR` lê 0 sem dados recebidos;
+    - `0x1000F410` é um registrador desconhecido que lê 0 ("Mystery Regs");
+    - `MCH_RICM`/`MCH_DRD` usam valores fixos de `INIT`/`CNFGA`/`CNFGB`, que **não foram adotados** por não serem documentação.
+  - `pcsx2/DEV9/DEV9.cpp`: `0x1470/0x1472` são tratados como escritas desconhecidas.
+- **BIOS real do usuário** (comportamento observado):
+  - valores escritos nos registradores do GS;
+  - calibração do relógio por HBLANK;
+  - pulso DEV9;
+  - texto pelo SIO;
+  - uso de `LWC1`/`SWC1`;
+  - par `LUI`/`ORI`/`JR` no vetor de reset;
+  - uso do bloco MCH `0x1000F400–0x1000F4C0` (comando `F410` com bit de ocupado).
+
+Fontes adicionais:
+- https://github.com/ps2dev/ps2sdk/blob/master/common/include/gs_privileged.h
+- https://github.com/ps2dev/ps2sdk/blob/master/ee/graph/src/graph_mode.c
+- https://github.com/ps2dev/ps2sdk/blob/master/ee/kernel/include/sio.h
+- https://github.com/ps2dev/ps2sdk/blob/master/common/include/dev9regs.h
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/GS.cpp
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Counters.cpp
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/HwRead.cpp

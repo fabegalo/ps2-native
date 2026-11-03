@@ -2,7 +2,7 @@
 
 Leia também `README.md` / `README.pt-BR.md`, `docs/ARCHITECTURE.md` (contratos
 implementados e interfaces propostas), o status do marco mais recente
-(`docs/M2.1-STATUS.md`, em andamento, com `docs/M2.0-STATUS.md`, `docs/M1.3-STATUS.md`, `docs/M1.2-STATUS.md`,
+(`docs/M2.2-STATUS.md`, em andamento, com `docs/M2.1-STATUS.md`, `docs/M2.0-STATUS.md`, `docs/M1.3-STATUS.md`, `docs/M1.2-STATUS.md`,
 `docs/M1.1-STATUS.md` e `docs/M0-STATUS.md` como histórico) e `docs/NEXT-TASK.md`. Licenças e referências estão em
 `docs/LICENSE-DECISION.md` e `docs/REFERENCE-AUDIT.md`. Atualizar status e
 READMEs (inglês e português) somente com o que foi demonstrado por teste.
@@ -42,8 +42,9 @@ reais; não forçar Browser ou jogos com stubs.
 
 ## Estado atual (2026-11-03)
 
-- M0, M1.1, M1.2, M1.3 e M2.0 concluídos; M2.1 em andamento. 16 testes CTest (ver `docs/M2.1-STATUS.md`).
-- M2.1: dumps reais do usuário (SCPH-70012/77008/90006, fora do repositório) executam 70.090 instruções e param no `SD` em `SMODE1` (`0x12000010`, GS não modelado). `0x1F803204` ("tool board id") lê `0xFF` por hipótese (sem placa de ferramenta; evidência em `docs/M2.1-STATUS.md`). Adicionados MMI do pipeline 1 + `PADDUW`, relógio do EE (1 ciclo/instrução, hipótese) com `COP0 Count` e timers T0–T3 (`EeRegisters`), latch `0x1000F500`, entrada S da TLB cobrindo 16 KiB e entradas não escritas que não correspondem.
+- M0, M1.1, M1.2, M1.3, M2.0 e M2.1 concluídos; M2.2 em andamento. 17 testes CTest (ver `docs/M2.2-STATUS.md`).
+- M2.2: as três BIOS reais executam 637.620 instruções (637.598 na SCPH-90006) e param no `SW` em `0x1000F410` (MCH, sem documentação pública; recusa explícita) em `0x9FC4135C`. Adicionados `GsRegisters` (`SMODE1/2`, `SRFSH`, `SYNCH1/2`, `SYNCV`, escritas de `CSR`; nada é desenhado) com relógio de linha NTSC/PAL que gera o HBLANK dos timers, latches DEV9 `0x1F801470/2`, transmissão do EE SIO (`ps2n-boot` mostra a saída), `LWC1`/`SWC1` com `Status.CU1` e prova AOT de `JR` constante (`LUI`+`ORI`/`ADDIU`), que leva a tradução da BIOS de 12 para 107 instruções estáticas.
+- M2.1: `0x1F803204` ("tool board id") lê `0xFF` por hipótese (sem placa de ferramenta; evidência em `docs/M2.1-STATUS.md`). MMI do pipeline 1 + `PADDUW`, relógio do EE (1 ciclo/instrução, hipótese) com `COP0 Count` e timers T0–T3 (`EeRegisters`), latch `0x1000F500`, entrada S da TLB cobrindo 16 KiB e entradas não escritas que não correspondem.
 - M2.0: loader de ROM0 (ROMDIR/EXTINFO/ROMVER/SHA-256), barramento EE com TLB
   e scratchpad, COP0 de reset, interpretador + AOT híbrido (`ps2n-aot --bios`,
   `ps2n-boot`) com semântica única em `ee_semantics.hpp`, trace reproduzível e
@@ -51,9 +52,9 @@ reais; não forçar Browser ou jogos com stubs.
 - M1.3: relocations `R_MIPS_26` e `R_MIPS_HI16/LO16` lidas como evidência
   (nunca aplicadas), jump tables provadas por `SLTIU` + `BEQ $zero`, entradas
   indiretas verificadas em runtime e subconjunto inteiro R5900 de 64 bits.
-- Próximo passo: continuação da **M2.1** (`docs/NEXT-TASK.md`) — registradores privilegiados do GS
-  (`SMODE1` primeiro), calibração por T0/`Count`
-  e MCH, sempre seguindo o trace da BIOS real.
+- Próximo passo: continuação da **M2.2** (`docs/NEXT-TASK.md`) — evidência do protocolo do MCH
+  (`F410`, `MCH_RICM`/`MCH_DRD`, cadeia Direct RDRAM) antes de qualquer modelo,
+  sempre seguindo o trace da BIOS real.
 - Fixtures são somente sintéticos. Nenhum jogo comercial, Browser, IOP,
   VU, GS, SPU2 ou DMA é suportado. Nenhum jogo é declarado compatível.
 
@@ -160,17 +161,19 @@ BIOS, traces e traduções de firmware ficam fora do repositório
 - CI: `.github/workflows/build.yml`, matriz de seis alvos, `fail-fast: false`.
   Resultado local não substitui a CI; confirmar os jobs do commit
   correspondente (`gh run list`, `gh run view`) antes de declarar aprovação.
-- Resultado de referência (M2.1): 16/16 testes — `core-validation`,
+- Resultado de referência (M2.2): 17/17 testes — `core-validation`,
   `native-aot-smoke`, `native-aot-ops`, `native-indirect-{sym,hints,unresolved}`,
   `native-jump-{relocations,explicit,unresolved}`,
   `native-m13-{relocations,stripped,stripped-hint}`, `native-m20-boot`,
-  `cli-m20-boot-{interpreter,hybrid}`, `native-m21-boot`. Qualquer falha é regressão.
+  `cli-m20-boot-{interpreter,hybrid}`, `native-m21-boot`, `native-m22-boot`. Qualquer falha é regressão.
 
 ## Estrutura
 
 - `include/ps2native/` — contratos públicos: `elf`, `memory`, `ee`, `mips`,
   `ee_semantics` (semântica inteira R5900 única para AOT e interpretador),
-  `ee_registers` (timers e registradores do EE em `0x10000000`),
+  `ee_registers` (timers, SIO e registradores do EE em `0x10000000`),
+  `gs_registers` (registradores privilegiados do GS e relógio de linha),
+  `device_timing` (`DeviceRefusal`, relógio do EE e comprimentos de linha),
   `control_flow`, `aot`, `aot_runtime`, `interpreter`, `bios`, `boot`,
   `sha256`, `io`, `core`.
 - `src/` — biblioteca `ps2n_core`: loader ELF32 (`elf.cpp`), análise de
@@ -180,7 +183,7 @@ BIOS, traces e traduções de firmware ficam fora do repositório
   funções (`control_flow.cpp`), emissor C++ (`aot.cpp`), despacho AOT
   (`aot_runtime.cpp`), interpretador com COP0/TLB/ERET/CACHE
   (`interpreter.cpp`), loader de ROM0 (`bios.cpp`), boot híbrido e trace
-  (`boot.cpp`), registradores do EE (`ee_registers.cpp`), SHA-256 (`sha256.cpp`), I/O centralizado Unicode/long paths
+  (`boot.cpp`), registradores do EE (`ee_registers.cpp`), GS (`gs_registers.cpp`), SHA-256 (`sha256.cpp`), I/O centralizado Unicode/long paths
   (`io.cpp`). Todo novo `.cpp` entra em `ps2n_core` no `CMakeLists.txt`.
 - `tools/ps2n-aot.cpp` — CLI AOT (ELF ou ROM0 com `--bios`); reusa o `.cpp`
   gerado se idêntico (`write_text_if_changed`), nunca copia a entrada.
@@ -190,7 +193,8 @@ BIOS, traces e traduções de firmware ficam fora do repositório
   por argumento); `m13_program.hpp` é o mini-assembler com rótulos + construtor
   ELF compartilhado entre gerador e teste; `bios_program.hpp` monta a ROM0
   sintética (ROMDIR/EXTINFO/ROMVER + programa de reset) usada por
-  `boot_m20.cpp` e, na variante `build_firmware(true)`, por `boot_m21.cpp`
+  `boot_m20.cpp` e, nas variantes `build_firmware(Stage::M21/M22)`, por
+  `boot_m21.cpp`/`boot_m22.cpp`; `boot_checks.hpp` reúne os auxiliares de teste
   (endereços definidos uma vez); cada
   teste E2E compila a TU gerada com `ps2n_core` e valida registradores, RAM,
   contagem de instruções e falhas esperadas.

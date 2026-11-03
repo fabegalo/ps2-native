@@ -2,9 +2,34 @@
 **Idiomas:** [English](README.md) | Português (Brasil)
 
 
-> **Status:** protótipo experimental, M2.1 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS executam apenas as primeiras ~70.000 instruções do EE e param num registrador não modelado.
+> **Status:** protótipo experimental, M2.2 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS executam as primeiras ~637.600 instruções do EE e param num registrador não modelado. Nada é renderizado.
 
-## Novidades da M2.1 — primeiras etapas de uma BIOS real
+## Novidades da M2.2 — registradores privilegiados do GS e a configuração de memória da BIOS
+
+Os mesmos três dumps agora retiram **637.620** instruções (SCPH-70012/77008) e **637.598** (SCPH-90006), de forma idêntica no interpretador puro e no modo híbrido. Eles:
+
+- programam o CRTC do GS;
+- calibram o relógio do EE contando bordas de HBLANK com T0 e `Count`;
+- pulsam o DEV9;
+- imprimem `# Initialize memory (rev:3.70, ctm:393Mhz, cpuclk:295Mhz detected)` pelo EE SIO (`rev:4.00` na SCPH-90006).
+
+Param em `0x9FC4135C`, no `SW` em `0x1000F410`, registrador do controlador de memória (MCH) sem documentação pública. A recusa explícita permanece até haver evidência.
+
+- **Registradores privilegiados do GS** (só estado de controle, sem renderização):
+  - `SMODE1/SMODE2/SRFSH/SYNCH1/SYNCH2/SYNCV` aceitam escritas de 64 bits; bits reservados são recusados e leituras também (são só de escrita).
+  - `CSR` aceita escritas de `RESET` e dos bits de reconhecimento. A leitura do `CSR` é recusada porque o valor depende do VBLANK e da revisão do GS.
+- **Relógio de linha do GS gera o HBLANK:**
+  - `SMODE1.SINT` suspende o sincronismo; linhas NTSC (9370 BUSCLK) ou PAL (9436) começam quando ele é liberado.
+  - Retemporizar o GS com um timer contando HBLANK é recusado.
+- **Latches DEV9, transmissão do EE SIO, `LWC1`/`SWC1`:**
+  - `LWC1`/`SWC1` movem palavras cruas; sem `Status.CU1` param como coprocessador inutilizável.
+  - O resto do SIO e da FPU é recusado.
+- **Prova AOT de saltos constantes `LUI`/`ORI`/`JR`:**
+  - Um salto só é provado quando não há entrada entre o `LUI` e o `JR` e o `LUI` não está em delay slot.
+  - A cobertura estática da BIOS sobe de 12 para 107 instruções (2 saltos provados). O código que a BIOS copia para a RAM continua interpretado.
+- **17/17 testes** aprovados localmente (MSVC, LLVM clang++); a CI usa somente firmware sintético. [Evidências, hipóteses e bloqueio da M2.2](docs/M2.2-STATUS.md).
+
+## M2.1 — primeiras etapas de uma BIOS real
 
 Três dumps de ROM0 fornecidos pelo usuário (SCPH-70012 v2.00 EUA, SCPH-77008 v2.20 Europa, SCPH-90006 v2.20 Japão; nunca guardados no repositório) iniciam no vetor de reset, passam pela configuração de COP0/TLB, pela escrita em `0x1000F500`, pela pilha no scratchpad e por `PADDUW`, e entram no módulo `RDRAM` da ROM, retirando **70.090 instruções** de forma idêntica no interpretador puro e no modo híbrido. Leem o byte *tool board id* em `0x1F803204`, seguem o caminho de varejo e param na primeira escrita em registrador privilegiado do GS (`SMODE1`, `0x12000010`). O GS não é modelado.
 
@@ -16,7 +41,7 @@ Três dumps de ROM0 fornecidos pelo usuário (SCPH-70012 v2.00 EUA, SCPH-77008 v
 - **MMI do pipeline 1 e `PADDUW`** na semântica compartilhada AOT/interpretador (`MULT1/MULTU1/DIV1/DIVU1/MFHI1/MFLO1/MTHI1/MTLO1` sobre LO1/HI1).
 - **Relógio do EE e `COP0 Count`:** um ciclo por instrução retirada (hipótese registrada); timers T0–T3 do EE (`COUNT/MODE/COMP`, BUSCLK, /16, /256 e HBLANK NTSC) derivam do mesmo relógio. Gate, interrupções de timer, flags de modo e `HOLD` são recusados com motivo.
 - **TLB corrigida pela BIOS real:** entrada com bit S mapeia os 16 KiB do scratchpad com qualquer PageMask; entradas nunca escritas não correspondem.
-- **16/16 testes** aprovados localmente (MSVC 19.44, LLVM clang++ 22); a CI usa somente firmware sintético. [Evidências, hipóteses e próximo bloqueio da M2.1](docs/M2.1-STATUS.md).
+- **16/16 testes** ao fim da M2.1. [Evidências e hipóteses da M2.1](docs/M2.1-STATUS.md).
 
 ## M2.0 — infraestrutura de boot do PS2 original
 
@@ -113,7 +138,7 @@ O build gera seu próprio ELF de teste em `out/build/fixtures/synthetic.elf` e r
 - `tests/`: firmware/jogos **não** são necessários; fixture MIPS de autoria própria.
 - `.github/workflows/build.yml`: matriz dos seis sistemas/arquiteturas, sem releases prematuras.
 
-A API permanece uniforme por plataforma. Consultar [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
+A API permanece uniforme por plataforma. Consultar [M2.2](docs/M2.2-STATUS.md), [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
 
 ## Próximos marcos
 
@@ -121,4 +146,4 @@ A API permanece uniforme por plataforma. Consultar [M2.1](docs/M2.1-STATUS.md), 
 
 **Licença:** BSD-3-Clause apenas para o código original deste protótipo. Código GPL de projetos de referência não foi incorporado. Consulte `docs/LICENSE-DECISION.md` antes de integrar bibliotecas de terceiros.
 
-Próxima tarefa objetiva: [continuação da M2.1](docs/NEXT-TASK.md).
+Próxima tarefa objetiva: [continuação da M2.2](docs/NEXT-TASK.md).

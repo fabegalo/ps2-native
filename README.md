@@ -2,9 +2,34 @@
 **Languages:** English | [Português (Brasil)](README.pt-BR.md)
 
 
-**Status: experimental prototype, M2.1 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps run only their first ~70,000 EE instructions and then stop at an unmodeled register.**
+**Status: experimental prototype, M2.2 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps run their first ~637,600 EE instructions and then stop at an unmodeled register. Nothing is rendered.**
 
-### Current progress — M2.1: first steps of a real BIOS
+### Current progress — M2.2: GS privileged registers and the BIOS memory setup
+
+The same three user-supplied ROM0 dumps now retire **637,620** instructions (SCPH-70012/77008) and **637,598** (SCPH-90006), identically interpreter-only and hybrid. They:
+
+- program the GS CRTC;
+- calibrate the EE clock by counting HBLANK edges with T0 and `Count`;
+- pulse DEV9;
+- print `# Initialize memory (rev:3.70, ctm:393Mhz, cpuclk:295Mhz detected)` through the EE SIO (`rev:4.00` on SCPH-90006).
+
+They stop at `0x9FC4135C` on `SW` to `0x1000F410`, a memory controller (MCH) register with no public documentation. It stays an explicit refusal until there is evidence.
+
+- **GS privileged registers** (control state only, no rendering):
+  - `SMODE1/SMODE2/SRFSH/SYNCH1/SYNCH2/SYNCV` take 64-bit writes; reserved bits are refused and reads are refused (write-only).
+  - `CSR` writes: `RESET` and acknowledge bits. `CSR` reads are refused because their value depends on VBLANK and the GS revision.
+- **GS line clock drives HBLANK:**
+  - `SMODE1.SINT` holds sync; NTSC (9370 BUSCLK) or PAL (9436) lines start when it is released.
+  - Retiming the GS while a timer counts HBLANK is refused.
+- **DEV9 latches, EE SIO transmit, `LWC1`/`SWC1`:**
+  - `LWC1`/`SWC1` move raw words; without `Status.CU1` they stop as coprocessor unusable.
+  - The rest of the SIO and FPU is refused.
+- **AOT proof of constant `LUI`/`ORI`/`JR` jumps:**
+  - A jump is proven only when no entry point lies between the `LUI` and the `JR` and the `LUI` is not in a delay slot.
+  - Static BIOS coverage grows from 12 to 107 instructions (2 proven jumps). Code the BIOS copies to RAM stays interpreted.
+- **17/17 tests** pass locally (MSVC, LLVM clang++); CI uses synthetic firmware only. [M2.2 evidence, hypotheses and block point](docs/M2.2-STATUS.md).
+
+### M2.1: first steps of a real BIOS
 
 Three user-supplied ROM0 dumps (SCPH-70012 v2.00 USA, SCPH-77008 v2.20 Europe, SCPH-90006 v2.20 Japan; never stored in the repository) boot from the reset vector through COP0/TLB setup, the `0x1000F500` store, the scratchpad stack, `PADDUW` and into the ROM's `RDRAM` module, retiring **70,090 instructions** identically in interpreter-only and hybrid mode. They read the tool board id byte at `0x1F803204`, take the retail path, and stop at the first GS privileged register write (`SMODE1`, `0x12000010`). The GS is not modeled.
 
@@ -16,7 +41,7 @@ Three user-supplied ROM0 dumps (SCPH-70012 v2.00 USA, SCPH-77008 v2.20 Europe, S
 - **MMI pipeline 1 and `PADDUW`** in the shared AOT/interpreter semantics (`MULT1/MULTU1/DIV1/DIVU1/MFHI1/MFLO1/MTHI1/MTLO1` on LO1/HI1).
 - **EE clock and COP0 `Count`:** one cycle per retired instruction (a recorded hypothesis); EE timers T0–T3 (`COUNT/MODE/COMP`, BUSCLK, /16, /256 and NTSC HBLANK) derive from the same clock. Gates, timer interrupts, mode flags and `HOLD` are refused with a reason.
 - **TLB fixed against the real BIOS:** an S-bit entry maps the whole 16 KiB scratchpad whatever its PageMask; never-written entries do not match.
-- **16/16 tests** pass locally (MSVC 19.44, LLVM clang++ 22); CI uses synthetic firmware only. [M2.1 evidence, hypotheses and next block point](docs/M2.1-STATUS.md).
+- **16/16 tests** at the end of M2.1. [M2.1 evidence and hypotheses](docs/M2.1-STATUS.md).
 
 ### M2.0: original PS2 boot infrastructure
 
@@ -84,6 +109,6 @@ The CI matrix targets Windows (x86-64/ARM64), Linux (x86-64/ARM64) and macOS (In
 
 `ps2n-aot input.elf output.cpp` produces a translation unit only; a host must link it with `ps2n_core` and initialize memory/state. The current integration is implemented for synthetic fixtures, not for real commercial games or the PS2 BIOS.
 
-See [architecture](docs/ARCHITECTURE.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
+See [architecture](docs/ARCHITECTURE.md), [M2.2 status](docs/M2.2-STATUS.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
 
-Next engineering increment: [M2.1 continued](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.
+Next engineering increment: [M2.2 continued](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.
