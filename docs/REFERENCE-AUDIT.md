@@ -161,6 +161,23 @@ Fontes adicionais:
 - https://github.com/allkern/iris
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Hw.cpp
 
+## Consulta para a M2.7 — 03/11/2026
+
+Somente comportamento e formatos; **nenhum trecho foi copiado ou traduzido**. Nenhum firmware, NVM ou trace entrou no repositório.
+
+- **ps2tek:** tempos verticais NTSC/PAL (262/312 linhas, 22/26 de *blank*), BUSCLK = EE/2, fontes de IRQ do IOP (0 VBLANK início, 3 DMA, 11 VBLANK fim), `DICR`/`DICR2` (flag mestre), canais DMA do IOP e *tags* de cadeia, registradores do SIF (`MSCOM`/`SMCOM`/`MSFLG`/`SMFLG`, `CTRL`, `BD6`), "GIF I/O" (`GIF_CTRL`, `GIF_MODE`, `GIF_STAT`) e o modo de cadeia do DMAC do EE.
+- **ps2sdk** (AFL-2.0, só documentação):
+  - `common/include/gs_privileged.h`: layout dos campos do `SYNCV` e do `SMODE1`.
+  - `iop/system/sifman/src/sifman.c` ("baseado no SCE SDK 3.1.0"): condição de residência por `BD6`, espera de `MSFLG 0x10000`, `sceSifSetDChain` e o formato das *tags* do canal 9 (endereço/IRQ/fim, palavras, *tag* do EE com `QWC` arredondado).
+- **PCSX2** (GPL-3.0+, só comportamento observável): o IOP lê 0 em `0x1D000060`; os flags do SIF começam em 0. Os dois viraram **hipóteses** nomeadas, não valores copiados.
+- **Busca na web** pelo bloco `0x1F801900`: nenhuma documentação pública encontrada.
+
+Fontes adicionais:
+- https://psi-rockin.github.io/ps2tek/
+- https://github.com/ps2dev/ps2sdk/blob/master/iop/system/sifman/src/sifman.c
+- https://github.com/ps2dev/ps2sdk/blob/master/common/include/gs_privileged.h
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/IopMem.cpp
+
 ## Consulta para a M2.6 — 03/11/2026
 
 Somente comportamento, formatos e dados; **nenhum trecho foi copiado ou traduzido**. Nenhuma NVM, firmware ou trace entrou no repositório; a NVM sintética usada no diagnóstico foi gerada e mantida só localmente.

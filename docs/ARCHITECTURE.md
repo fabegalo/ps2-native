@@ -109,3 +109,11 @@ Cada bloqueio da ROM0 do usuário vira o menor modelo sustentado por evidência 
 `NvmImage` (`nvm.hpp`) é a NVM do próprio console do usuário: `load_nvm_image` valida tamanho, SHA-256 opcional e a identidade contra `ConsoleHardware::mechacon` (layout, ModelID, ConModelID) e o nome do modelo. Ela chega ao IOP por `prepare_ee_boot` → `Memory::reset_for_boot` → `EeRegisters::reset` → `Iop::reset` (ponteiro não proprietário; sem NVM, as leituras dela param o IOP). `ConsoleHardware::dev9_revision` dá o `DEV9_R_REV` medido.
 
 No `Iop`, um registrador desconhecido carrega a máscara dos bits conhecidos (`ANDI` que só usa bits conhecidos produz valor conhecido); os timers 0–5 avançam por ciclo do IOP e geram `I_STAT`; exceções (`SYSCALL`, `BREAK`, interrupção) seguem o R3000A, e a linha de interrupção que depende de fonte não modelada para o IOP. Tudo continua interno ao IOP, executado de forma preguiçosa até o tempo do EE. Detalhes: [M2.6-STATUS.md](M2.6-STATUS.md).
+
+## M2.7 — VBLANK, ordem EE/IOP e SIF
+
+`GsRegisters::vertical_clock()` deriva o campo do `SYNCV` sobre o relógio de linha, ou diz por que o tempo é desconhecido, e `timing_generation()` muda a cada alteração possível. `Iop::run_until(ciclo, &gs)` levanta `I_STAT` 0/11 nas bordas.
+
+Regra de ordem: o IOP nunca roda à frente do EE, e `EeRegisters` chama `sync_iop()` antes de cada leitura de estado do IOP (RAM, SIF) e de cada escrita que o IOP observa (GS, SIF). Assim, o resultado depende só da sequência de acessos do EE, igual para interpretador e AOT. Um escalonador por eventos com IRQs do IOP para o EE (INTC do EE) fica para quando o firmware precisar deles.
+
+Os registradores do SIF são estado do `Iop`, acessados pelo EE por `ee_sif_read`/`ee_sif_write`. O DMA do SIF ainda não é modelado. Detalhes: [M2.7-STATUS.md](M2.7-STATUS.md).

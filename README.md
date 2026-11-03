@@ -2,15 +2,28 @@
 **Languages:** English | [Português (Brasil)](README.pt-BR.md)
 
 
-**Status: experimental prototype, M2.6 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps, run with a console hardware profile, execute 15.8–17.7 million EE instructions (with the IOP running its own boot path alongside) and stop where the IOP needs the console's MECHACON NVM configuration, which is per console: you supply your own console's NVM dump with `--nvm=` (none is bundled). Nothing is rendered.**
+**Status: experimental prototype, M2.7 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps, run with a console hardware profile, execute 15.8–17.7 million EE instructions (with the IOP running its own boot path alongside) and stop where the IOP needs the console's MECHACON NVM configuration, which is per console: you supply your own console's NVM dump with `--nvm=` (none is bundled). Nothing is rendered.**
 
-### Current progress — M2.6: external MECHACON NVM, EECONF and the IOP kernel start
+### Current progress — M2.7: VBLANK, deterministic EE/IOP ordering and the SIF registers
+
+- **Real BIOS (no NVM supplied):** unchanged — 17,685,811 / 17,685,893 / 15,816,643 EE instructions, stopping at the IOP's `ReadConfig`; interpreter and hybrid traces identical.
+- **GS vertical timing:** the field comes from `SYNCV` (the BIOS's NTSC value: 525 half-lines, 480 displayed, 45 blank) on the M2.2 line clock. It is held while `SMODE1.SINT` is set, and unknown (with a reason) for other `CMOD` values, an unwritten `SYNCV`, or after a GS reset. Field edges at the line-clock epoch are a named hypothesis.
+- **IOP VBLANK (IRQ 0/11):** raised at the field edges. The IOP never runs ahead of the EE and is synced before every EE read of IOP state and every EE write it observes (GS, SIF), so ordering is deterministic and identical for interpreter and AOT. IRQ 3 (DMA) is a known source that never rises, since no DMA transfer can start.
+- **SIF registers:** `MSCOM`/`SMCOM`/`MSFLG`/`SMFLG` are shared between the EE and the IOP, with the set and clear rules from ps2tek. On the IOP, `SIF_BD6` has bits 12-31 known 0 (SIFMAN's residency test; hypothesis). `AND` and `BEQ`/`BNE` work on values whose bits are only partly known.
+- **EE:** `GIF_CTRL`/`GIF_MODE`, `DEV9_R_REV` from the profile, and HBLANK timers that keep counting across a GS line-clock change (GS reset, NTSC/PAL).
+- **Diagnostic only, not a boot** (local synthetic NVM, never committed):
+  - **IOP:** passes the VBLANK block (~436 thousand instructions in M2.6), SIFMAN's residency test and its DMA interrupt setup, and waits in SIFMAN for the EE's `MSFLG` (about 2.2 million instructions).
+  - **EE:** reads the IOP's boot data from IOP RAM, resets the GIF and the GS, then stops at the first status read of an undocumented controller the kernel drives at `0x1F801900` (`0x1A000000` on SCPH-70012). No public source documents it, so no answer is invented.
+- **No SIF DMA yet:** neither side reaches a SIF transfer, and the public documentation does not settle the FIFO word/quadword framing or depth; channel starts stay refused by name.
+- **24/24 tests** pass locally (MSVC and clang). [M2.7 evidence, hypotheses and what is missing](docs/M2.7-STATUS.md).
+
+### M2.6: external MECHACON NVM, EECONF and the IOP kernel start
 
 - **External NVM (`--nvm=FILE`, `--expect-nvm-sha256=HEX`):** the 1024-byte image PS2Ident dumps (`sceCdReadNVM` words 0..511), validated for size, SHA-256, a known MECHACON layout (Dragon, v5+) and the model name, ModelID and ConModelID of the selected profile (PS2Ident database values); an NVM is never accepted for another model. The MECHACON S commands `ReadNVM`, `OpenConfig` (read), `ReadConfig` and `CloseConfig` serve it; anything else is refused by name.
 - **Real BIOS (no NVM supplied):** unchanged counts — 17,685,811 / 17,685,893 / 15,816,643 EE instructions; the IOP now stops explicitly at `ReadConfig` with "no NVM image is supplied". Interpreter and hybrid traces are identical (apart from engine-switch events).
 - **Diagnostic only, not a boot:** with a locally generated synthetic NVM (never committed, not console data) the IOP runs EECONF to completion and THREADMAN's timer setup, ~433–436 thousand instructions, and stops when interrupts are re-enabled with VBLANK start/end in `I_MASK`: the IOP VBLANK (GS CRTC vertical timing) is the next component.
 - **IOP:** tool board id (shared with the EE), `DEV9_R_REV` per profile (measured: PS2Ident's "ssbus revision"), the expansion-bay write, i.LINK id register and PHY bus reset (hypotheses named), values with known and unknown bits (`ANDI`), the six hardware timers raising `I_STAT`, and R3000A exceptions (`SYSCALL`, `BREAK`, interrupts, `RFE`). An interrupt line that depends on a source that is not modeled stops the IOP by name.
-- **23/23 tests** pass locally (MSVC and clang). [M2.6 evidence, hypotheses and what is missing](docs/M2.6-STATUS.md).
+- 23/23 tests at the time. [M2.6 evidence, hypotheses and what is missing](docs/M2.6-STATUS.md).
 
 ### M2.5: past the MCH/RDRAM block, IOP on the boot path
 
@@ -153,6 +166,6 @@ The CI matrix targets Windows (x86-64/ARM64), Linux (x86-64/ARM64) and macOS (In
 
 `ps2n-aot input.elf output.cpp` produces a translation unit only; a host must link it with `ps2n_core` and initialize memory/state. The current integration is implemented for synthetic fixtures, not for real commercial games or the PS2 BIOS.
 
-See [architecture](docs/ARCHITECTURE.md), [M2.6 status](docs/M2.6-STATUS.md), [M2.5 status](docs/M2.5-STATUS.md), [M2.4 status](docs/M2.4-STATUS.md), [M2.3 status](docs/M2.3-STATUS.md), [M2.2 status](docs/M2.2-STATUS.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
+See [architecture](docs/ARCHITECTURE.md), [M2.7 status](docs/M2.7-STATUS.md), [M2.6 status](docs/M2.6-STATUS.md), [M2.5 status](docs/M2.5-STATUS.md), [M2.4 status](docs/M2.4-STATUS.md), [M2.3 status](docs/M2.3-STATUS.md), [M2.2 status](docs/M2.2-STATUS.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
 
-Next engineering increment: [M2.6 continued: the IOP VBLANK and a real NVM](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.
+Next engineering increment: [M2.7 continued: the kernel's undocumented controller and a real NVM](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.

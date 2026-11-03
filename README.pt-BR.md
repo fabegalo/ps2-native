@@ -2,15 +2,28 @@
 **Idiomas:** [English](README.md) | Português (Brasil)
 
 
-> **Status:** protótipo experimental, M2.6 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS, com um perfil de hardware do console, executam de 15,8 a 17,7 milhões de instruções do EE (com o IOP executando o próprio caminho de boot) e param onde o IOP precisa da configuração da NVM do MECHACON, que é de cada console: o usuário fornece o dump da NVM do próprio console com `--nvm=` (nenhuma é distribuída). Nada é renderizado.
+> **Status:** protótipo experimental, M2.7 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS, com um perfil de hardware do console, executam de 15,8 a 17,7 milhões de instruções do EE (com o IOP executando o próprio caminho de boot) e param onde o IOP precisa da configuração da NVM do MECHACON, que é de cada console: o usuário fornece o dump da NVM do próprio console com `--nvm=` (nenhuma é distribuída). Nada é renderizado.
 
-## Novidades da M2.6 — NVM externa do MECHACON, EECONF e o início do kernel do IOP
+## Novidades da M2.7 — VBLANK, ordem determinística EE/IOP e registradores do SIF
+
+- **BIOS real (sem NVM):** inalterado — 17.685.811 / 17.685.893 / 15.816.643 instruções do EE, com parada no `ReadConfig` do IOP; traces do interpretador e do híbrido idênticos.
+- **Tempo vertical do GS:** o campo vem do `SYNCV` (o valor NTSC da BIOS: 525 meias-linhas, 480 visíveis, 45 de *blank*) sobre o relógio de linha da M2.2. Fica parado com `SMODE1.SINT` e desconhecido (com razão) para outros `CMOD`, `SYNCV` não escrito ou depois do reset do GS. Bordas do campo no *epoch* do relógio de linha são hipótese nomeada.
+- **VBLANK do IOP (IRQ 0/11):** gerado nas bordas do campo. O IOP nunca roda à frente do EE e é sincronizado antes de cada leitura do EE de estado do IOP e de cada escrita do EE que ele observa (GS, SIF). A ordem é determinística e igual para interpretador e AOT. O IRQ 3 (DMA) é fonte conhecida que nunca sobe, porque nenhuma transferência DMA pode começar.
+- **Registradores do SIF:** `MSCOM`/`SMCOM`/`MSFLG`/`SMFLG` são compartilhados entre EE e IOP, com as regras de ligar e limpar do ps2tek. No IOP, `SIF_BD6` tem os bits 12-31 conhecidos em 0 (teste de residência do SIFMAN; hipótese). `AND` e `BEQ`/`BNE` operam sobre valores com bits só parcialmente conhecidos.
+- **EE:** `GIF_CTRL`/`GIF_MODE`, `DEV9_R_REV` do perfil e timers em HBLANK que continuam contando através de uma mudança do relógio de linha do GS (reset do GS, NTSC/PAL).
+- **Só diagnóstico, não é boot** (NVM sintética local, nunca versionada):
+  - **IOP:** passa o bloqueio do VBLANK (~436 mil instruções na M2.6), o teste de residência do SIFMAN e a configuração da interrupção de DMA, e espera no SIFMAN o `MSFLG` do EE (cerca de 2,2 milhões de instruções).
+  - **EE:** lê os dados de boot do IOP na RAM do IOP, reinicia o GIF e o GS e para na primeira leitura de status de um controlador não documentado que o kernel usa em `0x1F801900` (`0x1A000000` na SCPH-70012). Nenhuma fonte pública o documenta, então nenhuma resposta é inventada.
+- **Ainda sem DMA do SIF:** nenhum dos lados chega a uma transferência do SIF, e a documentação pública não define o enquadramento palavra/*quadword* nem a profundidade das FIFOs; partidas de canal continuam recusadas com nome.
+- **24/24 testes** aprovados localmente (MSVC e clang). [Evidências, hipóteses e o que falta](docs/M2.7-STATUS.md).
+
+## M2.6 — NVM externa do MECHACON, EECONF e o início do kernel do IOP
 
 - **NVM externa (`--nvm=ARQUIVO`, `--expect-nvm-sha256=HEX`):** a imagem de 1024 bytes que o PS2Ident extrai (palavras 0..511 de `sceCdReadNVM`), validada por tamanho, SHA-256, layout conhecido do MECHACON (Dragon, v5+) e nome de modelo, ModelID e ConModelID do perfil selecionado (valores do banco do PS2Ident); uma NVM nunca é aceita para outro modelo. Os comandos S `ReadNVM`, `OpenConfig` (leitura), `ReadConfig` e `CloseConfig` a servem; o resto é recusado com nome.
 - **BIOS real (sem NVM):** contagens inalteradas — 17.685.811 / 17.685.893 / 15.816.643 instruções do EE; o IOP agora para explicitamente no `ReadConfig` com "no NVM image is supplied". Interpretador e híbrido têm traces idênticos (exceto os eventos de troca de motor).
 - **Só diagnóstico, não é boot:** com uma NVM sintética gerada localmente (nunca versionada, não é dado de console), o IOP conclui o EECONF e a configuração de timer do THREADMAN, ~433–436 mil instruções, e para quando as interrupções são reabilitadas com VBLANK início/fim em `I_MASK`: o VBLANK do IOP (tempo vertical do CRTC do GS) é o próximo componente.
 - **IOP:** *tool board id* (compartilhado com o EE), `DEV9_R_REV` por perfil (medido: "ssbus revision" do PS2Ident), a escrita da *expansion bay*, registrador de identificação e reset de barramento do i.LINK (hipóteses nomeadas), valores com bits conhecidos e desconhecidos (`ANDI`), os seis timers de hardware gerando `I_STAT` e exceções R3000A (`SYSCALL`, `BREAK`, interrupções, `RFE`). Uma linha de interrupção que depende de fonte não modelada para o IOP com o nome dela.
-- **23/23 testes** aprovados localmente (MSVC e clang). [Evidências, hipóteses e o que falta](docs/M2.6-STATUS.md).
+- 23/23 testes na época. [Evidências, hipóteses e o que falta](docs/M2.6-STATUS.md).
 
 ## M2.5 — MCH/RDRAM superado, IOP no caminho de boot
 
@@ -182,7 +195,7 @@ O build gera seu próprio ELF de teste em `out/build/fixtures/synthetic.elf` e r
 - `tests/`: firmware/jogos **não** são necessários; fixture MIPS de autoria própria.
 - `.github/workflows/build.yml`: matriz dos seis sistemas/arquiteturas, sem releases prematuras.
 
-A API permanece uniforme por plataforma. Consultar [M2.6](docs/M2.6-STATUS.md), [M2.5](docs/M2.5-STATUS.md), [M2.4](docs/M2.4-STATUS.md), [M2.3](docs/M2.3-STATUS.md), [M2.2](docs/M2.2-STATUS.md), [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
+A API permanece uniforme por plataforma. Consultar [M2.7](docs/M2.7-STATUS.md), [M2.6](docs/M2.6-STATUS.md), [M2.5](docs/M2.5-STATUS.md), [M2.4](docs/M2.4-STATUS.md), [M2.3](docs/M2.3-STATUS.md), [M2.2](docs/M2.2-STATUS.md), [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
 
 ## Próximos marcos
 
@@ -190,4 +203,4 @@ A API permanece uniforme por plataforma. Consultar [M2.6](docs/M2.6-STATUS.md), 
 
 **Licença:** BSD-3-Clause apenas para o código original deste protótipo. Código GPL de projetos de referência não foi incorporado. Consulte `docs/LICENSE-DECISION.md` antes de integrar bibliotecas de terceiros.
 
-Próxima tarefa objetiva: [continuação da M2.6: o VBLANK do IOP e uma NVM real](docs/NEXT-TASK.md).
+Próxima tarefa objetiva: [continuação da M2.7: o controlador não documentado do kernel e uma NVM real](docs/NEXT-TASK.md).

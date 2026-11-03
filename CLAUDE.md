@@ -2,7 +2,7 @@
 
 Leia também `README.md` / `README.pt-BR.md`, `docs/ARCHITECTURE.md` (contratos
 implementados e interfaces propostas), o status do marco mais recente
-(`docs/M2.6-STATUS.md`, em andamento, com `docs/M2.5-STATUS.md`, `docs/M2.4-STATUS.md`, `docs/M2.3-STATUS.md`, `docs/M2.2-STATUS.md`, `docs/M2.1-STATUS.md`, `docs/M2.0-STATUS.md`, `docs/M1.3-STATUS.md`, `docs/M1.2-STATUS.md`,
+(`docs/M2.7-STATUS.md`, em andamento, com `docs/M2.6-STATUS.md`, `docs/M2.5-STATUS.md`, `docs/M2.4-STATUS.md`, `docs/M2.3-STATUS.md`, `docs/M2.2-STATUS.md`, `docs/M2.1-STATUS.md`, `docs/M2.0-STATUS.md`, `docs/M1.3-STATUS.md`, `docs/M1.2-STATUS.md`,
 `docs/M1.1-STATUS.md` e `docs/M0-STATUS.md` como histórico) e `docs/NEXT-TASK.md`. Licenças e referências estão em
 `docs/LICENSE-DECISION.md` e `docs/REFERENCE-AUDIT.md`. Atualizar status e
 READMEs (inglês e português) somente com o que foi demonstrado por teste.
@@ -42,7 +42,8 @@ reais; não forçar Browser ou jogos com stubs.
 
 ## Estado atual (2026-11-03)
 
-- M0, M1.1, M1.2, M1.3, M2.0, M2.1, M2.2, M2.3, M2.4 e M2.5 concluídos; M2.6 em andamento. 23 testes CTest (ver `docs/M2.6-STATUS.md`).
+- M0, M1.1, M1.2, M1.3, M2.0, M2.1, M2.2, M2.3, M2.4, M2.5 e M2.6 concluídos; M2.7 em andamento. 24 testes CTest (ver `docs/M2.7-STATUS.md`).
+- M2.7: tempo vertical do GS (`GsRegisters::vertical_clock`, campo do `SYNCV`, bordas no *epoch* do relógio de linha por hipótese) gera VBLANK início/fim no `I_STAT` do IOP (IRQ 0/11). O IOP é sincronizado antes de leituras do EE e de escritas do GS/SIF (ordem determinística). IRQ 3 (DMA) é fonte conhecida e nunca sobe. Registradores do SIF `MSCOM`/`SMCOM`/`MSFLG`/`SMFLG` são compartilhados. `SIF_BD6` < `0x1000` (hipótese). `AND`/`BEQ`/`BNE` com bits parciais. EE: `GIF_CTRL`/`GIF_MODE`, `DEV9_R_REV`, timers em HBLANK através do reset do GS. BIOS reais sem NVM: contagens da M2.6. Diagnóstico com NVM sintética: IOP ~2,2 milhões de instruções no laço do `SIFMAN`; o EE para no controlador não documentado `0x1F801900`/`0x1A000000` depois do reset do GS. Sem DMA do SIF.
 - M2.6: NVM externa do MECHACON (`nvm.hpp`, `--nvm=`/`--expect-nvm-sha256=`; 1024 bytes no formato do PS2Ident, layout Dragon, validada contra nome de modelo/ModelID/ConModelID do perfil) servindo `ReadNVM`/`OpenConfig`/`ReadConfig`/`CloseConfig`. IOP: *tool board id* compartilhado, `DEV9_R_REV` por perfil (medido), `0xB600000A`, i.LINK `0x847C`/reset do PHY (hipóteses), bits conhecidos em valores desconhecidos (`ANDI`), timers 0–5 com `I_STAT`, exceções R3000A. BIOS reais sem NVM: contagens da M2.5, parada explícita no `ReadConfig`. Diagnóstico com NVM sintética local (não é boot): IOP ~436 mil instruções até o VBLANK do IOP.
 - M2.5 (IOP): `Iop` (R3000A, `iop.hpp`) roda o caminho de boot do mesmo ROM0 (PRId do perfil, EE/8, execução preguiçosa até o tempo do EE, valores desconhecidos rastreados), com INTC, DMA (sem transferências), status N do CDVD e comandos S do MECHACON. EE: `I_MASK`, `PAND`/`PXOR`/`POR`/`PNOR`, blocos não documentados `0x1F801900`/`0x1A000000`. BIOS reais: 17.685.811 (SCPH-70012), 17.685.893 (SCPH-77008), 15.816.643 (dump J) instruções; kernel em RAM, "Initialize GS"; bloqueio no `LW` de `0xBC0003C0` porque o `EECONF` pede `ReadConfig` (`S 0x41`) da NVM de cada console.
 - M2.5: bloqueio do `F410` superado. Perfis `ConsoleHardware` (`--console=MODELO[:PLACA]`) fornecem `D_ENABLER` por placa e ROMVER (SCPH-77008 `0x4111` medido; demais por mesma revisão de chip, hipótese). Latches de controle `F400`–`F4C0` e operação do `F410` (hipótese), `SOP 0xE` = inicialização dos pinos SIO (hipótese), `CLRR` = `0xB`, registradores da RDRAM programados antes do `SETR` e mantidos por ele (hipótese), `SRD` sem resposta lê 0 (hipótese). BIOS reais: 1.845.848 (SCPH-70012), 1.845.866 (SCPH-77008) e 1.111.255 (dump J de 2006-09) instruções, bloqueio no `LW` de `0xBC0003F0` (RAM do IOP, `QueryBootMode(2)`, PC `0x9FC43954`/`0x9FC43A2C`).
@@ -57,8 +58,8 @@ reais; não forçar Browser ou jogos com stubs.
 - M1.3: relocations `R_MIPS_26` e `R_MIPS_HI16/LO16` lidas como evidência
   (nunca aplicadas), jump tables provadas por `SLTIU` + `BEQ $zero`, entradas
   indiretas verificadas em runtime e subconjunto inteiro R5900 de 64 bits.
-- Próximo passo: continuação da **M2.6** (`docs/NEXT-TASK.md`) — VBLANK do IOP
-  (tempo vertical do GS) e uma NVM real por perfil.
+- Próximo passo: continuação da **M2.7** (`docs/NEXT-TASK.md`) — evidência do
+  controlador não documentado do kernel e uma NVM real por perfil.
 - Fixtures são somente sintéticos. Nenhum jogo comercial, Browser, IOP,
   VU, GS, SPU2 ou DMA é suportado. Nenhum jogo é declarado compatível.
 
@@ -165,11 +166,11 @@ BIOS, traces e traduções de firmware ficam fora do repositório
 - CI: `.github/workflows/build.yml`, matriz de seis alvos, `fail-fast: false`.
   Resultado local não substitui a CI; confirmar os jobs do commit
   correspondente (`gh run list`, `gh run view`) antes de declarar aprovação.
-- Resultado de referência (M2.6): 23/23 testes — `core-validation`,
+- Resultado de referência (M2.7): 24/24 testes — `core-validation`,
   `native-aot-smoke`, `native-aot-ops`, `native-indirect-{sym,hints,unresolved}`,
   `native-jump-{relocations,explicit,unresolved}`,
   `native-m13-{relocations,stripped,stripped-hint}`, `native-m20-boot`,
-  `cli-m20-boot-{interpreter,hybrid}`, `native-m21-boot`, `native-m22-boot`, `native-m23-boot`, `native-m24-boot`, `native-m25-boot`, `native-m25-iop`, `native-m26-nvm`, `native-m26-iop`. Qualquer falha é regressão.
+  `cli-m20-boot-{interpreter,hybrid}`, `native-m21-boot`, `native-m22-boot`, `native-m23-boot`, `native-m24-boot`, `native-m25-boot`, `native-m25-iop`, `native-m26-nvm`, `native-m26-iop`, `native-m27-iop`. Qualquer falha é regressão.
 
 ## Estrutura
 
@@ -200,7 +201,7 @@ BIOS, traces e traduções de firmware ficam fora do repositório
   ELF compartilhado entre gerador e teste; `bios_program.hpp` monta a ROM0
   sintética (ROMDIR/EXTINFO/ROMVER + programa de reset) usada por
   `boot_m20.cpp` e, nas variantes `build_firmware(Stage::M21..M25)`, por
-  `boot_m21.cpp`..`boot_m25.cpp`; `iop_m25.cpp` testa o IOP e a visão do EE sobre ele; `nvm_m26.cpp` a NVM e os comandos S; `iop_m26.cpp` timers, exceções e dispositivos do IOP; `boot_checks.hpp` reúne os auxiliares de teste
+  `boot_m21.cpp`..`boot_m25.cpp`; `iop_m25.cpp` testa o IOP e a visão do EE sobre ele; `nvm_m26.cpp` a NVM e os comandos S; `iop_m26.cpp` timers, exceções e dispositivos do IOP; `iop_m27.cpp` VBLANK, ordem EE/IOP, SIF e dispositivos do EE após o reset do GS; `boot_checks.hpp` reúne os auxiliares de teste
   (endereços definidos uma vez); cada
   teste E2E compila a TU gerada com `ps2n_core` e valida registradores, RAM,
   contagem de instruções e falhas esperadas.
