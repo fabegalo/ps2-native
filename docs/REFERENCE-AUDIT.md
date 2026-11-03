@@ -57,3 +57,18 @@ Fontes adicionais:
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Hw.h
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/ps2/BiosTools.cpp
 - https://github.com/ps2dev/ps2sdk/tree/master/tools/romimg/src
+
+## Consulta para a M2.1 — 03/11/2026
+
+Somente leitura de comportamento; **nenhum trecho foi copiado ou traduzido**. O firmware do usuário foi executado e desmontado apenas localmente; nenhum byte, trace ou tradução dele entrou no repositório.
+
+- **ps2tek** (documentação de hardware): layout de `Tn_COUNT/MODE/COMP/HOLD`, fontes de relógio (BUSCLK, /16, /256, HBLANK), linha NTSC de 9370 ciclos de BUSCLK, `Count` incrementado a cada ciclo do EE, EE a 294,912 MHz.
+- **PCSX2** `pcsx2/MMI.cpp`: `MULT1/MULTU1/DIV1/DIVU1/MFHI1/MFLO1/MTHI1/MTLO1` com as regras do pipeline 0 nas metades altas de LO/HI e `PADDUW` com saturação por palavra. `pcsx2/HwWrite.cpp`: escritas sem caso próprio, como `0x1000F500`, vão para armazenamento simples ("Mystery Regs"). `pcsx2/ps2/Iop/IopHwRead.cpp`: leitura de 8 bits em `0x1F803204` devolve `0x7C`, comentada como *"TOOL board id"* — registrada como referência, **não adotada** sem evidência do console de varejo. `pcsx2/Hw.h`: a região `0x1000F400` (MCH) é descrita como pouco conhecida.
+- **BIOS real do usuário** (comportamento observado): grava a entrada 0 da TLB com PageMask 0 e bit S e usa a pilha em `0x70003FF0`, o que fundamenta a cobertura de 16 KiB da entrada S e a hipótese de que entradas não escritas não correspondem; converte sua medição de HBLANK com 15734 Hz (taxa de linha NTSC).
+- Diferença em relação à M2.0: a TLB deixou de recusar traduções enquanto houver entradas indefinidas (o PCSX2 as zera; o ps2-native as considera não correspondentes e continua recusando `TLBR` delas).
+
+Fontes adicionais:
+- https://psi-rockin.github.io/ps2tek/
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/MMI.cpp
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/HwWrite.cpp
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/ps2/Iop/IopHwRead.cpp

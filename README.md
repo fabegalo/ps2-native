@@ -2,9 +2,18 @@
 **Languages:** English | [Português (Brasil)](README.pt-BR.md)
 
 
-**Status: M2.0 experimental prototype. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported; running a real Sony BIOS has not been demonstrated yet.**
+**Status: experimental prototype, M2.1 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps run only their first ~70,000 EE instructions and then stop at an unmodeled register.**
 
-### Current progress — M2.0: original PS2 boot infrastructure
+### Current progress — M2.1: first steps of a real BIOS
+
+Three user-supplied ROM0 dumps (SCPH-70012 v2.00 USA, SCPH-77008 v2.20 Europe, SCPH-90006 v2.20 Japan; never stored in the repository) boot from the reset vector through COP0/TLB setup, the `0x1000F500` store, the scratchpad stack, `PADDUW` and into the ROM's `RDRAM` module, retiring **70,067 instructions** identically in interpreter-only and hybrid mode. They stop at a byte read of `0x1F803204` (labeled "TOOL board id" by PCSX2), whose value on a retail console is not verified yet.
+
+- **MMI pipeline 1 and `PADDUW`** in the shared AOT/interpreter semantics (`MULT1/MULTU1/DIV1/DIVU1/MFHI1/MFLO1/MTHI1/MTLO1` on LO1/HI1).
+- **EE clock and COP0 `Count`:** one cycle per retired instruction (a recorded hypothesis); EE timers T0–T3 (`COUNT/MODE/COMP`, BUSCLK, /16, /256 and NTSC HBLANK) derive from the same clock. Gates, timer interrupts, mode flags and `HOLD` are refused with a reason.
+- **TLB fixed against the real BIOS:** an S-bit entry maps the whole 16 KiB scratchpad whatever its PageMask; never-written entries do not match.
+- **16/16 tests** pass locally (MSVC 19.44, LLVM clang++ 22); CI uses synthetic firmware only. [M2.1 evidence, hypotheses and next block point](docs/M2.1-STATUS.md).
+
+### M2.0: original PS2 boot infrastructure
 
 - **BIOS loader for your own ROM0 dump:** exactly 4 MiB; ROMDIR, EXTINFO and ROMVER (version, region, console kind, build date) validated field by field; SHA-256 identity with an optional `--expect-sha256`. ROM1/ROM2/EROM/NVM are not loaded yet, so revisions are never mixed. Nothing from Sony is bundled.
 - **EE bus and MMU:** KSEG0/KSEG1 decode the physical bus (32 MiB RAM, read-only ROM0 at `0x1FC00000`); kuseg/KSEG2/KSEG3 go only through the guest-written 48-entry TLB (page masks, ASID, global, valid/dirty, the S bit for the 16 KiB scratchpad). Every EE device region (timers, DMAC, INTC, SIO, SIF, MCH, GIF, VIF, IPU, VU, GS, IOP) fails with its name; TLB faults are reported by exception type.
@@ -70,6 +79,6 @@ The CI matrix targets Windows (x86-64/ARM64), Linux (x86-64/ARM64) and macOS (In
 
 `ps2n-aot input.elf output.cpp` produces a translation unit only; a host must link it with `ps2n_core` and initialize memory/state. The current integration is implemented for synthetic fixtures, not for real commercial games or the PS2 BIOS.
 
-See [architecture](docs/ARCHITECTURE.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
+See [architecture](docs/ARCHITECTURE.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
 
-Next engineering increment: [M2.1](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.
+Next engineering increment: [M2.1 continued](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.
