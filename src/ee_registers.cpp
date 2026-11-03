@@ -43,8 +43,9 @@ GsRegisters::LineClock timer_clock(std::uint32_t mode, const GsRegisters& gs) {
 }
 } // namespace
 
-void EeRegisters::reset(const ConsoleHardware* hardware) {
+void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::uint8_t> rom0) {
     hardware_ = hardware;
+    iop_.reset(rom0, hardware);
     // Hypothesis: counters, modes (disabled) and the latch are zero/unset after reset.
     timers_ = {};
     f500_.reset();
@@ -53,7 +54,14 @@ void EeRegisters::reset(const ConsoleHardware* hardware) {
     sio_output_.clear();
     gs_.reset(0u);
     mch_.reset();
+    // Hypothesis: every source masked at power-on. The kernel reads I_MASK
+    // before writing it (EnableIntc tests the bit, then reverses it).
+    intc_mask_ = 0u;
+    undocumented_190x_ = {};
+    undocumented_1a_ = {};
 }
+
+void EeRegisters::sync_iop() { iop_.run_until(now() / kEeCyclesPerIopCycle); }
 
 std::uint64_t EeRegisters::now() const {
     if (clock_ == nullptr) throw DeviceRefusal("no EE clock is attached to the EE registers");
@@ -121,6 +129,10 @@ std::uint32_t EeRegisters::read_timer(unsigned index, unsigned reg) {
 }
 
 std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
+    if (physical >= kIopRamEePhysical && physical < kIopRamEePhysical + 0x00800000u) {
+        sync_iop();
+        return iop_.ee_read(physical - kIopRamEePhysical, bytes);
+    }
     if (physical >= kTimersBase && physical < kTimersEnd) {
         const auto offset = physical & 0x7FFu;
         if (bytes != 4u || offset % 16u != 0u || offset >= 0x40u)
@@ -155,6 +167,16 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
     if (physical == kDev9Reg1470 || physical == kDev9Reg1472)
         throw DeviceRefusal("DEV9 " + hex(physical) + " read: an undocumented register; its read value is not verified");
     if (physical >= kMchBase && physical < kMchEnd) return mch_.read(physical, bytes, now());
+    if (physical == kIntcMask) {
+        if (bytes != 4u) throw DeviceRefusal("I_MASK read of " + std::to_string(bytes) + " byte(s) is not modeled");
+        return intc_mask_;
+    }
+    if ((physical >= kUndocumented190x && physical < kUndocumented190x + 16u) ||
+        (physical >= kUndocumented1A && physical < kUndocumented1A + 16u))
+        throw DeviceRefusal(hex(physical) + " read: an undocumented register; its read value is not verified");
+    if (physical == kIntcStat)
+        throw DeviceRefusal("I_STAT read: no EE interrupt source (GS, SBUS, VBLANK, VIF, VU, IPU, timers, SFIFO) "
+                            "is modeled, so the pending bits are unknown");
     if (physical == kSioIsr) {
         if (bytes != 4u) throw DeviceRefusal("SIO_ISR read of " + std::to_string(bytes) + " byte(s) is not modeled");
         // Bits 12-15: TX FIFO level, 0 because transmission is instantaneous;
@@ -169,6 +191,8 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
 }
 
 void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value) {
+    if (physical >= kIopRamEePhysical && physical < kIopRamEePhysical + 0x00800000u)
+        throw DeviceRefusal("EE write to IOP RAM is not modeled (the IOP model owns its RAM)");
     if (physical >= kTimersBase && physical < kTimersEnd) {
         const auto offset = physical & 0x7FFu;
         if (bytes != 4u || offset % 16u != 0u || offset >= 0x40u)
@@ -229,6 +253,27 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
     }
     if (physical >= kMchBase && physical < kMchEnd) {
         mch_.write(physical, bytes, value, now());
+        return;
+    }
+    if (physical == kIntcMask) {
+        if (bytes != 4u) throw DeviceRefusal("I_MASK write of " + std::to_string(bytes) + " byte(s) is not modeled");
+        intc_mask_ ^= static_cast<std::uint32_t>(value) & kIntcSources;
+        return;
+    }
+    for (auto [base, latch] : {std::pair{kUndocumented190x, &undocumented_190x_},
+                               std::pair{kUndocumented1A, &undocumented_1a_}}) {
+        if (physical < base || physical >= base + 16u) continue;
+        if (physical + bytes > base + 16u)
+            throw DeviceRefusal(hex(physical) + " write crosses the end of the undocumented " + hex(base) + " block");
+        // Latched as written; its function is unknown and nothing reads it back.
+        for (std::size_t i = 0; i < bytes; ++i)
+            (*latch)[physical - base + i] = static_cast<std::uint8_t>(value >> (8u * i));
+        return;
+    }
+    if (physical == kIntcStat) {
+        if (bytes != 4u) throw DeviceRefusal("I_STAT write of " + std::to_string(bytes) + " byte(s) is not modeled");
+        // Acknowledge (write 1 to clear): nothing is ever raised here and
+        // reads are refused, so there is no state to change.
         return;
     }
     throw DeviceRefusal("no register model");

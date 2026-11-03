@@ -11,18 +11,18 @@ namespace {
 constexpr std::array kProfiles{
     ConsoleHardware{"SCPH-70012", "GH-032-22", "0200AC20040614", 0x00003101u, ProfileEvidence::SameChipRevision,
                     "EE 3.1 / GS 1.11 board; 0x3101 read on SCPH-50001 (EE 3.1, GS 1.09) and "
-                    "SCPH-55000 (EE 3.1, GS 1.11)"},
+                    "SCPH-55000 (EE 3.1, GS 1.11)", 0x24u, "PS2Ident database entry of this model and ROMVER"},
     ConsoleHardware{"SCPH-70012", "GH-035-11", "0200AC20040614", std::nullopt, ProfileEvidence::Unknown,
                     "EE 4.2 / GS 1.12 board; no log of this board, and the table holds several EE 4.x "
-                    "keys (0x4000, 0x4110, 0x4111, 0x4212) with two different configurations"},
+                    "keys (0x4000, 0x4110, 0x4111, 0x4212) with two different configurations", 0x24u, "PS2Ident database entry of this model and ROMVER"},
     ConsoleHardware{"SCPH-77008", "GH-051", "0220EC20060210", 0x00004111u, ProfileEvidence::Measured,
-                    "PS2Ident log of an SCPH-77008 (EE 4.2, GS 1.12), MechaResearch/MechaPwn issue 80"},
+                    "PS2Ident log of an SCPH-77008 (EE 4.2, GS 1.12), MechaResearch/MechaPwn issue 80", 0x30u, "PS2Ident database entry of this model and ROMVER"},
     ConsoleHardware{"SCPH-90000", "GH-070", "0220JC20060905", 0x00004322u, ProfileEvidence::SameChipRevision,
                     "EE 4.3 / GS 1.14 board; 0x4322 read on two SCPH-90001 (EE 4.3, GS 1.14 with ROMVER "
-                    "0220AC20060905, and GS 1.15)"},
+                    "0220AC20060905, and GS 1.15)", 0x30u, "PS2Ident database entry of this model and ROMVER"},
     ConsoleHardware{"SCPH-90006", "GH-070", "0220HC20060905", 0x00004322u, ProfileEvidence::SameChipRevision,
                     "EE 4.3 / GS 1.14 board; 0x4322 read on two SCPH-90001 (EE 4.3, GS 1.14 with ROMVER "
-                    "0220AC20060905, and GS 1.15)"},
+                    "0220AC20060905, and GS 1.15)", 0x30u, "PS2Ident database entry of this model and ROMVER"},
 };
 } // namespace
 

@@ -74,7 +74,8 @@ std::optional<unsigned> MipsInstruction::written_gpr() const noexcept {
         case MipsOpcode::Mult: case MipsOpcode::Multu:
         case MipsOpcode::Mfhi: case MipsOpcode::Mflo: case MipsOpcode::Jalr:
         case MipsOpcode::Mult1: case MipsOpcode::Multu1: case MipsOpcode::Mfhi1:
-        case MipsOpcode::Mflo1: case MipsOpcode::Padduw:
+        case MipsOpcode::Mflo1: case MipsOpcode::Padduw: case MipsOpcode::Pand:
+        case MipsOpcode::Pxor: case MipsOpcode::Por: case MipsOpcode::Pnor:
             target = rd;
             break;
         case MipsOpcode::Addiu: case MipsOpcode::Daddiu: case MipsOpcode::Slti:
@@ -199,7 +200,8 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
         }
     } else if (op == 0x1c) {
         // MMI: pipeline-1 HI/LO moves, multiply and divide (same field rules
-        // as their SPECIAL counterparts) and the MMI1 sub-table (sa field).
+        // as their SPECIAL counterparts) and the MMI1/MMI2/MMI3 sub-tables
+        // (sa field).
         switch (funct) {
             case 0x10: if (rs == 0 && rt == 0 && sa == 0) return make(MipsOpcode::Mfhi1); break;
             case 0x11: if (rt == 0 && rd == 0 && sa == 0) return make(MipsOpcode::Mthi1); break;
@@ -210,6 +212,14 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
             case 0x1a: if (rd == 0 && sa == 0) return make(MipsOpcode::Div1); break;
             case 0x1b: if (rd == 0 && sa == 0) return make(MipsOpcode::Divu1); break;
             case 0x28: if (sa == 0x10) return make(MipsOpcode::Padduw); break;
+            case 0x09:
+                if (sa == 0x12) return make(MipsOpcode::Pand);
+                if (sa == 0x13) return make(MipsOpcode::Pxor);
+                break;
+            case 0x29:
+                if (sa == 0x12) return make(MipsOpcode::Por);
+                if (sa == 0x13) return make(MipsOpcode::Pnor);
+                break;
             default: break;
         }
     } else if (op == 0x10) {

@@ -137,6 +137,9 @@ int boot_main(int argc, Character** argv) {
             }
             std::cout << '\n';
         }
+        std::cout << "# IOP: " << report.iop_instructions << " instructions, PC " << hex32(report.iop_pc)
+                  << (report.iop_stop ? ", stopped" : ", running") << '\n';
+        for (const auto& event : report.iop_events) std::cout << "#   " << event << '\n';
         std::cout << "# last " << report.tail.size() << " instructions\n";
         for (const auto& line : report.tail) std::cout << line << '\n';
         std::cout << "# result " << ps2native::boot_outcome_name(report.outcome)

@@ -17,7 +17,7 @@ namespace ps2native {
 enum class BusRegion : std::uint8_t {
     MainRam, BiosRom, Scratchpad,
     EeTimers, Ipu, Gif, Vif0, Vif1, EeFifos, Dmac, Intc, Sio, Sif, Mch, DmacExtended, EeRegisters,
-    VuMemory, GsRegisters, IopMemory, Rom1, Rom2, IopRegisters, Unmapped
+    VuMemory, GsRegisters, IopMemory, Rom1, Rom2, IopRegisters, Block1A, Unmapped
 };
 [[nodiscard]] const char* bus_region_name(BusRegion region) noexcept;
 [[nodiscard]] BusRegion classify_physical(std::uint32_t physical_address) noexcept;
@@ -119,6 +119,9 @@ public:
     void set_clock(const std::uint64_t* ee_cycles) noexcept { registers_.set_clock(ee_cycles); }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return registers_.gs(); }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
+    [[nodiscard]] const Iop& iop() const noexcept { return registers_.iop(); }
+    // Runs the IOP up to the current EE time (boot mapping, clock attached).
+    void sync_iop() { registers_.sync_iop(); }
     [[nodiscard]] const std::string& sio_output() const noexcept { return registers_.sio_output(); }
 
 private:

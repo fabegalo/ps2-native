@@ -231,6 +231,17 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             return out;
         };
         s.set_reg128(d_, lanes(a.low, b.low), lanes(a.high, b.high));
+    // PAND/PXOR/POR/PNOR: bitwise over all 128 bits.
+    } else if constexpr (Op == O::Pand || Op == O::Pxor || Op == O::Por || Op == O::Pnor) {
+        const auto a = s.reg128(s_);
+        const auto b = s.reg128(t_);
+        auto op = [](std::uint64_t x, std::uint64_t y) -> std::uint64_t {
+            if constexpr (Op == O::Pand) return x & y;
+            else if constexpr (Op == O::Pxor) return x ^ y;
+            else if constexpr (Op == O::Por) return x | y;
+            else return ~(x | y);
+        };
+        s.set_reg128(d_, op(a.low, b.low), op(a.high, b.high));
     } else if constexpr (Op == O::Addiu) {
         s.set_reg32_sign_extended(t_, s.reg32(s_) + simm32(w));
     } else if constexpr (Op == O::Daddiu) {

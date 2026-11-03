@@ -9,7 +9,7 @@ add_library(ps2n_core STATIC
     src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
     src/interpreter.cpp src/boot.cpp src/ee_registers.cpp
-    src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp)
+    src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(MSVC)
     target_compile_options(ps2n_core PRIVATE /W4 /permissive-)
@@ -325,5 +325,11 @@ if(BUILD_TESTING)
     add_executable(ps2n-boot-m25 tests/boot_m25.cpp "${M25_AOT}")
     target_link_libraries(ps2n-boot-m25 PRIVATE ps2n_core)
     add_test(NAME native-m25-boot COMMAND ps2n-boot-m25 "${M25_ROM}")
+
+    # M2.5: the IOP (MIPS I boot path, interrupt/DMA/CDVD registers it reaches)
+    # and what the EE sees of it, plus the EE INTC and the MMI logical group.
+    add_executable(ps2n-iop-m25 tests/iop_m25.cpp)
+    target_link_libraries(ps2n-iop-m25 PRIVATE ps2n_core)
+    add_test(NAME native-m25-iop COMMAND ps2n-iop-m25)
 
 endif()

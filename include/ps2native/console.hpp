@@ -10,6 +10,9 @@
 // the EE User's Manual defines; the BIOS lookup needs it 0 at that point. The
 // low half differs between mainboards that share one BIOS (SCPH-70012 ships on
 // GH-032 with EE 3.1 and on GH-035 with EE 4.2), so it belongs to the board.
+//
+// IOP PRId: the IOP reset code reads it first (< 0x10: PS1 path); CDVDMAN
+// and other modules branch on the IOP revision.
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -29,6 +32,10 @@ struct ConsoleHardware {
     std::optional<std::uint32_t> d_enabler; // D_ENABLER after reset; empty: not measured
     ProfileEvidence evidence{ProfileEvidence::Measured};
     std::string_view source;     // where the value comes from
+    // IOP COP0 PRId ("IOP revision" in the PS2Ident database, read there with
+    // mfc0 $15 on the IOP); empty: unknown, so the IOP stops at its PRId read.
+    std::optional<std::uint32_t> iop_prid{};
+    std::string_view iop_source{};
 };
 
 [[nodiscard]] std::span<const ConsoleHardware> known_console_hardware() noexcept;

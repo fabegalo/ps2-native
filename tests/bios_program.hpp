@@ -180,6 +180,10 @@ public:
     }
     void padduw(unsigned rd, unsigned rs, unsigned rt) { mmi(rs, rt, rd, 0x10u, 0x28u); }
     void multu1(unsigned rd, unsigned rs, unsigned rt) { mmi(rs, rt, rd, 0u, 0x19u); }
+    void pand(unsigned rd, unsigned rs, unsigned rt) { mmi(rs, rt, rd, 0x12u, 0x09u); }
+    void pxor(unsigned rd, unsigned rs, unsigned rt) { mmi(rs, rt, rd, 0x13u, 0x09u); }
+    void por(unsigned rd, unsigned rs, unsigned rt) { mmi(rs, rt, rd, 0x12u, 0x29u); }
+    void pnor(unsigned rd, unsigned rs, unsigned rt) { mmi(rs, rt, rd, 0x13u, 0x29u); }
     void div1(unsigned rs, unsigned rt) { mmi(rs, rt, 0u, 0u, 0x1au); }
     void divu1(unsigned rs, unsigned rt) { mmi(rs, rt, 0u, 0u, 0x1bu); }
     void mfhi1(unsigned rd) { mmi(0u, 0u, rd, 0u, 0x10u); }

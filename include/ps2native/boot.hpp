@@ -38,6 +38,11 @@ struct BootReport {
     std::uint64_t interpreted_instructions{};
     std::uint64_t engine_switches{};
     std::string sio_output; // EE SIO TX bytes since reset (BIOS console output)
+    // IOP at the end of the run (run up to the EE time; boot mapping only).
+    std::uint64_t iop_instructions{};
+    std::uint32_t iop_pc{};
+    std::optional<std::string> iop_stop;
+    std::vector<std::string> iop_events;
     std::vector<std::string> trace;
     std::vector<std::string> tail;
 };

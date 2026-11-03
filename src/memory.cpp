@@ -36,7 +36,8 @@ std::string access_name(bool write, std::size_t size, const char* what) {
 // Register regions handled (or refused) by EeRegisters.
 bool is_ee_register_region(BusRegion region) {
     return (region >= BusRegion::EeTimers && region <= BusRegion::EeRegisters) ||
-           region == BusRegion::GsRegisters || region == BusRegion::IopRegisters;
+           region == BusRegion::GsRegisters || region == BusRegion::IopRegisters || region == BusRegion::IopMemory ||
+           region == BusRegion::Block1A;
 }
 BusError device_refusal(BusFault fault, bool write, std::size_t size, std::uint32_t address,
                         std::uint32_t physical, BusRegion region, const char* what, const std::string& detail) {
@@ -68,6 +69,7 @@ const char* bus_region_name(BusRegion region) noexcept {
         case BusRegion::VuMemory: return "VU0/VU1 memory";
         case BusRegion::GsRegisters: return "GS privileged registers";
         case BusRegion::IopMemory: return "IOP memory";
+        case BusRegion::Block1A: return "0x1A000000 block";
         case BusRegion::Rom1: return "ROM1";
         case BusRegion::Rom2: return "ROM2";
         case BusRegion::IopRegisters: return "IOP registers";
@@ -95,6 +97,7 @@ BusRegion classify_physical(std::uint32_t p) noexcept {
     }
     if (p >= 0x11000000u && p < 0x11010000u) return BusRegion::VuMemory;
     if (p >= 0x12000000u && p < 0x12002000u) return BusRegion::GsRegisters;
+    if (p >= 0x1A000000u && p < 0x1A000010u) return BusRegion::Block1A;
     if (p >= 0x1C000000u && p < 0x1C800000u) return BusRegion::IopMemory;
     if (p >= 0x1E000000u && p < 0x1E400000u) return BusRegion::Rom1;
     if (p >= 0x1E400000u && p < 0x1E800000u) return BusRegion::Rom2;
@@ -162,7 +165,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
     tlb_defined_ = {};
     asid_ = 0;
     error_level_ = true;
-    registers_.reset(hardware);
+    registers_.reset(hardware, rom_);
 }
 
 void Memory::set_translation_context(std::uint8_t asid, bool error_level) noexcept {

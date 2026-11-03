@@ -183,6 +183,15 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
     }
     report.retired = state.retired_instructions - start_retired;
     report.sio_output = memory.sio_output();
+    if (memory.mapping() == Memory::Mapping::HardwareReset) {
+        memory.sync_iop();
+        const auto& iop = memory.iop();
+        report.iop_instructions = iop.cycle();
+        report.iop_pc = iop.pc();
+        report.iop_stop = iop.stop_reason();
+        for (const auto& event : iop.events())
+            report.iop_events.push_back("IOP " + std::to_string(event.cycle) + " " + event.text);
+    }
     tracer.finish();
     std::ostringstream stop;
     stop << "STOP " << boot_outcome_name(report.outcome);

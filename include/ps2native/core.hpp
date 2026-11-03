@@ -4,6 +4,7 @@
 #include "ps2native/elf.hpp"
 #include "ps2native/device_timing.hpp"
 #include "ps2native/console.hpp"
+#include "ps2native/iop.hpp"
 #include "ps2native/gs_registers.hpp"
 #include "ps2native/ee_registers.hpp"
 #include "ps2native/memory.hpp"
