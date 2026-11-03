@@ -36,7 +36,7 @@ Uma base C++20 compartilhada para Windows x64/ARM64, Linux x64/ARM64 (inclui Ste
 - **VU0/VU1 + VIF/GIF/DMA:** macro/micro, tempos e semântica vetorial reais.
 - **GS (fiel):** interfaces de comandos VRAM/texturas, provas de imagem e backends modernos; **Native** renderizará através de contratos compartilhados, nunca alterando física/temporização.
 - **SPU2, controles e memory cards:** I/O persistente e seguro, áudio e sincronização.
-- **BIOS host:** exigir dumps do usuário, sistema original e diferenças regionais; não distribuir firmware. (M2.0 já valida a ROM0 e inicia o EE; ROM1/ROM2/EROM/NVM, IOP e dispositivos seguem pendentes.)
+- **BIOS host:** exigir dumps do usuário, sistema original e diferenças regionais; não distribuir firmware. (M2.0 já valida a ROM0 e inicia o EE; a M2.6 carrega a NVM do MECHACON do dump do usuário, validada contra o perfil; ROM1/ROM2/EROM e a maior parte dos dispositivos seguem pendentes.)
 - **launcher:** gerenciador gráfico, importação sem duplicar, AOT automático, diagnóstico, salvamento e handoff para boot original.
 - **platform:** filesystem Unicode, paths longos, SIMD, memória executável, GPU, áudio e input isolados por backend; API multiplataforma única.
 
@@ -103,3 +103,9 @@ Cada bloqueio da ROM0 do usuário vira o menor modelo sustentado por evidência 
 `ConsoleHardware` (`console.hpp`) guarda o que a BIOS lê do próprio hardware e nenhum ROM0 contém, por modelo, placa e ROMVER: hoje `D_ENABLER`, com a evidência de cada valor. `prepare_ee_boot` recusa um perfil de outra revisão de BIOS; `EeRegisters` lê `0x1000F520` do perfil ou recusa com nome. `MchRegisters` acrescenta os latches de controle `F400`–`F4C0` e a operação do `F410`, além da inicialização dos pinos SIO (`SOP 1110`), que chega à `RdramChain` como `sio_pin_initialization()`. Hipóteses e evidência: [M2.5-STATUS.md](M2.5-STATUS.md).
 
 `Iop` (`iop.hpp`) é o R3000A do caminho de boot, dono da própria RAM de 2 MiB, ROM0 e registradores de I/O (INTC, DMA, CDVD/MECHACON). `EeRegisters` o contém e o executa até o tempo do EE (`sync_iop`, razão 8:1) sempre que o EE lê a RAM do IOP em `0x1C000000`; o IOP nunca altera estado do EE, por isso a execução preguiçosa é determinística e igual para interpretador e AOT. Valores desconhecidos são rastreados por registrador e RAM; uma leitura do EE de byte não escrito, ou depois de o IOP parar, é recusada com a razão do IOP.
+
+## M2.6 — NVM do MECHACON e núcleo do IOP
+
+`NvmImage` (`nvm.hpp`) é a NVM do próprio console do usuário: `load_nvm_image` valida tamanho, SHA-256 opcional e a identidade contra `ConsoleHardware::mechacon` (layout, ModelID, ConModelID) e o nome do modelo. Ela chega ao IOP por `prepare_ee_boot` → `Memory::reset_for_boot` → `EeRegisters::reset` → `Iop::reset` (ponteiro não proprietário; sem NVM, as leituras dela param o IOP). `ConsoleHardware::dev9_revision` dá o `DEV9_R_REV` medido.
+
+No `Iop`, um registrador desconhecido carrega a máscara dos bits conhecidos (`ANDI` que só usa bits conhecidos produz valor conhecido); os timers 0–5 avançam por ciclo do IOP e geram `I_STAT`; exceções (`SYSCALL`, `BREAK`, interrupção) seguem o R3000A, e a linha de interrupção que depende de fonte não modelada para o IOP. Tudo continua interno ao IOP, executado de forma preguiçosa até o tempo do EE. Detalhes: [M2.6-STATUS.md](M2.6-STATUS.md).

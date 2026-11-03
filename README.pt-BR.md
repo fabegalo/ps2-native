@@ -2,9 +2,17 @@
 **Idiomas:** [English](README.md) | Português (Brasil)
 
 
-> **Status:** protótipo experimental, M2.5 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS, com um perfil de hardware do console, executam de 15,8 a 17,7 milhões de instruções do EE (com o IOP executando o próprio caminho de boot) e param onde o IOP precisa da configuração da NVM do MECHACON, que é de cada console e não está disponível. Nada é renderizado.
+> **Status:** protótipo experimental, M2.6 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS, com um perfil de hardware do console, executam de 15,8 a 17,7 milhões de instruções do EE (com o IOP executando o próprio caminho de boot) e param onde o IOP precisa da configuração da NVM do MECHACON, que é de cada console: o usuário fornece o dump da NVM do próprio console com `--nvm=` (nenhuma é distribuída). Nada é renderizado.
 
-## Novidades da M2.5 — MCH/RDRAM superado, IOP no caminho de boot
+## Novidades da M2.6 — NVM externa do MECHACON, EECONF e o início do kernel do IOP
+
+- **NVM externa (`--nvm=ARQUIVO`, `--expect-nvm-sha256=HEX`):** a imagem de 1024 bytes que o PS2Ident extrai (palavras 0..511 de `sceCdReadNVM`), validada por tamanho, SHA-256, layout conhecido do MECHACON (Dragon, v5+) e nome de modelo, ModelID e ConModelID do perfil selecionado (valores do banco do PS2Ident); uma NVM nunca é aceita para outro modelo. Os comandos S `ReadNVM`, `OpenConfig` (leitura), `ReadConfig` e `CloseConfig` a servem; o resto é recusado com nome.
+- **BIOS real (sem NVM):** contagens inalteradas — 17.685.811 / 17.685.893 / 15.816.643 instruções do EE; o IOP agora para explicitamente no `ReadConfig` com "no NVM image is supplied". Interpretador e híbrido têm traces idênticos (exceto os eventos de troca de motor).
+- **Só diagnóstico, não é boot:** com uma NVM sintética gerada localmente (nunca versionada, não é dado de console), o IOP conclui o EECONF e a configuração de timer do THREADMAN, ~433–436 mil instruções, e para quando as interrupções são reabilitadas com VBLANK início/fim em `I_MASK`: o VBLANK do IOP (tempo vertical do CRTC do GS) é o próximo componente.
+- **IOP:** *tool board id* (compartilhado com o EE), `DEV9_R_REV` por perfil (medido: "ssbus revision" do PS2Ident), a escrita da *expansion bay*, registrador de identificação e reset de barramento do i.LINK (hipóteses nomeadas), valores com bits conhecidos e desconhecidos (`ANDI`), os seis timers de hardware gerando `I_STAT` e exceções R3000A (`SYSCALL`, `BREAK`, interrupções, `RFE`). Uma linha de interrupção que depende de fonte não modelada para o IOP com o nome dela.
+- **23/23 testes** aprovados localmente (MSVC e clang). [Evidências, hipóteses e o que falta](docs/M2.6-STATUS.md).
+
+## M2.5 — MCH/RDRAM superado, IOP no caminho de boot
 
 - **Avanço com BIOS real:** SCPH-70012, SCPH-77008 e o dump japonês de 2006-09 chegam a 17.685.811 / 17.685.893 / 15.816.643 instruções do EE (antes ~637.600, em `0x1000F410`). A BIOS conclui a configuração de memória (inclusive o início/polling real do `F410`), imprime `Total accessable memory size: 32 MB`, configura a TLB, inicia o kernel em RAM e imprime `Initialize Start.` / `Initialize GS ...`. As três param no `LW 0xBC0003C0`: o `EECONF` do IOP precisa de `ReadConfig` (comando S `0x41` do MECHACON), cujos bytes estão na NVM de cada console. Interpretador e híbrido são idênticos.
 - **IOP (R3000A) no caminho de boot:** mesmo vetor de reset, PRId do perfil, relógio EE/8 (fato) a 1 instrução/ciclo (hipótese), execução preguiçosa até o tempo do EE; load delay slots, `IsC`, propagação de valores desconhecidos com origem, códigos POST, controlador de interrupções, registradores de interrupção e canais de DMA (transferências recusadas), status N do CDVD e interface de comandos S do MECHACON (`OpenConfig` respondido, leituras da NVM recusadas).
@@ -12,7 +20,7 @@
 - **Perfis de hardware (`--console=MODELO[:PLACA]`):** `D_ENABLER` (`0x1000F520`) vem da placa, nunca de um valor global. SCPH-77008 é medido (`0x4111`); SCPH-70012 GH-032 e SCPH-90000/90006 usam valores medidos em consoles com as mesmas revisões de chip (hipóteses marcadas); SCPH-70012 GH-035 continua desconhecido e recusado. Um perfil é recusado com BIOS de outro ROMVER.
 - **Registradores de controle do MCH** `F400`–`F4C0` como latches e a operação do `F410` (só o bit 31, ocupado por 16 SCK; hipótese), a inicialização dos pinos SIO (`SOP 1110`, hipótese) e a codificação de opcodes das Direct RDRAM posteriores (`CLRR` = `1011`).
 - **RDRAM:** registradores programados antes do primeiro `SETR` e mantidos por ele (hipótese), novos layouts (`DEVID`, `CCA/CCB`, `NAPX`, `PDNXA/B`, `TPARM`, `SKIP`, registradores de teste) e `SRD` sem resposta lendo 0 (hipótese).
-- **21/21 testes** aprovados localmente (MSVC e clang). [Evidências, hipóteses e o bloqueio da NVM](docs/M2.5-STATUS.md).
+- **21/21 testes** na M2.5. [Evidências, hipóteses e o bloqueio da NVM](docs/M2.5-STATUS.md).
 
 ## M2.4 — registradores de temporização da RDRAM e transações concluídas no tempo certo
 
@@ -81,7 +89,7 @@ Três dumps de ROM0 fornecidos pelo usuário (SCPH-70012 v2.00 EUA, SCPH-77008 v
 
 ## M2.0 — infraestrutura de boot do PS2 original
 
-- **Loader de BIOS para o seu dump de ROM0:** exatamente 4 MiB; ROMDIR, EXTINFO e ROMVER (versão, região, tipo de console, data de build) validados campo a campo; identidade por SHA-256 com `--expect-sha256` opcional. ROM1/ROM2/EROM/NVM ainda não são carregados, então revisões nunca são misturadas. Nada da Sony é distribuído.
+- **Loader de BIOS para o seu dump de ROM0:** exatamente 4 MiB; ROMDIR, EXTINFO e ROMVER (versão, região, tipo de console, data de build) validados campo a campo; identidade por SHA-256 com `--expect-sha256` opcional. ROM1/ROM2/EROM ainda não são carregados, então revisões nunca são misturadas; uma imagem da NVM do MECHACON só é carregada do dump do próprio usuário e validada contra o perfil do console. Nada da Sony é distribuído.
 - **Barramento e MMU do EE:** KSEG0/KSEG1 decodificam o barramento físico (RAM de 32 MiB, ROM0 somente leitura em `0x1FC00000`); kuseg/KSEG2/KSEG3 só pela TLB de 48 entradas escrita pelo convidado (page mask, ASID, global, valid/dirty, bit S do scratchpad de 16 KiB). Toda região de dispositivo do EE (timers, DMAC, INTC, SIO, SIF, MCH, GIF, VIF, IPU, VU, GS, IOP) falha com seu nome; falhas de TLB são informadas pelo tipo de exceção.
 - **Reset do EE e COP0:** PC `0xBFC00000`, `Status = BEV | ERL`, `PRid 0x2E20`, `Config 0x440`; `MFC0/MTC0` com regras por registrador, `TLBWI/TLBR/TLBP`, `ERET`, `EI/DI`, `CACHE` (só invalidação/write-back, pois a memória é coerente), `PREF`. Temporização de ciclos, conteúdo de cache, interrupções e vetorização de exceções não são modelados e param com diagnóstico.
 - **Execução híbrida:** um único cabeçalho de semântica R5900 (`ee_semantics.hpp`) usado pelos blocos AOT e pelo novo interpretador. `ps2n-aot <rom0> <saida.cpp> --bios` traduz o código do firmware estaticamente alcançável e lista cada fronteira do interpretador; `ps2n-boot` executa blocos AOT quando o PC coincide exatamente e o interpretador nos demais casos, sempre visível no trace. Tradução de outra ROM0 é recusada.
@@ -174,7 +182,7 @@ O build gera seu próprio ELF de teste em `out/build/fixtures/synthetic.elf` e r
 - `tests/`: firmware/jogos **não** são necessários; fixture MIPS de autoria própria.
 - `.github/workflows/build.yml`: matriz dos seis sistemas/arquiteturas, sem releases prematuras.
 
-A API permanece uniforme por plataforma. Consultar [M2.5](docs/M2.5-STATUS.md), [M2.4](docs/M2.4-STATUS.md), [M2.3](docs/M2.3-STATUS.md), [M2.2](docs/M2.2-STATUS.md), [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
+A API permanece uniforme por plataforma. Consultar [M2.6](docs/M2.6-STATUS.md), [M2.5](docs/M2.5-STATUS.md), [M2.4](docs/M2.4-STATUS.md), [M2.3](docs/M2.3-STATUS.md), [M2.2](docs/M2.2-STATUS.md), [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
 
 ## Próximos marcos
 
@@ -182,4 +190,4 @@ A API permanece uniforme por plataforma. Consultar [M2.5](docs/M2.5-STATUS.md), 
 
 **Licença:** BSD-3-Clause apenas para o código original deste protótipo. Código GPL de projetos de referência não foi incorporado. Consulte `docs/LICENSE-DECISION.md` antes de integrar bibliotecas de terceiros.
 
-Próxima tarefa objetiva: [continuação da M2.5: a configuração da NVM do MECHACON](docs/NEXT-TASK.md).
+Próxima tarefa objetiva: [continuação da M2.6: o VBLANK do IOP e uma NVM real](docs/NEXT-TASK.md).

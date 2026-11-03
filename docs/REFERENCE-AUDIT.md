@@ -160,3 +160,29 @@ Fontes adicionais:
 - https://psi-rockin.github.io/ps2tek/
 - https://github.com/allkern/iris
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Hw.cpp
+
+## Consulta para a M2.6 — 03/11/2026
+
+Somente comportamento, formatos e dados; **nenhum trecho foi copiado ou traduzido**. Nenhuma NVM, firmware ou trace entrou no repositório; a NVM sintética usada no diagnóstico foi gerada e mantida só localmente.
+
+- **PS2Ident** (`ps2homebrew/PS2Ident`), consultado como dados e documentação:
+  - `DumpMECHACON_EEPROM`: imagem de 1024 bytes com as palavras 0..511 de `sceCdReadNVM`.
+  - `sysman/dev9.c`: "ssbus revision" é `DEV9_REG(DEV9_R_REV)`. `sysman/iLink.c`: o PHY do i.LINK é lido por `PHYAccess`; o registrador `0x7C` aparece só como "UnknownRegister7C" (desliga/religa o LINK).
+  - `PS2Ident.db`: versão do MECHACON, ModelID, ConModelID, SSBUS revision e dados do PHY do i.LINK por modelo, placa e ROMVER.
+- **ps2sdk** (AFL-2.0, só documentação):
+  - `iop/cdvd/cdvdman`: parâmetros e respostas de `ReadNVM`, `OpenConfig`, `ReadConfig` e `CloseConfig`; checksum do bloco.
+  - `iop/system/eeconf/src/eeconf.c` (reimplementação do `EECONF`): ordem dos comandos S, `eeconf_dve_magic` (`0x1F803204`, `DEV9_R_REV`, `0xB600000A`), `eeconf_ieee1394_available`/`_reset`.
+  - `common/include/dev9regs.h`: `DEV9_R_REV` = `0xBF80146E`. `iop/dev9/dev9/src/ps2dev9.c`: nibble alto `0x20` = CXD9566 (PCMCIA), `0x30` = CXD9611 (*expansion bay*).
+  - `iop/arcade/acata`: a janela `0xB6000000` como área de dispositivo da *expansion bay* (ATA nos arcades).
+- **ps2tek:** timers do IOP (registradores, bits de modo, prescalers, larguras), fontes de `I_STAT` e regra de entrega (`I_CTRL && (I_STAT & I_MASK)`).
+- **PCSX2** (GPL-3.0+, só comportamento observável):
+  - `pcsx2/CDVD/CDVD.cpp`: layout da NVM "BIOS v1.70+" (áreas de configuração, i.LINK ID e console ID); o formato `.nvm` é o mesmo da imagem do PS2Ident.
+  - `pcsx2/FW.cpp`: comentário de um desenvolvedor de que `0x1F80847C` lê `0x10000001` no próprio console de varejo; adotado como **hipótese** nomeada.
+- **psdevwiki:** offset do nome do modelo (`0x1B0`) nas NVM Dragon. Novos acessos ao site foram bloqueados por verificação anti-robô, que não foi contornada.
+
+Fontes adicionais:
+- https://github.com/ps2homebrew/PS2Ident
+- https://github.com/ps2dev/ps2sdk/blob/master/iop/system/eeconf/src/eeconf.c
+- https://github.com/ps2dev/ps2sdk/blob/master/iop/dev9/dev9/src/ps2dev9.c
+- https://psi-rockin.github.io/ps2tek/
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/FW.cpp
