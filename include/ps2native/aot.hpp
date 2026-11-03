@@ -9,6 +9,14 @@ namespace ps2native {
 struct AotOptions {
     std::vector<std::uint32_t> additional_function_entries;
     std::vector<AotJumpTable> jump_tables;
+    // Hybrid translation (boot firmware): discovery stops at instructions the
+    // AOT does not translate and at targets outside the static image; those
+    // addresses are listed as interpreter boundaries instead of failing.
+    bool interpreter_boundaries{};
+    // Provenance exported by the generated module ("elf", "bios-rom0") and the
+    // SHA-256 of the input; computed from the ELF bytes when left empty.
+    std::string source_kind{"elf"};
+    std::string source_sha256;
 };
 
 // Emits compiled native basic-block functions and a dispatch table.

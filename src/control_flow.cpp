@@ -164,15 +164,33 @@ std::optional<std::uint32_t> window_entry(const std::set<std::uint32_t>& entries
 
 AotControlFlow analyze_control_flow(
     const ElfImage& image, std::span<const std::uint32_t> additional_function_entries,
-    std::span<const AotJumpTable> additional_jump_tables) {
+    std::span<const AotJumpTable> additional_jump_tables, bool interpreter_boundaries) {
     AotControlFlow graph;
     std::set<std::uint32_t> expanded_as_normal;
+    std::set<std::uint32_t> boundary_addresses;
     std::queue<std::pair<std::uint32_t, bool>> pending;
+
+    auto boundary = [&](std::uint32_t address, const std::string& reason) {
+        graph.leaders.erase(address);
+        if (boundary_addresses.insert(address).second)
+            graph.interpreter_boundaries.push_back({address, reason});
+    };
+    // Instruction word, or nullopt at an interpreter boundary (hybrid mode only).
+    auto fetch = [&](std::uint32_t address) -> std::optional<std::uint32_t> {
+        if (!interpreter_boundaries) return image.instruction_at(address);
+        try {
+            return image.instruction_at(address);
+        } catch (const std::exception& error) {
+            boundary(address, std::string("outside the static image (") + error.what() + ")");
+            return std::nullopt;
+        }
+    };
 
     auto seed = [&](std::uint32_t address, bool function) {
         if ((address & 3u) != 0)
             throw std::runtime_error("Unaligned AOT function entry address");
-        (void)image.instruction_at(address); // Validate executable file-backed code.
+        if (!fetch(address)) return; // Validate executable file-backed code.
+        if (boundary_addresses.contains(address)) return;
         graph.leaders.insert(address);
         if (function) {
             graph.function_entries.insert(address);
@@ -258,7 +276,26 @@ AotControlFlow analyze_control_flow(
             if (!is_delay_slot && !expanded_as_normal.insert(pc).second) continue;
             if (graph.instructions.size() >= 131072)
                 throw std::runtime_error("M1 AOT instruction discovery limit reached");
-            const auto decoded = decode_mips(pc, image.instruction_at(pc));
+            if (boundary_addresses.contains(pc)) continue;
+            const auto word = fetch(pc);
+            if (!word) continue;
+            if (interpreter_boundaries) {
+                const auto candidate = try_decode_r5900(pc, *word);
+                if (!candidate || !mips_aot_supported(candidate->opcode)) {
+                    boundary(pc, candidate ? std::string("system instruction ") +
+                                                 mips_opcode_name(candidate->opcode)
+                                           : std::string("instruction not implemented by the AOT"));
+                    // A system instruction that does not transfer control falls
+                    // through: translation resumes after it. ERET/SYSCALL/BREAK
+                    // and unknown encodings end static discovery on this path.
+                    const bool falls_through = candidate && candidate->opcode != MipsOpcode::Eret &&
+                                               candidate->opcode != MipsOpcode::Syscall &&
+                                               candidate->opcode != MipsOpcode::Break;
+                    if (falls_through && !is_delay_slot) seed(pc + 4u, false);
+                    continue;
+                }
+            }
+            const auto decoded = decode_mips(pc, *word);
             if (is_delay_slot && decoded.has_delay_slot())
                 throw std::runtime_error("Control transfer in branch delay slot is unsupported by M1");
             graph.instructions.emplace(pc, decoded);

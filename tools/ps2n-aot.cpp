@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <algorithm>
 #include <stdexcept>
 #include <string>
@@ -10,11 +11,14 @@
 template <typename Character>
 int aot_main(int argc, Character** argv) {
     if (argc < 3) {
-        std::cerr << "Usage: ps2n-aot <owned-mips-elf> <output.cpp> [--entry=0xADDRESS ...] [--table=0xADDRESS:COUNT ...]\n";
+        std::cerr << "Usage: ps2n-aot <owned-mips-elf> <output.cpp> [--entry=0xADDRESS ...] [--table=0xADDRESS:COUNT ...]\n"
+                     "       ps2n-aot <your-rom0.bin> <output.cpp> --bios [--expect-sha256=HEX] [--entry=0xADDRESS ...]\n";
         return 2;
     }
     try {
         ps2native::AotOptions options;
+        bool bios_input = false;
+        std::optional<std::string> expected_sha256;
         auto parse_u32 = [](const std::string& value, const std::string& label) {
             if (value.empty() || value[0] == '-')
                 throw std::runtime_error("Invalid " + label);
@@ -40,11 +44,31 @@ int aot_main(int argc, Character** argv) {
                     parse_u32(argument.substr(0, colon), "--table address"),
                     parse_u32(argument.substr(colon + 1), "--table entry count")
                 });
+            } else if (flag == "--bios") {
+                bios_input = true;
+            } else if (flag.starts_with("--expect-sha256=")) {
+                expected_sha256 = flag.substr(16);
             } else {
-                throw std::runtime_error("Unrecognized argument; expected --entry or --table");
+                throw std::runtime_error("Unrecognized argument; expected --entry, --table, --bios or --expect-sha256");
             }
         }
         const auto input = ps2native::read_file(std::filesystem::path(argv[1]));
+        if (bios_input) {
+            // Hybrid translation of user-supplied boot firmware: reachable ROM code
+            // only, interpreter boundaries listed; nothing is embedded but code.
+            if (!options.jump_tables.empty()) throw std::runtime_error("--table is not supported with --bios");
+            const auto bios = ps2native::load_bios_rom0(input, {expected_sha256});
+            options.interpreter_boundaries = true;
+            options.source_kind = "bios-rom0";
+            options.source_sha256 = bios.sha256;
+            const auto generated = ps2native::generate_aot_cpp(ps2native::bios_code_image(bios), options);
+            const bool updated = ps2native::write_text_if_changed(std::filesystem::path(argv[2]), generated);
+            std::cout << (updated ? "AOT source generated" : "AOT unchanged; reused")
+                      << "; ROM0 " << bios.version.romver << " sha256 " << bios.sha256
+                      << "; reset vector 0x" << std::hex << ps2native::kEeResetVector << std::dec << '\n';
+            return 0;
+        }
+        if (expected_sha256) throw std::runtime_error("--expect-sha256 applies to --bios inputs");
         const auto elf = ps2native::parse_ee_elf(input);
         const auto generated = ps2native::generate_aot_cpp(elf, options);
         const bool updated = ps2native::write_text_if_changed(

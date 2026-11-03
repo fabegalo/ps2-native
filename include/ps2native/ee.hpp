@@ -8,6 +8,25 @@ struct Register128 {
     std::uint64_t low{};
     std::uint64_t high{};
 };
+// COP0 register numbers used by the boot path (EE Core User's Manual).
+enum class Cop0 : unsigned {
+    Index = 0, Random = 1, EntryLo0 = 2, EntryLo1 = 3, Context = 4, PageMask = 5,
+    Wired = 6, BadVAddr = 8, Count = 9, EntryHi = 10, Compare = 11, Status = 12,
+    Cause = 13, Epc = 14, PRid = 15, Config = 16, BadPAddr = 23, Debug = 24,
+    Perf = 25, TagLo = 28, TagHi = 29, ErrorEpc = 30
+};
+// Status fields (R5900 layout).
+inline constexpr std::uint32_t kStatusIE = 1u << 0;
+inline constexpr std::uint32_t kStatusEXL = 1u << 1;
+inline constexpr std::uint32_t kStatusERL = 1u << 2;
+inline constexpr std::uint32_t kStatusKSU = 3u << 3;
+inline constexpr std::uint32_t kStatusIM7 = 1u << 15;
+inline constexpr std::uint32_t kStatusEIE = 1u << 16;
+inline constexpr std::uint32_t kStatusEDI = 1u << 17;
+inline constexpr std::uint32_t kStatusBEV = 1u << 22;
+// Bits that exist in the R5900 Status register; the rest read as zero.
+inline constexpr std::uint32_t kStatusWritable = 0xF0C79C1Fu;
+
 struct EEState {
     std::array<Register128, 32> gpr{};
     // Lower 64 bits of LO/HI (pipeline 0). LO1/HI1 (MMI pipeline 1) are not modeled.
@@ -20,7 +39,12 @@ struct EEState {
     bool delay_indirect{};
     // pc was reached through JR/JALR and has not yet been checked by the dispatcher.
     bool indirect_entry_pending{};
+    // Address of the instruction being executed (diagnostics: faults, block points).
+    std::uint32_t instruction_pc{};
+    // The instruction at instruction_pc executes in a branch delay slot.
+    bool instruction_in_delay_slot{};
     std::uint64_t retired_instructions{};
+    std::array<std::uint32_t, 32> cop0{};
     [[nodiscard]] std::uint32_t reg32(unsigned index) const;
     [[nodiscard]] std::uint64_t reg64(unsigned index) const;
     [[nodiscard]] Register128 reg128(unsigned index) const;
@@ -28,5 +52,13 @@ struct EEState {
     void set_reg32_sign_extended(unsigned index, std::uint32_t value);
     void set_reg64(unsigned index, std::uint64_t value);
     void set_reg128(unsigned index, std::uint64_t low, std::uint64_t high);
+    [[nodiscard]] std::uint32_t cp0(Cop0 reg) const noexcept { return cop0[static_cast<unsigned>(reg)]; }
+    void set_cp0(Cop0 reg, std::uint32_t value) noexcept { cop0[static_cast<unsigned>(reg)] = value; }
 };
+
+// EE core state after a hardware reset: every register cleared, PC at the
+// reset vector 0xBFC00000, Status = BEV | ERL (bootstrap vectors, error level),
+// PRid = 0x2E20 (R5900 implementation 0x2E, revision 0x20), Config = 0x440
+// (16 KiB instruction cache, 8 KiB data cache, caches disabled), Random = 47.
+[[nodiscard]] EEState ee_reset_state();
 } // namespace ps2native

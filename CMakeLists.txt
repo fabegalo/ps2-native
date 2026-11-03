@@ -5,7 +5,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(ps2n_core STATIC src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/ee.cpp src/mips.cpp src/control_flow.cpp src/aot.cpp)
+add_library(ps2n_core STATIC
+    src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/ee.cpp src/mips.cpp
+    src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
+    src/interpreter.cpp src/boot.cpp)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(MSVC)
     target_compile_options(ps2n_core PRIVATE /W4 /permissive-)
@@ -15,6 +18,21 @@ endif()
 
 add_executable(ps2n-aot tools/ps2n-aot.cpp)
 target_link_libraries(ps2n-aot PRIVATE ps2n_core)
+
+# M2.0: EE boot from the reset vector of a user-supplied ROM0 (interpreter only).
+add_executable(ps2n-boot tools/ps2n-boot.cpp)
+target_link_libraries(ps2n-boot PRIVATE ps2n_core)
+
+# Optional local hybrid runner for YOUR firmware: generate the translation with
+#   ps2n-aot <your-rom0.bin> <out.cpp> --bios
+# and configure with -DPS2N_BIOS_AOT_SOURCE=<out.cpp>. The generated file is
+# derived from Sony firmware: keep it local, never commit or distribute it.
+set(PS2N_BIOS_AOT_SOURCE "" CACHE FILEPATH "ps2n-aot --bios translation of a user-supplied ROM0")
+if(PS2N_BIOS_AOT_SOURCE)
+    add_executable(ps2n-boot-hybrid tools/ps2n-boot.cpp "${PS2N_BIOS_AOT_SOURCE}")
+    target_compile_definitions(ps2n-boot-hybrid PRIVATE PS2N_BOOT_WITH_AOT=1)
+    target_link_libraries(ps2n-boot-hybrid PRIVATE ps2n_core)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
@@ -192,5 +210,33 @@ if(BUILD_TESTING)
         target_link_libraries(ps2n-m13-${M13_CASE} PRIVATE ps2n_core)
         add_test(NAME ${M13_TEST} COMMAND ps2n-m13-${M13_CASE} "${M13_INPUT}" ${M13_MODE})
     endforeach()
+
+    # M2.0: synthetic ROM0 (tests/bios_program.hpp, no Sony content) booted from
+    # the reset vector, interpreter-only and hybrid with its ps2n-aot --bios translation.
+    set(M20_ROM "${FIXTURE_DIR}/synthetic-rom0.bin")
+    set(M20_AOT "${FIXTURE_DIR}/synthetic_rom0_aot.cpp")
+    add_custom_command(
+        OUTPUT "${M20_ROM}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M20_ROM}" bios
+        DEPENDS ps2n-make-fixture VERBATIM)
+    add_custom_command(
+        OUTPUT "${M20_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M20_ROM}" "${M20_AOT}" --bios
+        DEPENDS ps2n-aot "${M20_ROM}" VERBATIM)
+    add_executable(ps2n-boot-m20 tests/boot_m20.cpp "${M20_AOT}")
+    target_link_libraries(ps2n-boot-m20 PRIVATE ps2n_core)
+    add_test(NAME native-m20-boot COMMAND ps2n-boot-m20 "${M20_ROM}")
+
+    set(M20_BLOCK_POINT "# block point 0x[0-9A-F]+ \\[bus: device not implemented\\] EE bus R32 \\(LW\\) at 0xB000F000 \\(physical 0x1000F000, INTC\\)")
+    add_test(NAME cli-m20-boot-interpreter COMMAND ps2n-boot "${M20_ROM}" --trace=full)
+    set_tests_properties(cli-m20-boot-interpreter PROPERTIES
+        PASS_REGULAR_EXPRESSION "# engine interpreter only.*${M20_BLOCK_POINT}")
+    add_executable(ps2n-boot-synthetic-hybrid tools/ps2n-boot.cpp "${M20_AOT}")
+    target_compile_definitions(ps2n-boot-synthetic-hybrid PRIVATE PS2N_BOOT_WITH_AOT=1)
+    target_link_libraries(ps2n-boot-synthetic-hybrid PRIVATE ps2n_core)
+    add_test(NAME cli-m20-boot-hybrid COMMAND ps2n-boot-synthetic-hybrid "${M20_ROM}")
+    set_tests_properties(cli-m20-boot-hybrid PROPERTIES
+        PASS_REGULAR_EXPRESSION "# engine hybrid: AOT blocks [0-9]+ \\+ interpreter fallback.*${M20_BLOCK_POINT}")
 
 endif()

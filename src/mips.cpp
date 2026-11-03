@@ -80,7 +80,7 @@ std::optional<unsigned> MipsInstruction::written_gpr() const noexcept {
         case MipsOpcode::Xori: case MipsOpcode::Lui:
         case MipsOpcode::Lb: case MipsOpcode::Lbu: case MipsOpcode::Lh:
         case MipsOpcode::Lhu: case MipsOpcode::Lw: case MipsOpcode::Lwu:
-        case MipsOpcode::Ld: case MipsOpcode::Lq:
+        case MipsOpcode::Ld: case MipsOpcode::Lq: case MipsOpcode::Mfc0:
             target = rt;
             break;
         case MipsOpcode::Jal: case MipsOpcode::Bltzal: case MipsOpcode::Bgezal:
@@ -105,7 +105,26 @@ std::uint32_t mips_jump_target(std::uint32_t pc, std::uint32_t word) noexcept {
     return ((pc + 4u) & 0xf0000000u) | ((word & 0x03ffffffu) << 2);
 }
 
-MipsInstruction decode_mips(std::uint32_t pc, std::uint32_t word) {
+const char* mips_opcode_name(MipsOpcode opcode) noexcept {
+    switch (opcode) {
+#define PS2N_OPCODE_NAME(name) case MipsOpcode::name: return #name;
+        PS2N_R5900_AOT_OPCODES(PS2N_OPCODE_NAME)
+        PS2N_R5900_SYSTEM_OPCODES(PS2N_OPCODE_NAME)
+#undef PS2N_OPCODE_NAME
+    }
+    return "?";
+}
+
+bool mips_aot_supported(MipsOpcode opcode) noexcept {
+    switch (opcode) {
+#define PS2N_OPCODE_AOT(name) case MipsOpcode::name: return true;
+        PS2N_R5900_AOT_OPCODES(PS2N_OPCODE_AOT)
+#undef PS2N_OPCODE_AOT
+        default: return false;
+    }
+}
+
+std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t word) noexcept {
     const auto op = word >> 26;
     const auto rs = static_cast<std::uint8_t>((word >> 21) & 31u);
     const auto rt = static_cast<std::uint8_t>((word >> 16) & 31u);
@@ -128,6 +147,9 @@ MipsInstruction decode_mips(std::uint32_t pc, std::uint32_t word) {
             case 0x09: if (rt == 0 && sa == 0) return make(MipsOpcode::Jalr); break;
             case 0x0a: if (sa == 0) return make(MipsOpcode::Movz); break;
             case 0x0b: if (sa == 0) return make(MipsOpcode::Movn); break;
+            // The 20-bit code field of SYSCALL/BREAK is free for software use.
+            case 0x0c: return make(MipsOpcode::Syscall);
+            case 0x0d: return make(MipsOpcode::Break);
             // SYNC/SYNC.L/SYNC.P: stype lives in the sa field.
             case 0x0f: if (rs == 0 && rt == 0 && rd == 0) return make(MipsOpcode::Sync); break;
             case 0x10: if (rs == 0 && rt == 0 && sa == 0) return make(MipsOpcode::Mfhi); break;
@@ -173,6 +195,25 @@ MipsInstruction decode_mips(std::uint32_t pc, std::uint32_t word) {
             case 0x13: if (rs != 31) return make(MipsOpcode::Bgezall); break;
             default: break;
         }
+    } else if (op == 0x10) {
+        // COP0. MFC0/MTC0 with a non-zero low field are the debug/performance
+        // sub-encodings (MFBPC, MFPC, ...), which are not decoded.
+        if ((word & 0x7ffu) == 0u) {
+            if (rs == 0x00) return make(MipsOpcode::Mfc0);
+            if (rs == 0x04) return make(MipsOpcode::Mtc0);
+        }
+        if (rs == 0x10 && rt == 0 && rd == 0 && sa == 0) {
+            switch (funct) {
+                case 0x01: return make(MipsOpcode::Tlbr);
+                case 0x02: return make(MipsOpcode::Tlbwi);
+                case 0x06: return make(MipsOpcode::Tlbwr);
+                case 0x08: return make(MipsOpcode::Tlbp);
+                case 0x18: return make(MipsOpcode::Eret);
+                case 0x38: return make(MipsOpcode::Ei);
+                case 0x39: return make(MipsOpcode::Di);
+                default: break;
+            }
+        }
     } else {
         switch (op) {
             case 0x02: return make(MipsOpcode::J);
@@ -204,12 +245,44 @@ MipsInstruction decode_mips(std::uint32_t pc, std::uint32_t word) {
             case 0x28: return make(MipsOpcode::Sb);
             case 0x29: return make(MipsOpcode::Sh);
             case 0x2b: return make(MipsOpcode::Sw);
+            case 0x2f: return make(MipsOpcode::Cache);
+            case 0x33: return make(MipsOpcode::Pref);
             case 0x37: return make(MipsOpcode::Ld);
             case 0x3f: return make(MipsOpcode::Sd);
             default: break;
         }
     }
-    throw std::runtime_error("AOT unsupported R5900 instruction " + hex32(word) +
-                             " at " + hex32(pc) + " (no fallback/stub)");
+    return std::nullopt;
+}
+
+namespace {
+// Encoding class of an instruction the interpreter does not implement.
+const char* encoding_class(std::uint32_t word) {
+    switch (word >> 26) {
+        case 0x00: return "SPECIAL";
+        case 0x01: return "REGIMM";
+        case 0x10: return "COP0";
+        case 0x11: case 0x31: case 0x39: return "COP1/FPU";
+        case 0x12: case 0x36: case 0x3e: return "COP2/VU0 macro";
+        case 0x1c: return "MMI";
+        case 0x1a: case 0x1b: case 0x22: case 0x26: case 0x2a: case 0x2c: case 0x2d: case 0x2e:
+            return "unaligned load/store";
+        default: return "other";
+    }
+}
+} // namespace
+
+MipsInstruction decode_r5900(std::uint32_t pc, std::uint32_t word) {
+    if (const auto decoded = try_decode_r5900(pc, word)) return *decoded;
+    throw std::runtime_error(std::string("R5900 instruction ") + hex32(word) + " at " + hex32(pc) +
+                             " (" + encoding_class(word) + ") not implemented by the interpreter");
+}
+
+MipsInstruction decode_mips(std::uint32_t pc, std::uint32_t word) {
+    const auto decoded = try_decode_r5900(pc, word);
+    if (!decoded || !mips_aot_supported(decoded->opcode))
+        throw std::runtime_error("AOT unsupported R5900 instruction " + hex32(word) +
+                                 " at " + hex32(pc) + " (no fallback/stub)");
+    return *decoded;
 }
 } // namespace ps2native

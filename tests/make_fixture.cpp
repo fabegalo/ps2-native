@@ -1,4 +1,5 @@
 // Synthetic, independently-authored MIPS instructions. No Sony or game binaries.
+#include "bios_program.hpp"
 #include "m13_program.hpp"
 
 #include <cstdint>
@@ -27,8 +28,18 @@ std::uint32_t i(unsigned op, unsigned rs, unsigned rt, std::int16_t imm) {
 
 template <typename Character>
 int fixture_main(int argc, Character** argv) {
-    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym|jump-table|jump-table-nosym|m13|m13-stripped]\n"; return 2; }
+    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym|jump-table|jump-table-nosym|m13|m13-stripped|bios]\n"; return 2; }
     constexpr std::uint32_t start = 0x00100000u;
+
+    // Synthetic M2.0 boot firmware in the ROM0 container format (not Sony code).
+    if (argc == 3 && std::filesystem::path(argv[2]) == std::filesystem::path("bios")) {
+        const auto firmware = m20::build_firmware();
+        std::ofstream out(std::filesystem::path(argv[1]), std::ios::binary | std::ios::trunc);
+        if (!out || !out.write(reinterpret_cast<const char*>(firmware.rom.data()),
+                               static_cast<std::streamsize>(firmware.rom.size()))) return 1;
+        std::cout << "Created synthetic ROM0, ROMDIR at 0x" << std::hex << firmware.romdir_offset << '\n';
+        return 0;
+    }
 
     // Synthetic M1.3: relocation evidence, bounded jump tables, R5900 integer subset.
     if (argc == 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("m13") ||

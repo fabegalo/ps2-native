@@ -42,4 +42,13 @@ void EEState::set_reg128(unsigned index, std::uint64_t low, std::uint64_t high) 
     check_index(index, gpr.size());
     if (index != 0) gpr[index] = {low, high};
 }
+EEState ee_reset_state() {
+    EEState state;
+    state.pc = 0xBFC00000u;
+    state.set_cp0(Cop0::Status, kStatusBEV | kStatusERL);
+    state.set_cp0(Cop0::PRid, 0x00002E20u);
+    state.set_cp0(Cop0::Config, 0x00000440u);
+    state.set_cp0(Cop0::Random, 47u);
+    return state;
+}
 }  // namespace ps2native
