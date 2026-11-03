@@ -26,6 +26,13 @@ The M0 prototype validates and loads little-endian MIPS ELF32 `ET_EXEC`/`PT_LOAD
 
 Implemented M0 opcodes: `NOP`, `ADDIU`, `ADDU`, `ORI`, `LUI`, `LW`, `SW`, `BEQ`, `BNE`, `J`, `JAL`, `JR` (limited lower-word semantics). EE 128-bit register *storage* does **not** imply 128-bit/MMI instruction support. Unsupported opcodes, device registers, dynamic code and undiscovered jump targets fail explicitly.
 
+
+## M1.2 — evidence-backed indirect jump targets
+
+Jump-table discovery is deliberately conservative: the ELF32 loader recognizes **already-resolved R_MIPS_32 pointers** in non-executable allocated data sections, backed by defined executable `STT_SECTION` / `STT_FUNC` symbols. Valid targets become AOT function roots, including targets inside an executable section that have no function symbol. Rejected candidates remain reported, never silently interpreted as code.
+
+For stripped files that lack relocation evidence, a developer can declare a known table explicitly: `ps2n-aot input.elf output.cpp --table=0x00101000:2`. Every word must be readable from file-backed non-executable data and point to executable code; invalid hints fail. Unrecognized indirect addresses still fail at runtime. This is **not** automatic recognition of all jump tables, relocations, dynamic overlays or commercial games. See [M1.2 status](docs/M1.2-STATUS.md).
+
 ## Build and test
 
 Requires CMake >= 3.21, Ninja and a C++20 compiler; no external libraries.

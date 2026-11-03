@@ -5,6 +5,8 @@
 #include <stdexcept>
 
 namespace ps2native {
+// Implemented separately to isolate relocation-specific ELF validation.
+void discover_relocated_code_pointers(ElfImage& image);
 namespace {
 std::uint16_t u16(std::span<const std::uint8_t> b, std::size_t pos) {
     if (pos > b.size() || b.size() - pos < 2) throw std::runtime_error("ELF truncated (u16)");
@@ -120,6 +122,7 @@ ElfImage parse_ee_elf(std::span<const std::uint8_t> data) {
     elf.function_entries.erase(std::unique(elf.function_entries.begin(), elf.function_entries.end()),
                                elf.function_entries.end());
     elf.bytes.assign(data.begin(), data.end());
+    discover_relocated_code_pointers(elf);
     return elf;
 }
 
@@ -134,6 +137,19 @@ std::uint32_t ElfImage::instruction_at(std::uint32_t address) const {
         }
     }
     throw std::runtime_error("Instruction outside executable PT_LOAD / dynamic code unsupported");
+}
+
+std::uint32_t ElfImage::data_word_at(std::uint32_t address) const {
+    if ((address & 3u) != 0) throw std::runtime_error("Unaligned jump-table data address");
+    for (const auto& seg : segments) {
+        if (!(seg.flags & 1u) && (seg.flags & 4u) &&
+            address >= seg.vaddr &&
+            static_cast<std::uint64_t>(address) + 4u <=
+                static_cast<std::uint64_t>(seg.vaddr) + seg.file_size) {
+            return u32(bytes, static_cast<std::size_t>(seg.file_offset) + address - seg.vaddr);
+        }
+    }
+    throw std::runtime_error("Data pointer not in file-backed non-executable PT_LOAD");
 }
 
 }  // namespace ps2native

@@ -25,8 +25,74 @@ std::uint32_t i(unsigned op, unsigned rs, unsigned rt, std::int16_t imm) {
 
 template <typename Character>
 int fixture_main(int argc, Character** argv) {
-    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym]\n"; return 2; }
+    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym|jump-table|jump-table-nosym]\n"; return 2; }
     constexpr std::uint32_t start = 0x00100000u;
+
+    // Synthetic M1.2: two valid function pointers, one non-executable pointer.
+    if (argc == 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("jump-table") ||
+                      std::filesystem::path(argv[2]) == std::filesystem::path("jump-table-nosym"))) {
+        const bool with_relocations = std::filesystem::path(argv[2]) == std::filesystem::path("jump-table");
+        constexpr std::uint32_t table = start + 0x1000u;
+        const std::vector<std::uint32_t> code{
+            r(31,0,16,0x21), i(0x0f,0,8,0x0010), i(0x0d,8,8,0x1000),
+            i(0x23,8,9,0), r(9,0,31,0x09), i(0x09,0,10,5),
+            i(0x2b,0,2,0x40), i(0x23,8,9,4), r(9,0,31,0x09),
+            i(0x09,10,10,1), i(0x2b,0,2,0x44), r(16,0,31,0x21),
+            r(31,0,0,0x08), 0, 0xffffffffu,
+            i(0x09,10,2,7), r(31,0,0,0x08), 0,
+            i(0x09,10,2,9), r(31,0,0,0x08), 0
+        };
+        constexpr std::size_t textoff = 0x100, dataoff = 0x200;
+        constexpr std::size_t symoff = 0x300, stroff = 0x340, reloff = 0x400, shoff = 0x500;
+        std::vector<std::uint8_t> b(with_relocations ? shoff+6u*40u : dataoff+12u, 0);
+        b[0]=0x7f; b[1]='E'; b[2]='L'; b[3]='F'; b[4]=1; b[5]=1; b[6]=1;
+        write16(b,16,2); write16(b,18,8); write32(b,20,1);
+        write32(b,24,start); write32(b,28,52); write16(b,40,52);
+        write16(b,42,32); write16(b,44,2);
+        // PT_LOAD #1: executable text, #2: file-backed non-executable data.
+        write32(b,52,1); write32(b,56,textoff); write32(b,60,start);
+        write32(b,64,start); write32(b,68,static_cast<std::uint32_t>(code.size()*4u));
+        write32(b,72,0x100); write32(b,76,5); write32(b,80,0x100);
+        write32(b,84,1); write32(b,88,dataoff); write32(b,92,table);
+        write32(b,96,table); write32(b,100,12); write32(b,104,0x100);
+        write32(b,108,4); write32(b,112,0x100);
+        for(std::size_t n=0;n<code.size();++n) write32(b,textoff+n*4,code[n]);
+        write32(b,dataoff,start+15u*4u); write32(b,dataoff+4,start+18u*4u);
+        write32(b,dataoff+8,table); // rejected: non-executable target
+        if(with_relocations) {
+            write32(b,32,shoff); write16(b,46,40); write16(b,48,6);
+            const auto textsec=shoff+40u, datasec=shoff+80u;
+            write32(b,textsec+4,1); write32(b,textsec+8,6);
+            write32(b,textsec+12,start); write32(b,textsec+16,textoff);
+            write32(b,textsec+20,static_cast<std::uint32_t>(code.size()*4u));
+            write32(b,textsec+32,4);
+            write32(b,datasec+4,1); write32(b,datasec+8,2);
+            write32(b,datasec+12,table); write32(b,datasec+16,dataoff);
+            write32(b,datasec+20,12); write32(b,datasec+32,4);
+            const auto symsec=shoff+120u;
+            write32(b,symsec+4,2); write32(b,symsec+16,symoff);
+            write32(b,symsec+20,32); write32(b,symsec+24,4);
+            write32(b,symsec+28,2); write32(b,symsec+32,4); write32(b,symsec+36,16);
+            write32(b,symoff+20,start);
+            b[symoff+28]=3; write16(b,symoff+30,1); // local STT_SECTION(.text)
+            const auto strsec=shoff+160u;
+            write32(b,strsec+4,3); write32(b,strsec+16,stroff); write32(b,strsec+20,1);
+            const auto relsec=shoff+200u;
+            write32(b,relsec+4,9); write32(b,relsec+16,reloff);
+            write32(b,relsec+20,24); write32(b,relsec+24,3); write32(b,relsec+28,2);
+            write32(b,relsec+32,4); write32(b,relsec+36,8);
+            for(std::uint32_t n=0;n<3;++n){
+                write32(b,reloff+n*8u,table+n*4u);
+                write32(b,reloff+n*8u+4u,258); // symbol #1, R_MIPS_32
+            }
+        }
+        std::ofstream out(std::filesystem::path(argv[1]),std::ios::binary|std::ios::trunc);
+        if(!out || !out.write(reinterpret_cast<const char*>(b.data()),
+                              static_cast<std::streamsize>(b.size()))) return 1;
+        std::cout<<"Created M1.2 ELF with jump table and relocation="<<with_relocations<<'\n';
+        return 0;
+    }
+
     const std::vector<std::uint32_t> standard{
         r(31, 0, 16, 0x21),  // 00: addu $s0, $ra, $zero
         i(0x09, 0, 8, 5),    // 01: addiu $t0, $zero, 5

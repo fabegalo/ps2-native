@@ -33,6 +33,13 @@ Projeto independente inspirado na **visão** do [x360-native](https://github.com
 
 Nenhum arquivo proprietário, biblioteca GPL, BIOS ou jogo faz parte desta base.
 
+
+## M1.2 — destinos indiretos com evidência verificável
+
+A descoberta de jump tables é conservadora: o parser ELF32 identifica ponteiros `R_MIPS_32` **já resolvidos** em seções de dados não executáveis, associados a símbolos `STT_SECTION` ou `STT_FUNC` em código executável. Os destinos válidos entram no grafo AOT, inclusive endereços internos da seção sem símbolo de função. Candidatos rejeitados têm diagnóstico explícito.
+
+Em executáveis sem relocations/símbolos, é possível informar uma tabela conhecida: `ps2n-aot entrada.elf saida.cpp --table=0x00101000:2`. Todos os elementos são validados; tabelas inválidas falham. Endereços indiretos não descobertos continuam rejeitados. **Isso não representa compatibilidade genérica com jogos, overlays ou todas as variantes de relocação MIPS.** Veja o [status M1.2](docs/M1.2-STATUS.md).
+
 ## Compilar e testar
 
 Requisitos: CMake 3.21+, compilador C++20, Ninja (Linux/macOS; também recomendado no Windows). Não requer Python, administrador ou dependências externas.

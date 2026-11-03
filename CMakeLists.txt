@@ -107,4 +107,41 @@ if(BUILD_TESTING)
     target_link_libraries(ps2n-aot-indirect-unresolved PRIVATE ps2n_core)
     add_test(NAME native-indirect-unresolved COMMAND ps2n-aot-indirect-unresolved "${STRIPPED_ELF}" unresolved)
 
+    # M1.2: valid ELF32 R_MIPS_32 references and explicit jump table entries.
+    foreach(FIXTURE_MODE IN ITEMS jump-table jump-table-nosym)
+        set(JUMP_ELF "${FIXTURE_DIR}/${FIXTURE_MODE}.elf")
+        add_custom_command(
+            OUTPUT "${JUMP_ELF}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
+            COMMAND $<TARGET_FILE:ps2n-make-fixture> "${JUMP_ELF}" "${FIXTURE_MODE}"
+            DEPENDS ps2n-make-fixture VERBATIM)
+    endforeach()
+    set(JUMP_RELOC_ELF "${FIXTURE_DIR}/jump-table.elf")
+    set(JUMP_STRIPPED_ELF "${FIXTURE_DIR}/jump-table-nosym.elf")
+    set(JUMP_RELOC_AOT "${FIXTURE_DIR}/jump_reloc_aot.cpp")
+    set(JUMP_HINT_AOT "${FIXTURE_DIR}/jump_hints_aot.cpp")
+    set(JUMP_UNKNOWN_AOT "${FIXTURE_DIR}/jump_unknown_aot.cpp")
+    add_custom_command(
+        OUTPUT "${JUMP_RELOC_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${JUMP_RELOC_ELF}" "${JUMP_RELOC_AOT}"
+        DEPENDS ps2n-aot "${JUMP_RELOC_ELF}" VERBATIM)
+    add_custom_command(
+        OUTPUT "${JUMP_HINT_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${JUMP_STRIPPED_ELF}" "${JUMP_HINT_AOT}" --table=0x00101000:2
+        DEPENDS ps2n-aot "${JUMP_STRIPPED_ELF}" VERBATIM)
+    add_custom_command(
+        OUTPUT "${JUMP_UNKNOWN_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${JUMP_STRIPPED_ELF}" "${JUMP_UNKNOWN_AOT}"
+        DEPENDS ps2n-aot "${JUMP_STRIPPED_ELF}" VERBATIM)
+
+    add_executable(ps2n-jump-reloc tests/aot_jump_table.cpp "${JUMP_RELOC_AOT}")
+    target_link_libraries(ps2n-jump-reloc PRIVATE ps2n_core)
+    add_test(NAME native-jump-relocations COMMAND ps2n-jump-reloc "${JUMP_RELOC_ELF}" reloc)
+    add_executable(ps2n-jump-hints tests/aot_jump_table.cpp "${JUMP_HINT_AOT}")
+    target_link_libraries(ps2n-jump-hints PRIVATE ps2n_core)
+    add_test(NAME native-jump-explicit COMMAND ps2n-jump-hints "${JUMP_STRIPPED_ELF}" explicit)
+    add_executable(ps2n-jump-unresolved tests/aot_jump_table.cpp "${JUMP_UNKNOWN_AOT}")
+    target_link_libraries(ps2n-jump-unresolved PRIVATE ps2n_core)
+    add_test(NAME native-jump-unresolved COMMAND ps2n-jump-unresolved "${JUMP_STRIPPED_ELF}" unresolved)
+
 endif()
