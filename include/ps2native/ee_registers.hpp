@@ -9,9 +9,11 @@
 // reason.
 #include "ps2native/console.hpp"
 #include "ps2native/device_timing.hpp"
+#include "ps2native/gif.hpp"
 #include "ps2native/gs_registers.hpp"
 #include "ps2native/iop.hpp"
 #include "ps2native/mch.hpp"
+#include "ps2native/video_encoder.hpp"
 
 #include <array>
 #include <cstddef>
@@ -40,23 +42,11 @@ inline constexpr std::uint32_t kSioTxFifo = 0x1000F180u;
 inline constexpr std::uint32_t kDmacEnabler = 0x1000F520u;
 // EE interrupt controller (ps2tek): I_STAT 0x1000F000 (pending sources 0-14,
 // write 1 to clear) and I_MASK 0x1000F010 (write 1 to reverse a bit).
-// 0x1F801900..0x1F80191F: bytes the EE kernel writes at "Initialize GS"
-// (0x190C = 7, 0x190D/0x1904/0x1905/0x190A/0x190B = 0, 0x1907 = 0x12). No
-// public documentation names them (ps2tek, ps2sdk and PCSX2's IOP register
-// definitions do not; PCSX2 keeps unknown IOP-page writes as plain storage).
-// After the GS reset the kernel pulses 0x1918 (0, ~555-iteration delay, then
-// 16-bit 1) and starts what looks like a serial-bus transaction (0x1908 = 8,
-// 0x1904 = 0x42, 0x1905 = 0, 0x1900 = 0x7E, 0x1906 = 1), then polls bit 0 of
-// 0x1908 and reads a byte from 0x1900; only the kernel uses the block (ROM
-// scan of the three dumps). Its device and answers are unknown.
-inline constexpr std::uint32_t kUndocumented190x = 0x1F801900u;
-// 0x1A000000..0x1A00001F: the SCPH-70012 kernel writes 16-bit values here at
-// the same steps (0x1A000008 = 3, 0x1A000004 = 1; later 0x1A000006,
-// 0x1A000002 = 0x42, 0x1A000010) where the later kernels write the 0x1F801900
-// block; equally undocumented (PCSX2 calls it "ba0", ignores writes and
-// answers one read address with a counter).
-inline constexpr std::uint32_t kUndocumented1A = 0x1A000000u;
-inline constexpr std::uint32_t kUndocumentedBlockBytes = 0x20u;
+// 0x1F801900..0x1F80191F and 0x1A000000..0x1A00001F: the two bus masters to
+// the video encoder (video_encoder.hpp).
+inline constexpr std::uint32_t kUndocumented190x = kVideoEncoderMaster190x;
+inline constexpr std::uint32_t kUndocumented1A = kVideoEncoderMaster1A;
+inline constexpr std::uint32_t kUndocumentedBlockBytes = kVideoEncoderMasterBytes;
 inline constexpr std::uint32_t kIntcStat = 0x1000F000u;
 inline constexpr std::uint32_t kIntcMask = 0x1000F010u;
 inline constexpr std::uint32_t kIntcSources = 0x7FFFu;
@@ -68,14 +58,18 @@ public:
     // reset vector in `rom0` (empty: no IOP execution); the clock is attached
     // separately.
     void reset(const ConsoleHardware* hardware = nullptr, std::span<const std::uint8_t> rom0 = {},
-               const NvmImage* nvm = nullptr);
+               const NvmImage* nvm = nullptr, const DiagnosticAssumptions* assumptions = nullptr);
     // EE cycle counter (EEState::retired_instructions during boot).
     void set_clock(const std::uint64_t* ee_cycles) noexcept { clock_ = ee_cycles; }
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes);
     void write(std::uint32_t physical, std::size_t bytes, std::uint64_t value);
+    // 128-bit store (SQ): the GIF FIFO takes whole quadwords.
+    void write128(std::uint32_t physical, std::uint64_t low, std::uint64_t high);
+    [[nodiscard]] const Gif& gif() const noexcept { return gif_; }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return gs_; }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return mch_; }
     [[nodiscard]] const Iop& iop() const noexcept { return iop_; }
+    [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return video_encoder_; }
     // INTC sources enabled in I_MASK (an interrupt reaches COP0 IP2 when one
     // of them is pending).
     [[nodiscard]] std::uint32_t intc_mask() const noexcept { return intc_mask_; }
@@ -110,14 +104,11 @@ private:
     std::array<std::optional<std::uint32_t>, 3> sio_setup_{};
     std::string sio_output_;
     std::uint32_t intc_mask_{};
-    // GIF (ps2tek "GIF I/O"): GIF_CTRL bit 3 (temporary stop) and GIF_MODE
-    // bits 0 (mask PATH3) and 2 (intermittent mode) as written. No GIF path
-    // (GIF DMA, VIF1, VU1) is modeled, so the GIF never holds data.
-    std::uint32_t gif_ctrl_{}, gif_mode_{};
-    // 0x1F801900..0x1F80191F as written (byte granularity), no modeled effect.
-    std::array<std::optional<std::uint8_t>, kUndocumentedBlockBytes> undocumented_190x_{};
-    // 0x1A000000..0x1A00001F, same rule.
-    std::array<std::optional<std::uint8_t>, kUndocumentedBlockBytes> undocumented_1a_{};
+    Gif gif_;
+    // Video encoder serial bus and its two masters.
+    VideoEncoderBus video_encoder_;
+    VideoEncoderMaster encoder_master_190x_{VideoEncoderMaster::Layout::Byte190x};
+    VideoEncoderMaster encoder_master_1a_{VideoEncoderMaster::Layout::Halfword1A};
     const std::uint64_t* clock_{};
     const ConsoleHardware* hardware_{};
 };

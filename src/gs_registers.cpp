@@ -39,6 +39,7 @@ std::optional<std::size_t> mode_index(std::uint32_t physical) {
 void GsRegisters::reset(std::uint64_t now) {
     ++generation_;
     mode_ = {};
+    general_ = {};
     csr_written_.reset();
     line_ = {Sync::Running, 2u, {now, kEeCyclesPerBusCycle * kBusCyclesPerNtscLine}};
 }
@@ -105,6 +106,7 @@ void GsRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
             // state (PCSX2 clears them too); the line clock restarts as NTSC.
             change_line_state({Sync::Running, 2u, {now, kEeCyclesPerBusCycle * kBusCyclesPerNtscLine}}, guard);
             mode_ = {};
+            general_ = {}; // hypothesis: the general registers are back to unknown as well
             ++generation_;
         }
         // SIGNAL/FINISH/HSINT/VSINT/EDWINT: 1 clears the event and re-enables
@@ -174,6 +176,47 @@ std::uint64_t GsRegisters::VerticalClock::next_edge(std::uint64_t from, bool end
     if (from <= first) return first;
     const auto fields = (from - first + period - 1u) / period;
     return first + fields * period;
+}
+
+void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
+    const auto shown = "GS general register " + hex(index, 2) + " = " + hex(value, 16);
+    switch (index) {
+        // State registers (ps2sdk gs_gp.h addresses): PRIM, RGBAQ, ST, UV, TEX0,
+        // CLAMP, FOG, TEX1, TEX2, XYOFFSET, PRMODECONT, PRMODE, TEXCLUT,
+        // SCANMSK, MIPTBP1/2, TEXA, FOGCOL, TEXFLUSH, SCISSOR, ALPHA, DIMX,
+        // DTHE, COLCLAMP, TEST, PABE, FBA, FRAME, ZBUF, BITBLTBUF, TRXPOS, TRXREG.
+        case 0x00: case 0x01: case 0x02: case 0x03: case 0x06: case 0x07: case 0x08: case 0x09: case 0x0A:
+        case 0x14: case 0x15: case 0x16: case 0x17: case 0x18: case 0x19: case 0x1A: case 0x1B: case 0x1C:
+        case 0x22: case 0x34: case 0x35: case 0x36: case 0x37: case 0x3B: case 0x3D: case 0x3F: case 0x40:
+        case 0x41: case 0x42: case 0x43: case 0x44: case 0x45: case 0x46: case 0x47: case 0x48: case 0x49:
+        case 0x4A: case 0x4B: case 0x4C: case 0x4D: case 0x4E: case 0x4F: case 0x50: case 0x51: case 0x52:
+            general_[index] = value;
+            return;
+        case 0x53: { // TRXDIR: XDIR 0 host->local, 1 local->host, 2 local->local, 3 off
+            const auto xdir = value & 3u;
+            if ((value & ~3ull) != 0u) throw DeviceRefusal(shown + ": TRXDIR bits above 1 are reserved");
+            if (xdir != 3u) {
+                const auto& trxreg = general_[0x52];
+                if (!trxreg) throw DeviceRefusal(shown + ": transmission started with TRXREG never written");
+                const auto width = *trxreg & 0xFFFu, height = (*trxreg >> 32) & 0xFFFu;
+                // An empty area moves no pixel (hypothesis: the transmission
+                // ends at once and expects no IMAGE data).
+                if (width != 0u && height != 0u)
+                    throw DeviceRefusal(shown + ": a " + std::to_string(width) + "x" + std::to_string(height) +
+                                        " transmission moves pixels; GS local memory is not modeled");
+            }
+            general_[index] = value;
+            return;
+        }
+        case 0x04: case 0x05: case 0x0C: case 0x0D:
+            throw DeviceRefusal(shown + ": a vertex write (XYZ/XYZF) draws; drawing is not modeled");
+        case 0x54:
+            throw DeviceRefusal(shown + ": HWREG moves pixels; GS local memory is not modeled");
+        case 0x60: case 0x61: case 0x62:
+            throw DeviceRefusal(shown + ": SIGNAL/FINISH/LABEL raise GS events; not modeled");
+        default:
+            throw DeviceRefusal(shown + ": no GS general register at this address");
+    }
 }
 
 std::optional<std::uint64_t> GsRegisters::latched(std::uint32_t physical) const {

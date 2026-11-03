@@ -155,7 +155,7 @@ void Memory::load(const ElfImage& elf) {
 }
 
 void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware,
-                            const NvmImage* nvm) {
+                            const NvmImage* nvm, const DiagnosticAssumptions* assumptions) {
     if (rom0.size() != kBiosRomBytes)
         throw std::runtime_error("BIOS ROM0 must be exactly 4 MiB to be mapped at 0x1FC00000");
     mapping_ = Mapping::HardwareReset;
@@ -166,7 +166,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
     tlb_defined_ = {};
     asid_ = 0;
     error_level_ = true;
-    registers_.reset(hardware, rom_, nvm);
+    registers_.reset(hardware, rom_, nvm, assumptions);
 }
 
 void Memory::set_translation_context(std::uint8_t asid, bool error_level) noexcept {
@@ -355,6 +355,26 @@ std::uint64_t Memory::read64(std::uint32_t address) const {
 }
 void Memory::write64(std::uint32_t address, std::uint64_t value) {
     write_le(address, 8, value, "SD");
+}
+void Memory::write128(std::uint32_t address, std::uint64_t low, std::uint64_t high) {
+    // The low half resolves exactly as before; a 16-byte aligned quadword never
+    // spans two regions.
+    const auto target = resolve(address & ~15u, 8, true, "SD");
+    if ((address & 15u) != 0u || !is_ee_register_region(target.region)) {
+        write_le(address, 8, low, "SD");
+        write_le(address + 8u, 8, high, "SD");
+        return;
+    }
+    try {
+        registers_.write128(target.physical, low, high);
+    } catch (const DeviceRefusal& refusal) {
+        throw device_refusal(BusFault::Device, true, 16, address, target.physical, target.region, "SQ",
+                             refusal.what());
+    }
+    if (observer_ != nullptr) {
+        observer_->on_bus_access({true, 8, address, target.physical, target.region, low});
+        observer_->on_bus_access({true, 8, address + 8u, target.physical + 8u, target.region, high});
+    }
 }
 std::uint32_t Memory::fetch32(std::uint32_t address) const {
     return static_cast<std::uint32_t>(read_le(address, 4, "instruction fetch", false));

@@ -43,6 +43,8 @@ struct BootReport {
     std::uint32_t iop_pc{};
     std::optional<std::string> iop_stop;
     std::vector<std::string> iop_events;
+    // Video encoder serial-bus transactions, in order.
+    std::vector<std::string> video_encoder_transactions;
     std::vector<std::string> trace;
     std::vector<std::string> tail;
 };
@@ -54,8 +56,11 @@ struct BootReport {
 // registers refuse reads); its ROMVER must be the ROM0's, or the boot is refused.
 // `nvm` is that console's MECHACON NVM (load_nvm_image for `hardware`;
 // nullptr: none, so NVM reads are refused); it must outlive `memory`.
+// `assumptions` (nullptr: none) are diagnostic values for unmeasured device
+// state; a run that uses them is an experiment, not a boot of a measured console.
 void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state, Memory& memory,
-                     const ConsoleHardware* hardware = nullptr, const NvmImage* nvm = nullptr);
+                     const ConsoleHardware* hardware = nullptr, const NvmImage* nvm = nullptr,
+                     const DiagnosticAssumptions* assumptions = nullptr);
 
 // Runs the EE from its current state: AOT blocks where the module has a block
 // for the exact PC, the interpreter (explicitly traced) everywhere else. Never

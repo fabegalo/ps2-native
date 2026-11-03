@@ -93,7 +93,7 @@ public:
     // and resets the device registers of console `hardware` (may be nullptr),
     // whose MECHACON holds `nvm` (may be nullptr; must outlive the memory).
     void reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware = nullptr,
-                        const NvmImage* nvm = nullptr);
+                        const NvmImage* nvm = nullptr, const DiagnosticAssumptions* assumptions = nullptr);
     [[nodiscard]] Mapping mapping() const noexcept { return mapping_; }
     // Naturally aligned little-endian accesses; misalignment is an explicit error
     // (the R5900 address-error exception is not modeled yet).
@@ -105,6 +105,10 @@ public:
     void write16(std::uint32_t guest_address, std::uint16_t value);
     void write32(std::uint32_t guest_address, std::uint32_t value);
     void write64(std::uint32_t guest_address, std::uint64_t value);
+    // SQ: one 128-bit store at a 16-byte aligned address. Memory takes it as
+    // two 64-bit halves (traced as such); a device register (the GIF FIFO)
+    // receives the whole quadword at once.
+    void write128(std::uint32_t guest_address, std::uint64_t low, std::uint64_t high);
     // Instruction fetch: same translation and checks, not reported to the observer.
     [[nodiscard]] std::uint32_t fetch32(std::uint32_t guest_address) const;
     // Translation only (CACHE hit operations): physical address or BusError.
@@ -122,6 +126,7 @@ public:
     [[nodiscard]] const GsRegisters& gs() const noexcept { return registers_.gs(); }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
     [[nodiscard]] const Iop& iop() const noexcept { return registers_.iop(); }
+    [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return registers_.video_encoder(); }
     // Runs the IOP up to the current EE time (boot mapping, clock attached).
     void sync_iop() { registers_.sync_iop(); }
     [[nodiscard]] const std::string& sio_output() const noexcept { return registers_.sio_output(); }

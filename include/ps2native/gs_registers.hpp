@@ -84,6 +84,13 @@ public:
     [[nodiscard]] VerticalClock vertical_clock() const;
     // Incremented whenever the line or vertical clock may change.
     [[nodiscard]] std::uint64_t timing_generation() const noexcept { return generation_; }
+    // GS general register `index` written through the GIF (A+D). Registers
+    // hold state only: anything that draws or moves pixels (vertex kicks, a
+    // non-empty TRXDIR transmission, HWREG) or raises a GS event (SIGNAL,
+    // FINISH, LABEL) is refused, as are unassigned addresses.
+    void general_write(std::uint8_t index, std::uint64_t value);
+    // Value last written to general register `index` since reset.
+    [[nodiscard]] std::optional<std::uint64_t> general(std::uint8_t index) const { return general_[index]; }
     // Last value written to a modeled register since reset (for traces and tests).
     [[nodiscard]] std::optional<std::uint64_t> latched(std::uint32_t physical) const;
 
@@ -100,6 +107,7 @@ private:
 
     std::array<std::optional<std::uint64_t>, kModeRegisters> mode_{};
     std::optional<std::uint64_t> csr_written_;
+    std::array<std::optional<std::uint64_t>, 256> general_{};
     LineState line_{};
     std::uint64_t generation_{};
 };

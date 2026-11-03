@@ -9,7 +9,8 @@ add_library(ps2n_core STATIC
     src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
     src/interpreter.cpp src/boot.cpp src/ee_registers.cpp
-    src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp src/nvm.cpp)
+    src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp src/nvm.cpp
+    src/video_encoder.cpp src/gif.cpp)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(MSVC)
     target_compile_options(ps2n_core PRIVATE /W4 /permissive-)
@@ -349,5 +350,9 @@ if(BUILD_TESTING)
     add_executable(ps2n-iop-m27 tests/iop_m27.cpp)
     target_link_libraries(ps2n-iop-m27 PRIVATE ps2n_core)
     add_test(NAME native-m27-iop COMMAND ps2n-iop-m27)
+
+    add_executable(ps2n-m28 tests/m28.cpp)
+    target_link_libraries(ps2n-m28 PRIVATE ps2n_core)
+    add_test(NAME native-m28-video-gif COMMAND ps2n-m28)
 
 endif()

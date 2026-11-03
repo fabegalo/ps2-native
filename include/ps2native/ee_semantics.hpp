@@ -291,8 +291,7 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     } else if constexpr (Op == O::Sq) {
         const auto quad = effective_address(s, w) & ~15u;
         const auto value = s.reg128(t_);
-        m.write64(quad, value.low);
-        m.write64(quad + 8u, value.high);
+        m.write128(quad, value.low, value.high);
     // R5900 branches compare the full lower 64 bits. The condition reads rs
     // before BxxZAL writes the link register.
     } else if constexpr (Op == O::Beq || Op == O::Beql) {

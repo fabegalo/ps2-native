@@ -18,8 +18,6 @@ constexpr std::uint32_t kF500 = 0x1000F500u;
 // SIF registers, EE side (ps2tek): MSCOM, SMCOM, MSFLG, SMFLG, CTRL, BD6 at
 // 0x1000F200 + n * 0x10; the state is shared with the IOP, which owns it.
 constexpr std::uint32_t kSifBase = 0x1000F200u, kSifEnd = 0x1000F270u;
-constexpr std::uint32_t kGifCtrl = 0x10003000u, kGifMode = 0x10003010u;
-constexpr std::uint32_t kGifCtrlReset = 1u << 0, kGifCtrlStop = 1u << 3, kGifModeBits = (1u << 0) | (1u << 2);
 // Tn_MODE fields (ps2tek).
 constexpr std::uint32_t kModeClock = 3u << 0;
 constexpr std::uint32_t kModeGateEnable = 1u << 2;
@@ -48,7 +46,8 @@ GsRegisters::LineClock timer_clock(std::uint32_t mode, const GsRegisters& gs) {
 }
 } // namespace
 
-void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::uint8_t> rom0, const NvmImage* nvm) {
+void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::uint8_t> rom0, const NvmImage* nvm,
+                        const DiagnosticAssumptions* assumptions) {
     hardware_ = hardware;
     iop_.reset(rom0, hardware, nvm);
     // Hypothesis: counters, modes (disabled) and the latch are zero/unset after reset.
@@ -63,10 +62,10 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
     // before writing it (EnableIntc tests the bit, then reverses it).
     intc_mask_ = 0u;
     // Hypothesis: GIF not stopped, PATH3 unmasked, continuous mode at power-on.
-    gif_ctrl_ = 0u;
-    gif_mode_ = 0u;
-    undocumented_190x_ = {};
-    undocumented_1a_ = {};
+    gif_.reset();
+    video_encoder_.reset(assumptions);
+    encoder_master_190x_.reset();
+    encoder_master_1a_.reset();
 }
 
 // Deterministic EE/IOP ordering: the IOP never runs ahead of the EE, and it
@@ -161,6 +160,10 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
         sync_iop();
         return iop_.ee_sif_read((physical - kSifBase) / 0x10u);
     }
+    if (physical == kGifStat) {
+        if (bytes != 4u) throw DeviceRefusal("GIF_STAT read of " + std::to_string(bytes) + " byte(s) is not modeled");
+        return gif_.read_stat();
+    }
     if (physical == kF500) {
         // Unidentified register; what reads return has not been verified.
         throw DeviceRefusal("0x1000F500 read: an unidentified register; its read value is not verified");
@@ -199,9 +202,10 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
         if (bytes != 4u) throw DeviceRefusal("I_MASK read of " + std::to_string(bytes) + " byte(s) is not modeled");
         return intc_mask_;
     }
-    if ((physical >= kUndocumented190x && physical < kUndocumented190x + kUndocumentedBlockBytes) ||
-        (physical >= kUndocumented1A && physical < kUndocumented1A + kUndocumentedBlockBytes))
-        throw DeviceRefusal(hex(physical) + " read: an undocumented register; its read value is not verified");
+    if (physical >= kVideoEncoderMaster190x && physical < kVideoEncoderMaster190x + kVideoEncoderMasterBytes)
+        return encoder_master_190x_.read(physical - kVideoEncoderMaster190x, bytes, video_encoder_);
+    if (physical >= kVideoEncoderMaster1A && physical < kVideoEncoderMaster1A + kVideoEncoderMasterBytes)
+        return encoder_master_1a_.read(physical - kVideoEncoderMaster1A, bytes, video_encoder_);
     if (physical == kIntcStat)
         throw DeviceRefusal("I_STAT read: no EE interrupt source (GS, SBUS, VBLANK, VIF, VU, IPU, timers, SFIFO) "
                             "is modeled, so the pending bits are unknown");
@@ -216,6 +220,11 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
     if (physical >= kSioLcr && physical < kSioTxFifo + 0x80u)
         throw DeviceRefusal("EE SIO read: only SIO_ISR is modeled (LSR/RX FIFO status and receive are not)");
     throw DeviceRefusal("no register model");
+}
+
+void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint64_t high) {
+    if (physical == kGifFifo) return gif_.write_fifo(low, high, gs_);
+    throw DeviceRefusal("128-bit store: no register model");
 }
 
 void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value) {
@@ -252,23 +261,15 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
         return;
     }
     if (physical == kGifCtrl || physical == kGifMode) {
-        const auto v = static_cast<std::uint32_t>(value);
-        const auto allowed = physical == kGifCtrl ? kGifCtrlReset | kGifCtrlStop : kGifModeBits;
-        if (bytes != 4u || (v & ~allowed) != 0u)
-            throw DeviceRefusal(std::string(physical == kGifCtrl ? "GIF_CTRL" : "GIF_MODE") + " = " + hex(v) + " (" +
-                                std::to_string(bytes) + " byte(s)): only 32-bit writes of the documented bits are "
-                                "modeled");
-        if (physical == kGifMode) {
-            gif_mode_ = v;
-            return;
-        }
-        // Reset: the GIF drops its state; with no path modeled it holds no
-        // transfer to drop. Hypothesis: GIF_MODE and the stop bit return to
-        // their power-on values (ps2tek does not say what the reset clears).
-        if ((v & kGifCtrlReset) != 0u) gif_mode_ = 0u;
-        gif_ctrl_ = v & kGifCtrlStop;
+        if (bytes != 4u)
+            throw DeviceRefusal(std::string(physical == kGifCtrl ? "GIF_CTRL" : "GIF_MODE") + " write of " +
+                                std::to_string(bytes) + " byte(s): only 32-bit writes are modeled");
+        if (physical == kGifCtrl) gif_.write_ctrl(static_cast<std::uint32_t>(value));
+        else gif_.write_mode(static_cast<std::uint32_t>(value));
         return;
     }
+    if (physical >= kGifFifo && physical < kGifFifo + 0x10u)
+        throw DeviceRefusal("GIF FIFO write of " + std::to_string(bytes) + " byte(s): the FIFO takes quadwords (SQ)");
     if (physical == kF500 && bytes == 4u) {
         // Written by the BIOS reset code before the RDRAM setup. Its function
         // is undocumented (PCSX2 keeps it as plain storage): the value is
@@ -319,14 +320,13 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
         intc_mask_ ^= static_cast<std::uint32_t>(value) & kIntcSources;
         return;
     }
-    for (auto [base, latch] : {std::pair{kUndocumented190x, &undocumented_190x_},
-                               std::pair{kUndocumented1A, &undocumented_1a_}}) {
-        if (physical < base || physical >= base + kUndocumentedBlockBytes) continue;
-        if (physical + bytes > base + kUndocumentedBlockBytes)
-            throw DeviceRefusal(hex(physical) + " write crosses the end of the undocumented " + hex(base) + " block");
-        // Latched as written; its function is unknown and nothing reads it back.
-        for (std::size_t i = 0; i < bytes; ++i)
-            (*latch)[physical - base + i] = static_cast<std::uint8_t>(value >> (8u * i));
+    for (auto [base, master] : {std::pair{kVideoEncoderMaster190x, &encoder_master_190x_},
+                                std::pair{kVideoEncoderMaster1A, &encoder_master_1a_}}) {
+        if (physical < base || physical >= base + kVideoEncoderMasterBytes) continue;
+        if (physical + bytes > base + kVideoEncoderMasterBytes)
+            throw DeviceRefusal(hex(physical) + " write crosses the end of the video encoder master block at " +
+                                hex(base));
+        master->write(physical - base, bytes, static_cast<std::uint32_t>(value), video_encoder_);
         return;
     }
     if (physical == kIntcStat) {

@@ -411,11 +411,11 @@ void check_ee_devices() {
     registers.write(0x10003000u, 4u, 1u);       // GIF_CTRL reset
     registers.write(0x10003000u, 4u, 8u);       // temporary stop
     registers.write(0x10003010u, 4u, 5u);       // GIF_MODE
-    rejects([&] { registers.write(0x10003000u, 4u, 2u); }, "only 32-bit writes of the documented bits");
-    rejects([&] { registers.write(0x10003010u, 2u, 1u); }, "only 32-bit writes of the documented bits");
+    rejects([&] { registers.write(0x10003000u, 4u, 2u); }, "only bits 0 (reset) and 3 (stop) are modeled");
+    rejects([&] { registers.write(0x10003010u, 2u, 1u); }, "only 32-bit writes are modeled");
     registers.write(kUndocumented190x + 0x18u, 1u, 0u);
     registers.write(kUndocumented190x + 0x18u, 2u, 1u);
-    rejects([&] { (void)registers.read(kUndocumented190x + 0x08u, 1u); }, "an undocumented register");
+    rejects([&] { (void)registers.read(kUndocumented190x + 0x08u, 1u); }, "before it was cleared");
 
     // T0 counts HBLANK across the GS reset: old lines up to the reset, new
     // ones from it.

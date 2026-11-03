@@ -8,7 +8,9 @@ cmake-build-*/
 .idea/
 CMakeUserPresets.json
 
-# User-owned content MUST remain outside the repository
+# Local user-owned content (never commit)
+/bios/
+/games/
 *.iso
 *.chd
 *.cso

@@ -103,7 +103,8 @@ const char* boot_outcome_name(BootOutcome outcome) noexcept {
 }
 
 void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state, Memory& memory,
-                     const ConsoleHardware* hardware, const NvmImage* nvm) {
+                     const ConsoleHardware* hardware, const NvmImage* nvm,
+                     const DiagnosticAssumptions* assumptions) {
     if (aot != nullptr && (std::string(aot->source_kind) != "bios-rom0" || bios.sha256 != aot->source_sha256))
         throw std::runtime_error(std::string("AOT module was generated from ") + aot->source_kind + " sha256 " +
                                  aot->source_sha256 + ", not from this ROM0 (sha256 " + bios.sha256 +
@@ -114,7 +115,7 @@ void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state
                                  bios.version.romver + "; firmware revisions are never mixed");
     if (nvm != nullptr && hardware == nullptr)
         throw std::runtime_error("an NVM image needs the console profile it was validated for");
-    memory.reset_for_boot(bios.rom0, hardware, nvm);
+    memory.reset_for_boot(bios.rom0, hardware, nvm, assumptions);
     state = ee_reset_state();
     memory.set_clock(&state.retired_instructions);
     memory.set_translation_context(0, (state.cp0(Cop0::Status) & kStatusERL) != 0u);
@@ -193,6 +194,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
         report.iop_stop = iop.stop_reason();
         for (const auto& event : iop.events())
             report.iop_events.push_back("IOP " + std::to_string(event.cycle) + " " + event.text);
+        report.video_encoder_transactions = memory.video_encoder().transactions();
     }
     tracer.finish();
     std::ostringstream stop;

@@ -190,11 +190,12 @@ void check_ee_view(const IopRom& rom) {
     rejects([&] { (void)registers.read(kIntcStat, 4u); }, "no EE interrupt source");
     rejects([&] { registers.write(kIntcMask, 2u, 1u); }, "I_MASK write of 2 byte(s)");
 
-    // Undocumented blocks: writes latched, reads refused.
+    // Video encoder bus masters (M2.8): configuration writes latched, reading
+    // them back refused.
     registers.write(kUndocumented190x + 0xCu, 1u, 7u);
     registers.write(kUndocumented1A + 8u, 2u, 3u);
-    rejects([&] { (void)registers.read(kUndocumented190x + 0xCu, 1u); }, "an undocumented register");
-    rejects([&] { (void)registers.read(kUndocumented1A + 8u, 2u); }, "an undocumented register");
+    rejects([&] { (void)registers.read(kUndocumented190x + 0xCu, 1u); }, "reading this register back is not modeled");
+    rejects([&] { (void)registers.read(kUndocumented1A + 8u, 2u); }, "reading this register back is not modeled");
     rejects([&] { registers.write(kUndocumented1A + 0x1Eu, 4u, 0u); }, "crosses the end");
 }
 

@@ -34,7 +34,8 @@ int boot_main(int argc, Character** argv) {
     if (argc < 2) {
         std::cerr << "Usage: ps2n-boot <your-rom0.bin> [--expect-sha256=HEX] [--max-instructions=N]\n"
                      "                 [--console=MODEL[:MAINBOARD]] [--nvm=FILE] [--expect-nvm-sha256=HEX]\n"
-                     "                 [--trace=events|full] [--trace-out=FILE] [--tail=N] [--stop-at=0xADDRESS]\n";
+                     "                 [--trace=events|full] [--trace-out=FILE] [--tail=N] [--stop-at=0xADDRESS]\n"
+                     "                 [--assume-video-encoder=0xREG:0xVALUE]... (diagnostic experiments only)\n";
         return 2;
     }
     try {
@@ -44,6 +45,7 @@ int boot_main(int argc, Character** argv) {
         const ps2native::ConsoleHardware* hardware = nullptr;
         std::optional<std::filesystem::path> nvm_path;
         ps2native::NvmLoadOptions nvm_options;
+        ps2native::DiagnosticAssumptions assumptions;
         auto number = [](const std::string& text, const char* label) {
             std::size_t used = 0;
             std::uint64_t value = 0;
@@ -68,6 +70,15 @@ int boot_main(int argc, Character** argv) {
                 nvm_path = std::filesystem::path(argv[i]).native().substr(6);
             } else if (flag.starts_with("--expect-nvm-sha256=")) {
                 nvm_options.expected_sha256 = flag.substr(20);
+            } else if (flag.starts_with("--assume-video-encoder=")) {
+                const auto text = flag.substr(23);
+                const auto colon = text.find(':');
+                if (colon == std::string::npos) throw std::runtime_error("Invalid --assume-video-encoder (0xREG:0xVALUE)");
+                const auto index = number(text.substr(0, colon), "--assume-video-encoder register");
+                const auto value = number(text.substr(colon + 1), "--assume-video-encoder value");
+                if (index > 0xFFu || value > 0xFFu) throw std::runtime_error("Invalid --assume-video-encoder (bytes)");
+                assumptions.video_encoder_registers.emplace_back(static_cast<std::uint8_t>(index),
+                                                                 static_cast<std::uint8_t>(value));
             } else if (flag.starts_with("--max-instructions=")) {
                 options.max_instructions = number(flag.substr(19), "--max-instructions");
             } else if (flag == "--trace=events") {
@@ -122,6 +133,12 @@ int boot_main(int argc, Character** argv) {
         } else {
             header << "# nvm none\n";
         }
+        if (!assumptions.empty()) {
+            header << "# DIAGNOSTIC EXPERIMENT (not a boot of a measured console): assumed video encoder registers";
+            for (const auto& [index, value] : assumptions.video_encoder_registers)
+                header << ' ' << hex32(index).substr(8) << '=' << hex32(value).substr(8);
+            header << "\n";
+        }
         header << "# engine " << (module != nullptr ? "hybrid: AOT blocks " + std::to_string(module->block_count) +
                                                           " + interpreter fallback"
                                                     : std::string("interpreter only")) << "\n"
@@ -138,7 +155,8 @@ int boot_main(int argc, Character** argv) {
 
         ps2native::EEState state;
         ps2native::Memory memory;
-        ps2native::prepare_ee_boot(bios, module, state, memory, hardware, nvm ? &*nvm : nullptr);
+        ps2native::prepare_ee_boot(bios, module, state, memory, hardware, nvm ? &*nvm : nullptr,
+                                   assumptions.empty() ? nullptr : &assumptions);
         const auto report = ps2native::run_ee_boot(state, memory, module, options);
 
         if (trace_out) {
@@ -164,6 +182,10 @@ int boot_main(int argc, Character** argv) {
         std::cout << "# IOP: " << report.iop_instructions << " instructions, PC " << hex32(report.iop_pc)
                   << (report.iop_stop ? ", stopped" : ", running") << '\n';
         for (const auto& event : report.iop_events) std::cout << "#   " << event << '\n';
+        if (!report.video_encoder_transactions.empty()) {
+            std::cout << "# video encoder bus: " << report.video_encoder_transactions.size() << " transactions\n";
+            for (const auto& line : report.video_encoder_transactions) std::cout << "#   " << line << '\n';
+        }
         std::cout << "# last " << report.tail.size() << " instructions\n";
         for (const auto& line : report.tail) std::cout << line << '\n';
         std::cout << "# result " << ps2native::boot_outcome_name(report.outcome)
