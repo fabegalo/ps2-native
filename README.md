@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/ps2-native-banner.webp" alt="ps2-native — PlayStation 2 native recompilation banner" width="100%" />
+
 # ps2-native
 
 **An open research project for running original PlayStation 2 software through native ahead-of-time recompilation.**
