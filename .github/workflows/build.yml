@@ -53,7 +53,10 @@ jobs:
       - name: Build
         run: cmake --build out/build --config Release --parallel 2
 
+      - name: Test long paths and Unicode (260, 500, 1000)
+        run: ctest --test-dir out/build -C Release -R "^io-long-paths$" --verbose
+
       - name: Test AOT end-to-end
-        run: ctest --test-dir out/build -C Release --output-on-failure
+        run: ctest --test-dir out/build -C Release -E "^io-long-paths$" --output-on-failure
 
 # Developer-only proof of concept. No publishing or release automation.

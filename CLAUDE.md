@@ -42,7 +42,8 @@ reais; não forçar Browser ou jogos com stubs.
 
 ## Estado atual (2026-11-03)
 
-- M0, M1.1, M1.2, M1.3, M2.0, M2.1, M2.2, M2.3, M2.4, M2.5, M2.6 e M2.7 concluídos; M2.8 em andamento. 25 testes CTest (ver `docs/M2.8-STATUS.md`).
+- M0, M1.1, M1.2, M1.3, M2.0, M2.1, M2.2, M2.3, M2.4, M2.5, M2.6 e M2.7 concluídos; M2.8 em andamento. 26 testes CTest (ver `docs/M2.8-STATUS.md` e `docs/WINDOWS-PATHS.md`).
+- I/O host centralizado, incluindo traces e fixtures; caminhos Unicode de 260/500/1000 caracteres cobertos por `io-long-paths`, sem Registro ou cópias de entradas. UNC real é opcional e explicitamente não validado sem compartilhamento. Limite externo reproduzido no Ninja: ver `docs/WINDOWS-PATHS.md`.
 - M2.8: primeiro boot com BIOS + NVM reais (SCPH-70004, ROMVER `0200EC20040614`, perfis `SCPH-70004:GH-032-11`/`:GH-032-32`; arquivos locais em `bios/`, ignorada pelo Git): EE 17.690.079 e IOP 2.210.789 instruções, interpretador = híbrido; para na leitura do registrador `0x7E` (ID do chip) do codificador de vídeo. O "controlador não documentado" é o barramento serial (estilo I²C, escravo `0x42`/`0x43`) do codificador de vídeo dos slim: `VideoEncoderBus` + `VideoEncoderMaster` (16 bits em `0x1A000000`, 8 bits em `0x1F801900`; papéis por hipótese). Leituras do escravo só com `--assume-video-encoder=` (diagnóstico marcado). GIF PATH3 PACKED A+D (`gif.hpp`) escreve os registradores gerais do GS; `SQ` chega inteiro à FIFO (`Memory::write128`). Diagnóstico com ID assumido: o EE para no `I_STAT` (estado do GS após o reset desconhecido). VBLANK após o reset do GS e DMA do SIF continuam sem evidência.
 - M2.7: tempo vertical do GS (`GsRegisters::vertical_clock`, campo do `SYNCV`, bordas no *epoch* do relógio de linha por hipótese) gera VBLANK início/fim no `I_STAT` do IOP (IRQ 0/11). O IOP é sincronizado antes de leituras do EE e de escritas do GS/SIF (ordem determinística). IRQ 3 (DMA) é fonte conhecida e nunca sobe. Registradores do SIF `MSCOM`/`SMCOM`/`MSFLG`/`SMFLG` são compartilhados. `SIF_BD6` < `0x1000` (hipótese). `AND`/`BEQ`/`BNE` com bits parciais. EE: `GIF_CTRL`/`GIF_MODE`, `DEV9_R_REV`, timers em HBLANK através do reset do GS. BIOS reais sem NVM: contagens da M2.6. Diagnóstico com NVM sintética: IOP ~2,2 milhões de instruções no laço do `SIFMAN`; o EE para no controlador não documentado `0x1F801900`/`0x1A000000` depois do reset do GS. Sem DMA do SIF.
 - M2.6: NVM externa do MECHACON (`nvm.hpp`, `--nvm=`/`--expect-nvm-sha256=`; 1024 bytes no formato do PS2Ident, layout Dragon, validada contra nome de modelo/ModelID/ConModelID do perfil) servindo `ReadNVM`/`OpenConfig`/`ReadConfig`/`CloseConfig`. IOP: *tool board id* compartilhado, `DEV9_R_REV` por perfil (medido), `0xB600000A`, i.LINK `0x847C`/reset do PHY (hipóteses), bits conhecidos em valores desconhecidos (`ANDI`), timers 0–5 com `I_STAT`, exceções R3000A. BIOS reais sem NVM: contagens da M2.5, parada explícita no `ReadConfig`. Diagnóstico com NVM sintética local (não é boot): IOP ~436 mil instruções até o VBLANK do IOP.
@@ -167,7 +168,7 @@ BIOS, traces e traduções de firmware ficam fora do repositório
 - CI: `.github/workflows/build.yml`, matriz de seis alvos, `fail-fast: false`.
   Resultado local não substitui a CI; confirmar os jobs do commit
   correspondente (`gh run list`, `gh run view`) antes de declarar aprovação.
-- Resultado de referência (M2.8): 25/25 testes — `core-validation`,
+- Resultado de referência (M2.8 + I/O): 26/26 testes — `io-long-paths`, `core-validation`,
   `native-aot-smoke`, `native-aot-ops`, `native-indirect-{sym,hints,unresolved}`,
   `native-jump-{relocations,explicit,unresolved}`,
   `native-m13-{relocations,stripped,stripped-hint}`, `native-m20-boot`,

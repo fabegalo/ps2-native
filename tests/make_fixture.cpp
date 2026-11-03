@@ -1,16 +1,20 @@
 // Synthetic, independently-authored MIPS instructions. No Sony or game binaries.
 #include "bios_program.hpp"
 #include "m13_program.hpp"
+#include "ps2native/io.hpp"
 
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace {
+bool write_fixture(const std::filesystem::path& path, std::span<const std::uint8_t> bytes) {
+    try { (void)ps2native::write_binary_if_changed(path, bytes); return true; }
+    catch (const std::exception& error) { std::cerr << error.what() << '\n'; return false; }
+}
 void write16(std::vector<std::uint8_t>& bytes, std::size_t off, std::uint16_t v) {
     bytes.at(off) = static_cast<std::uint8_t>(v);
     bytes.at(off+1) = static_cast<std::uint8_t>(v >> 8);
@@ -45,9 +49,7 @@ int fixture_main(int argc, Character** argv) {
                                                   : mode == std::filesystem::path("bios-m22") ? m20::Stage::M22
                                                   : mode == std::filesystem::path("bios-m21") ? m20::Stage::M21
                                                                                               : m20::Stage::M20);
-        std::ofstream out(std::filesystem::path(argv[1]), std::ios::binary | std::ios::trunc);
-        if (!out || !out.write(reinterpret_cast<const char*>(firmware.rom.data()),
-                               static_cast<std::streamsize>(firmware.rom.size()))) return 1;
+        if (!write_fixture(std::filesystem::path(argv[1]), firmware.rom)) return 1;
         std::cout << "Created synthetic ROM0, ROMDIR at 0x" << std::hex << firmware.romdir_offset << '\n';
         return 0;
     }
@@ -57,9 +59,7 @@ int fixture_main(int argc, Character** argv) {
                       std::filesystem::path(argv[2]) == std::filesystem::path("m13-stripped"))) {
         const bool with_sections = std::filesystem::path(argv[2]) == std::filesystem::path("m13");
         const auto b = m13::build_elf(m13::build_program(), with_sections);
-        std::ofstream out(std::filesystem::path(argv[1]), std::ios::binary | std::ios::trunc);
-        if (!out || !out.write(reinterpret_cast<const char*>(b.data()),
-                               static_cast<std::streamsize>(b.size()))) return 1;
+        if (!write_fixture(std::filesystem::path(argv[1]), b)) return 1;
         std::cout << "Created M1.3 ELF, sections=" << with_sections << '\n';
         return 0;
     }
@@ -122,9 +122,7 @@ int fixture_main(int argc, Character** argv) {
                 write32(b,reloff+n*8u+4u,258); // symbol #1, R_MIPS_32
             }
         }
-        std::ofstream out(std::filesystem::path(argv[1]),std::ios::binary|std::ios::trunc);
-        if(!out || !out.write(reinterpret_cast<const char*>(b.data()),
-                              static_cast<std::streamsize>(b.size()))) return 1;
+        if (!write_fixture(std::filesystem::path(argv[1]), b)) return 1;
         std::cout<<"Created M1.2 ELF with jump table and relocation="<<with_relocations<<'\n';
         return 0;
     }
@@ -275,12 +273,7 @@ int fixture_main(int argc, Character** argv) {
         write32(bytes, str_section + 20, sizeof(names));
         write32(bytes, str_section + 32, 1);
     }
-    std::ofstream out(std::filesystem::path(argv[1]), std::ios::binary | std::ios::trunc);
-    if (!out || !out.write(reinterpret_cast<const char*>(bytes.data()),
-                           static_cast<std::streamsize>(bytes.size()))) {
-        std::cerr << "Failed to write fixture ELF\n";
-        return 1;
-    }
+    if (!write_fixture(std::filesystem::path(argv[1]), bytes)) return 1;
     std::cout << "Wrote synthetic EE/MIPS ELF, " << instr.size() << " instructions\n";
     return 0;
 }

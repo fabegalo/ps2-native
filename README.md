@@ -163,6 +163,10 @@ For stripped files that lack relocation evidence, a developer can declare a know
 
 ## Build and test
 
+Host I/O supports long Unicode paths on Windows without registry changes. The
+permanent `io-long-paths` test covers 260/500/1000-character paths, AOT output,
+BIOS/NVM/ELF input and traces. See [coverage and external build-tool limits](docs/WINDOWS-PATHS.md).
+
 Requires CMake >= 3.21, Ninja and a C++20 compiler; no external libraries.
 
 ```sh

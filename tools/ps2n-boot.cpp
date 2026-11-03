@@ -5,7 +5,6 @@
 #include "ps2native/core.hpp"
 
 #include <filesystem>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -55,7 +54,7 @@ int boot_main(int argc, Character** argv) {
             return value;
         };
         for (int i = 2; i < argc; ++i) {
-            const auto flag = std::filesystem::path(argv[i]).string();
+            const auto flag = ps2native::path_utf8(std::filesystem::path(argv[i]));
             if (flag.starts_with("--expect-sha256=")) {
                 load.expected_sha256 = flag.substr(16);
             } else if (flag.starts_with("--console=")) {
@@ -160,11 +159,9 @@ int boot_main(int argc, Character** argv) {
         const auto report = ps2native::run_ee_boot(state, memory, module, options);
 
         if (trace_out) {
-            std::ofstream file(*trace_out, std::ios::binary | std::ios::trunc);
-            if (!file) throw std::runtime_error("Cannot write the trace file");
-            file << header.str();
-            for (const auto& line : report.trace) file << line << '\n';
-            if (!file) throw std::runtime_error("Failed writing the trace file");
+            std::string text = header.str();
+            for (const auto& line : report.trace) { text += line; text += '\n'; }
+            (void)ps2native::write_text_if_changed(*trace_out, text);
         } else {
             for (const auto& line : report.trace) std::cout << line << '\n';
         }

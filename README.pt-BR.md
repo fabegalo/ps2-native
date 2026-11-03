@@ -170,6 +170,10 @@ Em executáveis sem relocations/símbolos, é possível informar uma tabela conh
 
 ## Compilar e testar
 
+O I/O suporta caminhos Unicode longos no Windows sem alterar o Registro. O teste
+permanente `io-long-paths` cobre caminhos de 260/500/1000 caracteres, saída AOT,
+entrada BIOS/NVM/ELF e traces. Ver [cobertura e limites das ferramentas de build](docs/WINDOWS-PATHS.md).
+
 Requisitos: CMake 3.21+, compilador C++20, Ninja (Linux/macOS; também recomendado no Windows). Não requer Python, administrador ou dependências externas.
 
 ```sh

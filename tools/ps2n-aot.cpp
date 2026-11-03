@@ -31,7 +31,7 @@ int aot_main(int argc, Character** argv) {
             return static_cast<std::uint32_t>(parsed);
         };
         for (int i = 3; i < argc; ++i) {
-            const auto flag = std::filesystem::path(argv[i]).string();
+            const auto flag = ps2native::path_utf8(std::filesystem::path(argv[i]));
             if (flag.starts_with("--entry=")) {
                 options.additional_function_entries.push_back(
                     parse_u32(flag.substr(8), "--entry address"));

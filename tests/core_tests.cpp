@@ -83,11 +83,11 @@ int core_tests_main(int argc, Character** argv) {
         // content is never rewritten, so downstream CMake targets don't rebuild.
         auto probe = std::filesystem::path(argv[1]);
         probe += ".aot-cache-check.txt";
-        std::filesystem::remove(probe);
+        ps2native::remove_file(probe);
         check(ps2native::write_text_if_changed(probe, "AOT-1"), "first cache write");
         check(!ps2native::write_text_if_changed(probe, "AOT-1"), "identical AOT reused");
         check(ps2native::write_text_if_changed(probe, "AOT-2"), "changed AOT rewritten");
-        std::filesystem::remove(probe);
+        ps2native::remove_file(probe);
         std::cout << "Core tests OK: ELF validation, segment/BSS, RAM aliases, EE GPR, fail-closed AOT\n";
         return 0;
     } catch (const std::exception& e) {

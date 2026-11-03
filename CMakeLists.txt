@@ -39,13 +39,23 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
     add_executable(ps2n-make-fixture tests/make_fixture.cpp)
+    target_link_libraries(ps2n-make-fixture PRIVATE ps2n_core)
+    add_executable(ps2n-io-paths tests/io_paths.cpp)
+    target_link_libraries(ps2n-io-paths PRIVATE ps2n_core)
+    set(PS2N_TEST_UNC_ROOT "" CACHE PATH "Optional existing writable UNC share for I/O tests")
+    add_test(NAME io-long-paths COMMAND ps2n-io-paths
+        "${CMAKE_CURRENT_BINARY_DIR}/io-paths"
+        $<TARGET_FILE:ps2n-aot> $<TARGET_FILE:ps2n-boot> $<TARGET_FILE:ps2n-make-fixture>
+        "${CMAKE_COMMAND}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/io_cli.cmake"
+        "${PS2N_TEST_UNC_ROOT}")
+    set_tests_properties(io-long-paths PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}" TIMEOUT 180)
     set(FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
     set(FIXTURE_ELF "${FIXTURE_DIR}/synthetic.elf")
     set(FIXTURE_AOT "${FIXTURE_DIR}/synthetic_aot.cpp")
 
     add_custom_command(
         OUTPUT "${FIXTURE_ELF}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
         COMMAND $<TARGET_FILE:ps2n-make-fixture> "${FIXTURE_ELF}"
         DEPENDS ps2n-make-fixture
         VERBATIM)
@@ -60,7 +70,6 @@ if(BUILD_TESTING)
     set(OPS_AOT "${FIXTURE_DIR}/ops_aot.cpp")
     add_custom_command(
         OUTPUT "${OPS_ELF}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
         COMMAND $<TARGET_FILE:ps2n-make-fixture> "${OPS_ELF}" ops
         DEPENDS ps2n-make-fixture
         VERBATIM)
@@ -89,7 +98,6 @@ if(BUILD_TESTING)
         set(INPUT_ELF "${FIXTURE_DIR}/${FIXTURE_MODE}.elf")
         add_custom_command(
             OUTPUT "${INPUT_ELF}"
-            COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
             COMMAND $<TARGET_FILE:ps2n-make-fixture> "${INPUT_ELF}" "${FIXTURE_MODE}"
             DEPENDS ps2n-make-fixture
             VERBATIM)
@@ -132,7 +140,6 @@ if(BUILD_TESTING)
         set(JUMP_ELF "${FIXTURE_DIR}/${FIXTURE_MODE}.elf")
         add_custom_command(
             OUTPUT "${JUMP_ELF}"
-            COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
             COMMAND $<TARGET_FILE:ps2n-make-fixture> "${JUMP_ELF}" "${FIXTURE_MODE}"
             DEPENDS ps2n-make-fixture VERBATIM)
     endforeach()
@@ -169,7 +176,6 @@ if(BUILD_TESTING)
     foreach(FIXTURE_MODE IN ITEMS m13 m13-stripped)
         add_custom_command(
             OUTPUT "${FIXTURE_DIR}/${FIXTURE_MODE}.elf"
-            COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
             COMMAND $<TARGET_FILE:ps2n-make-fixture> "${FIXTURE_DIR}/${FIXTURE_MODE}.elf" "${FIXTURE_MODE}"
             DEPENDS ps2n-make-fixture VERBATIM)
     endforeach()
@@ -219,7 +225,6 @@ if(BUILD_TESTING)
     set(M20_AOT "${FIXTURE_DIR}/synthetic_rom0_aot.cpp")
     add_custom_command(
         OUTPUT "${M20_ROM}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
         COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M20_ROM}" bios
         DEPENDS ps2n-make-fixture VERBATIM)
     add_custom_command(
@@ -247,7 +252,6 @@ if(BUILD_TESTING)
     set(M21_AOT "${FIXTURE_DIR}/synthetic_rom0_m21_aot.cpp")
     add_custom_command(
         OUTPUT "${M21_ROM}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
         COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M21_ROM}" bios-m21
         DEPENDS ps2n-make-fixture VERBATIM)
     add_custom_command(
@@ -264,7 +268,6 @@ if(BUILD_TESTING)
     set(M22_AOT "${FIXTURE_DIR}/synthetic_rom0_m22_aot.cpp")
     add_custom_command(
         OUTPUT "${M22_ROM}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
         COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M22_ROM}" bios-m22
         DEPENDS ps2n-make-fixture VERBATIM)
     add_custom_command(
@@ -281,7 +284,6 @@ if(BUILD_TESTING)
     set(M23_AOT "${FIXTURE_DIR}/synthetic_rom0_m23_aot.cpp")
     add_custom_command(
         OUTPUT "${M23_ROM}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
         COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M23_ROM}" bios-m23
         DEPENDS ps2n-make-fixture VERBATIM)
     add_custom_command(
@@ -298,7 +300,6 @@ if(BUILD_TESTING)
     set(M24_AOT "${FIXTURE_DIR}/synthetic_rom0_m24_aot.cpp")
     add_custom_command(
         OUTPUT "${M24_ROM}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
         COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M24_ROM}" bios-m24
         DEPENDS ps2n-make-fixture VERBATIM)
     add_custom_command(
@@ -316,7 +317,6 @@ if(BUILD_TESTING)
     set(M25_AOT "${FIXTURE_DIR}/synthetic_rom0_m25_aot.cpp")
     add_custom_command(
         OUTPUT "${M25_ROM}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
         COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M25_ROM}" bios-m25
         DEPENDS ps2n-make-fixture VERBATIM)
     add_custom_command(
