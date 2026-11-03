@@ -19,6 +19,16 @@ else()
     target_compile_options(ps2n_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Launcher core: content identification, the persistent library and runtime
+# contracts. No GUI dependency, so it builds and is tested on every host.
+add_library(ps2n_frontend STATIC src/frontend/content.cpp src/frontend/library.cpp src/frontend/runtime.cpp)
+target_link_libraries(ps2n_frontend PUBLIC ps2n_core)
+if(MSVC)
+    target_compile_options(ps2n_frontend PRIVATE /W4 /permissive- /utf-8)
+else()
+    target_compile_options(ps2n_frontend PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(ps2n-aot tools/ps2n-aot.cpp)
 target_link_libraries(ps2n-aot PRIVATE ps2n_core)
 
@@ -378,6 +388,19 @@ if(BUILD_TESTING)
     add_executable(ps2n-m28 tests/m28.cpp)
     target_link_libraries(ps2n-m28 PRIVATE ps2n_core)
     add_test(NAME native-m28-video-gif COMMAND ps2n-m28)
+
+    # Launcher core (headless): probes of synthetic ROM0 and ISO images (one past
+    # 4 GiB, sparse), Unicode long-path library persistence, runtime contracts.
+    add_executable(ps2n-frontend-tests tests/frontend_tests.cpp)
+    target_link_libraries(ps2n-frontend-tests PRIVATE ps2n_frontend)
+    if(MSVC)
+        target_compile_options(ps2n-frontend-tests PRIVATE /utf-8)
+    endif()
+    add_dependencies(ps2n-frontend-tests ps2n-fixture)
+    add_custom_target(ps2n-frontend-rom0 DEPENDS "${M20_ROM}")
+    add_dependencies(ps2n-frontend-tests ps2n-frontend-rom0)
+    add_test(NAME launcher-core COMMAND ps2n-frontend-tests "${M20_ROM}" "${CMAKE_CURRENT_BINARY_DIR}")
+    set_tests_properties(launcher-core PROPERTIES TIMEOUT 120)
 
     set(M29_ROM "${FIXTURE_DIR}/synthetic-gs.bin")
     set(M29_AOT "${FIXTURE_DIR}/synthetic_gs_aot.cpp")

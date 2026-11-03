@@ -221,4 +221,87 @@ bool write_binary_if_changed(const std::filesystem::path& path, std::span<const 
 bool write_text_if_changed(const std::filesystem::path& path, std::string_view data) {
     return write_binary_if_changed(path, {reinterpret_cast<const std::uint8_t*>(data.data()), data.size()});
 }
+void write_file_atomically(const std::filesystem::path& path, std::span<const std::uint8_t> data) {
+    const auto native = native_io_path(path);
+    if (!native.parent_path().empty()) make_directories(native.parent_path());
+    auto temporary = native;
+    temporary += ".tmp";
+    {
+        errno = 0;
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        if (!out || (!data.empty() && !out.write(reinterpret_cast<const char*>(data.data()),
+                                                 static_cast<std::streamsize>(data.size()))) || !out.flush())
+            fail("Cannot write temporary file", temporary, stream_error());
+        out.close();
+        if (!out) fail("Cannot close temporary file", temporary, stream_error());
+    }
+    std::error_code error;
+    std::filesystem::rename(temporary, native, error); // replaces an existing file on every host
+    if (error) {
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
+        fail("Cannot replace file", native, error);
+    }
+}
+std::filesystem::path display_path(const std::filesystem::path& path) {
+#ifdef _WIN32
+    const auto& text = path.native();
+    if (text.starts_with(L"\\\\?\\UNC\\")) return std::filesystem::path(L"\\\\" + text.substr(8));
+    if (text.starts_with(L"\\\\?\\")) return std::filesystem::path(text.substr(4));
+#endif
+    return path;
+}
+std::uint64_t regular_file_size(const std::filesystem::path& path) {
+    const auto native = native_io_path(path);
+    std::error_code error;
+    const auto size = std::filesystem::file_size(native, error);
+    if (error) fail("Cannot read file size", native, error);
+    return size;
+}
+
+struct InputFile::Stream {
+    std::ifstream file;
+};
+InputFile::InputFile(const std::filesystem::path& path) : path_(path), stream_(new Stream) {
+    const auto native = native_io_path(path);
+    errno = 0;
+    stream_->file.open(native, std::ios::binary);
+    if (!stream_->file) {
+        delete stream_;
+        stream_ = nullptr;
+        fail("Cannot open input file", native, stream_error());
+    }
+    std::error_code error;
+    size_ = std::filesystem::file_size(native, error);
+    if (error) {
+        delete stream_;
+        stream_ = nullptr;
+        fail("Cannot read file size", native, error);
+    }
+}
+InputFile::InputFile(InputFile&& other) noexcept
+    : path_(std::move(other.path_)), size_(other.size_), stream_(other.stream_) { other.stream_ = nullptr; }
+InputFile& InputFile::operator=(InputFile&& other) noexcept {
+    if (this != &other) {
+        delete stream_;
+        path_ = std::move(other.path_);
+        size_ = other.size_;
+        stream_ = other.stream_;
+        other.stream_ = nullptr;
+    }
+    return *this;
+}
+InputFile::~InputFile() { delete stream_; }
+std::size_t InputFile::read_at(std::uint64_t offset, std::span<std::uint8_t> out) {
+    if (stream_ == nullptr) throw std::runtime_error("InputFile used after move");
+    if (offset >= size_ || out.empty()) return 0;
+    const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(out.size(), size_ - offset));
+    auto& file = stream_->file;
+    file.clear();
+    errno = 0;
+    if (!file.seekg(static_cast<std::streamoff>(offset)) ||
+        !file.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(count)))
+        fail("Cannot read input file range", path_, stream_error());
+    return count;
+}
 } // namespace ps2native
