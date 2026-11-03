@@ -2,9 +2,18 @@
 **Idiomas:** [English](README.md) | Português (Brasil)
 
 
-> **Status:** protótipo experimental, M2.7 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS, com um perfil de hardware do console, executam de 15,8 a 17,7 milhões de instruções do EE (com o IOP executando o próprio caminho de boot) e param onde o IOP precisa da configuração da NVM do MECHACON, que é de cada console: o usuário fornece o dump da NVM do próprio console com `--nvm=` (nenhuma é distribuída). Nada é renderizado.
+> **Status:** protótipo experimental, M2.8 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS, com um perfil de hardware do console, executam de 15,8 a 17,7 milhões de instruções do EE (com o IOP executando o próprio caminho de boot). Sem a NVM do MECHACON do console, param onde o IOP precisa dela; com a BIOS real da SCPH-70004 e a NVM dela, o kernel chega a "Initialize GS" e para na leitura do ID do codificador de vídeo, cujo valor não foi medido. O usuário fornece os arquivos do próprio console (nenhum é distribuído). Nada é renderizado.
 
-## Novidades da M2.7 — VBLANK, ordem determinística EE/IOP e registradores do SIF
+## Novidades da M2.8 — boot com NVM real, barramento do codificador de vídeo e PATH3 do GIF
+
+- **BIOS real + NVM real (locais, nunca versionadas):** ROM0 da SCPH-70004 `0200EC20040614` com a NVM desse console (modelo SCPH-70004, ModelID 27D420, ConModelID 26D4, todas as somas de configuração válidas), nas duas placas que o PS2Ident lista (`SCPH-70004:GH-032-11`, `:GH-032-32`). O EECONF lê a configuração real e o kernel roda da RAM até "Initialize GS": **17.690.079 instruções do EE e 2.210.789 do IOP**, no interpretador e no híbrido AOT (1.217 instruções em AOT, 402 trocas de motor), com traces idênticos. As outras NVM encontradas foram recusadas (vazias, ou anteriores ao layout Dragon, sem nome de modelo).
+- **O controlador não documentado é o barramento do codificador de vídeo dos slim:** as funções do próprio firmware (ROMGSCRT/kernel) enviam transações no estilo I²C ao escravo `0x42`/`0x43` com ponteiro de registrador; o registrador `0x7E` é o ID do chip (`0x1D` trava, `0x1C` programa o codificador por modo de vídeo). Um modelo de escravo (`VideoEncoderBus`) com dois layouts de mestre: 16 bits em `0x1A000000` (ROMVER 0200) e 8 bits em `0x1F801900` (ROMVER 0220). Papéis dos registradores, conclusão instantânea e confirmação são hipóteses nomeadas. A leitura de registrador é recusada, salvo valor assumido em diagnóstico (`--assume-video-encoder=0xREG:0xVALOR`, marcado `DIAGNOSTIC EXPERIMENT` no trace); o boot para nessa leitura.
+- **PATH3 do GIF e registradores gerais do GS:** o `SQ` chega à FIFO do GIF como um *quadword*; *GIFtags* PACKED A+D escrevem os registradores gerais do GS (só estado). `GIF_STAT` informa M3R/IMT/PSE e pacote PATH3 aberto; tudo que desenha, move pixels ou gera evento do GS é recusado.
+- **Só diagnóstico** (ID assumido `0x1C`/`0x10`): o pacote do GIF de 44 escritas do kernel passa e o EE para na leitura de `I_STAT`, que depende do estado do GS depois do reset (desconhecido).
+- **Não avançou, com motivo:** continuidade do VBLANK depois do reset do GS (sem evidência do tempo vertical antes da reescrita do `SYNCV`) e DMA do SIF (nenhum lado inicia uma transferência ainda).
+- **25/25 testes** aprovados localmente (clang). [Evidências, hipóteses e o que falta](docs/M2.8-STATUS.md).
+
+## M2.7 — VBLANK, ordem determinística EE/IOP e registradores do SIF
 
 - **BIOS real (sem NVM):** inalterado — 17.685.811 / 17.685.893 / 15.816.643 instruções do EE, com parada no `ReadConfig` do IOP; traces do interpretador e do híbrido idênticos.
 - **Tempo vertical do GS:** o campo vem do `SYNCV` (o valor NTSC da BIOS: 525 meias-linhas, 480 visíveis, 45 de *blank*) sobre o relógio de linha da M2.2. Fica parado com `SMODE1.SINT` e desconhecido (com razão) para outros `CMOD`, `SYNCV` não escrito ou depois do reset do GS. Bordas do campo no *epoch* do relógio de linha são hipótese nomeada.
@@ -15,7 +24,7 @@
   - **IOP:** passa o bloqueio do VBLANK (~436 mil instruções na M2.6), o teste de residência do SIFMAN e a configuração da interrupção de DMA, e espera no SIFMAN o `MSFLG` do EE (cerca de 2,2 milhões de instruções).
   - **EE:** lê os dados de boot do IOP na RAM do IOP, reinicia o GIF e o GS e para na primeira leitura de status de um controlador não documentado que o kernel usa em `0x1F801900` (`0x1A000000` na SCPH-70012). Nenhuma fonte pública o documenta, então nenhuma resposta é inventada.
 - **Ainda sem DMA do SIF:** nenhum dos lados chega a uma transferência do SIF, e a documentação pública não define o enquadramento palavra/*quadword* nem a profundidade das FIFOs; partidas de canal continuam recusadas com nome.
-- **24/24 testes** aprovados localmente (MSVC e clang). [Evidências, hipóteses e o que falta](docs/M2.7-STATUS.md).
+- **24/24 testes** aprovados localmente na M2.7 (MSVC e clang). [Evidências, hipóteses e o que falta](docs/M2.7-STATUS.md).
 
 ## M2.6 — NVM externa do MECHACON, EECONF e o início do kernel do IOP
 
@@ -195,7 +204,7 @@ O build gera seu próprio ELF de teste em `out/build/fixtures/synthetic.elf` e r
 - `tests/`: firmware/jogos **não** são necessários; fixture MIPS de autoria própria.
 - `.github/workflows/build.yml`: matriz dos seis sistemas/arquiteturas, sem releases prematuras.
 
-A API permanece uniforme por plataforma. Consultar [M2.7](docs/M2.7-STATUS.md), [M2.6](docs/M2.6-STATUS.md), [M2.5](docs/M2.5-STATUS.md), [M2.4](docs/M2.4-STATUS.md), [M2.3](docs/M2.3-STATUS.md), [M2.2](docs/M2.2-STATUS.md), [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
+A API permanece uniforme por plataforma. Consultar [M2.8](docs/M2.8-STATUS.md), [M2.7](docs/M2.7-STATUS.md), [M2.6](docs/M2.6-STATUS.md), [M2.5](docs/M2.5-STATUS.md), [M2.4](docs/M2.4-STATUS.md), [M2.3](docs/M2.3-STATUS.md), [M2.2](docs/M2.2-STATUS.md), [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
 
 ## Próximos marcos
 
@@ -203,4 +212,4 @@ A API permanece uniforme por plataforma. Consultar [M2.7](docs/M2.7-STATUS.md), 
 
 **Licença:** BSD-3-Clause apenas para o código original deste protótipo. Código GPL de projetos de referência não foi incorporado. Consulte `docs/LICENSE-DECISION.md` antes de integrar bibliotecas de terceiros.
 
-Próxima tarefa objetiva: [continuação da M2.7: o controlador não documentado do kernel e uma NVM real](docs/NEXT-TASK.md).
+Próxima tarefa objetiva: [continuação da M2.8: o ID do codificador de vídeo e o estado do GS depois do reset](docs/NEXT-TASK.md).

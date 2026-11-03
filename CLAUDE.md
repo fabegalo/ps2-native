@@ -2,7 +2,7 @@
 
 Leia também `README.md` / `README.pt-BR.md`, `docs/ARCHITECTURE.md` (contratos
 implementados e interfaces propostas), o status do marco mais recente
-(`docs/M2.7-STATUS.md`, em andamento, com `docs/M2.6-STATUS.md`, `docs/M2.5-STATUS.md`, `docs/M2.4-STATUS.md`, `docs/M2.3-STATUS.md`, `docs/M2.2-STATUS.md`, `docs/M2.1-STATUS.md`, `docs/M2.0-STATUS.md`, `docs/M1.3-STATUS.md`, `docs/M1.2-STATUS.md`,
+(`docs/M2.8-STATUS.md`, em andamento, com `docs/M2.7-STATUS.md`, `docs/M2.6-STATUS.md`, `docs/M2.5-STATUS.md`, `docs/M2.4-STATUS.md`, `docs/M2.3-STATUS.md`, `docs/M2.2-STATUS.md`, `docs/M2.1-STATUS.md`, `docs/M2.0-STATUS.md`, `docs/M1.3-STATUS.md`, `docs/M1.2-STATUS.md`,
 `docs/M1.1-STATUS.md` e `docs/M0-STATUS.md` como histórico) e `docs/NEXT-TASK.md`. Licenças e referências estão em
 `docs/LICENSE-DECISION.md` e `docs/REFERENCE-AUDIT.md`. Atualizar status e
 READMEs (inglês e português) somente com o que foi demonstrado por teste.
@@ -42,7 +42,8 @@ reais; não forçar Browser ou jogos com stubs.
 
 ## Estado atual (2026-11-03)
 
-- M0, M1.1, M1.2, M1.3, M2.0, M2.1, M2.2, M2.3, M2.4, M2.5 e M2.6 concluídos; M2.7 em andamento. 24 testes CTest (ver `docs/M2.7-STATUS.md`).
+- M0, M1.1, M1.2, M1.3, M2.0, M2.1, M2.2, M2.3, M2.4, M2.5, M2.6 e M2.7 concluídos; M2.8 em andamento. 25 testes CTest (ver `docs/M2.8-STATUS.md`).
+- M2.8: primeiro boot com BIOS + NVM reais (SCPH-70004, ROMVER `0200EC20040614`, perfis `SCPH-70004:GH-032-11`/`:GH-032-32`; arquivos locais em `bios/`, ignorada pelo Git): EE 17.690.079 e IOP 2.210.789 instruções, interpretador = híbrido; para na leitura do registrador `0x7E` (ID do chip) do codificador de vídeo. O "controlador não documentado" é o barramento serial (estilo I²C, escravo `0x42`/`0x43`) do codificador de vídeo dos slim: `VideoEncoderBus` + `VideoEncoderMaster` (16 bits em `0x1A000000`, 8 bits em `0x1F801900`; papéis por hipótese). Leituras do escravo só com `--assume-video-encoder=` (diagnóstico marcado). GIF PATH3 PACKED A+D (`gif.hpp`) escreve os registradores gerais do GS; `SQ` chega inteiro à FIFO (`Memory::write128`). Diagnóstico com ID assumido: o EE para no `I_STAT` (estado do GS após o reset desconhecido). VBLANK após o reset do GS e DMA do SIF continuam sem evidência.
 - M2.7: tempo vertical do GS (`GsRegisters::vertical_clock`, campo do `SYNCV`, bordas no *epoch* do relógio de linha por hipótese) gera VBLANK início/fim no `I_STAT` do IOP (IRQ 0/11). O IOP é sincronizado antes de leituras do EE e de escritas do GS/SIF (ordem determinística). IRQ 3 (DMA) é fonte conhecida e nunca sobe. Registradores do SIF `MSCOM`/`SMCOM`/`MSFLG`/`SMFLG` são compartilhados. `SIF_BD6` < `0x1000` (hipótese). `AND`/`BEQ`/`BNE` com bits parciais. EE: `GIF_CTRL`/`GIF_MODE`, `DEV9_R_REV`, timers em HBLANK através do reset do GS. BIOS reais sem NVM: contagens da M2.6. Diagnóstico com NVM sintética: IOP ~2,2 milhões de instruções no laço do `SIFMAN`; o EE para no controlador não documentado `0x1F801900`/`0x1A000000` depois do reset do GS. Sem DMA do SIF.
 - M2.6: NVM externa do MECHACON (`nvm.hpp`, `--nvm=`/`--expect-nvm-sha256=`; 1024 bytes no formato do PS2Ident, layout Dragon, validada contra nome de modelo/ModelID/ConModelID do perfil) servindo `ReadNVM`/`OpenConfig`/`ReadConfig`/`CloseConfig`. IOP: *tool board id* compartilhado, `DEV9_R_REV` por perfil (medido), `0xB600000A`, i.LINK `0x847C`/reset do PHY (hipóteses), bits conhecidos em valores desconhecidos (`ANDI`), timers 0–5 com `I_STAT`, exceções R3000A. BIOS reais sem NVM: contagens da M2.5, parada explícita no `ReadConfig`. Diagnóstico com NVM sintética local (não é boot): IOP ~436 mil instruções até o VBLANK do IOP.
 - M2.5 (IOP): `Iop` (R3000A, `iop.hpp`) roda o caminho de boot do mesmo ROM0 (PRId do perfil, EE/8, execução preguiçosa até o tempo do EE, valores desconhecidos rastreados), com INTC, DMA (sem transferências), status N do CDVD e comandos S do MECHACON. EE: `I_MASK`, `PAND`/`PXOR`/`POR`/`PNOR`, blocos não documentados `0x1F801900`/`0x1A000000`. BIOS reais: 17.685.811 (SCPH-70012), 17.685.893 (SCPH-77008), 15.816.643 (dump J) instruções; kernel em RAM, "Initialize GS"; bloqueio no `LW` de `0xBC0003C0` porque o `EECONF` pede `ReadConfig` (`S 0x41`) da NVM de cada console.
@@ -58,8 +59,8 @@ reais; não forçar Browser ou jogos com stubs.
 - M1.3: relocations `R_MIPS_26` e `R_MIPS_HI16/LO16` lidas como evidência
   (nunca aplicadas), jump tables provadas por `SLTIU` + `BEQ $zero`, entradas
   indiretas verificadas em runtime e subconjunto inteiro R5900 de 64 bits.
-- Próximo passo: continuação da **M2.7** (`docs/NEXT-TASK.md`) — evidência do
-  controlador não documentado do kernel e uma NVM real por perfil.
+- Próximo passo: continuação da **M2.8** (`docs/NEXT-TASK.md`) — medição do ID
+  do codificador de vídeo e estado do GS depois do reset.
 - Fixtures são somente sintéticos. Nenhum jogo comercial, Browser, IOP,
   VU, GS, SPU2 ou DMA é suportado. Nenhum jogo é declarado compatível.
 
@@ -166,11 +167,11 @@ BIOS, traces e traduções de firmware ficam fora do repositório
 - CI: `.github/workflows/build.yml`, matriz de seis alvos, `fail-fast: false`.
   Resultado local não substitui a CI; confirmar os jobs do commit
   correspondente (`gh run list`, `gh run view`) antes de declarar aprovação.
-- Resultado de referência (M2.7): 24/24 testes — `core-validation`,
+- Resultado de referência (M2.8): 25/25 testes — `core-validation`,
   `native-aot-smoke`, `native-aot-ops`, `native-indirect-{sym,hints,unresolved}`,
   `native-jump-{relocations,explicit,unresolved}`,
   `native-m13-{relocations,stripped,stripped-hint}`, `native-m20-boot`,
-  `cli-m20-boot-{interpreter,hybrid}`, `native-m21-boot`, `native-m22-boot`, `native-m23-boot`, `native-m24-boot`, `native-m25-boot`, `native-m25-iop`, `native-m26-nvm`, `native-m26-iop`, `native-m27-iop`. Qualquer falha é regressão.
+  `cli-m20-boot-{interpreter,hybrid}`, `native-m21-boot`, `native-m22-boot`, `native-m23-boot`, `native-m24-boot`, `native-m25-boot`, `native-m25-iop`, `native-m26-nvm`, `native-m26-iop`, `native-m27-iop`, `native-m28-video-gif`. Qualquer falha é regressão.
 
 ## Estrutura
 
@@ -178,7 +179,8 @@ BIOS, traces e traduções de firmware ficam fora do repositório
   `ee_semantics` (semântica inteira R5900 única para AOT e interpretador),
   `ee_registers` (timers, SIO e registradores do EE em `0x10000000`),
   `gs_registers` (registradores privilegiados do GS e relógio de linha),
-  `mch` (interface serial e controle do MCH), `iop` (IOP R3000A do caminho de boot), `nvm` (imagem da NVM do MECHACON), `console` (perfis de hardware por
+  `mch` (interface serial e controle do MCH), `iop` (IOP R3000A do caminho de boot), `nvm` (imagem da NVM do MECHACON),
+  `video_encoder` (barramento serial do codificador de vídeo e seus mestres), `gif` (PATH3 do GIF), `console` (perfis de hardware por
   placa/ROMVER, `D_ENABLER`), `rdram` (cadeia Direct RDRAM),
   `device_timing` (`DeviceRefusal`, relógio do EE e comprimentos de linha),
   `control_flow`, `aot`, `aot_runtime`, `interpreter`, `bios`, `boot`,
@@ -201,7 +203,7 @@ BIOS, traces e traduções de firmware ficam fora do repositório
   ELF compartilhado entre gerador e teste; `bios_program.hpp` monta a ROM0
   sintética (ROMDIR/EXTINFO/ROMVER + programa de reset) usada por
   `boot_m20.cpp` e, nas variantes `build_firmware(Stage::M21..M25)`, por
-  `boot_m21.cpp`..`boot_m25.cpp`; `iop_m25.cpp` testa o IOP e a visão do EE sobre ele; `nvm_m26.cpp` a NVM e os comandos S; `iop_m26.cpp` timers, exceções e dispositivos do IOP; `iop_m27.cpp` VBLANK, ordem EE/IOP, SIF e dispositivos do EE após o reset do GS; `boot_checks.hpp` reúne os auxiliares de teste
+  `boot_m21.cpp`..`boot_m25.cpp`; `iop_m25.cpp` testa o IOP e a visão do EE sobre ele; `nvm_m26.cpp` a NVM e os comandos S; `iop_m26.cpp` timers, exceções e dispositivos do IOP; `iop_m27.cpp` VBLANK, ordem EE/IOP, SIF e dispositivos do EE após o reset do GS; `m28.cpp` codificador de vídeo, GIF, `SQ` e perfis SCPH-70004; `boot_checks.hpp` reúne os auxiliares de teste
   (endereços definidos uma vez); cada
   teste E2E compila a TU gerada com `ps2n_core` e valida registradores, RAM,
   contagem de instruções e falhas esperadas.

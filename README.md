@@ -2,9 +2,18 @@
 **Languages:** English | [Português (Brasil)](README.pt-BR.md)
 
 
-**Status: experimental prototype, M2.7 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps, run with a console hardware profile, execute 15.8–17.7 million EE instructions (with the IOP running its own boot path alongside) and stop where the IOP needs the console's MECHACON NVM configuration, which is per console: you supply your own console's NVM dump with `--nvm=` (none is bundled). Nothing is rendered.**
+**Status: experimental prototype, M2.8 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps, run with a console hardware profile, execute 15.8–17.7 million EE instructions (with the IOP running its own boot path alongside). Without the console's MECHACON NVM they stop where the IOP needs it; with a real SCPH-70004 BIOS and its own NVM the kernel reaches "Initialize GS" and stops at the video encoder's chip-ID read, whose value has not been measured. You supply your own console's files (none is bundled). Nothing is rendered.**
 
-### Current progress — M2.7: VBLANK, deterministic EE/IOP ordering and the SIF registers
+### Current progress — M2.8: real NVM boot, the video encoder serial bus and GIF PATH3
+
+- **Real BIOS + real NVM (local, never committed):** SCPH-70004 ROM0 `0200EC20040614` with that console's NVM (model SCPH-70004, ModelID 27D420, ConModelID 26D4, all configuration checksums valid), on both boards PS2Ident lists (`SCPH-70004:GH-032-11`, `:GH-032-32`). EECONF reads the real configuration and the kernel runs from RAM to "Initialize GS": **17,690,079 EE and 2,210,789 IOP instructions**, interpreter and hybrid AOT (1,217 AOT instructions, 402 engine switches) with identical traces. The other NVM files found were refused (empty, or pre-Dragon without a model name).
+- **The undocumented controller is the slim consoles' video encoder bus:** the firmware's own ROMGSCRT/kernel helpers send I²C-style transactions to slave `0x42`/`0x43` with a register pointer; register `0x7E` is the chip ID (`0x1D` hangs, `0x1C` programs the encoder per video mode). One slave model (`VideoEncoderBus`) with two master layouts: 16-bit at `0x1A000000` (ROMVER 0200) and 8-bit at `0x1F801900` (ROMVER 0220). Register roles, instant completion and acknowledge are named hypotheses. A register read is refused unless a diagnostic run assumes it (`--assume-video-encoder=0xREG:0xVALUE`, labelled `DIAGNOSTIC EXPERIMENT` in the trace); the boot stops at that read.
+- **GIF PATH3 and GS general registers:** `SQ` reaches the GIF FIFO as one quadword; PACKED A+D GIFtags write the GS general registers (state only). `GIF_STAT` reports M3R/IMT/PSE and an open PATH3 packet; anything that draws, moves pixels or raises a GS event is refused.
+- **Diagnostic only** (assumed ID `0x1C`/`0x10`): the kernel's 44-write GIF packet passes and the EE stops at its `I_STAT` read, which depends on the GS state after reset (unknown).
+- **Not advanced, with reasons:** VBLANK continuity after the GS reset (no evidence for the vertical timing before `SYNCV` is rewritten) and SIF DMA (neither side starts a transfer yet).
+- **25/25 tests** pass locally (clang). [M2.8 evidence, hypotheses and what is missing](docs/M2.8-STATUS.md).
+
+### M2.7: VBLANK, deterministic EE/IOP ordering and the SIF registers
 
 - **Real BIOS (no NVM supplied):** unchanged — 17,685,811 / 17,685,893 / 15,816,643 EE instructions, stopping at the IOP's `ReadConfig`; interpreter and hybrid traces identical.
 - **GS vertical timing:** the field comes from `SYNCV` (the BIOS's NTSC value: 525 half-lines, 480 displayed, 45 blank) on the M2.2 line clock. It is held while `SMODE1.SINT` is set, and unknown (with a reason) for other `CMOD` values, an unwritten `SYNCV`, or after a GS reset. Field edges at the line-clock epoch are a named hypothesis.
@@ -15,7 +24,7 @@
   - **IOP:** passes the VBLANK block (~436 thousand instructions in M2.6), SIFMAN's residency test and its DMA interrupt setup, and waits in SIFMAN for the EE's `MSFLG` (about 2.2 million instructions).
   - **EE:** reads the IOP's boot data from IOP RAM, resets the GIF and the GS, then stops at the first status read of an undocumented controller the kernel drives at `0x1F801900` (`0x1A000000` on SCPH-70012). No public source documents it, so no answer is invented.
 - **No SIF DMA yet:** neither side reaches a SIF transfer, and the public documentation does not settle the FIFO word/quadword framing or depth; channel starts stay refused by name.
-- **24/24 tests** pass locally (MSVC and clang). [M2.7 evidence, hypotheses and what is missing](docs/M2.7-STATUS.md).
+- **24/24 tests** passed locally at M2.7 (MSVC and clang). [M2.7 evidence, hypotheses and what is missing](docs/M2.7-STATUS.md).
 
 ### M2.6: external MECHACON NVM, EECONF and the IOP kernel start
 
@@ -166,6 +175,6 @@ The CI matrix targets Windows (x86-64/ARM64), Linux (x86-64/ARM64) and macOS (In
 
 `ps2n-aot input.elf output.cpp` produces a translation unit only; a host must link it with `ps2n_core` and initialize memory/state. The current integration is implemented for synthetic fixtures, not for real commercial games or the PS2 BIOS.
 
-See [architecture](docs/ARCHITECTURE.md), [M2.7 status](docs/M2.7-STATUS.md), [M2.6 status](docs/M2.6-STATUS.md), [M2.5 status](docs/M2.5-STATUS.md), [M2.4 status](docs/M2.4-STATUS.md), [M2.3 status](docs/M2.3-STATUS.md), [M2.2 status](docs/M2.2-STATUS.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
+See [architecture](docs/ARCHITECTURE.md), [M2.8 status](docs/M2.8-STATUS.md), [M2.7 status](docs/M2.7-STATUS.md), [M2.6 status](docs/M2.6-STATUS.md), [M2.5 status](docs/M2.5-STATUS.md), [M2.4 status](docs/M2.4-STATUS.md), [M2.3 status](docs/M2.3-STATUS.md), [M2.2 status](docs/M2.2-STATUS.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
 
-Next engineering increment: [M2.7 continued: the kernel's undocumented controller and a real NVM](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.
+Next engineering increment: [M2.8 continued: the video encoder ID and the GS state after reset](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.

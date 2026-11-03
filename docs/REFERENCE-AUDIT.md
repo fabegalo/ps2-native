@@ -203,3 +203,22 @@ Fontes adicionais:
 - https://github.com/ps2dev/ps2sdk/blob/master/iop/dev9/dev9/src/ps2dev9.c
 - https://psi-rockin.github.io/ps2tek/
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/FW.cpp
+
+## Consulta para a M2.8 — 03/11/2026
+
+Somente comportamento, formatos e dados; **nenhum trecho foi copiado ou traduzido**. Nenhuma BIOS, NVM, trace ou tradução entrou no repositório (a pasta local `bios/` está no `.gitignore`).
+
+- **Firmware do usuário (dumps locais, lidos por desmontagem própria):** módulo `ROMGSCRT` e kernel do EE (cópia em RAM). As funções de leitura e escrita do codificador de vídeo (endereços `0x42`/`0x43`, ponteiro de registrador), os registradores `0x7E`/`0x7F`/`0xB1`, a condição `DEV9_R_REV & 0xF0 == 0x30`, as sequências dos dois mestres (`0x1A000000`, `0x1F801900`), o pacote PATH3 do `SetGsCrt` (44 escritas A+D, tabela em `0x800159C8`) e a contagem de 30 HBLANKs com `SMODE1.PRST = 1`. A semântica foi inferida do uso; o código do firmware não foi reproduzido.
+- **PS2Ident.db** (dados): entradas da SCPH-70004 (ROMVER `0200EC20040614`, placas GH-032-11/GH-032-32, MECHACON 6.2/6.4, ModelID `27D420`, ConModelID `26D4`, EE 3.1 / GS 1.11).
+- **ps2tek:** GIF (`GIF_CTRL`, `GIF_MODE`, `GIF_STAT`, FIFO), fontes do `INTC` do EE, DMA do IOP (`CHCR`, `BCR`, *tags* de cadeia, `DPCR`, `DICR`) e DMAC do EE (`CHCR`, *tags* de origem/destino, `D_CTRL`/`D_STAT`/`D_PCR`/`D_SQWC`).
+- **ps2sdk** (AFL-2.0, só documentação): `gif_tags.h` (campos do *GIFtag*), `gs_gp.h` (endereços dos registradores gerais), `iop/system/sifman/src/sifman.c` (formato das entradas de transferência do SIF, `CHCR`/`BCR` dos canais 9/10, `sceSifSetDChain`).
+- **PCSX2** (GPL-3.0+, só comportamento observável): `pcsx2/Memory.cpp` (o bloco em `0x1A000000` chamado "DVE"), `pcsx2/GS.cpp` (reset por `CSR`), `pcsx2/Sif.h`/`Sif0.cpp`/`Sif1.cpp` (enquadramento palavra/*quadword* do SIF e preenchimento de pacotes curtos, descritos como resultados de testes no console). Nada foi adotado como fato: o que serviria ao DMA do SIF fica registrado como referência até haver medição ou teste próprio.
+
+Fontes adicionais:
+- https://github.com/ps2homebrew/PS2Ident
+- https://psi-rockin.github.io/ps2tek/
+- https://github.com/ps2dev/ps2sdk/blob/master/common/include/gif_tags.h
+- https://github.com/ps2dev/ps2sdk/blob/master/iop/system/sifman/src/sifman.c
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Memory.cpp
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/GS.cpp
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Sif.h
