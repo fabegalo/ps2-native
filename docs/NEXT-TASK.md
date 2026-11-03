@@ -1,0 +1,3 @@
+# Próxima tarefa curta — M1.1
+
+Implementar despacho AOT genérico de funções EE: separar decodificação, análise de fluxo e geração em módulos, criar tabela de blocos/funções alcançáveis e resolver `JR/JALR` para destinos previamente recompilados, preservando delay slots. Destinos desconhecidos devem gerar erro diagnóstico explícito (sem stub de sucesso nem fallback escondido). Criar ELF sintético com chamadas indiretas e testes de resultado, RAM, instruções e cache incremental. Validar CI de seis targets; não incorporar código GPL, duplicar arquivos de jogos nem anunciar compatibilidade comercial.

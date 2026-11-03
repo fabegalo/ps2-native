@@ -1,0 +1,27 @@
+# Build and local IDE output
+/build/
+/out/
+cmake-build-*/
+.cache/
+.vs/
+.vscode/
+.idea/
+CMakeUserPresets.json
+
+# User-owned content MUST remain outside the repository
+*.iso
+*.chd
+*.cso
+*.bin
+*.cue
+*.irx
+*.elf
+*.rom
+*.bios
+*.mcd
+*.ps2
+*.mc2
+*.sav
+
+# Local generated AOT output (never commit translated commercial content)
+/generated/

@@ -1,0 +1,59 @@
+name: M0 - Build and tests (six native targets)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x86-64
+            os: windows-2025
+            arch: x64
+          - name: Windows ARM64
+            os: windows-11-arm
+            arch: ARM64
+          - name: Linux x86-64
+            os: ubuntu-24.04
+            arch: x64
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+            arch: ARM64
+          - name: macOS Intel x86-64
+            os: macos-15-intel
+            arch: x64
+          - name: macOS Apple Silicon ARM64
+            os: macos-15
+            arch: ARM64
+    runs-on: ${{ matrix.os }}
+    steps:
+      # actions/checkout v4.2.2 pinned by commit SHA.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Configure (Unix / Ninja)
+        if: runner.os != 'Windows'
+        run: cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (Windows / MSVC)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: cmake -S . -B out/build -G "Visual Studio 17 2022" -A "${{ matrix.arch }}"
+
+      - name: Build
+        run: cmake --build out/build --config Release --parallel 2
+
+      - name: Test AOT end-to-end
+        run: ctest --test-dir out/build -C Release --output-on-failure
+
+# M0 is a developer prototype. No publishing or release automation.
