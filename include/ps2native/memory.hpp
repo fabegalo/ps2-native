@@ -90,8 +90,10 @@ public:
     Memory();
     void load(const ElfImage& elf);
     // Zeroes RAM and scratchpad, maps the 4 MiB ROM0 at 0x1FC00000, clears the TLB
-    // and resets the device registers of console `hardware` (may be nullptr).
-    void reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware = nullptr);
+    // and resets the device registers of console `hardware` (may be nullptr),
+    // whose MECHACON holds `nvm` (may be nullptr; must outlive the memory).
+    void reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware = nullptr,
+                        const NvmImage* nvm = nullptr);
     [[nodiscard]] Mapping mapping() const noexcept { return mapping_; }
     // Naturally aligned little-endian accesses; misalignment is an explicit error
     // (the R5900 address-error exception is not modeled yet).

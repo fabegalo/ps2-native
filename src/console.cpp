@@ -7,22 +7,29 @@ namespace {
 // Mainboards, chip revisions and shipped ROMVERs from the PS2Ident database;
 // D_ENABLER values from PS2Ident logs ("EE_F520"). The three BIOS revisions
 // keep the same MCH table and the 2006-09 one adds only the 0x4322 key, the
-// value read on EE 4.3 consoles.
+// value read on EE 4.3 consoles. MECHACON version, ModelID and ConModelID
+// and the SSBUS (DEV9) revision from the database entry of the same model,
+// mainboard and ROMVER.
 constexpr std::array kProfiles{
     ConsoleHardware{"SCPH-70012", "GH-032-22", "0200AC20040614", 0x00003101u, ProfileEvidence::SameChipRevision,
                     "EE 3.1 / GS 1.11 board; 0x3101 read on SCPH-50001 (EE 3.1, GS 1.09) and "
-                    "SCPH-55000 (EE 3.1, GS 1.11)", 0x24u, "PS2Ident database entry of this model and ROMVER"},
+                    "SCPH-55000 (EE 3.1, GS 1.11)", 0x24u, "PS2Ident database entry of this model and ROMVER",
+                    MechaconInfo{{0x01u, 6u, 4u, 0u}, {0x2Bu, 0xD4u, 0x20u}, {0x2Au, 0xD4u}, NvmLayout::Dragon}, std::uint8_t{0x32}},
     ConsoleHardware{"SCPH-70012", "GH-035-11", "0200AC20040614", std::nullopt, ProfileEvidence::Unknown,
                     "EE 4.2 / GS 1.12 board; no log of this board, and the table holds several EE 4.x "
-                    "keys (0x4000, 0x4110, 0x4111, 0x4212) with two different configurations", 0x24u, "PS2Ident database entry of this model and ROMVER"},
+                    "keys (0x4000, 0x4110, 0x4111, 0x4212) with two different configurations", 0x24u, "PS2Ident database entry of this model and ROMVER",
+                    MechaconInfo{{0x01u, 6u, 0u, 0u}, {0x2Bu, 0xD4u, 0x20u}, {0x2Au, 0xD4u}, NvmLayout::Dragon}, std::uint8_t{0x32}},
     ConsoleHardware{"SCPH-77008", "GH-051", "0220EC20060210", 0x00004111u, ProfileEvidence::Measured,
-                    "PS2Ident log of an SCPH-77008 (EE 4.2, GS 1.12), MechaResearch/MechaPwn issue 80", 0x30u, "PS2Ident database entry of this model and ROMVER"},
+                    "PS2Ident log of an SCPH-77008 (EE 4.2, GS 1.12), MechaResearch/MechaPwn issue 80", 0x30u, "PS2Ident database entry of this model and ROMVER",
+                    MechaconInfo{{0x05u, 6u, 10u, 0u}, {0x5Bu, 0xD4u, 0x20u}, {0x5Au, 0xD4u}, NvmLayout::Dragon}, std::uint8_t{0x31}},
     ConsoleHardware{"SCPH-90000", "GH-070", "0220JC20060905", 0x00004322u, ProfileEvidence::SameChipRevision,
                     "EE 4.3 / GS 1.14 board; 0x4322 read on two SCPH-90001 (EE 4.3, GS 1.14 with ROMVER "
-                    "0220AC20060905, and GS 1.15)", 0x30u, "PS2Ident database entry of this model and ROMVER"},
+                    "0220AC20060905, and GS 1.15)", 0x30u, "PS2Ident database entry of this model and ROMVER",
+                    MechaconInfo{{0x00u, 6u, 12u, 0u}, {0x78u, 0xD4u, 0x20u}, {0x77u, 0xD4u}, NvmLayout::Dragon}, std::uint8_t{0x31}},
     ConsoleHardware{"SCPH-90006", "GH-070", "0220HC20060905", 0x00004322u, ProfileEvidence::SameChipRevision,
                     "EE 4.3 / GS 1.14 board; 0x4322 read on two SCPH-90001 (EE 4.3, GS 1.14 with ROMVER "
-                    "0220AC20060905, and GS 1.15)", 0x30u, "PS2Ident database entry of this model and ROMVER"},
+                    "0220AC20060905, and GS 1.15)", 0x30u, "PS2Ident database entry of this model and ROMVER",
+                    MechaconInfo{{0x04u, 6u, 12u, 0u}, {0x79u, 0xD4u, 0x20u}, {0x78u, 0xD4u}, NvmLayout::Dragon}, std::uint8_t{0x31}},
 };
 } // namespace
 

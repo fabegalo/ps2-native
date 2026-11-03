@@ -27,7 +27,8 @@ constexpr unsigned s1 = 17, s2 = 18, s3 = 19, s4 = 20, s5 = 21, s6 = 22, s7 = 23
 
 const ConsoleHardware kIopProfile{"SYNTHETIC", "TEST-BOARD", "0000AC00000000", 0x00004111u,
                                   ProfileEvidence::Measured, "iop_m25 synthetic profile", 0x30u,
-                                  "iop_m25 synthetic profile"};
+                                  "iop_m25 synthetic profile",
+                                  MechaconInfo{{0u, 6u, 0u, 0u}, {0u, 0u, 0u}, {0u, 0u}, NvmLayout::Dragon}};
 const ConsoleHardware kNoPrid{"SYNTHETIC", "NO-PRID", "0000AC00000000", 0x00004111u,
                               ProfileEvidence::Measured, "iop_m25 synthetic profile"};
 
@@ -148,7 +149,7 @@ void check_iop(const IopRom& rom) {
     require(no_rom.stopped(), "no ROM0: the IOP stays stopped");
 }
 
-// The IOP program variant ending in ReadConfig, refused for want of an NVM.
+// ReadConfig with no area opened is refused (with an NVM: native-m26-nvm).
 void check_read_config() {
     Assembler a(0xBFC00000u);
     a.lui(t6, 0xBF40u);
@@ -161,8 +162,8 @@ void check_read_config() {
     Iop iop;
     iop.reset(rom, &kIopProfile);
     iop.run_until(10u);
-    require(iop.stopped() && iop.stop_reason()->find("MECHACON NVM") != std::string::npos,
-            "ReadConfig needs the console's NVM: " + iop.stop_reason().value_or(""));
+    require(iop.stopped() && iop.stop_reason()->find("ReadConfig without an open configuration area") != std::string::npos,
+            "ReadConfig needs OpenConfig: " + iop.stop_reason().value_or(""));
 }
 
 void check_ee_view(const IopRom& rom) {

@@ -16,6 +16,7 @@
 // engines (interpreter and AOT) see the same IOP state at the same EE cycle.
 #include "ps2native/console.hpp"
 #include "ps2native/device_timing.hpp"
+#include "ps2native/nvm.hpp"
 
 #include <array>
 #include <cstddef>
@@ -31,6 +32,13 @@ inline constexpr std::uint64_t kEeCyclesPerIopCycle = 8u; // 294.912 MHz / 36.86
 inline constexpr std::uint32_t kIopRamBytes = 2u * 1024u * 1024u; // PS2Ident: 2097152 on every model
 // EE physical window onto IOP RAM.
 inline constexpr std::uint32_t kIopRamEePhysical = 0x1C000000u;
+// 0x1F803204 (same register for the EE and the IOP): tool (DTL-T) board id, read as a byte by the EE RDRAM module and
+// the IOP EECONF module. Retail consoles have no tool board; 0xFF (bus pulled
+// high) is a hypothesis backed by 0xBF803800 reading 0xFFFF on every retail
+// console in the PS2Ident database. The firmware only checks for tool board
+// classes (high nibble 1-3, or 0x60/0x61), which 0xFF is not.
+inline constexpr std::uint32_t kToolBoardIdPhysical = 0x1F803204u;
+inline constexpr std::uint8_t kRetailToolBoardId = 0xFFu;
 
 class Iop {
 public:
@@ -40,8 +48,10 @@ public:
     };
     Iop();
     // Power-on with `rom0` (empty: no ROM, the IOP stays stopped) on console
-    // `hardware` (nullptr: none, so its PRId read stops the IOP).
-    void reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware);
+    // `hardware` (nullptr: none, so its PRId read stops the IOP), whose
+    // MECHACON holds `nvm` (nullptr: none, so NVM reads stop the IOP). `nvm`
+    // must have been validated for `hardware` and outlive the IOP.
+    void reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware, const NvmImage* nvm = nullptr);
     // Runs until `cycle` IOP cycles since reset, or until the IOP stops.
     void run_until(std::uint64_t cycle);
     // EE read of IOP RAM at `offset` (the IOP must have been run up to now).
@@ -62,14 +72,36 @@ private:
         std::uint32_t value;
         bool defined{true};
         std::string origin; // why the value is unknown (when !defined)
+        std::uint32_t known; // bits known even when !defined
     };
     struct Access {
         std::uint32_t physical;
         bool cached;
         bool kseg2;
     };
+    // Hardware timer (ps2tek "IOP Timers"): 0-2 are 16-bit, 3-5 32-bit.
+    struct Timer {
+        bool configured{};                  // mode written since power-on
+        std::optional<std::uint32_t> count; // empty: never written
+        std::uint32_t mode{};
+        std::optional<std::uint32_t> target;
+        std::uint32_t prescale{1}, phase{};
+    };
     void step();
+    void commit(const PendingLoad& load);
+    // R3000A exception entry: EPC, Cause.ExcCode/BD, SR mode stack, vector.
+    void enter_exception(std::uint32_t code, std::uint32_t pc, bool delay_slot);
+    // IOP interrupt line to COP0 (Cause.IP2): I_CTRL bit 0 and I_STAT & I_MASK.
+    // Empty: it depends on a source that is not modeled.
+    [[nodiscard]] std::optional<bool> interrupt_line() const;
+    [[nodiscard]] const std::optional<std::uint32_t>* latch(std::uint32_t physical) const;
+    void tick_timers();
+    [[nodiscard]] std::uint32_t timer_read(unsigned index, std::uint32_t reg, const std::string& name);
+    void timer_write(unsigned index, std::uint32_t reg, std::optional<std::uint32_t> value, const std::string& name);
     [[nodiscard]] std::uint32_t reg(unsigned index) const;
+    // Register value of which only the bits in `mask` are used: known when
+    // those bits are, even if others are not.
+    [[nodiscard]] std::uint32_t masked_reg(unsigned index, std::uint32_t mask) const;
     // Value to store: may be unknown (copied as unknown into RAM or a latch).
     [[nodiscard]] std::optional<std::uint32_t> stored_reg(unsigned index) const;
     void set_reg(unsigned index, std::uint32_t value);
@@ -82,7 +114,7 @@ private:
     void io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what);
     void mechacon_command(std::uint8_t command, const char* what);
     void cop0_write(unsigned index, std::uint32_t value);
-    [[nodiscard]] std::uint32_t cop0_read(unsigned index) const;
+    [[nodiscard]] std::uint32_t cop0_read(unsigned index);
 
     std::vector<std::uint8_t> rom_;
     std::vector<std::uint8_t> ram_;
@@ -90,6 +122,7 @@ private:
     std::array<std::uint32_t, 32> gpr_{};
     std::uint32_t gpr_defined_{1u};         // bit n: GPR n holds a known value ($zero always)
     std::array<std::string, 32> gpr_origin_; // why an unknown GPR is unknown
+    std::array<std::uint32_t, 32> gpr_known_{}; // bits of an unknown GPR that are known
     std::optional<std::uint32_t> hi_, lo_;
     std::uint32_t pc_{};
     std::optional<std::uint32_t> branch_target_; // set by a jump/branch: taken after the delay slot
@@ -97,6 +130,7 @@ private:
     std::optional<PendingLoad> pending_load_;    // load result, visible one instruction later
     std::optional<PendingLoad> write_;           // this instruction's ALU result
     std::optional<std::string> undefined_load_;  // this instruction loaded an unknown value: why
+    std::uint32_t undefined_known_{};            // bits of that value that are known
     std::array<std::optional<std::uint32_t>, 16> cop0_{};
     const ConsoleHardware* hardware_{};
     // Bus configuration as written; empty value: unknown (reset value never
@@ -107,6 +141,19 @@ private:
     std::vector<std::uint8_t> s_params_;
     std::optional<std::uint8_t> s_command_;
     std::deque<std::uint8_t> s_results_;
+    // Configuration area opened by OpenConfig (read mode only).
+    struct OpenConfig {
+        unsigned area;
+        unsigned blocks;
+        unsigned next;
+    };
+    std::optional<OpenConfig> config_;
+    std::array<Timer, 6> timers_{};
+    bool timers_running_{};
+    std::uint32_t istat_{}; // I_STAT bits of the modeled sources (timers)
+    // i.LINK link controller: a bus reset was started through the PHY.
+    bool ilink_bus_reset_{};
+    const NvmImage* nvm_{};
     std::uint64_t cycle_{};
     std::optional<std::string> stop_;
     std::uint64_t stop_cycle_{};

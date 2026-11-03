@@ -13,6 +13,11 @@
 //
 // IOP PRId: the IOP reset code reads it first (< 0x10: PS1 path); CDVDMAN
 // and other modules branch on the IOP revision.
+//
+// MECHACON: version and the IDs its NVM carries (PS2Ident database fields
+// MECHACONVersion, ModelID = i.LINK ID bytes 1..3, ConModelID = console ID
+// bytes 0..1), used to check that an NVM image belongs to this model.
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -23,6 +28,17 @@ enum class ProfileEvidence : std::uint8_t {
     Measured,         // read on a console of this model (PS2Ident log)
     SameChipRevision, // measured on other models with the same EE and GS revisions (hypothesis)
     Unknown           // no measurement: the firmware's read of it is refused
+};
+
+// EEPROM organisation of the MECHACON generation (see nvm.hpp).
+enum class NvmLayout : std::uint8_t {
+    Dragon // MECHACON v5 and later (SCPH-50000 onwards)
+};
+struct MechaconInfo {
+    std::array<std::uint8_t, 4> version; // region, major, minor, system type
+    std::array<std::uint8_t, 3> model_id;
+    std::array<std::uint8_t, 2> con_model_id;
+    NvmLayout layout;
 };
 
 struct ConsoleHardware {
@@ -36,6 +52,13 @@ struct ConsoleHardware {
     // mfc0 $15 on the IOP); empty: unknown, so the IOP stops at its PRId read.
     std::optional<std::uint32_t> iop_prid{};
     std::string_view iop_source{};
+    // Empty: unknown, so NVM images are refused for this profile.
+    std::optional<MechaconInfo> mechacon{};
+    // DEV9_R_REV (IOP 0x1F80146E, ps2sdk dev9regs.h): the SSBUS interface
+    // revision PS2Ident records as "ssbus revision" (dev9GetHardwareInfo reads
+    // DEV9_REG(DEV9_R_REV)); high nibble 0x2 CXD9566 (PCMCIA), 0x3 CXD9611
+    // (expansion bay). Empty: unknown, so the IOP stops at its read.
+    std::optional<std::uint8_t> dev9_revision{};
 };
 
 [[nodiscard]] std::span<const ConsoleHardware> known_console_hardware() noexcept;

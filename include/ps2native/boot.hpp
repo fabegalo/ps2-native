@@ -52,8 +52,10 @@ struct BootReport {
 // this exact ROM0 (same SHA-256); a translation of another revision is refused.
 // `hardware` is the console the ROM0 runs on (nullptr: none, so board-specific
 // registers refuse reads); its ROMVER must be the ROM0's, or the boot is refused.
+// `nvm` is that console's MECHACON NVM (load_nvm_image for `hardware`;
+// nullptr: none, so NVM reads are refused); it must outlive `memory`.
 void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state, Memory& memory,
-                     const ConsoleHardware* hardware = nullptr);
+                     const ConsoleHardware* hardware = nullptr, const NvmImage* nvm = nullptr);
 
 // Runs the EE from its current state: AOT blocks where the module has a block
 // for the exact PC, the interpreter (explicitly traced) everywhere else. Never

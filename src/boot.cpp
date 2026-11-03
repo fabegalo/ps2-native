@@ -103,7 +103,7 @@ const char* boot_outcome_name(BootOutcome outcome) noexcept {
 }
 
 void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state, Memory& memory,
-                     const ConsoleHardware* hardware) {
+                     const ConsoleHardware* hardware, const NvmImage* nvm) {
     if (aot != nullptr && (std::string(aot->source_kind) != "bios-rom0" || bios.sha256 != aot->source_sha256))
         throw std::runtime_error(std::string("AOT module was generated from ") + aot->source_kind + " sha256 " +
                                  aot->source_sha256 + ", not from this ROM0 (sha256 " + bios.sha256 +
@@ -112,7 +112,9 @@ void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state
         throw std::runtime_error("console " + std::string(hardware->model) + ":" + std::string(hardware->mainboard) +
                                  " ships with ROMVER " + std::string(hardware->romver) + ", not " +
                                  bios.version.romver + "; firmware revisions are never mixed");
-    memory.reset_for_boot(bios.rom0, hardware);
+    if (nvm != nullptr && hardware == nullptr)
+        throw std::runtime_error("an NVM image needs the console profile it was validated for");
+    memory.reset_for_boot(bios.rom0, hardware, nvm);
     state = ee_reset_state();
     memory.set_clock(&state.retired_instructions);
     memory.set_translation_context(0, (state.cp0(Cop0::Status) & kStatusERL) != 0u);

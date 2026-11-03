@@ -33,7 +33,7 @@ template <typename Character>
 int boot_main(int argc, Character** argv) {
     if (argc < 2) {
         std::cerr << "Usage: ps2n-boot <your-rom0.bin> [--expect-sha256=HEX] [--max-instructions=N]\n"
-                     "                 [--console=MODEL[:MAINBOARD]]\n"
+                     "                 [--console=MODEL[:MAINBOARD]] [--nvm=FILE] [--expect-nvm-sha256=HEX]\n"
                      "                 [--trace=events|full] [--trace-out=FILE] [--tail=N] [--stop-at=0xADDRESS]\n";
         return 2;
     }
@@ -42,6 +42,8 @@ int boot_main(int argc, Character** argv) {
         ps2native::BootOptions options;
         std::optional<std::filesystem::path> trace_out;
         const ps2native::ConsoleHardware* hardware = nullptr;
+        std::optional<std::filesystem::path> nvm_path;
+        ps2native::NvmLoadOptions nvm_options;
         auto number = [](const std::string& text, const char* label) {
             std::size_t used = 0;
             std::uint64_t value = 0;
@@ -62,6 +64,10 @@ int boot_main(int argc, Character** argv) {
                         known += std::string(" ") + std::string(profile.model) + ":" + std::string(profile.mainboard);
                     throw std::runtime_error("Unknown or ambiguous console " + flag.substr(10) + "; known:" + known);
                 }
+            } else if (flag.starts_with("--nvm=")) {
+                nvm_path = std::filesystem::path(argv[i]).native().substr(6);
+            } else if (flag.starts_with("--expect-nvm-sha256=")) {
+                nvm_options.expected_sha256 = flag.substr(20);
             } else if (flag.starts_with("--max-instructions=")) {
                 options.max_instructions = number(flag.substr(19), "--max-instructions");
             } else if (flag == "--trace=events") {
@@ -83,6 +89,13 @@ int boot_main(int argc, Character** argv) {
         const auto rom = ps2native::read_file(std::filesystem::path(argv[1]));
         const auto bios = ps2native::load_bios_rom0(rom, load);
         const auto* module = linked_module();
+        std::optional<ps2native::NvmImage> nvm;
+        if (nvm_path) {
+            if (hardware == nullptr) throw std::runtime_error("--nvm needs --console: an NVM is validated against its console");
+            nvm = ps2native::load_nvm_image(ps2native::read_file(*nvm_path), *hardware, nvm_options);
+        } else if (nvm_options.expected_sha256) {
+            throw std::runtime_error("--expect-nvm-sha256 needs --nvm");
+        }
 
         std::ostringstream header;
         header << "# ps2-native EE boot trace v1\n"
@@ -98,6 +111,17 @@ int boot_main(int argc, Character** argv) {
                    << ps2native::profile_evidence_name(hardware->evidence) << ": " << hardware->source << ")\n";
         else
             header << "# console none selected\n";
+        if (nvm) {
+            header << "# nvm sha256 " << nvm->sha256 << ", model " << nvm->model_name << ", layout "
+                   << ps2native::nvm_layout_info(nvm->layout).name << ", configuration checksums";
+            for (unsigned area = 0; area < ps2native::kNvmConfigAreas; ++area) {
+                header << ' ' << area << ':';
+                for (const bool ok : nvm->config_checksum_ok[area]) header << (ok ? '+' : '-');
+            }
+            header << "\n";
+        } else {
+            header << "# nvm none\n";
+        }
         header << "# engine " << (module != nullptr ? "hybrid: AOT blocks " + std::to_string(module->block_count) +
                                                           " + interpreter fallback"
                                                     : std::string("interpreter only")) << "\n"
@@ -114,7 +138,7 @@ int boot_main(int argc, Character** argv) {
 
         ps2native::EEState state;
         ps2native::Memory memory;
-        ps2native::prepare_ee_boot(bios, module, state, memory, hardware);
+        ps2native::prepare_ee_boot(bios, module, state, memory, hardware, nvm ? &*nvm : nullptr);
         const auto report = ps2native::run_ee_boot(state, memory, module, options);
 
         if (trace_out) {

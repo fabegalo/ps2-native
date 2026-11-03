@@ -154,7 +154,8 @@ void Memory::load(const ElfImage& elf) {
     }
 }
 
-void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware) {
+void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware,
+                            const NvmImage* nvm) {
     if (rom0.size() != kBiosRomBytes)
         throw std::runtime_error("BIOS ROM0 must be exactly 4 MiB to be mapped at 0x1FC00000");
     mapping_ = Mapping::HardwareReset;
@@ -165,7 +166,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
     tlb_defined_ = {};
     asid_ = 0;
     error_level_ = true;
-    registers_.reset(hardware, rom_);
+    registers_.reset(hardware, rom_, nvm);
 }
 
 void Memory::set_translation_context(std::uint8_t asid, bool error_level) noexcept {

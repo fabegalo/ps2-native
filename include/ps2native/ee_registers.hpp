@@ -21,13 +21,6 @@
 #include <string>
 
 namespace ps2native {
-// 0x1F803204: tool (DTL-T) board id, read as a byte by the EE RDRAM module and
-// the IOP EECONF module. Retail consoles have no tool board; 0xFF (bus pulled
-// high) is a hypothesis backed by 0xBF803800 reading 0xFFFF on every retail
-// console in the PS2Ident database. The firmware only checks for tool board
-// classes (high nibble 1-3, or 0x60/0x61), which 0xFF is not.
-inline constexpr std::uint32_t kToolBoardIdPhysical = 0x1F803204u;
-inline constexpr std::uint8_t kRetailToolBoardId = 0xFFu;
 // DEV9 interface registers 0x1F801470/0x1F801472 (ps2sdk dev9regs.h names
 // them only by address). The RDRAM module pulses them (1472 = 1, 1470 = 0,
 // 1472 = 0, ~555-iteration delay, 1472 = 1); their function is undocumented.
@@ -67,7 +60,8 @@ public:
     // selected, so board-specific registers refuse reads), with the IOP at its
     // reset vector in `rom0` (empty: no IOP execution); the clock is attached
     // separately.
-    void reset(const ConsoleHardware* hardware = nullptr, std::span<const std::uint8_t> rom0 = {});
+    void reset(const ConsoleHardware* hardware = nullptr, std::span<const std::uint8_t> rom0 = {},
+               const NvmImage* nvm = nullptr);
     // EE cycle counter (EEState::retired_instructions during boot).
     void set_clock(const std::uint64_t* ee_cycles) noexcept { clock_ = ee_cycles; }
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes);

@@ -43,9 +43,9 @@ GsRegisters::LineClock timer_clock(std::uint32_t mode, const GsRegisters& gs) {
 }
 } // namespace
 
-void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::uint8_t> rom0) {
+void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::uint8_t> rom0, const NvmImage* nvm) {
     hardware_ = hardware;
-    iop_.reset(rom0, hardware);
+    iop_.reset(rom0, hardware, nvm);
     // Hypothesis: counters, modes (disabled) and the latch are zero/unset after reset.
     timers_ = {};
     f500_.reset();

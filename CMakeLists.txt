@@ -9,7 +9,7 @@ add_library(ps2n_core STATIC
     src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
     src/interpreter.cpp src/boot.cpp src/ee_registers.cpp
-    src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp)
+    src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp src/nvm.cpp)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(MSVC)
     target_compile_options(ps2n_core PRIVATE /W4 /permissive-)
@@ -331,5 +331,17 @@ if(BUILD_TESTING)
     add_executable(ps2n-iop-m25 tests/iop_m25.cpp)
     target_link_libraries(ps2n-iop-m25 PRIVATE ps2n_core)
     add_test(NAME native-m25-iop COMMAND ps2n-iop-m25)
+
+    # M2.6: external MECHACON NVM images (validation) and the configuration and
+    # NVM S commands reading them.
+    add_executable(ps2n-nvm-m26 tests/nvm_m26.cpp)
+    target_link_libraries(ps2n-nvm-m26 PRIVATE ps2n_core)
+    add_test(NAME native-m26-nvm COMMAND ps2n-nvm-m26)
+
+    # M2.6: the IOP devices EECONF and THREADMAN reach (tool board, DEV9 revision,
+    # expansion bay, i.LINK), the hardware timers, I_STAT and exception entry.
+    add_executable(ps2n-iop-m26 tests/iop_m26.cpp)
+    target_link_libraries(ps2n-iop-m26 PRIVATE ps2n_core)
+    add_test(NAME native-m26-iop COMMAND ps2n-iop-m26)
 
 endif()
