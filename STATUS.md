@@ -12,6 +12,7 @@
 | Boot EE | ROM0 reais, COP0/TLB, memória, RDRAM, início do kernel em RAM e AOT híbrido com trace | CPU e dispositivos ainda parciais |
 | IOP | Inicialização R3000A, NVM externa, MECHACON, timers/VBLANK e registradores SIF compartilhados | Sem serviços completos, DMA SIF ou interrupções de hardware completas |
 | GS/GIF | VRAM 4 MiB PSMCT32/24, PATH3 PACKED/REGLIST/IMAGE, transferências, pontos/sprites, scanout RGBA8/BMP e eventos; imagem sintética determinística | Sem pixels da BIOS real; formatos, primitivas, efeitos e timing ainda parciais |
+| Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
 ## Última evidência: M2.9
@@ -30,6 +31,14 @@
 - **Testes:** a documentação M2.8 relata 25 testes CTest locais aprovados no Windows x86-64. CI do commit M2.8 deve ser conferida em [GitHub Actions](https://github.com/fabegalo/ps2-native/actions); a suíte remota só é aprovada quando todos os seis jobs terminarem com sucesso.
 
 Detalhamento de endereços, perfis, SHA-256, suposições, componentes e bloqueios: [M2.8](docs/M2.8-STATUS.md).
+
+## Launcher desktop (fundação da interface)
+
+- **Executável `ps2-native`** (Qt 6 Quick, LGPL-3.0 dinâmico; `PS2N_LAUNCHER=AUTO|ON|OFF`): Início, Biblioteca, BIOS, Configurações e Sobre. Gerencia o conteúdo do usuário e **não substitui** Browser, System Configuration nem boot de disco; ações sem runtime aparecem bloqueadas com o motivo.
+- **Núcleo compartilhado `ps2n_frontend`**, sem GUI: BIOS por `load_bios_rom0`, NVM por `load_nvm_image` contra o perfil da mesma ROMVER, discos ISO 9660 (2048/2352 bytes, Mode 1/2), CUE multifaixa, leitura por faixa acima de 4 GiB; biblioteca versionada com escrita atômica, sem copiar ISOs ou firmware; contratos futuros do runtime (`RuntimeSession`, renderizadores, controle, áudio) declarados e indisponíveis.
+- **Testes:** `launcher-core` (headless, também na CI do núcleo) e `launcher-ui-import`/`launcher-ui-restore` (janela real offscreen: importação, páginas, diagnóstico, persistência e restauração) aprovados no Windows x86-64 com Qt 6.8.3, sem avisos de QML. Novo workflow `launcher.yml` para os seis alvos (Qt 6.8.3 oficial no Windows, Qt 6.4 do Ubuntu, Qt do Homebrew); conferir o resultado por commit no GitHub Actions.
+- **Validação gráfica local** (plataforma `windows`): todas as páginas capturadas em 1360×860, 1600×1000 e 1000×660; pasta local com 60 ROM0 reais validadas, uma ISO de DVD de PS2 e um CD de PlayStation em CUE/BIN identificados; diagnóstico numa ROM0 real até o limite de instruções. Conteúdo local fora do Git.
+- Limites: jogos, Browser, controle, áudio e renderização dependem do runtime; imagens comprimidas não são lidas; diálogos nativos e arrastar e soltar não foram exercitados automaticamente. Contratos e detalhes: [LAUNCHER.md](docs/LAUNCHER.md).
 
 ## I/O do host: caminhos longos e Unicode
 

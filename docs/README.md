@@ -7,6 +7,7 @@ Este índice separa o material de engenharia da apresentação estável do proje
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — contratos de hardware, AOT, memória, interfaces e decisões arquiteturais.
 - **[REFERENCE-AUDIT.md](REFERENCE-AUDIT.md)** — fontes técnicas, comparação de abordagens e limites das referências.
 - **[LICENSE-DECISION.md](LICENSE-DECISION.md)** — licenciamento e proteção contra incorporação de código incompatível.
+- **[LAUNCHER.md](LAUNCHER.md)** — launcher desktop opcional: camadas, identificação de conteúdo, persistência, diagnóstico, dependências Qt e validação.
 
 ## Relatórios de marcos
 
