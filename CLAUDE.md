@@ -43,7 +43,7 @@ reais; não forçar Browser ou jogos com stubs.
 ## Estado atual (2026-11-03)
 
 - M0, M1.1, M1.2, M1.3 e M2.0 concluídos; M2.1 em andamento. 16 testes CTest (ver `docs/M2.1-STATUS.md`).
-- M2.1: dumps reais do usuário (SCPH-70012/77008/90006, fora do repositório) executam 70.067 instruções e param em `LBU 0x1F803204` ("TOOL board id", valor de varejo não verificado). Adicionados MMI do pipeline 1 + `PADDUW`, relógio do EE (1 ciclo/instrução, hipótese) com `COP0 Count` e timers T0–T3 (`EeRegisters`), latch `0x1000F500`, entrada S da TLB cobrindo 16 KiB e entradas não escritas que não correspondem.
+- M2.1: dumps reais do usuário (SCPH-70012/77008/90006, fora do repositório) executam 70.090 instruções e param no `SD` em `SMODE1` (`0x12000010`, GS não modelado). `0x1F803204` ("tool board id") lê `0xFF` por hipótese (sem placa de ferramenta; evidência em `docs/M2.1-STATUS.md`). Adicionados MMI do pipeline 1 + `PADDUW`, relógio do EE (1 ciclo/instrução, hipótese) com `COP0 Count` e timers T0–T3 (`EeRegisters`), latch `0x1000F500`, entrada S da TLB cobrindo 16 KiB e entradas não escritas que não correspondem.
 - M2.0: loader de ROM0 (ROMDIR/EXTINFO/ROMVER/SHA-256), barramento EE com TLB
   e scratchpad, COP0 de reset, interpretador + AOT híbrido (`ps2n-aot --bios`,
   `ps2n-boot`) com semântica única em `ee_semantics.hpp`, trace reproduzível e
@@ -51,8 +51,8 @@ reais; não forçar Browser ou jogos com stubs.
 - M1.3: relocations `R_MIPS_26` e `R_MIPS_HI16/LO16` lidas como evidência
   (nunca aplicadas), jump tables provadas por `SLTIU` + `BEQ $zero`, entradas
   indiretas verificadas em runtime e subconjunto inteiro R5900 de 64 bits.
-- Próximo passo: continuação da **M2.1** (`docs/NEXT-TASK.md`) — evidência para
-  `0x1F803204`, depois registradores privilegiados do GS, calibração por T0/`Count`
+- Próximo passo: continuação da **M2.1** (`docs/NEXT-TASK.md`) — registradores privilegiados do GS
+  (`SMODE1` primeiro), calibração por T0/`Count`
   e MCH, sempre seguindo o trace da BIOS real.
 - Fixtures são somente sintéticos. Nenhum jogo comercial, Browser, IOP,
   VU, GS, SPU2 ou DMA é suportado. Nenhum jogo é declarado compatível.

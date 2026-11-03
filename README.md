@@ -6,7 +6,12 @@
 
 ### Current progress — M2.1: first steps of a real BIOS
 
-Three user-supplied ROM0 dumps (SCPH-70012 v2.00 USA, SCPH-77008 v2.20 Europe, SCPH-90006 v2.20 Japan; never stored in the repository) boot from the reset vector through COP0/TLB setup, the `0x1000F500` store, the scratchpad stack, `PADDUW` and into the ROM's `RDRAM` module, retiring **70,067 instructions** identically in interpreter-only and hybrid mode. They stop at a byte read of `0x1F803204` (labeled "TOOL board id" by PCSX2), whose value on a retail console is not verified yet.
+Three user-supplied ROM0 dumps (SCPH-70012 v2.00 USA, SCPH-77008 v2.20 Europe, SCPH-90006 v2.20 Japan; never stored in the repository) boot from the reset vector through COP0/TLB setup, the `0x1000F500` store, the scratchpad stack, `PADDUW` and into the ROM's `RDRAM` module, retiring **70,090 instructions** identically in interpreter-only and hybrid mode. They read the tool board id byte at `0x1F803204`, take the retail path, and stop at the first GS privileged register write (`SMODE1`, `0x12000010`). The GS is not modeled.
+
+- **Tool board id `0x1F803204`:** reads `0xFF`, meaning no tool board. This value is a recorded hypothesis.
+  - The firmware only distinguishes tool-board classes (high nibble 1–3 on the EE, `0x60/0x61` on the IOP).
+  - `0xFF` (bus pulled high) is supported by PS2Ident data, but the exact retail byte has not been measured.
+  - Other sizes, writes and the rest of the IOP register window are refused.
 
 - **MMI pipeline 1 and `PADDUW`** in the shared AOT/interpreter semantics (`MULT1/MULTU1/DIV1/DIVU1/MFHI1/MFLO1/MTHI1/MTLO1` on LO1/HI1).
 - **EE clock and COP0 `Count`:** one cycle per retired instruction (a recorded hypothesis); EE timers T0–T3 (`COUNT/MODE/COMP`, BUSCLK, /16, /256 and NTSC HBLANK) derive from the same clock. Gates, timer interrupts, mode flags and `HOLD` are refused with a reason.

@@ -6,7 +6,12 @@
 
 ## Novidades da M2.1 — primeiras etapas de uma BIOS real
 
-Três dumps de ROM0 fornecidos pelo usuário (SCPH-70012 v2.00 EUA, SCPH-77008 v2.20 Europa, SCPH-90006 v2.20 Japão; nunca guardados no repositório) iniciam no vetor de reset, passam pela configuração de COP0/TLB, pela escrita em `0x1000F500`, pela pilha no scratchpad e por `PADDUW`, e entram no módulo `RDRAM` da ROM, retirando **70.067 instruções** de forma idêntica no interpretador puro e no modo híbrido. Param na leitura de byte de `0x1F803204` (chamado de "TOOL board id" pelo PCSX2), cujo valor num console de varejo ainda não foi verificado.
+Três dumps de ROM0 fornecidos pelo usuário (SCPH-70012 v2.00 EUA, SCPH-77008 v2.20 Europa, SCPH-90006 v2.20 Japão; nunca guardados no repositório) iniciam no vetor de reset, passam pela configuração de COP0/TLB, pela escrita em `0x1000F500`, pela pilha no scratchpad e por `PADDUW`, e entram no módulo `RDRAM` da ROM, retirando **70.090 instruções** de forma idêntica no interpretador puro e no modo híbrido. Leem o byte *tool board id* em `0x1F803204`, seguem o caminho de varejo e param na primeira escrita em registrador privilegiado do GS (`SMODE1`, `0x12000010`). O GS não é modelado.
+
+- **Tool board id `0x1F803204`:** lê `0xFF`, ou seja, sem placa de ferramenta. Esse valor é uma hipótese registrada.
+  - O firmware só distingue classes de placa de ferramenta (nibble alto 1–3 no EE, `0x60/0x61` no IOP).
+  - `0xFF` (barramento alto) é sustentado por dados do PS2Ident, mas o byte exato no varejo não foi medido.
+  - Outros tamanhos, escritas e o resto da janela de registradores do IOP são recusados.
 
 - **MMI do pipeline 1 e `PADDUW`** na semântica compartilhada AOT/interpretador (`MULT1/MULTU1/DIV1/DIVU1/MFHI1/MFLO1/MTHI1/MTLO1` sobre LO1/HI1).
 - **Relógio do EE e `COP0 Count`:** um ciclo por instrução retirada (hipótese registrada); timers T0–T3 do EE (`COUNT/MODE/COMP`, BUSCLK, /16, /256 e HBLANK NTSC) derivam do mesmo relógio. Gate, interrupções de timer, flags de modo e `HOLD` são recusados com motivo.
