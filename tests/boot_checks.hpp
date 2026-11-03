@@ -1,4 +1,4 @@
-// Assertion helpers shared by the boot tests (M2.0, M2.1, M2.2).
+// Assertion helpers shared by the boot tests (M2.0-M2.3).
 #pragma once
 
 #include "ps2native/core.hpp"

@@ -175,11 +175,12 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     m.write8(0xB000F180u, 'k');
     require(m.sio_output() == "ok", "SIO TX bytes in order");
 
-    // MCH / RDRAM controller: undocumented, refused with the register named.
+    // MCH / RDRAM controller: the undocumented registers stay refused, named
+    // (MCH_RICM/MCH_DRD are modeled since M2.3, see boot_m23.cpp).
     device_refused([&] { m.write32(0xB000F410u, 0u); }, "MCH (RDRAM controller) register 0x1000F410 is not modeled");
     device_refused([&] { (void)m.read32(0xB000F410u); }, "register 0x1000F410 is not modeled");
-    device_refused([&] { m.write32(0xB000F430u, 0x80000000u); }, "register 0x1000F430 is not modeled");
-    device_refused([&] { (void)m.read32(0xB000F440u); }, "register 0x1000F440 is not modeled");
+    device_refused([&] { m.write32(0xB000F420u, 0u); }, "register 0x1000F420 is not modeled");
+    device_refused([&] { (void)m.read32(0xB000F460u); }, "register 0x1000F460 is not modeled");
     device_refused([&] { (void)m.read16(0xB000F480u); }, "register 0x1000F480 is not modeled");
 
     m.reset_for_boot(rom);

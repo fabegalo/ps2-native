@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -60,7 +61,20 @@ constexpr std::uint64_t kM22Smode2 = 3u;
 constexpr std::uint64_t kM22Srfsh = 8u;
 constexpr char kM22SioText[] = "M2.2 SIO\n";
 
-enum class Stage { M20, M21, M22 };
+// M2.3: Algorithm InitDev (Rambus Direct RDRAM data sheet) for the two RDRAMs
+// through MCH_RICM/MCH_DRD, polling bit 31 like the BIOS serial helpers.
+constexpr std::uint32_t kM23ResultRam = 0x80000400u;
+constexpr std::uint32_t kM23SetrResult = kM23ResultRam;          // Count over the SETR transaction
+constexpr std::uint32_t kM23SwrResult = kM23ResultRam + 4u;      // Count over the broadcast SWR of INIT
+constexpr std::uint32_t kM23FirstRead = kM23ResultRam + 8u;      // SRD INIT of SDEV 0x1F before numbering
+constexpr std::uint32_t kM23SecondRead = kM23ResultRam + 0xCu;   // the same after device 0 got SDEVID 0
+constexpr std::uint32_t kM23Device0Read = kM23ResultRam + 0x10u; // SRD INIT of SDEV 0
+constexpr std::uint32_t kM23Device1Read = kM23ResultRam + 0x14u; // SRD INIT of SDEV 1
+// SETR-to-CLRR wait, in Count cycles from the SETR store: enough for the SETR
+// transaction and the 16 SCK cycles after it.
+constexpr std::uint32_t kM23ClrrWait = 9600u;
+
+enum class Stage { M20, M21, M22, M23 };
 
 enum Reg : unsigned {
     zero = 0, at = 1, v0 = 2, v1 = 3, a0 = 4, a1 = 5, a2 = 6, a3 = 7, t0 = 8, t1 = 9, t2 = 10, t3 = 11,
@@ -139,6 +153,7 @@ public:
     void mflo1(unsigned rd) { mmi(0u, 0u, rd, 0u, 0x12u); }
     void mtlo1(unsigned rs) { mmi(rs, 0u, 0u, 0u, 0x13u); }
     void bne(unsigned rs, unsigned rt, const std::string& target) { branch(0x05u, rs, rt, target); }
+    void bltz(unsigned rs, const std::string& target) { branch(0x01u, rs, 0u, target); }
     void beq(unsigned rs, unsigned rt, const std::string& target) { branch(0x04u, rs, rt, target); }
     void branch(unsigned op, unsigned rs, unsigned rt, const std::string& target) {
         fixups_.emplace_back(words_.size(), target);
@@ -415,6 +430,66 @@ inline void emit_m22_core(Assembler& a, std::uint32_t table_rom) {
     a.label("m22_jumps_done");
 }
 
+// M2.3, before ERET (AOT-reachable): InitDev steps 2-10 for two devices, each
+// transaction as the BIOS helpers issue it (wait for bit 31 clear, SD to
+// MCH_DRD, start MCH_RICM, SYNC, wait again), with SRD reads of INIT along the
+// way and the SETR and SWR durations measured with Count.
+inline void emit_m23_core(Assembler& a) {
+    const auto low = [](std::uint32_t address) { return static_cast<std::int32_t>(address & 0xffffu); };
+    constexpr std::int32_t kRicm = -0x0BD0; // 0x1000F430 from 0xB0010000
+    constexpr std::int32_t kDrd = -0x0BC0;  // 0x1000F440
+    unsigned serial_count = 0;
+    const auto wait_idle = [&](const std::string& name) {
+        a.label(name);
+        a.lw(t1, kRicm, t6);
+        a.bltz(t1, name);
+        a.nop();
+    };
+    const auto serial = [&](std::uint8_t sop, bool broadcast, std::uint8_t sdev, std::uint16_t sd,
+                            const std::function<void()>& before_start = {}) {
+        const auto id = std::to_string(serial_count++);
+        wait_idle("m23_pre" + id);
+        a.ori(t0, zero, sd);
+        a.sw(t0, kDrd, t6);
+        const std::uint32_t sa = sop <= 1u ? 0x021u : 0u; // SRD/SWR address INIT
+        const auto ricm = 0x80000000u | (sa << 16) | (static_cast<std::uint32_t>(sop) << 6) | (broadcast ? 0x20u : 0u) | sdev;
+        a.lui(t0, ricm >> 16);
+        a.ori(t0, t0, ricm & 0xffffu);
+        if (before_start) before_start();
+        a.sw(t0, kRicm, t6);
+        a.sync_p();
+        wait_idle("m23_post" + id);
+    };
+    const auto read_init = [&](std::uint8_t sdev, std::uint32_t result) {
+        serial(0u, false, sdev, 0u);
+        a.lw(t2, kDrd, t6);
+        a.sw(t2, low(result), a1);
+    };
+    a.label("m23_mch");
+    a.lui(t6, 0xB001u);
+    a.lui(a1, 0x8000u);
+    serial(2u, true, 0u, 0u, [&] { a.mtc0(zero, Count); }); // SETR
+    a.mfc0(t2, Count);
+    a.sw(t2, low(kM23SetrResult), a1);
+    a.label("m23_setr_wait");                               // step 3: 16 SCK cycles
+    a.mfc0(t1, Count);
+    a.sltiu(t1, t1, kM23ClrrWait);
+    a.bne(t1, zero, "m23_setr_wait");
+    a.nop();
+    serial(3u, true, 0u, 0u);                               // CLRR
+    serial(4u, true, 0u, 0u);                               // SETF
+    serial(1u, true, 0u, 0x001Fu, [&] { a.mtc0(zero, Count); }); // SWR INIT: SRP 0, SDEVID 0x1F
+    a.mfc0(t2, Count);
+    a.sw(t2, low(kM23SwrResult), a1);
+    read_init(0x1Fu, kM23FirstRead);                        // device 0 answers
+    serial(1u, false, 0x1Fu, 0x0080u);                      // device 0: SRP 1, SDEVID 0
+    read_init(0x1Fu, kM23SecondRead);                       // device 1 answers
+    serial(1u, false, 0x1Fu, 0x0081u);                      // device 1: SRP 1, SDEVID 1
+    read_init(0u, kM23Device0Read);
+    read_init(1u, kM23Device1Read);
+    a.label("m23_done");
+}
+
 // M2.1, after ERET: a scratchpad entry written like the real BIOS does
 // (PageMask 0, S bit) still spans the whole 16 KiB.
 inline void emit_m21_scratchpad(Assembler& a) {
@@ -440,10 +515,12 @@ inline void emit_m21_scratchpad(Assembler& a) {
 
 // Stage::M21 adds the M2.1 blocks (MMI, COP0 Count, EE timers, 0x1000F500 before
 // ERET, where the AOT reaches them; a PageMask-0 scratchpad entry after it);
-// Stage::M22 also the M2.2 block before ERET. The default (M2.0) firmware is unchanged.
+// Stage::M22 also the M2.2 block before ERET; Stage::M23 adds the M2.3 block
+// after it. The default (M2.0) firmware is unchanged.
 inline Firmware build_firmware(Stage stage = Stage::M20) {
     const bool m21 = stage != Stage::M20;
-    const bool m22 = stage == Stage::M22;
+    const bool m22 = stage == Stage::M22 || stage == Stage::M23;
+    const bool m23 = stage == Stage::M23;
     std::vector<File> files;
     files.push_back({"RESET", {}, {}});
     files.push_back({"ROMDIR", {}, {}});
@@ -560,6 +637,7 @@ inline Firmware build_firmware(Stage stage = Stage::M20) {
     a.nop();
     if (m21) emit_m21_core(a, fw.table_rom);
     if (m22) emit_m22_core(a, fw.table_rom);
+    if (m23) emit_m23_core(a);
     a.label("leave_error_level");
     a.la(t0, 0u);                    // patched below: ErrorEPC = after_eret
     a.mtc0(t0, ErrorEPC);
@@ -606,6 +684,8 @@ inline Firmware build_firmware(Stage stage = Stage::M20) {
                                  "m22_const_target", "m22_rewritten_jr", "m22_rewritten_target", "m22_entered_jr",
                                  "m22_entered_target", "m22_slot_jr", "m22_slot_target", "m22_outside_jr"})
             fw.labels.emplace(name, a.at(name));
+    if (m23)
+        for (const char* name : {"m23_mch", "m23_setr_wait", "m23_done"}) fw.labels.emplace(name, a.at(name));
 
     // ROMDIR: name[10], EXTINFO size (u16), file size (u32); zero terminator.
     auto& romdir = files[1].data;

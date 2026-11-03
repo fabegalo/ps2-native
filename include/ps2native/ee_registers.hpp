@@ -1,12 +1,14 @@
 #pragma once
 // Device registers the EE boot path models: the EE registers at physical
 // 0x10000000..0x1000FFFF, the GS privileged registers (GsRegisters, which also
-// clock HBLANK for the EE timers) and, in the IOP register window
+// clock HBLANK for the EE timers), the MCH serial interface to the RDRAM chain
+// (MchRegisters) and, in the IOP register window
 // 0x1F800000..0x1F9FFFFF, only the tool board id byte. Each register documents what is known and what
 // is a hypothesis; every other address, access size or mode still fails with a
 // reason.
 #include "ps2native/device_timing.hpp"
 #include "ps2native/gs_registers.hpp"
+#include "ps2native/mch.hpp"
 
 #include <array>
 #include <cstddef>
@@ -46,6 +48,7 @@ public:
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes);
     void write(std::uint32_t physical, std::size_t bytes, std::uint64_t value);
     [[nodiscard]] const GsRegisters& gs() const noexcept { return gs_; }
+    [[nodiscard]] const MchRegisters& mch() const noexcept { return mch_; }
     // Bytes the guest sent through the EE SIO TX FIFO since reset.
     [[nodiscard]] const std::string& sio_output() const noexcept { return sio_output_; }
 
@@ -64,6 +67,7 @@ private:
 
     std::array<Timer, 4> timers_{};
     GsRegisters gs_;
+    MchRegisters mch_;
     // 0x1000F500: unidentified register written by the BIOS reset code.
     std::optional<std::uint32_t> f500_;
     // DEV9 0x1F801470/0x1F801472: write latches, same rule as 0x1000F500.

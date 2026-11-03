@@ -15,19 +15,6 @@ std::string hex(std::uint32_t value, int digits = 8) {
 constexpr std::uint32_t kTimersBase = 0x10000000u;
 constexpr std::uint32_t kTimersEnd = 0x10002000u;
 constexpr std::uint32_t kF500 = 0x1000F500u;
-// Memory controller (MCH) / RDRAM ASIC cell registers 0x1000F400..0x1000F4FF.
-// The BIOS memory setup uses F400-F4C0: F410 as a command register written with
-// bit 31 set and polled until it clears, F430 (MCH_RICM) and F440 (MCH_DRD) as
-// the Direct RDRAM serial-chain interface, F480 read back. No public document
-// describes them (PCSX2 keeps F410 as an unknown register reading 0), so every
-// access fails explicitly.
-constexpr std::uint32_t kMchBase = 0x1000F400u;
-constexpr std::uint32_t kMchEnd = 0x1000F500u;
-std::string mch_refusal(std::uint32_t physical) {
-    return "MCH (RDRAM controller) register " + hex(physical) +
-           " is not modeled: its command/completion semantics are undocumented";
-}
-
 // Tn_MODE fields (ps2tek).
 constexpr std::uint32_t kModeClock = 3u << 0;
 constexpr std::uint32_t kModeGateEnable = 1u << 2;
@@ -64,6 +51,7 @@ void EeRegisters::reset() {
     sio_setup_ = {};
     sio_output_.clear();
     gs_.reset(0u);
+    mch_.reset();
 }
 
 std::uint64_t EeRegisters::now() const {
@@ -152,7 +140,7 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
     }
     if (physical == kDev9Reg1470 || physical == kDev9Reg1472)
         throw DeviceRefusal("DEV9 " + hex(physical) + " read: an undocumented register; its read value is not verified");
-    if (physical >= kMchBase && physical < kMchEnd) throw DeviceRefusal(mch_refusal(physical));
+    if (physical >= kMchBase && physical < kMchEnd) return mch_.read(physical, bytes, now());
     if (physical == kSioIsr) {
         if (bytes != 4u) throw DeviceRefusal("SIO_ISR read of " + std::to_string(bytes) + " byte(s) is not modeled");
         // Bits 12-15: TX FIFO level, 0 because transmission is instantaneous;
@@ -225,7 +213,10 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
         sio_setup_[physical == kSioLcr ? 0u : physical == kSioFcr ? 1u : 2u] = static_cast<std::uint32_t>(value);
         return;
     }
-    if (physical >= kMchBase && physical < kMchEnd) throw DeviceRefusal(mch_refusal(physical));
+    if (physical >= kMchBase && physical < kMchEnd) {
+        mch_.write(physical, bytes, value, now());
+        return;
+    }
     throw DeviceRefusal("no register model");
 }
 } // namespace ps2native

@@ -96,7 +96,7 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     bus_fault([&] { (void)memory.read32(0x00000000u); }, BusFault::KusegWithErl, "Status.ERL = 1");
     bus_fault([&] { (void)memory.read32(0xB000F000u); }, BusFault::Device, "INTC");
     bus_fault([&] { (void)memory.read32(0xB0003000u); }, BusFault::Device, "GIF");
-    bus_fault([&] { (void)memory.read32(0xB000F430u); }, BusFault::Device, "MCH (RDRAM controller)");
+    bus_fault([&] { (void)memory.read32(0xB000F410u); }, BusFault::Device, "MCH (RDRAM controller)");
     bus_fault([&] { (void)memory.read64(0xB2000000u); }, BusFault::Device, "GS privileged registers");
     bus_fault([&] { (void)memory.read32(0xBC000000u); }, BusFault::Device, "IOP memory");
     bus_fault([&] { (void)memory.read32(0xBF801000u); }, BusFault::Device, "IOP registers");

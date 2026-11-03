@@ -146,7 +146,7 @@ void check_registers(const std::vector<std::uint8_t>& rom) {
     device_refused([&] { m.write16(0xB000F500u, 1u); }, "no register model");
     device_refused([&] { m.write32(0xB000F510u, 1u); }, "DMAC extended): device not implemented (no register model)");
     device_refused([&] { (void)m.read32(0xB000F000u); }, "INTC): device not implemented (no register model)");
-    device_refused([&] { (void)m.read32(0xB000F430u); }, "MCH (RDRAM controller)");
+    device_refused([&] { (void)m.read32(0xB000F410u); }, "MCH (RDRAM controller)");
     device_refused([&] { (void)m.fetch32(0xB0000000u); }, "instruction fetch from device registers");
 
     // Tool board id: a retail console has no tool board (0xFF is a hypothesis).

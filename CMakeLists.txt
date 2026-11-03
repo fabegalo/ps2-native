@@ -9,7 +9,7 @@ add_library(ps2n_core STATIC
     src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
     src/interpreter.cpp src/boot.cpp src/ee_registers.cpp
-    src/gs_registers.cpp)
+    src/gs_registers.cpp src/rdram.cpp src/mch.cpp)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(MSVC)
     target_compile_options(ps2n_core PRIVATE /W4 /permissive-)
@@ -273,5 +273,22 @@ if(BUILD_TESTING)
     add_executable(ps2n-boot-m22 tests/boot_m22.cpp "${M22_AOT}")
     target_link_libraries(ps2n-boot-m22 PRIVATE ps2n_core)
     add_test(NAME native-m22-boot COMMAND ps2n-boot-m22 "${M22_ROM}")
+
+    # M2.3: MCH_RICM/MCH_DRD and the Direct RDRAM serial chain (InitDev for two
+    # devices) in the synthetic ROM0, plus chain and controller unit checks.
+    set(M23_ROM "${FIXTURE_DIR}/synthetic-rom0-m23.bin")
+    set(M23_AOT "${FIXTURE_DIR}/synthetic_rom0_m23_aot.cpp")
+    add_custom_command(
+        OUTPUT "${M23_ROM}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M23_ROM}" bios-m23
+        DEPENDS ps2n-make-fixture VERBATIM)
+    add_custom_command(
+        OUTPUT "${M23_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M23_ROM}" "${M23_AOT}" --bios
+        DEPENDS ps2n-aot "${M23_ROM}" VERBATIM)
+    add_executable(ps2n-boot-m23 tests/boot_m23.cpp "${M23_AOT}")
+    target_link_libraries(ps2n-boot-m23 PRIVATE ps2n_core)
+    add_test(NAME native-m23-boot COMMAND ps2n-boot-m23 "${M23_ROM}")
 
 endif()
