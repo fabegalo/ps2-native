@@ -1,67 +1,31 @@
-# Trabalho dos agentes
+# Trabalho dos agentes — regras permanentes
 
-## Performance-first, correctness-preserving — regra permanente
+Leia `CLAUDE.md`, `STATUS.md`, `docs/NEXT-TASK.md` e `docs/ARCHITECTURE.md` antes de alterar o ps2-native. As regras abaixo se aplicam a **todos os agentes**. O estado de cada marco pertence ao `STATUS.md` e aos relatórios `docs/M*-STATUS.md`, **não** a este arquivo.
 
-Performance é objetivo central do ps2-native. Toda otimização deve preservar
-correção, compatibilidade, fidelidade gráfica, semântica R5900 (delay slots,
-registradores de 128 bits, memória, exceções) e temporização do console.
-Medir antes/depois com cenários e condições equivalentes; registrar também
-resultados sem ganho. Evitar overhead desnecessário no runtime; instrumentação
-opcional, desligada normalmente. Melhorias compartilhadas devem beneficiar jogos
-genericamente, sem hacks por título. O modo Native nunca altera física, lógica,
-temporização ou renderização para ganhar FPS; o modo GS fiel é a referência.
+## Performance-first, correctness-preserving
 
-Leia e siga `CLAUDE.md`, especialmente as seções **Trabalho dos agentes — regras
-permanentes**, **Licenças** e **Commits e publicação**, além do status do marco
-mais recente em `docs/` e de `docs/NEXT-TASK.md`, antes de atuar neste
-repositório. Essas regras se aplicam a todos os agentes: Computer Use e sessões
-visuais/longas exigem autorização explícita; não repetir validações aprovadas
-sem mudança relevante; priorizar testes focados e evidências existentes.
-Processos em segundo plano exigem acompanhamento e duração limitada. Interação
-não autorizada exige interrupção e comunicação imediata do bloqueio; não esperar
-horas por aprovação. Concluir o escopo atual antes de ampliá-lo ou começar
-outro marco. Não modificar o x360-native.
+Performance é objetivo central, mas nenhuma otimização pode sacrificar correção, compatibilidade, comportamento R5900/IOP, timing, áudio, física ou fidelidade gráfica. Medir antes/depois sob condições equivalentes; registrar também ausência de ganho. Priorizar soluções genéricas compartilhadas, sem hacks por título, revisão ou plataforma. Instrumentação de diagnóstico deve ser opcional e ter overhead controlado. O modo GS fiel é referência de correção; o futuro modo Native não pode alterar lógica do jogo.
 
-## Sem sucesso falso — regra permanente
+## Fidelidade ao PlayStation 2
 
-Nada de stubs que retornam sucesso, hacks específicos por jogo ou fallback
-silencioso. Opcode, relocation, destino indireto, syscall, MMIO ou código
-dinâmico não suportado gera erro explícito. Descoberta de código somente por
-evidência verificável; relocations de executáveis já vinculados servem como
-evidência e nunca são reaplicadas. "Compilou" não é "executa"; nenhum jogo é
-declarado compatível sem teste real de gameplay.
+Reproduzir o sistema original — boot, Browser, configurações, Memory Cards, discos e erros — sem substituir suas telas por um launcher falso. Sem sucesso falso, stubs que retornem zero ou respostas MMIO arbitrárias. Comportamento não comprovado é hipótese identificada, isolada e testada; comportamento desconhecido falha com causa. Interpretador é explícito quando o AOT não tem prova estática suficiente.
 
-## Fidelidade ao console — regra permanente
+## Isolamento permanente de firmware e dados
 
-Ser o mais fiel possível ao PS2 original, idealmente idêntico (boot, Browser,
-System Configuration, Memory Card Browser, discos, códigos de erro e serviços
-da BIOS da revisão correspondente). O launcher não substitui menus originais.
-Divergências de projeto são corrigidas em direção ao original; o não comprovado
-fica como hipótese. Saves, Memory Cards e configurações reais são preservados.
+Cada BIOS/revisão/região só utiliza módulos, IRX, ROM1/ROM2, recursos, NVM e dependências **compatíveis e verificadas**. Conferir procedência, ROMVER, modelo e SHA-256. Não misturar arquivos por nome semelhante, não compartilhar caches de firmware original entre perfis e não usar fallback silencioso. A infraestrutura de hardware em C++20 é compartilhada. Preservar dados reais do usuário, mesmo quando dados sintéticos de teste puderem ser descartados.
 
-## Regra arquitetural permanente — isolamento de BIOS e firmware
+## Documentação estável — regra permanente
 
-Cada revisão/região de BIOS usa exclusivamente seus módulos e recursos
-originais (IRX, ROM1/ROM2, fontes, OSD/Browser). Nomes, exports ou tamanhos
-iguais não comprovam compatibilidade. Registrar versão, região, procedência e
-SHA-256 por perfil; verificar antes do carregamento, sem fallback silencioso,
-busca por basename em outras versões ou cache global de componentes originais.
-Dependência ausente ou sem identificação gera erro claro. Infraestrutura
-genérica pode ser compartilhada; firmware específico de uma revisão, não.
+- `README.md` e `README.pt-BR.md` são **vitrines estáveis do projeto**, não changelogs, relatórios de tarefa ou lista de milestones. Mantê-los equivalentes em conteúdo.
+- `AGENTS.md` e `CLAUDE.md` são **contratos permanentes**. Não atualizar por marco, commit, número de testes, novo dispositivo, PC de bloqueio ou status diário.
+- Atualizar `STATUS.md` com avanços efetivamente demonstrados, limites e evidência; detalhes técnicos no relatório específico em `docs/`; próximo trabalho apenas em `docs/NEXT-TASK.md`.
+- Modificar os quatro arquivos estáveis **somente** quando mudar uma decisão arquitetural duradoura, requisito de produto, instrução de uso pública ou política do mantenedor. Mudança documental irrelevante não justifica novos commits nem repetição de testes.
+- Não mover o texto antigo de cada README para `STATUS.md` como cópia integral; histórico detalhado continua nos relatórios existentes.
 
-## Licenças e conteúdo proprietário — regra permanente
+## Licença, commits e execução
 
-Código original é BSD-3-Clause. PCSX2 e PS2Recomp (GPL) são apenas referência:
-não copiar, derivar, ligar nem traduzir seu código. Integração de componente
-com licença incompatível exige decisão do mantenedor registrada em
-`docs/LICENSE-DECISION.md`. Nunca adicionar BIOS, firmware, jogos, assets,
-saves ou código traduzido de binários proprietários ao repositório.
+Código original BSD-3-Clause. PCSX2 e PS2Recomp GPL são referências de comportamento, nunca código a copiar, derivar ou vincular; qualquer licença incompatível requer decisão do mantenedor. Não comitar firmware Sony, jogos, arquivos NVM, dados privados, traces ou código traduzido de conteúdo proprietário.
 
-## Commits e CI
+Trabalhar diretamente na `main`, salvo instrução contrária. Conventional Commits, sem PR, ZIP, Release ou coautoria atribuída a assistentes. Não reescrever histórico publicado. Não modificar o x360-native.
 
-Commits Conventional Commits diretamente na `main`, sem PR, ZIP ou Release,
-sem atribuição a assistentes (nada de `Co-Authored-By` ou “Generated with”).
-Após o push, acompanhar o GitHub Actions nos seis alvos (Windows x86-64/ARM64,
-Linux x86-64/ARM64, macOS Intel/Apple Silicon) e corrigir falhas e regressões
-antes de concluir. Ao finalizar, informar apenas commits, funcionalidades
-implementadas, testes/CI e limitações restantes.
+Priorizar testes focados; não executar suítes longas ou testes visuais sem necessidade e autorização. Computer Use exige autorização explícita. Não deixar processos em segundo plano sem acompanhamento e prazo. Se uma etapa precisar de autorização não concedida, informar o impedimento sem permanecer aguardando. Concluir a tarefa antes de ampliar o escopo; conferir CI dos seis alvos quando houver mudança de código. Informar ao terminar apenas commits, o que mudou, testes/CI e limites restantes.

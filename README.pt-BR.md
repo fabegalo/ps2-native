@@ -1,180 +1,51 @@
-# ps2-native — Recompilação nativa do PlayStation 2
-**Idiomas:** [English](README.md) | Português (Brasil)
+<div align="center">
 
+# ps2-native
 
-> **Status:** protótipo experimental, M2.8 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS, com um perfil de hardware do console, executam de 15,8 a 17,7 milhões de instruções do EE (com o IOP executando o próprio caminho de boot). Sem a NVM do MECHACON do console, param onde o IOP precisa dela; com a BIOS real da SCPH-70004 e a NVM dela, o kernel chega a "Initialize GS" e para na leitura do ID do codificador de vídeo, cujo valor não foi medido. O usuário fornece os arquivos do próprio console (nenhum é distribuído). Nada é renderizado.
+**Projeto aberto de pesquisa para executar software original do PlayStation 2 por recompilação nativa antecipada (AOT).**
 
-## Novidades da M2.8 — boot com NVM real, barramento do codificador de vídeo e PATH3 do GIF
+[![CI](https://img.shields.io/github/actions/workflow/status/fabegalo/ps2-native/build.yml?branch=main&label=CI)](https://github.com/fabegalo/ps2-native/actions/workflows/build.yml)
+[![Experimental](https://img.shields.io/badge/estado-experimental-orange)](STATUS.md)
+[![BSD-3-Clause](https://img.shields.io/badge/licen%C3%A7a-BSD--3--Clause-blue)](LICENSE)
 
-- **BIOS real + NVM real (locais, nunca versionadas):** ROM0 da SCPH-70004 `0200EC20040614` com a NVM desse console (modelo SCPH-70004, ModelID 27D420, ConModelID 26D4, todas as somas de configuração válidas), nas duas placas que o PS2Ident lista (`SCPH-70004:GH-032-11`, `:GH-032-32`). O EECONF lê a configuração real e o kernel roda da RAM até "Initialize GS": **17.690.079 instruções do EE e 2.210.789 do IOP**, no interpretador e no híbrido AOT (1.217 instruções em AOT, 402 trocas de motor), com traces idênticos. As outras NVM encontradas foram recusadas (vazias, ou anteriores ao layout Dragon, sem nome de modelo).
-- **O controlador não documentado é o barramento do codificador de vídeo dos slim:** as funções do próprio firmware (ROMGSCRT/kernel) enviam transações no estilo I²C ao escravo `0x42`/`0x43` com ponteiro de registrador; o registrador `0x7E` é o ID do chip (`0x1D` trava, `0x1C` programa o codificador por modo de vídeo). Um modelo de escravo (`VideoEncoderBus`) com dois layouts de mestre: 16 bits em `0x1A000000` (ROMVER 0200) e 8 bits em `0x1F801900` (ROMVER 0220). Papéis dos registradores, conclusão instantânea e confirmação são hipóteses nomeadas. A leitura de registrador é recusada, salvo valor assumido em diagnóstico (`--assume-video-encoder=0xREG:0xVALOR`, marcado `DIAGNOSTIC EXPERIMENT` no trace); o boot para nessa leitura.
-- **PATH3 do GIF e registradores gerais do GS:** o `SQ` chega à FIFO do GIF como um *quadword*; *GIFtags* PACKED A+D escrevem os registradores gerais do GS (só estado). `GIF_STAT` informa M3R/IMT/PSE e pacote PATH3 aberto; tudo que desenha, move pixels ou gera evento do GS é recusado.
-- **Só diagnóstico** (ID assumido `0x1C`/`0x10`): o pacote do GIF de 44 escritas do kernel passa e o EE para na leitura de `I_STAT`, que depende do estado do GS depois do reset (desconhecido).
-- **Não avançou, com motivo:** continuidade do VBLANK depois do reset do GS (sem evidência do tempo vertical antes da reescrita do `SYNCV`) e DMA do SIF (nenhum lado inicia uma transferência ainda).
-- **25/25 testes** aprovados localmente (clang). [Evidências, hipóteses e o que falta](docs/M2.8-STATUS.md).
+[English](README.md) · [Português (Brasil)](README.pt-BR.md) · [Estado atual](STATUS.md) · [Documentação](docs/README.md) · [Como contribuir](CONTRIBUTING.md)
 
-## M2.7 — VBLANK, ordem determinística EE/IOP e registradores do SIF
+</div>
 
-- **BIOS real (sem NVM):** inalterado — 17.685.811 / 17.685.893 / 15.816.643 instruções do EE, com parada no `ReadConfig` do IOP; traces do interpretador e do híbrido idênticos.
-- **Tempo vertical do GS:** o campo vem do `SYNCV` (o valor NTSC da BIOS: 525 meias-linhas, 480 visíveis, 45 de *blank*) sobre o relógio de linha da M2.2. Fica parado com `SMODE1.SINT` e desconhecido (com razão) para outros `CMOD`, `SYNCV` não escrito ou depois do reset do GS. Bordas do campo no *epoch* do relógio de linha são hipótese nomeada.
-- **VBLANK do IOP (IRQ 0/11):** gerado nas bordas do campo. O IOP nunca roda à frente do EE e é sincronizado antes de cada leitura do EE de estado do IOP e de cada escrita do EE que ele observa (GS, SIF). A ordem é determinística e igual para interpretador e AOT. O IRQ 3 (DMA) é fonte conhecida que nunca sobe, porque nenhuma transferência DMA pode começar.
-- **Registradores do SIF:** `MSCOM`/`SMCOM`/`MSFLG`/`SMFLG` são compartilhados entre EE e IOP, com as regras de ligar e limpar do ps2tek. No IOP, `SIF_BD6` tem os bits 12-31 conhecidos em 0 (teste de residência do SIFMAN; hipótese). `AND` e `BEQ`/`BNE` operam sobre valores com bits só parcialmente conhecidos.
-- **EE:** `GIF_CTRL`/`GIF_MODE`, `DEV9_R_REV` do perfil e timers em HBLANK que continuam contando através de uma mudança do relógio de linha do GS (reset do GS, NTSC/PAL).
-- **Só diagnóstico, não é boot** (NVM sintética local, nunca versionada):
-  - **IOP:** passa o bloqueio do VBLANK (~436 mil instruções na M2.6), o teste de residência do SIFMAN e a configuração da interrupção de DMA, e espera no SIFMAN o `MSFLG` do EE (cerca de 2,2 milhões de instruções).
-  - **EE:** lê os dados de boot do IOP na RAM do IOP, reinicia o GIF e o GS e para na primeira leitura de status de um controlador não documentado que o kernel usa em `0x1F801900` (`0x1A000000` na SCPH-70012). Nenhuma fonte pública o documenta, então nenhuma resposta é inventada.
-- **Ainda sem DMA do SIF:** nenhum dos lados chega a uma transferência do SIF, e a documentação pública não define o enquadramento palavra/*quadword* nem a profundidade das FIFOs; partidas de canal continuam recusadas com nome.
-- **24/24 testes** aprovados localmente na M2.7 (MSVC e clang). [Evidências, hipóteses e o que falta](docs/M2.7-STATUS.md).
+> **Software experimental de pesquisa, não um launcher de PS2 jogável.** O projeto analisa e recompila um subconjunto verificado de código do PS2 e executa parte do firmware original num runtime híbrido AOT/interpretador. Ainda **não** completa o boot do Browser original nem executa jogos comerciais. CI aprovada não comprova jogabilidade ou compatibilidade funcional em cada plataforma.
 
-## M2.6 — NVM externa do MECHACON, EECONF e o início do kernel do IOP
+## O que é o ps2-native?
 
-- **NVM externa (`--nvm=ARQUIVO`, `--expect-nvm-sha256=HEX`):** a imagem de 1024 bytes que o PS2Ident extrai (palavras 0..511 de `sceCdReadNVM`), validada por tamanho, SHA-256, layout conhecido do MECHACON (Dragon, v5+) e nome de modelo, ModelID e ConModelID do perfil selecionado (valores do banco do PS2Ident); uma NVM nunca é aceita para outro modelo. Os comandos S `ReadNVM`, `OpenConfig` (leitura), `ReadConfig` e `CloseConfig` a servem; o resto é recusado com nome.
-- **BIOS real (sem NVM):** contagens inalteradas — 17.685.811 / 17.685.893 / 15.816.643 instruções do EE; o IOP agora para explicitamente no `ReadConfig` com "no NVM image is supplied". Interpretador e híbrido têm traces idênticos (exceto os eventos de troca de motor).
-- **Só diagnóstico, não é boot:** com uma NVM sintética gerada localmente (nunca versionada, não é dado de console), o IOP conclui o EECONF e a configuração de timer do THREADMAN, ~433–436 mil instruções, e para quando as interrupções são reabilitadas com VBLANK início/fim em `I_MASK`: o VBLANK do IOP (tempo vertical do CRTC do GS) é o próximo componente.
-- **IOP:** *tool board id* (compartilhado com o EE), `DEV9_R_REV` por perfil (medido: "ssbus revision" do PS2Ident), a escrita da *expansion bay*, registrador de identificação e reset de barramento do i.LINK (hipóteses nomeadas), valores com bits conhecidos e desconhecidos (`ANDI`), os seis timers de hardware gerando `I_STAT` e exceções R3000A (`SYSCALL`, `BREAK`, interrupções, `RFE`). Uma linha de interrupção que depende de fonte não modelada para o IOP com o nome dela.
-- 23/23 testes na época. [Evidências, hipóteses e o que falta](docs/M2.6-STATUS.md).
+O objetivo é executar o **sistema e os jogos originais do PlayStation 2** em computadores modernos, usando tradução estática antecipada (**AOT**) das instruções do Emotion Engine (R5900/MIPS) para C++ nativo como caminho principal. O runtime de compatibilidade ainda precisa reproduzir corretamente CPU, memória, serviços do firmware, IOP, gráficos, áudio, dispositivos e temporização.
 
-## M2.5 — MCH/RDRAM superado, IOP no caminho de boot
+Código do firmware e módulos dinâmicos ou copiados para RAM que não puderem ser traduzidos estaticamente com segurança podem usar um caminho de **interpretação explícito e rastreável**. Compilar código não significa inicializar o console nem tornar um jogo jogável.
 
-- **Avanço com BIOS real:** SCPH-70012, SCPH-77008 e o dump japonês de 2006-09 chegam a 17.685.811 / 17.685.893 / 15.816.643 instruções do EE (antes ~637.600, em `0x1000F410`). A BIOS conclui a configuração de memória (inclusive o início/polling real do `F410`), imprime `Total accessable memory size: 32 MB`, configura a TLB, inicia o kernel em RAM e imprime `Initialize Start.` / `Initialize GS ...`. As três param no `LW 0xBC0003C0`: o `EECONF` do IOP precisa de `ReadConfig` (comando S `0x41` do MECHACON), cujos bytes estão na NVM de cada console. Interpretador e híbrido são idênticos.
-- **IOP (R3000A) no caminho de boot:** mesmo vetor de reset, PRId do perfil, relógio EE/8 (fato) a 1 instrução/ciclo (hipótese), execução preguiçosa até o tempo do EE; load delay slots, `IsC`, propagação de valores desconhecidos com origem, códigos POST, controlador de interrupções, registradores de interrupção e canais de DMA (transferências recusadas), status N do CDVD e interface de comandos S do MECHACON (`OpenConfig` respondido, leituras da NVM recusadas).
-- **EE:** `I_MASK` do INTC (escrita inverte bits; leitura de `I_STAT` recusada), MMI `PAND`/`PXOR`/`POR`/`PNOR` e dois blocos sem documentação escritos pelo kernel (`0x1F801900`, `0x1A000000`), guardados com leitura recusada.
-- **Perfis de hardware (`--console=MODELO[:PLACA]`):** `D_ENABLER` (`0x1000F520`) vem da placa, nunca de um valor global. SCPH-77008 é medido (`0x4111`); SCPH-70012 GH-032 e SCPH-90000/90006 usam valores medidos em consoles com as mesmas revisões de chip (hipóteses marcadas); SCPH-70012 GH-035 continua desconhecido e recusado. Um perfil é recusado com BIOS de outro ROMVER.
-- **Registradores de controle do MCH** `F400`–`F4C0` como latches e a operação do `F410` (só o bit 31, ocupado por 16 SCK; hipótese), a inicialização dos pinos SIO (`SOP 1110`, hipótese) e a codificação de opcodes das Direct RDRAM posteriores (`CLRR` = `1011`).
-- **RDRAM:** registradores programados antes do primeiro `SETR` e mantidos por ele (hipótese), novos layouts (`DEVID`, `CCA/CCB`, `NAPX`, `PDNXA/B`, `TPARM`, `SKIP`, registradores de teste) e `SRD` sem resposta lendo 0 (hipótese).
-- **21/21 testes** na M2.5. [Evidências, hipóteses e o bloqueio da NVM](docs/M2.5-STATUS.md).
+O **Browser original do PlayStation 2** e as telas de configuração do sistema são alvos próprios. Um futuro launcher desktop gerenciará o conteúdo local do usuário; ele não substituirá os menus da Sony por imitações.
 
-## M2.4 — registradores de temporização da RDRAM e transações concluídas no tempo certo
+## Estado atual
 
-- **Efeitos na conclusão:**
-  - As transações seriais do MCH são validadas na escrita de `MCH_RICM`; uma recusa nomeia esse `SW` e não altera nada.
-  - O efeito na cadeia RDRAM e o dado do `SRD` só aparecem quando o bit 31 zera.
-- **`TCYCLE`, `TFRM`, `TRDLY` e `TEST77` da RDRAM** seguem os layouts do datasheet de 64/72 Mbit da Rambus (reset indefinido). A BIOS escreve exatamente esses endereços antes da enumeração, o que confirma o mapa. `TPARM` continua recusado.
-- **Evidência sobre `0x1000F520` (`D_ENABLER`):**
-  - As três BIOS o usam como chave da mesma tabela de 16 gerações do controlador de memória (`0x1201`…`0x4212`). Uma chave desconhecida aborta a inicialização de memória.
-  - O valor nesses modelos de console não é documentado, por isso continua recusado em vez de copiar a constante de um emulador.
-- **O ponto de bloqueio da BIOS real não muda:** continua em 637.620/637.598 instruções, no `SW` em `0x1000F410`. Os traces do interpretador e do híbrido são idênticos.
-- **19/19 testes** aprovados localmente (MSVC, LLVM clang++). [Evidências da M2.4 e insumos de hardware pendentes](docs/M2.4-STATUS.md).
+| Subsistema | Demonstrado | Ainda falta |
+|---|---|---|
+| **AOT nativo** | Análise ELF32/MIPS validada, descoberta conservadora de fluxo, geração de C++ e testes sintéticos de ponta a ponta | Tradução abrangente de jogos comerciais e código dinâmico |
+| **Emotion Engine** | Semântica parcial R5900, memória/TLB, boot de hardware e execução híbrida AOT/interpretador | CPU completa, temporização e exceções precisas |
+| **IOP e firmware** | Boot parcial R3000A, registradores de hardware, NVM externa, flags SIF e VBLANK | Boot completo da BIOS/Browser, interrupções, DMA SIF e serviços restantes |
+| **Gráficos** | Controle GS/GIF, temporização e um caminho limitado de pacotes GIF PATH3 | Renderização de framebuffer, GS/VU/VIF completos e gráficos de jogos |
+| **Jogos e experiência** | Ferramentas técnicas e fixtures sintéticos | Jogos jogáveis, launcher, instaladores e Releases públicas |
 
-## M2.3 — interface serial do MCH e cadeia Direct RDRAM
+**O registro atualizado e baseado em evidências fica em [STATUS.md](STATUS.md).** Ele separa execuções de firmware real, hipóteses de diagnóstico, resultados da CI e funcionalidades ausentes. Os detalhes de cada marco ficam nos [relatórios técnicos](docs/README.md), sem serem copiados para este README a cada mudança.
 
-- **`MCH_RICM`/`MCH_DRD`** (`0x1000F430/0x1000F440`) iniciam transações seriais de controle da Direct RDRAM:
-  - O layout dos campos é o que as rotinas seriais da BIOS montam. O bit 31 fica ocupado pela duração da transação em ciclos de SCK, no período mínimo de 1000 ns do datasheet (hipótese).
-  - `CLRR` menos de 16 SCK após o `SETR` é recusado.
-- **`RdramChain`** segue o datasheet Direct RDRAM da Rambus:
-  - `SETR`/`CLRR`/`SETF` e `SWR`/`SRD` do `INIT`;
-  - cadeia com repetidor SIO e seleção por `SDEVID`.
-  
-  `SOP` reservados, outros registradores, acesso antes do `SETR` e leituras sem resposta (ou com várias) são recusados sem alterar estado.
-- Uma ROM0 sintética executa o Algorithm InitDev para dois dispositivos, de forma idêntica no interpretador puro e no modo híbrido.
-- **O ponto de bloqueio da BIOS real não muda.** Os três dumps continuam em 637.620/637.598 instruções, no `SW` em `0x1000F410`. A BIOS escreve esse registrador sem documentação antes de qualquer transação serial, e depois usa `0x1000F520`, `F480/F490/F4C0` e os `SOP` `0xE`/`0xB`, reservados no datasheet disponível. Cada um exige evidência ou decisão do mantenedor.
-- **18/18 testes** aprovados localmente (MSVC, LLVM clang++). [Evidências da M2.3, ordem dos acessos da BIOS e decisão pendente](docs/M2.3-STATUS.md).
+## Como funciona
 
-## M2.2 — registradores privilegiados do GS e a configuração de memória da BIOS
+1. Carregar e validar firmware fornecido pelo usuário ou um executável MIPS obtido legalmente. Isolar cada revisão/região de BIOS e seus recursos correspondentes.
+2. Analisar código comprovadamente alcançável e gerar blocos AOT em C++20 somente com semântica suportada.
+3. Executar blocos nativos quando disponíveis. No boot do firmware, o interpretador assume explicitamente o código fora da cobertura AOT comprovada, registrando trocas de motor e bloqueios.
+4. Melhorar a fidelidade ao hardware com evidências técnicas, testes sintéticos reproduzíveis e observações documentadas de execuções de firmware real. Operações não implementadas nunca devem retornar sucesso silencioso.
 
-Os mesmos três dumps agora retiram **637.620** instruções (SCPH-70012/77008) e **637.598** (SCPH-90006), de forma idêntica no interpretador puro e no modo híbrido. Eles:
-
-- programam o CRTC do GS;
-- calibram o relógio do EE contando bordas de HBLANK com T0 e `Count`;
-- pulsam o DEV9;
-- imprimem `# Initialize memory (rev:3.70, ctm:393Mhz, cpuclk:295Mhz detected)` pelo EE SIO (`rev:4.00` na SCPH-90006).
-
-Param em `0x9FC4135C`, no `SW` em `0x1000F410`, registrador do controlador de memória (MCH) sem documentação pública. A recusa explícita permanece até haver evidência.
-
-- **Registradores privilegiados do GS** (só estado de controle, sem renderização):
-  - `SMODE1/SMODE2/SRFSH/SYNCH1/SYNCH2/SYNCV` aceitam escritas de 64 bits; bits reservados são recusados e leituras também (são só de escrita).
-  - `CSR` aceita escritas de `RESET` e dos bits de reconhecimento. A leitura do `CSR` é recusada porque o valor depende do VBLANK e da revisão do GS.
-- **Relógio de linha do GS gera o HBLANK:**
-  - `SMODE1.SINT` suspende o sincronismo; linhas NTSC (9370 BUSCLK) ou PAL (9436) começam quando ele é liberado.
-  - Retemporizar o GS com um timer contando HBLANK é recusado.
-- **Latches DEV9, transmissão do EE SIO, `LWC1`/`SWC1`:**
-  - `LWC1`/`SWC1` movem palavras cruas; sem `Status.CU1` param como coprocessador inutilizável.
-  - O resto do SIO e da FPU é recusado.
-- **Prova AOT de saltos constantes `LUI`/`ORI`/`JR`:**
-  - Um salto só é provado quando não há entrada entre o `LUI` e o `JR` e o `LUI` não está em delay slot.
-  - A cobertura estática da BIOS sobe de 12 para 107 instruções (2 saltos provados). O código que a BIOS copia para a RAM continua interpretado.
-- **17/17 testes** aprovados localmente (MSVC, LLVM clang++); a CI usa somente firmware sintético. [Evidências, hipóteses e bloqueio da M2.2](docs/M2.2-STATUS.md).
-
-## M2.1 — primeiras etapas de uma BIOS real
-
-Três dumps de ROM0 fornecidos pelo usuário (SCPH-70012 v2.00 EUA, SCPH-77008 v2.20 Europa, SCPH-90006 v2.20 Japão; nunca guardados no repositório) iniciam no vetor de reset, passam pela configuração de COP0/TLB, pela escrita em `0x1000F500`, pela pilha no scratchpad e por `PADDUW`, e entram no módulo `RDRAM` da ROM, retirando **70.090 instruções** de forma idêntica no interpretador puro e no modo híbrido. Leem o byte *tool board id* em `0x1F803204`, seguem o caminho de varejo e param na primeira escrita em registrador privilegiado do GS (`SMODE1`, `0x12000010`). O GS não é modelado.
-
-- **Tool board id `0x1F803204`:** lê `0xFF`, ou seja, sem placa de ferramenta. Esse valor é uma hipótese registrada.
-  - O firmware só distingue classes de placa de ferramenta (nibble alto 1–3 no EE, `0x60/0x61` no IOP).
-  - `0xFF` (barramento alto) é sustentado por dados do PS2Ident, mas o byte exato no varejo não foi medido.
-  - Outros tamanhos, escritas e o resto da janela de registradores do IOP são recusados.
-
-- **MMI do pipeline 1 e `PADDUW`** na semântica compartilhada AOT/interpretador (`MULT1/MULTU1/DIV1/DIVU1/MFHI1/MFLO1/MTHI1/MTLO1` sobre LO1/HI1).
-- **Relógio do EE e `COP0 Count`:** um ciclo por instrução retirada (hipótese registrada); timers T0–T3 do EE (`COUNT/MODE/COMP`, BUSCLK, /16, /256 e HBLANK NTSC) derivam do mesmo relógio. Gate, interrupções de timer, flags de modo e `HOLD` são recusados com motivo.
-- **TLB corrigida pela BIOS real:** entrada com bit S mapeia os 16 KiB do scratchpad com qualquer PageMask; entradas nunca escritas não correspondem.
-- **16/16 testes** ao fim da M2.1. [Evidências e hipóteses da M2.1](docs/M2.1-STATUS.md).
-
-## M2.0 — infraestrutura de boot do PS2 original
-
-- **Loader de BIOS para o seu dump de ROM0:** exatamente 4 MiB; ROMDIR, EXTINFO e ROMVER (versão, região, tipo de console, data de build) validados campo a campo; identidade por SHA-256 com `--expect-sha256` opcional. ROM1/ROM2/EROM ainda não são carregados, então revisões nunca são misturadas; uma imagem da NVM do MECHACON só é carregada do dump do próprio usuário e validada contra o perfil do console. Nada da Sony é distribuído.
-- **Barramento e MMU do EE:** KSEG0/KSEG1 decodificam o barramento físico (RAM de 32 MiB, ROM0 somente leitura em `0x1FC00000`); kuseg/KSEG2/KSEG3 só pela TLB de 48 entradas escrita pelo convidado (page mask, ASID, global, valid/dirty, bit S do scratchpad de 16 KiB). Toda região de dispositivo do EE (timers, DMAC, INTC, SIO, SIF, MCH, GIF, VIF, IPU, VU, GS, IOP) falha com seu nome; falhas de TLB são informadas pelo tipo de exceção.
-- **Reset do EE e COP0:** PC `0xBFC00000`, `Status = BEV | ERL`, `PRid 0x2E20`, `Config 0x440`; `MFC0/MTC0` com regras por registrador, `TLBWI/TLBR/TLBP`, `ERET`, `EI/DI`, `CACHE` (só invalidação/write-back, pois a memória é coerente), `PREF`. Temporização de ciclos, conteúdo de cache, interrupções e vetorização de exceções não são modelados e param com diagnóstico.
-- **Execução híbrida:** um único cabeçalho de semântica R5900 (`ee_semantics.hpp`) usado pelos blocos AOT e pelo novo interpretador. `ps2n-aot <rom0> <saida.cpp> --bios` traduz o código do firmware estaticamente alcançável e lista cada fronteira do interpretador; `ps2n-boot` executa blocos AOT quando o PC coincide exatamente e o interpretador nos demais casos, sempre visível no trace. Tradução de outra ROM0 é recusada.
-- **Trace reproduzível:** eventos COP0/TLB/CACHE, trocas de motor, opcionalmente cada instrução e acesso de dados, e o ponto exato de bloqueio (PC, palavra, dispositivo, endereço físico).
-
-Uma ROM0 sintética de autoria própria inicia no vetor de reset, passa por inicialização da TLB, mapeamento do scratchpad, invalidação de cache, cópia ROM→RAM, `ERET` e um payload em RAM, e para em `INTC_STAT` (`0x1000F000`), ainda não modelado: **582 instruções**, resultados idênticos com interpretador puro e híbrido (370 AOT + 213 interpretadas). **15/15 testes** aprovados localmente no Windows x86-64 (MSVC 19.44, LLVM clang++ 22). [Evidências da M2.0, uso com firmware real e limitações](docs/M2.0-STATUS.md).
-
-```sh
-./out/build/ps2n-boot /caminho/para/sua-rom0.bin --console=SCPH-77008 --trace=full --trace-out=boot-trace.txt
-```
-
-## M1.3
-
-- **Relocations MIPS como evidência, nunca aplicadas.** Em ELF32 `ET_EXEC` já vinculados que mantêm registros `SHT_REL`, `R_MIPS_26` (em `J`/`JAL` validados) e pares `R_MIPS_HI16`/`R_MIPS_LO16` (pareamento do ABI, vários HI16 por LO16, `LUI` + `%lo` com sinal) são conferidos contra os bytes vinculados e os símbolos. Um par HI16/LO16 que forma endereço de código (`ADDIU`) prova uma função cujo endereço é tomado. Registros malformados (HI16 órfão, instrução errada, símbolo inválido, sítio fora da seção de código) geram erro explícito; tipos não usados, como `R_MIPS_GPREL16`, são contados e informados, não descartados em silêncio.
-- **Jump tables provadas pelo próprio código**, sem configuração por jogo: um `JR` só é aceito quando um caminho em linha reta mostra o limite `SLTIU`, o guarda `BEQ …, $zero`, o índice escalado por palavra, a base da tabela e o `LW` da entrada, sem desvio externo para dentro dessa janela. Formas GCC e ee-gcc são reconhecidas; toda entrada precisa ser código executável do mesmo segmento. `JR` não provados são informados com motivo.
-- **Entradas indiretas verificadas em runtime:** `JR`/`JALR` só alcançam raízes de função, continuações de chamada ou alvos de tabelas provadas; o resto falha fechado.
-- **Subconjunto inteiro do R5900** com semântica de 64 bits que preserva a metade alta do GPR: deslocamentos de 32/64 bits, `DADDU/DSUBU/DADDIU`, lógicas, `SLT*` de 64 bits, `MOVZ/MOVN`, `MULT/MULTU` de três operandos, `DIV/DIVU` (resultados definidos na divisão por zero), `MFHI/MFLO/MTHI/MTLO`, loads/stores de byte a quadword (`LQ/SQ`), `BLEZ/BGTZ/BLTZ/BGEZ`, `BxxZAL`, todas as formas branch-likely com anulação do delay slot e `SYNC`. `ORI` e `BEQ/BNE` passaram ao comportamento de 64 bits do R5900.
-
-Um ELF sintético M1.3 (com e sem seções) é gerado, recompilado para C++, compilado nativamente e executado: **263 instruções**, 2 jump tables provadas, 61 valores de 64 bits de ALU/memória conferidos, registradores de link, anulação de branch-likely e destinos indiretos que falham fechados. **12/12 testes** aprovados localmente no Windows x86-64 (MSVC 19.44 e LLVM clang++ 22); os seis alvos são validados pelo [GitHub Actions](https://github.com/fabegalo/ps2-native/actions). [Evidências e limitações da M1.3](docs/M1.3-STATUS.md).
-
-## M1.1
-
-O recompilador AOT agora separa **decodificação MIPS, análise de fluxo e geração de C++**. Identifica funções por símbolos ELF32 `STT_FUNC` validados ou por entradas verificadas `--entry=0xADDRESS` em arquivos sem símbolos. Gera **funções nativas por bloco básico e uma tabela de despacho**: `JALR/JR` podem chamar funções recompiladas sem interpretar as instruções MIPS em tempo de execução.
-
-Um ELF sintético executou **28 instruções**, três chamadas indiretas, preservando delay slots e registradores de retorno (inclusive `JALR rs==rd`). Alvos desconhecidos, código modificado na RAM e símbolos inválidos provocam erro em vez de sucesso falso. Foram aprovados **6/6 testes** no Linux x86-64 com GCC 14.2 e Clang 17 + ASan/UBSan. [Evidência e limites do M1.1](docs/M1.1-STATUS.md).
-
-```sh
-./out/build/ps2n-aot input.elf out/build/generated/output.cpp --entry=0x00100050
-```
-
-A opção informa uma função já identificada; **não transforma jogos comerciais em executáveis nativos automaticamente**.
-
-## Base anterior — M0
-
-Projeto independente inspirado na **visão** do [x360-native](https://github.com/fabegalo/x360-native): rodar o sistema original e jogos do PlayStation 2 em computadores, priorizando recompilação estática AOT e interfaces de runtime verificáveis. **O x360-native não foi modificado.**
-
-## O que já funciona (M0)
-
-- Validação e carregamento de `ELF32`, little-endian, MIPS `ET_EXEC`, com segmentos `PT_LOAD`, endereços e BSS; outras variantes são rejeitadas explicitamente.
-- Modelo inicial de RAM EE de 32 MiB, com espelhos KSEG0/KSEG1, operações de 8 e 32 bits, acesso alinhado e erros para hardware não implementado.
-- Estrutura de 32 registradores de 128 bits do R5900, ainda **sem semântica MMI/128 bits**; apenas operações de palavra de um subconjunto de instruções.
-- Descoberta conservadora de instruções alcançáveis a partir de `e_entry` por fluxo de controle direto; salto indireto para destino não descoberto falha explicitamente.
-- Geração de C++20 por AOT e **compilação real desse código pelo compilador host**. Não é um interpretador oculto.
-- Teste end-to-end: ELF MIPS sintético → código C++ AOT → executável nativo → 37 instruções → `$v0=37`, memória `[0x40]=37` e retorno após delay slot.
-- Conjunto suportado: `NOP`, `ADDIU`, `ADDU`, `ORI`, `LUI`, `LW`, `SW`, `BEQ`, `BNE`, `J`, `JAL`, `JR` sob restrições explicitadas em `docs/M0-STATUS.md`.
-- Operações não implementadas geram erro em vez de falso sucesso.
-
-Nenhum arquivo proprietário, biblioteca GPL, BIOS ou jogo faz parte desta base.
-
-
-## M1.2 — destinos indiretos com evidência verificável
-
-A descoberta de jump tables é conservadora: o parser ELF32 identifica ponteiros `R_MIPS_32` **já resolvidos** em seções de dados não executáveis, associados a símbolos `STT_SECTION` ou `STT_FUNC` em código executável. Os destinos válidos entram no grafo AOT, inclusive endereços internos da seção sem símbolo de função. Candidatos rejeitados têm diagnóstico explícito.
-
-Em executáveis sem relocations/símbolos, é possível informar uma tabela conhecida: `ps2n-aot entrada.elf saida.cpp --table=0x00101000:2`. Todos os elementos são validados; tabelas inválidas falham. Endereços indiretos não descobertos continuam rejeitados. **Isso não representa compatibilidade genérica com jogos, overlays ou todas as variantes de relocação MIPS.** Veja o [status M1.2](docs/M1.2-STATUS.md).
+**Performance-first, correctness-preserving:** otimizar recompilador, CPU, memória e gráficos preservando o comportamento do console. Um futuro modo gráfico aprimorado deverá preservar lógica, física e sincronização dos jogos.
 
 ## Compilar e testar
 
-O I/O suporta caminhos Unicode longos no Windows sem alterar o Registro. O teste
-permanente `io-long-paths` cobre caminhos de 260/500/1000 caracteres, saída AOT,
-entrada BIOS/NVM/ELF e traces. Ver [cobertura e limites das ferramentas de build](docs/WINDOWS-PATHS.md).
-
-Requisitos: CMake 3.21+, compilador C++20, Ninja (Linux/macOS; também recomendado no Windows). Não requer Python, administrador ou dependências externas.
+Requisitos: **CMake 3.21+**, **compilador C++20** e **Ninja** (ou gerador nativo compatível). Não há SDK externo obrigatório nem exigência de instruções AVX.
 
 ```sh
 cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -182,38 +53,35 @@ cmake --build out/build --parallel
 ctest --test-dir out/build --output-on-failure
 ```
 
-No Windows, alternativamente use o gerador Visual Studio e `cmake --build out/build --config Release` (a CI usa MSVC no Windows).
+No Windows, também é possível usar o gerador Visual Studio do CMake; em builds com várias configurações, usar `--config Release` para compilar e testar.
 
-O build gera seu próprio ELF de teste em `out/build/fixtures/synthetic.elf` e recompila para `out/build/fixtures/synthetic_aot.cpp`. A geração integra o grafo do CMake: nenhum executável do jogo é distribuído e uma nova geração não é feita quando a entrada não muda.
+O GitHub Actions compila e testa **Windows x86-64/ARM64, Linux x86-64/ARM64 (incluindo a arquitetura do Steam Deck) e macOS Intel/Apple Silicon**. Compilar nos seis alvos não comprova que os jogos de PS2 funcionam neles.
 
-### Ferramenta AOT para análise técnica
+### Ferramentas de desenvolvimento
 
 ```sh
-./out/build/ps2n-aot ./meu_programa_mips.elf ./out/build/generated/program.cpp
+# Gerar C++ nativo a partir de um ELF MIPS suportado e obtido legalmente.
+./out/build/ps2n-aot entrada.elf out/build/generated/programa.cpp
+
+# Diagnosticar o boot de uma ROM0 fornecida pelo usuário.
+./out/build/ps2n-boot bios/sua-rom0.bin --console=MODELO:PLACA --trace=events
+
+# Caso exista, fornecer a NVM extraída do mesmo console.
+./out/build/ps2n-boot bios/sua-rom0.bin --console=MODELO:PLACA --nvm=bios/sua-nvm.nvm --trace=events
 ```
 
-**Importante:** o comando **só gera C++**. Esse C++ precisa ser compilado e conectado a um host que inicialize a memória e forneça o contexto EE. O fluxo automático completo existe apenas para o fixture sintético neste M0. Ele não é um conversor universal de jogos PS2. Gere apenas a partir de arquivos que você tem direito de usar; não redistribua código traduzido de jogos comerciais.
+`ps2n-aot` gera C++ que precisa ser ligado a um host compatível; não produz sozinho um jogo executável. `ps2n-boot` é uma ferramenta de diagnóstico e pode parar em hardware não implementado. O encerramento do processo não deve ser confundido com uma BIOS inicializada com sucesso.
 
-## Arquitetura
+ROM0, ROM1/ROM2, NVM, jogos e traduções proprietárias geradas **não são fornecidos**. Mantenha esses arquivos localmente e não os publique no repositório. A correspondência BIOS/NVM deve ser validada, não presumida pelo nome.
 
-- `include/ps2native/io.hpp` / `src/io.cpp`: fronteira única de I/O host, caminhos nativos Unicode e escrita incremental.
-- `include/ps2native/elf.hpp` / `src/elf.cpp`: contrato de validação ELF.
-- `include/ps2native/memory.hpp` / `src/memory.cpp`: RAM/espelhos e acesso seguro.
-- `include/ps2native/ee.hpp` / `src/ee.cpp`: estado EE sem estado global.
-- `include/ps2native/mips.hpp` / `src/mips.cpp`: decodificador do subconjunto R5900.
-- `include/ps2native/control_flow.hpp` / `src/control_flow.cpp`: análise de funções e fluxos.
-- `include/ps2native/aot.hpp` / `src/aot.cpp`: geração AOT e despachante.
-- `include/ps2native/aot_runtime.hpp`: ponto de entrada da tradução compilada.
-- `tools/ps2n-aot.cpp`: CLI de geração.
-- `tests/`: firmware/jogos **não** são necessários; fixture MIPS de autoria própria.
-- `.github/workflows/build.yml`: matriz dos seis sistemas/arquiteturas, sem releases prematuras.
+## Roadmap
 
-A API permanece uniforme por plataforma. Consultar [M2.8](docs/M2.8-STATUS.md), [M2.7](docs/M2.7-STATUS.md), [M2.6](docs/M2.6-STATUS.md), [M2.5](docs/M2.5-STATUS.md), [M2.4](docs/M2.4-STATUS.md), [M2.3](docs/M2.3-STATUS.md), [M2.2](docs/M2.2-STATUS.md), [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
+A direção de longo prazo é **AOT genérico → EE/IOP, firmware e DMA fiéis → GS/VU/SPU2 → Browser original → jogos → launcher multiplataforma simples e otimizações medidas**. Isso não é uma promessa de compatibilidade nem um cronograma de lançamento. Acompanhe a [próxima tarefa de engenharia](docs/NEXT-TASK.md) para o trabalho ativo.
 
-## Próximos marcos
+## Contribuição e documentação
 
-**M1:** ampliar semântica R5900, resolver fluxos indiretos/relocações e criar despachante verificável com fallback explícito. M2–M6: MMU/IOMMU, IOP, VU, DMA, GS, SPU2, BIOS/Browser originais, jogos, launcher e otimizações multiplataforma. Não existe atalho legítimo que elimine a necessidade desses componentes.
+Contribuições devem incluir testes focados e evidências, manter um núcleo único em C++20 para todas as plataformas e evitar hacks por jogo, fallbacks silenciosos e cópias desnecessárias. Consulte [CONTRIBUTING.md](CONTRIBUTING.md), [arquitetura](docs/ARCHITECTURE.md), [documentação técnica](docs/README.md) e [status](STATUS.md).
 
-**Licença:** BSD-3-Clause apenas para o código original deste protótipo. Código GPL de projetos de referência não foi incorporado. Consulte `docs/LICENSE-DECISION.md` antes de integrar bibliotecas de terceiros.
+## Licença
 
-Próxima tarefa objetiva: [continuação da M2.8: o ID do codificador de vídeo e o estado do GS depois do reset](docs/NEXT-TASK.md).
+O código original do ps2-native usa **[BSD-3-Clause](LICENSE)**. PCSX2 e PS2Recomp são referências de comportamento, **não implementações GPL copiadas ou vinculadas**. Firmware, jogos, NVM específica de aparelho e código traduzido com direitos autorais não fazem parte do repositório. Veja as [decisões de licenciamento](docs/LICENSE-DECISION.md).
