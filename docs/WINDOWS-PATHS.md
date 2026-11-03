@@ -62,13 +62,55 @@ I/O UNC real aprovado localmente no compartilhamento administrativo ja existente
   regras); a criacao de diretorios de fixtures foi retirada de `cmake -E` e
   pertence agora ao escritor compartilhado. A raiz do build e as operacoes
   internas de CMake/compilador continuam sendo responsabilidade dessas ferramentas.
-- Limite externo reproduzido, sem alterar Registro: CMake 3.31.6 configurou
-  `PS2N_BIOS_AOT_SOURCE` para uma traducao sintetica com nome Unicode em caminho
-  de 983 unidades UTF-16. A criacao da ROM0 e do C++ pelas ferramentas do projeto
-  funcionou. O Ninja 1.13.1 recusou o build antes da compilacao com
-  `Stat(...): Filename longer than 260 characters`. Isso limita esse toolchain
-  para fontes C++ profundas, nao as leituras/escritas do ps2-native. Nenhum arquivo
-  foi copiado para encobrir a falha. Nao se afirma suporte irrestrito a raizes
-  de projeto/build profundas no Ninja/MSBuild/compilador.
+## Compilacao AOT pelo Ninja sem copias
+
+A falha original foi reproduzida: Ninja 1.13.1 recusava `Stat` de uma fonte
+AOT Unicode com 983 unidades UTF-16, apesar de o CMake 3.31.6 a configurar.
+A integracao `cmake/AotSource.cmake` agora conserva a opcao publica
+`PS2N_BIOS_AOT_SOURCE` e referencia automaticamente o diretorio original por
+um caminho curto dentro do build quando necessario no Windows.
+
+`ps2n-path`, compilado no configure apenas com `src/io.cpp` e a fronteira de
+I/O publica, cria uma junction por APIs Win32. O buffer de reparse usa caminhos
+NT dimensionados, pois o probe com `mklink /J` e alvo profundo produziu uma
+referencia invalida. Nenhum fonte ou firmware e copiado; apenas o executavel
+proprio do helper e instalado no build pelo `try_compile`. Os arquivos AOT,
+ELF e headers conservam sua localizacao original. O helper verifica identidade
+de arquivo, recusa caminhos existentes que nao sejam referencias ao mesmo
+alvo e nao retargeta aliases. Nao usa hard links, wrapper C++, Registro,
+Developer Mode ou privilegio de criacao de symlink. A referencia e local ao
+build; nao constitui cache compartilhado de firmware.
+
+O Ninja recebe o caminho curto do mesmo arquivo e continua gerenciando suas
+dependencias normalmente. Uma segunda falha foi demonstrada no MSVC 19.44
+localizado: o CMake decodificava `/showIncludes` UTF-8 como OEM e o Ninja nao
+reconhecia headers alterados. O modulo captura o prefixo real sem transcodificar
+seus bytes. `/utf-8` torna o charset C++ explicito e atualiza comandos de
+compilacao antigos, para renovar seus registros de dependencias.
+
+A regressao permanente `aot-long-path-build` cria somente fixtures proprios,
+compila o C++ AOT original sob Ninja em 260/500/1000 unidades nativas e executa
+37 instrucoes MIPS com registradores/RAM/terminacao e limites conferidos.
+Compara identidade do arquivo original/referencia, exige no-op sem alteracoes,
+rebuild apos editar o fonte original e apos editar um header original,
+e comprova que remover a referencia preserva os dados. Cobre aliases relativos,
+reuso idempotente, conflito com diretorio comum/outro alvo e recusas explicitas.
+Os processos de teste e seus filhos tem timeout e grupo/job proprio.
+
+Validacao local: Windows x86-64, MSVC 19.44 localizado, CMake 3.31.6 e Ninja
+1.13.1; os tres casos exatos passaram em 52,38 s. O runner opcional tambem foi
+compilado automaticamente com o parametro original de 983 unidades, sem
+informar um alias manual. A CI exige que Ninja esteja disponivel para essa
+regressao nos seis alvos. Fora da CI, a ausencia de Ninja e reportada como
+cobertura nao validada (teste skipped), sem bloquear builds por geradores nativos.
+
+Limites restantes: a raiz do build e o basename precisam permitir um caminho
+curto para as ferramentas nativas; isso nao promete builds de projetos inteiros
+em raizes arbitrariamente profundas. O adaptador Windows requer filesystem com
+suporte a junctions e alvo local; junctions para UNC/rede sao recusadas antes
+da criacao. O I/O normal/UNC dos dados continua disponivel como descrito acima.
+Limites de reparse point, filesystem, permissoes, SDK e toolchain continuam
+produzindo erros explicitos. O bootstrap usa o compilador nativo selecionado;
+cross-compilacao com binarios de host nao executaveis nao foi validada.
 
 Referencia de sintaxe/limites: [Microsoft: Maximum Path Length Limitation](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation).

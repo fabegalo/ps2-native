@@ -14,6 +14,7 @@ add_library(ps2n_core STATIC
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(MSVC)
     target_compile_options(ps2n_core PRIVATE /W4 /permissive-)
+    target_compile_options(ps2n_core PUBLIC /utf-8)
 else()
     target_compile_options(ps2n_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -30,16 +31,39 @@ target_link_libraries(ps2n-boot PRIVATE ps2n_core)
 # and configure with -DPS2N_BIOS_AOT_SOURCE=<out.cpp>. The generated file is
 # derived from Sony firmware: keep it local, never commit or distribute it.
 set(PS2N_BIOS_AOT_SOURCE "" CACHE FILEPATH "ps2n-aot --bios translation of a user-supplied ROM0")
+include(cmake/AotSource.cmake)
 if(PS2N_BIOS_AOT_SOURCE)
-    add_executable(ps2n-boot-hybrid tools/ps2n-boot.cpp "${PS2N_BIOS_AOT_SOURCE}")
+    add_executable(ps2n-boot-hybrid tools/ps2n-boot.cpp)
+    ps2n_target_aot_source(ps2n-boot-hybrid "${PS2N_BIOS_AOT_SOURCE}")
     target_compile_definitions(ps2n-boot-hybrid PRIVATE PS2N_BOOT_WITH_AOT=1)
     target_link_libraries(ps2n-boot-hybrid PRIVATE ps2n_core)
 endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(ps2n-path tools/ps2n-path.cpp)
+    target_link_libraries(ps2n-path PRIVATE ps2n_core)
+    add_executable(ps2n-aot-build-paths tests/aot_build_paths.cpp)
+    target_link_libraries(ps2n-aot-build-paths PRIVATE ps2n_core)
+    option(PS2N_REQUIRE_NINJA_PATH_TEST "Fail configure if the Ninja AOT path test is unavailable" OFF)
+    if(CMAKE_GENERATOR MATCHES "Ninja")
+        set(PS2N_NINJA_EXECUTABLE "${CMAKE_MAKE_PROGRAM}")
+    else()
+        find_program(PS2N_NINJA_EXECUTABLE NAMES ninja)
+    endif()
+    if(PS2N_REQUIRE_NINJA_PATH_TEST AND NOT PS2N_NINJA_EXECUTABLE)
+        message(FATAL_ERROR "Ninja is required for AOT path regression coverage")
+    endif()
+    add_test(NAME aot-long-path-build COMMAND ps2n-aot-build-paths
+        "${CMAKE_CURRENT_BINARY_DIR}/aot-build-paths" "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_COMMAND}" $<TARGET_FILE:ps2n-make-fixture> $<TARGET_FILE:ps2n-aot>
+        $<TARGET_FILE:ps2n-path> $<TARGET_FILE:ps2n_core> "${CMAKE_CXX_COMPILER}"
+        "${PS2N_NINJA_EXECUTABLE}" "$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,Release>")
+    set_tests_properties(aot-long-path-build PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}" TIMEOUT 240 SKIP_RETURN_CODE 77)
     add_executable(ps2n-make-fixture tests/make_fixture.cpp)
     target_link_libraries(ps2n-make-fixture PRIVATE ps2n_core)
+    add_dependencies(ps2n-aot-build-paths ps2n-make-fixture ps2n-aot ps2n-path)
     add_executable(ps2n-io-paths tests/io_paths.cpp)
     target_link_libraries(ps2n-io-paths PRIVATE ps2n_core)
     set(PS2N_TEST_UNC_ROOT "" CACHE PATH "Optional existing writable UNC share for I/O tests")

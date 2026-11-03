@@ -222,3 +222,14 @@ Fontes adicionais:
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Memory.cpp
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/GS.cpp
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Sif.h
+
+## Consulta para compilacao AOT em caminhos profundos
+
+Somente APIs, formatos e comportamento; nenhum codigo do Ninja foi incorporado.
+A implementacao do projeto permanece independente, na fronteira de host I/O.
+
+- [Ninja 1.13.1, disk_interface.cc](https://github.com/ninja-build/ninja/blob/v1.13.1/src/disk_interface.cc): consulta do limite legado no Stat e dependencia do estado de long paths do processo. Usado apenas para explicar o bloqueio observado.
+- [Microsoft: REPARSE_DATA_BUFFER](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_reparse_data_buffer): tag e layout do buffer de mount point/junction; offsets e comprimentos em bytes.
+- [Microsoft: Hard Links and Junctions](https://learn.microsoft.com/en-us/windows/win32/fileio/hard-links-and-junctions): referencia a diretorios locais, inclusive entre volumes, e restricoes de rede.
+- [CMake 3.21: try_compile](https://cmake.org/cmake/help/v3.21/command/try_compile.html): bootstrap de executavel a partir dos fontes originais e instalacao do helper proprio no build.
+- MSVC 19.44 localizado e Ninja 1.13.1 locais: prefixo /showIncludes emitido em UTF-8 e decodificado como OEM no registro do CMake; a captura dos bytes originais restabeleceu o rebuild por header alterado, comprovado pelo teste sintetico.

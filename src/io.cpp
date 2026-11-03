@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <system_error>
@@ -10,6 +11,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <winioctl.h>
 #endif
 
 namespace ps2native {
@@ -82,6 +84,90 @@ void remove_directory_tree(const std::filesystem::path& path) {
     std::error_code error;
     std::filesystem::remove_all(native, error);
     if (error) fail("Cannot remove test directory", native, error);
+}
+bool files_equivalent(const std::filesystem::path& first, const std::filesystem::path& second) {
+    std::error_code error;
+    const bool same = std::filesystem::equivalent(native_io_path(first), native_io_path(second), error);
+    if (error) fail("Cannot compare file identities", first, error);
+    return same;
+}
+void ensure_directory_alias(const std::filesystem::path& alias, const std::filesystem::path& target) {
+    const auto native_alias = native_io_path(alias);
+    const auto native_target = native_io_path(target);
+#ifdef _WIN32
+    if (native_target.native().compare(4, 4, L"UNC\\") == 0)
+        fail("Directory aliases require a local target (junctions cannot reference UNC shares)", target);
+#endif
+    std::error_code error;
+    if (!std::filesystem::is_directory(native_target, error)) fail("Alias target is not an accessible directory", target, error);
+    const auto status = std::filesystem::symlink_status(native_alias, error);
+    if (error && error != std::errc::no_such_file_or_directory) fail("Cannot inspect directory alias", alias, error);
+    if (std::filesystem::exists(status)) {
+#ifdef _WIN32
+        const auto attributes = GetFileAttributesW(native_alias.c_str());
+        const bool reference = attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+#else
+        const bool reference = std::filesystem::is_symlink(status);
+#endif
+        if (!reference || !files_equivalent(native_alias, native_target)) fail("Existing alias has a different target or is not a reference", alias);
+        return;
+    }
+    if (!native_alias.parent_path().empty()) make_directories(native_alias.parent_path());
+#ifdef _WIN32
+    // Mount-point reparse data uses NT paths, not the legacy DOS path parser.
+    // No SeCreateSymbolicLinkPrivilege or Developer Mode is needed for junctions.
+    const auto& extended = native_target.native();
+    const std::wstring substitute = L"\\??\\" + extended.substr(4);
+    const std::wstring print = extended.substr(4);
+    struct Header {
+        DWORD tag;
+        WORD data_length, reserved;
+        WORD substitute_offset, substitute_length, print_offset, print_length;
+    };
+    static_assert(sizeof(Header) == 16);
+    const auto path_bytes = (substitute.size() + print.size() + 2) * sizeof(wchar_t);
+    const auto bytes = sizeof(Header) + path_bytes;
+    if (bytes > MAXIMUM_REPARSE_DATA_BUFFER_SIZE) fail("Directory alias target exceeds the reparse-point limit", target);
+    Header header{IO_REPARSE_TAG_MOUNT_POINT, static_cast<WORD>(bytes - 8), 0,
+                  0, static_cast<WORD>(substitute.size() * sizeof(wchar_t)),
+                  static_cast<WORD>((substitute.size() + 1) * sizeof(wchar_t)),
+                  static_cast<WORD>(print.size() * sizeof(wchar_t))};
+    std::vector<std::uint8_t> buffer(bytes, 0);
+    std::memcpy(buffer.data(), &header, sizeof(header));
+    std::memcpy(buffer.data() + sizeof(header), substitute.data(), header.substitute_length);
+    std::memcpy(buffer.data() + sizeof(header) + header.print_offset, print.data(), header.print_length);
+    if (!CreateDirectoryW(native_alias.c_str(), nullptr))
+        fail("Cannot create directory alias", alias, {static_cast<int>(GetLastError()), std::system_category()});
+    const auto handle = CreateFileW(native_alias.c_str(), GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        const auto code = GetLastError(); RemoveDirectoryW(native_alias.c_str());
+        fail("Cannot open directory alias", alias, {static_cast<int>(code), std::system_category()});
+    }
+    DWORD returned{};
+    const bool ok = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, buffer.data(),
+        static_cast<DWORD>(buffer.size()), nullptr, 0, &returned, nullptr) != 0;
+    const auto code = GetLastError();
+    CloseHandle(handle);
+    if (!ok) {
+        RemoveDirectoryW(native_alias.c_str());
+        fail("Cannot set directory alias (filesystem must support junctions)", alias,
+             {static_cast<int>(code), std::system_category()});
+    }
+#else
+    const auto absolute_target = std::filesystem::absolute(native_target, error);
+    if (error) fail("Cannot resolve directory alias target", target, error);
+    std::filesystem::create_directory_symlink(absolute_target, native_alias, error);
+    if (error) fail("Cannot create directory alias", alias, error);
+#endif
+    try {
+        if (!files_equivalent(native_alias, native_target)) fail("Directory alias identity verification failed", alias);
+    } catch (...) {
+        std::error_code ignored;
+        std::filesystem::remove(native_alias, ignored); // only the reference just created
+        throw;
+    }
 }
 std::vector<std::uint8_t> read_file(const std::filesystem::path& path) {
     const auto native = native_io_path(path);

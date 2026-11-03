@@ -18,7 +18,8 @@
 extern char** environ;
 #endif
 namespace io_test {
-inline void run(const std::filesystem::path& tool, const std::vector<std::filesystem::path>& args) {
+inline void run(const std::filesystem::path& tool, const std::vector<std::filesystem::path>& args,
+                unsigned timeout_seconds = 15) {
 #ifdef _WIN32
     auto quote = [](const std::wstring& value) {
         std::wstring out = L"\"";
@@ -35,13 +36,28 @@ inline void run(const std::filesystem::path& tool, const std::vector<std::filesy
     for (const auto& arg : args) command += L" " + quote(arg.native());
     STARTUPINFOW startup{}; startup.cb = sizeof(startup);
     PROCESS_INFORMATION child{};
-    if (!CreateProcessW(tool.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &child))
+    const auto job = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+        if (job) CloseHandle(job);
+        throw std::runtime_error("Cannot bound test process tree");
+    }
+    if (!CreateProcessW(tool.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_SUSPENDED, nullptr, nullptr, &startup, &child)) {
+        CloseHandle(job);
         throw std::runtime_error("Cannot start test tool (Win32 " + std::to_string(GetLastError()) + ")");
+    }
+    if (!AssignProcessToJobObject(job, child.hProcess)) {
+        TerminateProcess(child.hProcess, 1); CloseHandle(child.hThread); CloseHandle(child.hProcess); CloseHandle(job);
+        throw std::runtime_error("Cannot assign test process to bounded job");
+    }
+    ResumeThread(child.hThread);
     CloseHandle(child.hThread);
-    const auto wait = WaitForSingleObject(child.hProcess, 15000);
-    if (wait != WAIT_OBJECT_0) { TerminateProcess(child.hProcess, 1); WaitForSingleObject(child.hProcess, 5000); CloseHandle(child.hProcess); throw std::runtime_error("Test tool timed out"); }
+    const auto wait = WaitForSingleObject(child.hProcess, timeout_seconds * 1000u);
+    if (wait != WAIT_OBJECT_0) { CloseHandle(job); WaitForSingleObject(child.hProcess, 5000); CloseHandle(child.hProcess); throw std::runtime_error("Test tool timed out"); }
     DWORD code = 1; const bool ok = GetExitCodeProcess(child.hProcess, &code) != 0;
     CloseHandle(child.hProcess);
+    CloseHandle(job);
     if (!ok || code != 0) throw std::runtime_error("Test tool failed (exit " + std::to_string(code) + ")");
 #else
     std::vector<std::string> owned{tool.native()};
@@ -50,15 +66,22 @@ inline void run(const std::filesystem::path& tool, const std::vector<std::filesy
     for (auto& value : owned) argv.push_back(value.data());
     argv.push_back(nullptr);
     pid_t child{};
-    if (const auto error = posix_spawn(&child, tool.c_str(), nullptr, nullptr, argv.data(), environ); error)
+    posix_spawnattr_t attributes;
+    if (posix_spawnattr_init(&attributes) != 0) throw std::runtime_error("Cannot initialize test process attributes");
+    if (posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP) != 0 || posix_spawnattr_setpgroup(&attributes, 0) != 0) {
+        posix_spawnattr_destroy(&attributes); throw std::runtime_error("Cannot bound test process group");
+    }
+    const auto error = posix_spawn(&child, tool.c_str(), nullptr, &attributes, argv.data(), environ);
+    posix_spawnattr_destroy(&attributes);
+    if (error)
         throw std::runtime_error("Cannot start test tool (errno " + std::to_string(error) + ")");
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
     int status{};
     for (;;) {
         const auto result = waitpid(child, &status, WNOHANG);
         if (result == child) break;
         if (result < 0) throw std::runtime_error("Cannot wait for test tool");
-        if (std::chrono::steady_clock::now() >= deadline) { kill(child, SIGKILL); waitpid(child, &status, 0); throw std::runtime_error("Test tool timed out"); }
+        if (std::chrono::steady_clock::now() >= deadline) { kill(-child, SIGKILL); waitpid(child, &status, 0); throw std::runtime_error("Test tool timed out"); }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) throw std::runtime_error("Test tool failed");

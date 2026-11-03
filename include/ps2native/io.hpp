@@ -18,6 +18,10 @@ void create_directories(const std::filesystem::path& path);
 bool remove_file(const std::filesystem::path& path);
 // Cleanup of owned synthetic test directories, not user content.
 void remove_directory_tree(const std::filesystem::path& path);
+// A directory reference, never a copy: junction on Windows, symlink on POSIX.
+// Reuse only when the existing reference resolves to the same directory.
+void ensure_directory_alias(const std::filesystem::path& alias, const std::filesystem::path& target);
+[[nodiscard]] bool files_equivalent(const std::filesystem::path& first, const std::filesystem::path& second);
 // Centralized host filesystem boundary. std::filesystem::path preserves UTF-16
 // on Windows (the CLI uses wmain there), avoiding ANSI-only argv paths.
 [[nodiscard]] std::vector<std::uint8_t> read_file(const std::filesystem::path& path);
