@@ -15,7 +15,7 @@ namespace ps2native {
 // The analyzer does not guess that arbitrary words in code/data are functions.
 struct AotJumpTable {
     // Every table entry is a 32-bit absolute executable address in non-code
-    // file-backed PT_LOAD data. Explicit hints are mandatory without ELF relocation evidence.
+    // file-backed PT_LOAD data. Explicit hints are mandatory without other evidence.
     std::uint32_t address{};
     std::uint32_t entries{};
 };
@@ -29,12 +29,32 @@ struct AotRejectedTarget {
     std::uint32_t value{};
     std::string reason;
 };
+// A JR whose every possible target was proven from the code itself:
+//   SLTIU bound, BEQ guard, scaled index, table base, LW of the entry, JR.
+struct AotRecognizedJumpTable {
+    std::uint32_t jump_site{};
+    std::uint32_t bound_site{};
+    std::uint32_t table_address{};
+    std::uint32_t entries{};
+    std::string evidence;
+};
+// A JR (other than JR $ra) whose targets could not be proven statically.
+// It still runs, but only to verified indirect entries (checked at runtime).
+struct AotUnresolvedJump {
+    std::uint32_t site{};
+    std::string reason;
+};
 struct AotControlFlow {
     std::map<std::uint32_t, MipsInstruction> instructions;
     std::set<std::uint32_t> leaders;
     std::set<std::uint32_t> function_entries;
+    // Addresses a JR/JALR may legitimately reach: function roots, call
+    // continuations and proven jump-table targets. Anything else fails closed.
+    std::set<std::uint32_t> indirect_entries;
     std::vector<AotResolvedTarget> resolved_indirect_targets;
     std::vector<AotRejectedTarget> rejected_indirect_targets;
+    std::vector<AotRecognizedJumpTable> jump_tables;
+    std::vector<AotUnresolvedJump> unresolved_jumps;
 };
 
 [[nodiscard]] AotControlFlow analyze_control_flow(

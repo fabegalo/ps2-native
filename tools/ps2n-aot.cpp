@@ -54,7 +54,13 @@ int aot_main(int argc, Character** argv) {
                   << "; ELF functions: " << std::dec << elf.function_entries.size()
                   << "; verified relocations: " << elf.relocated_code_pointers.size()
                   << "; rejected relocation candidates: " << elf.rejected_code_pointers.size()
+                  << "; HI16/LO16 address pairs: " << elf.address_pairs.size()
+                  << "; unpaired LO16: " << elf.unpaired_lo16_relocations
                   << "; explicit tables: " << options.jump_tables.size() << '\n';
+        for (const auto& [type, count] : elf.unused_relocation_counts)
+            std::cout << "relocation type " << type << " not used as evidence: " << count << '\n';
+        if (elf.ignored_rela_sections != 0)
+            std::cout << "SHT_RELA sections ignored: " << elf.ignored_rela_sections << '\n';
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "ps2n-aot: " << e.what() << '\n';

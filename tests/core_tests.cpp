@@ -61,8 +61,9 @@ int core_tests_main(int argc, Character** argv) {
         malformed[68] = 0xff; malformed[69] = 0xff;
         throws([&] { (void)ps2native::parse_ee_elf(malformed); }, "truncated PT_LOAD rejected");
         malformed = bytes;
-        malformed[0x100] = 0xff; malformed[0x101] = 0xff;
-        malformed[0x102] = 0xff; malformed[0x103] = 0xff;
+        // SYSCALL (0x0000000C): EE syscalls are not implemented by the AOT yet.
+        malformed[0x100] = 0x0c; malformed[0x101] = 0;
+        malformed[0x102] = 0; malformed[0x103] = 0;
         const auto unsupported = ps2native::parse_ee_elf(malformed);
         throws([&] { (void)ps2native::generate_aot_cpp(unsupported); },
                "unsupported reachable opcode fails instead of being silently stubbed");

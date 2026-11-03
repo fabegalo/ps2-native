@@ -126,17 +126,20 @@ ElfImage parse_ee_elf(std::span<const std::uint8_t> data) {
     return elf;
 }
 
-std::uint32_t ElfImage::instruction_at(std::uint32_t address) const {
+const LoadSegment& ElfImage::code_segment_at(std::uint32_t address) const {
     if ((address & 3u) != 0) throw std::runtime_error("Misaligned instruction address");
     for (const auto& seg : segments) {
         if ((seg.flags & 1) && address >= seg.vaddr &&
             static_cast<std::uint64_t>(address) + 4 <=
-            static_cast<std::uint64_t>(seg.vaddr) + seg.file_size) {
-            const std::size_t offset = seg.file_offset + (address - seg.vaddr);
-            return u32(bytes, offset);
-        }
+            static_cast<std::uint64_t>(seg.vaddr) + seg.file_size)
+            return seg;
     }
     throw std::runtime_error("Instruction outside executable PT_LOAD / dynamic code unsupported");
+}
+
+std::uint32_t ElfImage::instruction_at(std::uint32_t address) const {
+    const auto& seg = code_segment_at(address);
+    return u32(bytes, static_cast<std::size_t>(seg.file_offset) + (address - seg.vaddr));
 }
 
 std::uint32_t ElfImage::data_word_at(std::uint32_t address) const {

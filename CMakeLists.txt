@@ -144,4 +144,53 @@ if(BUILD_TESTING)
     target_link_libraries(ps2n-jump-unresolved PRIVATE ps2n_core)
     add_test(NAME native-jump-unresolved COMMAND ps2n-jump-unresolved "${JUMP_STRIPPED_ELF}" unresolved)
 
+    # M1.3: R_MIPS_HI16/LO16 and R_MIPS_26 evidence, SLTIU-bounded jump tables,
+    # verified indirect entries and the R5900 integer subset (tests/m13_program.hpp).
+    foreach(FIXTURE_MODE IN ITEMS m13 m13-stripped)
+        add_custom_command(
+            OUTPUT "${FIXTURE_DIR}/${FIXTURE_MODE}.elf"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
+            COMMAND $<TARGET_FILE:ps2n-make-fixture> "${FIXTURE_DIR}/${FIXTURE_MODE}.elf" "${FIXTURE_MODE}"
+            DEPENDS ps2n-make-fixture VERBATIM)
+    endforeach()
+    set(M13_ELF "${FIXTURE_DIR}/m13.elf")
+    set(M13_STRIPPED_ELF "${FIXTURE_DIR}/m13-stripped.elf")
+    set(M13_RELOC_AOT "${FIXTURE_DIR}/m13_reloc_aot.cpp")
+    set(M13_STRIPPED_AOT "${FIXTURE_DIR}/m13_stripped_aot.cpp")
+    set(M13_HINT_AOT "${FIXTURE_DIR}/m13_hint_aot.cpp")
+    add_custom_command(
+        OUTPUT "${M13_RELOC_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M13_ELF}" "${M13_RELOC_AOT}"
+        DEPENDS ps2n-aot "${M13_ELF}" VERBATIM)
+    add_custom_command(
+        OUTPUT "${M13_STRIPPED_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M13_STRIPPED_ELF}" "${M13_STRIPPED_AOT}"
+        DEPENDS ps2n-aot "${M13_STRIPPED_ELF}" VERBATIM)
+    # 0x00100400 is m13::kCallback: only relocations (or this hint) prove it is code.
+    add_custom_command(
+        OUTPUT "${M13_HINT_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M13_STRIPPED_ELF}" "${M13_HINT_AOT}" --entry=0x00100400
+        DEPENDS ps2n-aot "${M13_STRIPPED_ELF}" VERBATIM)
+    foreach(M13_CASE IN ITEMS reloc stripped hint)
+        if(M13_CASE STREQUAL "reloc")
+            set(M13_INPUT "${M13_ELF}")
+            set(M13_AOT "${M13_RELOC_AOT}")
+            set(M13_MODE reloc)
+            set(M13_TEST native-m13-relocations)
+        elseif(M13_CASE STREQUAL "stripped")
+            set(M13_INPUT "${M13_STRIPPED_ELF}")
+            set(M13_AOT "${M13_STRIPPED_AOT}")
+            set(M13_MODE stripped)
+            set(M13_TEST native-m13-stripped)
+        else()
+            set(M13_INPUT "${M13_STRIPPED_ELF}")
+            set(M13_AOT "${M13_HINT_AOT}")
+            set(M13_MODE stripped-hint)
+            set(M13_TEST native-m13-stripped-hint)
+        endif()
+        add_executable(ps2n-m13-${M13_CASE} tests/aot_m13.cpp "${M13_AOT}")
+        target_link_libraries(ps2n-m13-${M13_CASE} PRIVATE ps2n_core)
+        add_test(NAME ${M13_TEST} COMMAND ps2n-m13-${M13_CASE} "${M13_INPUT}" ${M13_MODE})
+    endforeach()
+
 endif()

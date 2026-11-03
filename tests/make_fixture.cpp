@@ -1,4 +1,6 @@
 // Synthetic, independently-authored MIPS instructions. No Sony or game binaries.
+#include "m13_program.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -25,8 +27,20 @@ std::uint32_t i(unsigned op, unsigned rs, unsigned rt, std::int16_t imm) {
 
 template <typename Character>
 int fixture_main(int argc, Character** argv) {
-    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym|jump-table|jump-table-nosym]\n"; return 2; }
+    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym|jump-table|jump-table-nosym|m13|m13-stripped]\n"; return 2; }
     constexpr std::uint32_t start = 0x00100000u;
+
+    // Synthetic M1.3: relocation evidence, bounded jump tables, R5900 integer subset.
+    if (argc == 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("m13") ||
+                      std::filesystem::path(argv[2]) == std::filesystem::path("m13-stripped"))) {
+        const bool with_sections = std::filesystem::path(argv[2]) == std::filesystem::path("m13");
+        const auto b = m13::build_elf(m13::build_program(), with_sections);
+        std::ofstream out(std::filesystem::path(argv[1]), std::ios::binary | std::ios::trunc);
+        if (!out || !out.write(reinterpret_cast<const char*>(b.data()),
+                               static_cast<std::streamsize>(b.size()))) return 1;
+        std::cout << "Created M1.3 ELF, sections=" << with_sections << '\n';
+        return 0;
+    }
 
     // Synthetic M1.2: two valid function pointers, one non-executable pointer.
     if (argc == 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("jump-table") ||
@@ -38,7 +52,7 @@ int fixture_main(int argc, Character** argv) {
             i(0x23,8,9,0), r(9,0,31,0x09), i(0x09,0,10,5),
             i(0x2b,0,2,0x40), i(0x23,8,9,4), r(9,0,31,0x09),
             i(0x09,10,10,1), i(0x2b,0,2,0x44), r(16,0,31,0x21),
-            r(31,0,0,0x08), 0, 0xffffffffu,
+            r(31,0,0,0x08), 0, 0x0000000cu, // SYSCALL: unsupported, never compiled
             i(0x09,10,2,7), r(31,0,0,0x08), 0,
             i(0x09,10,2,9), r(31,0,0,0x08), 0
         };
@@ -151,7 +165,7 @@ int fixture_main(int argc, Character** argv) {
         r(16, 0, 31, 0x21),                  // 16: restore host return address
         r(31, 0, 0, 0x08),                   // 17: jr ra
         0,                                    // 18: return delay slot
-        0xffffffffu,                          // 19: unreachable unsupported opcode
+        0x0000000cu,                          // 19: unreachable unsupported SYSCALL
         i(0x09, 9, 2, 1),                    // 20: A: v0 = t1+1
         r(31, 0, 0, 0x08),                   // 21: jr ra
         i(0x09, 2, 2, 1),                    // 22: delay v0++ => 12
