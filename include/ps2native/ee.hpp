@@ -57,6 +57,7 @@ struct EEState {
     // COP0 Count advances once per EE cycle: it reads as cop0[Count] plus the
     // cycles retired since the last MTC0 Count (count_anchor).
     std::uint64_t count_anchor{};
+    bool compare_written{}; // Compare is undefined until programmed.
     [[nodiscard]] std::uint32_t count() const noexcept {
         return cop0[9] + static_cast<std::uint32_t>(retired_instructions - count_anchor);
     }
@@ -76,4 +77,8 @@ struct EEState {
 // PRid = 0x2E20 (R5900 implementation 0x2E, revision 0x20), Config = 0x440
 // (16 KiB instruction cache, 8 KiB data cache, caches disabled), Random = 47.
 [[nodiscard]] EEState ee_reset_state();
+// Samples Count/Compare before every instruction in both engines. Returns true
+// when interrupt entry changed PC. Timing retains the shared 1 cycle/instruction
+// model; this does not claim cycle-accurate superscalar execution.
+bool poll_ee_timer_interrupt(EEState& state);
 } // namespace ps2native

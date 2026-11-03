@@ -10,12 +10,27 @@
 |---|---|---|
 | AOT MIPS/R5900 | ELF32 sintéticos, CFG conservador, relocations como evidência, geração C++ e testes end-to-end | Cobertura incompleta de jogos e código dinâmico |
 | Boot EE | ROM0 reais, COP0/TLB, memória, RDRAM, início do kernel em RAM e AOT híbrido com trace | CPU e dispositivos ainda parciais |
-| IOP | Inicialização R3000A, NVM externa, MECHACON, timers/VBLANK e registradores SIF compartilhados | Sem serviços completos, DMA SIF ou interrupções de hardware completas |
+| Direct ELF | Loader comum, ambiente bare-metal explícito, Count/Compare e retomada com overlays AOT verificados | Sem kernel Sony/HLE, syscalls convencionais ou suporte demonstrado a jogos |
+| IOP | Inicialização R3000A, NVM externa, MECHACON, timers/VBLANK, SIF e EE→IOP SIF1 com bytes reais | Sem linker IRX, SIF0, RPC ou serviços completos; DMA/timing ainda parciais |
 | GS/GIF | VRAM 4 MiB PSMCT32/24, PATH3 PACKED/REGLIST/IMAGE, transferências, pontos/sprites, scanout RGBA8/BMP e eventos; imagem sintética determinística | Sem pixels da BIOS real; formatos, primitivas, efeitos e timing ainda parciais |
 | Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
-## Última evidência: M2.9
+## Última evidência: incremento M3.0
+
+- **Três ELF próprios pelo mesmo runtime:** chamadas/memória/interrupt de Count, comunicação SIF1 e frame
+  VIF1 DIRECT→GIF PATH2→GS. Interpretador e AOT conferem memória, registradores, eventos e framebuffer.
+- **SIF1 real dentro do modelo:** 256 bytes transferidos para a RAM IOP, checksum calculado no R3000A,
+  backpressure e flags/IRQ conferidos; não é RPC/HLE nem prova de timing físico.
+- **AOT genérico:** descoberta de funções por JALR constante, `--hybrid` para ELF e snapshot SHA-256 de
+  região dinâmica para regeneração offline; overlay compilado confere bytes e invalida código modificado.
+  No teste de CPU, interpretação caiu de 30.017 para 17 instruções e trocas de motor de 20.009 para 9.
+- **Frame Direct ELF:** 64×32, digest RGBA8 `40231620…b6f436a3`, igual nos dois motores. Modo original
+  de boot permanece separado; nenhum firmware ou jogo real foi reexecutado nesta etapa.
+- **Escopo M3.0 ainda parcial:** IRX/linking, execução VU0/VU1 e INTC/serviços completos não foram
+  implementados. O frame atual não atravessa VU. Evidências, medições, comandos e CI: [M3.0](docs/M3.0-STATUS.md).
+
+## Evidência anterior: M2.9
 
 - **Primeiro frame GS sintético:** 256×160, gerado por instruções R5900/GIF/GS; digest RGBA8 `43564b22…2e3f54`, igual no interpretador e no híbrido. API de framebuffer/eventos compartilhada e exportação BMP disponíveis, sem dependência gráfica obrigatória.
 - **BIOS real repetida nos dois perfis SCPH-70004:** mantém 17.690.079 instruções EE, parada em `0x80007D20`; diagnóstico com IDs assumidos mantém 17.690.770 e parada em `0x8000E628`. Zero escritas de pixels em ambas as rotas; não houve avanço do Browser. As máscaras de IMR após reset foram estabelecidas pelo manual; fase vertical e INTC seguem pendentes.

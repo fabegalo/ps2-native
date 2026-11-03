@@ -14,6 +14,7 @@
 #include "ps2native/iop.hpp"
 #include "ps2native/mch.hpp"
 #include "ps2native/video_encoder.hpp"
+#include "ps2native/vif.hpp"
 
 #include <array>
 #include <cstddef>
@@ -75,6 +76,11 @@ public:
     [[nodiscard]] std::uint32_t intc_mask() const noexcept { return intc_mask_; }
     // Runs the IOP up to the current EE time.
     void sync_iop();
+    [[nodiscard]] bool dma_reads_ram() const noexcept { return iop_.reads_ee_ram(); }
+    void attach_ee_ram(std::span<std::uint8_t> ram) { iop_.attach_ee_ram(ram); }
+    void load_iop_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry) {
+        iop_.load_program(bytes, address, entry);
+    }
     // Bytes the guest sent through the EE SIO TX FIFO since reset.
     [[nodiscard]] const std::string& sio_output() const noexcept { return sio_output_; }
 
@@ -105,6 +111,7 @@ private:
     std::string sio_output_;
     std::uint32_t intc_mask_{};
     Gif gif_;
+    Vif1 vif1_;
     // Video encoder serial bus and its two masters.
     VideoEncoderBus video_encoder_;
     VideoEncoderMaster encoder_master_190x_{VideoEncoderMaster::Layout::Byte190x};

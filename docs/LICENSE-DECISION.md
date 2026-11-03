@@ -20,3 +20,20 @@ Fontes consultadas em 03/11/2026:
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Docs/License.txt
 - https://github.com/N64Recomp/N64Recomp/blob/main/LICENSE
 - https://github.com/jpd002/Play-/blob/master/License.txt
+
+## Auditoria do fast track M3.0
+
+Consulta em 03/11/2026. Nenhuma integração de fonte, patch, biblioteca ou executável externo foi feita.
+As implementações Direct ELF, Count/Compare, SIF1, VIF1 e overlays são originais BSD-3-Clause.
+
+| Referência | Evidência auditada | Decisão |
+|---|---|---|
+| [gow-native-pc](https://github.com/Vnnc1/gow-native-pc/blob/d28a63d3fd0f2a412ff9018b52d2a9a3cbdb18fd/CREDITS.md) | LICENSE/CREDITS GPL-3.0; `engine/runtime.toml` fixa runtime Tobiichi; `games/gow1/game.toml` lista mapa, overrides e geradores | Arquitetura de pipeline como referência; não incorporar launcher, patches, runtime ou overrides |
+| [PS2Recomp](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/LICENSE) | GPL-3.0; README e `ps2xIOP/README.md` distinguem compilador, runtime, IRX e HLE | Referência de organização; nenhuma cópia, tradução de fonte ou vínculo |
+| [Play!](https://github.com/jpd002/Play-/blob/1f27232772e484bfb79364b751b84f41f4c87481/License.txt) | Licença permissiva de duas cláusulas; interfaces DMAC/INTC/SIF/VIF/VU/GS e IopBios consultadas | Reutilização potencial exige manter aviso/disclaimer e auditar dependências por arquivo. Não houve incorporação: adaptação de componentes completos traria CMIPS, JIT/Framework e serviços HLE acoplados |
+| [PCSX2](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Docs/License.txt) | GPL-3.0-or-later verificada novamente | Continua referência comportamental; nenhuma integração |
+
+O payload R3000A próprio desta etapa não implementa o formato/linker IRX e não usa módulos de Sony.
+O código `ps2sdk/iop/system/sifman/src/sifman.c` foi consultado como fonte adicional de pesquisa;
+seu cabeçalho declara AFL-2.0 e referência a SDK SCE. Nenhum trecho foi incorporado ou usado como
+base de implementação; esta consulta não é aprovação de reutilização de seus arquivos.

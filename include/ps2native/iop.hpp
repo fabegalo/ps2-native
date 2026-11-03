@@ -70,6 +70,17 @@ public:
     // have been run up to now. Throws DeviceRefusal for what is not modeled.
     [[nodiscard]] std::uint32_t ee_sif_read(unsigned index) const;
     void ee_sif_write(unsigned index, std::uint32_t value);
+    // Bare-metal development image, not IRX relocation/import linking.
+    void load_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry);
+    void attach_ee_ram(std::span<std::uint8_t> ram) { ee_ram_ = ram; }
+    [[nodiscard]] std::uint32_t ee_dma_read(std::uint32_t address) const;
+    void ee_dma_write(std::uint32_t address, std::uint32_t value);
+    [[nodiscard]] bool reads_ee_ram() const noexcept { return (ee_sif1_chcr_ & 0x100u) != 0u; }
+    struct SifDmaMetrics {
+        std::uint64_t bytes{}, source_full_cycles{}, destination_empty_cycles{};
+        std::size_t peak_fifo_words{};
+    };
+    [[nodiscard]] const SifDmaMetrics& sif1_metrics() const noexcept { return sif1_metrics_; }
 
     [[nodiscard]] std::uint64_t cycle() const noexcept { return cycle_; }
     [[nodiscard]] std::uint32_t pc() const noexcept { return pc_; }
@@ -79,6 +90,18 @@ public:
     [[nodiscard]] std::uint32_t gpr(unsigned index) const noexcept { return gpr_[index & 31u]; }
 
 private:
+    // SIF1: EE channel 6 normal source -> bounded FIFO -> IOP channel 10
+    // destination chain. No RPC/HLE or direct RAM mirroring.
+    void pump_sif1();
+    std::uint32_t iop_sif1_read(std::uint32_t address) const;
+    void iop_sif1_write(std::uint32_t address, std::uint32_t value);
+    std::span<std::uint8_t> ee_ram_;
+    std::uint32_t ee_dctrl_{}, ee_dstat_{}, ee_sif1_chcr_{}, ee_sif1_madr_{}, ee_sif1_qwc_{};
+    std::array<std::uint32_t, 4> iop_sif1_{};
+    std::deque<std::uint32_t> sif1_fifo_;
+    bool sif1_have_tag_{}, sif1_end_{};
+    std::uint32_t sif1_words_{};
+    SifDmaMetrics sif1_metrics_;
     struct PendingLoad {
         unsigned reg;
         std::uint32_t value;

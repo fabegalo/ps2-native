@@ -233,3 +233,32 @@ A implementacao do projeto permanece independente, na fronteira de host I/O.
 - [Microsoft: Hard Links and Junctions](https://learn.microsoft.com/en-us/windows/win32/fileio/hard-links-and-junctions): referencia a diretorios locais, inclusive entre volumes, e restricoes de rede.
 - [CMake 3.21: try_compile](https://cmake.org/cmake/help/v3.21/command/try_compile.html): bootstrap de executavel a partir dos fontes originais e instalacao do helper proprio no build.
 - MSVC 19.44 localizado e Ninja 1.13.1 locais: prefixo /showIncludes emitido em UTF-8 e decodificado como OEM no registro do CMake; a captura dos bytes originais restabeleceu o rebuild por header alterado, comprovado pelo teste sintetico.
+
+## Fast track M3.0: soluções genéricas e limites de reutilização
+
+| Implementação estudada | Organização observada | Aplicação neste núcleo |
+|---|---|---|
+| [gow-native-pc, runtime fixado](https://github.com/Vnnc1/gow-native-pc/blob/d28a63d3fd0f2a412ff9018b52d2a9a3cbdb18fd/engine/runtime.toml) | Pipeline externo PS2Recomp/Tobiichi, geradores EE/VU1/IOP, captura e recompilação offline | Aproveitar a separação conceitual entre identificação, geração e runtime; manter código dinâmico verificável e medir engine switches. Nenhum código GPL integrado |
+| [gow1, perfil](https://github.com/Vnnc1/gow-native-pc/blob/d28a63d3fd0f2a412ff9018b52d2a9a3cbdb18fd/games/gow1/game.toml) | Mapa de funções, overrides de GoW, endereços de frame, lista manual de heads VU1 e scripts de gameplay | Elementos específicos de título/revisão; excluídos do pipeline genérico. Nem progresso relatado pelo upstream nem meta de FPS provam resultado neste projeto |
+| [PS2Recomp](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/README.md) | Analisador ELF/símbolos/relocations, R5900→C++, registro de funções e syscalls; também admite stubs, patches e overrides por endereço | Metadados/CFG e fronteiras explícitas são princípios úteis; stubs de sucesso, function maps por título e requisitos SSE/AVX não foram adotados |
+| [PS2Recomp IOP](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/ps2xIOP/README.md) | IRX executado em R3000A, kernel virtual/imports e serviços HLE; RAM separada, transporte SIF | A separação de RAM e bytes transferidos é genérica. Aqui executa-se apenas o payload próprio e DMA modelado; IRX/HLE não foram simulados por retornos inventados |
+| [Play!](https://github.com/jpd002/Play-/blob/1f27232772e484bfb79364b751b84f41f4c87481/README.md) | Emulador com BIOS HLE; interfaces EE DMAC/INTC/SIF, VIF→VU/GIF, executor VU e backend GS | Hardware com licença permissiva é candidato futuro. As interfaces consultadas dependem de CMIPS, callbacks, Framework e save states; os serviços de IopBios são acoplados ao kernel HLE. Importá-los integralmente duplicaria o núcleo ou substituiria a política de boot |
+| [PCSX2](https://github.com/PCSX2/pcsx2) | Referência comportamental de R5900/IOP, exceções, SIF/DMA, VIF/VU e GS; análise inicial nos relatórios anteriores | Comparar comportamentos documentados, sem copiar, adaptar, traduzir ou vincular GPL. Nenhum resultado deste incremento é apresentado como comparação executada com PCSX2 |
+
+Avaliação específica de Play!: `Source/ee/{Dmac_Channel.h,DMAC.h,INTC.cpp,SIF.h,Vif1.h,VuExecutor.h}`,
+`Source/gs/GSHandler.h` e `Source/iop/{Iop_DmacChannel.h,IopBios.cpp}`. O design de interfaces e
+as tabelas de instruções VU foram consultados; não houve transplante. Decisão de integração e
+licenças em [LICENSE-DECISION](LICENSE-DECISION.md). Mantém-se um único C++20 por dispositivo.
+
+Evidência para implementações independentes:
+
+- [EE Core User's Manual v6](https://docs.alexrp.com/mips/ee.pdf), Count/Compare, pp. 70/72,
+  Status pp. 73–74 e Interrupt Exception p. 99: igualdade, IP7, reconhecimento por Compare,
+  máscaras, EXL, BEV, EPC/BD e vetor. Nenhum documento foi incorporado ao repositório.
+- [EE User's Manual](https://manuals.plus/m/55bdc71d3aebc33752a7dad6526b78248b6c258294fcf8a3ebed1f010da22365),
+  mapa de canais e VIF DIRECT; [ps2tek](https://psi-rockin.github.io/ps2tek/#sifdma), IOP DMA,
+  tags, DPCR2, DICR/DICR2, DMACEN/DMACINTEN e espera por FIFO. A latência do barramento e a
+  capacidade/throughput escolhidos continuam hipóteses de modelo explicitadas no relatório.
+
+O frame próprio verifica VIF1 DIRECT→GIF PATH2→GS. Não verifica VU ou serviços de jogo.
+Resultados reproduzíveis e limites de aceitação: [M3.0](M3.0-STATUS.md).

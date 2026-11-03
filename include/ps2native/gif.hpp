@@ -6,8 +6,9 @@
 //
 // Timing: the GS takes each quadword as it arrives, so the FIFO never holds
 // data (FQC = 0; hypothesis: no back-pressure is modeled, and the firmware
-// polls FQC = 0 before refilling). PATH1 and PATH2 (VU1 XGKICK, VIF1 DIRECT)
-// are never active: no VU or VIF is modeled and no DMA channel can start.
+// polls FQC = 0 before refilling). VIF1 DIRECT also uses this parser as PATH2;
+// interleaving paths is refused until arbitration is implemented. PATH1/VU1
+// XGKICK is not implemented.
 #include "ps2native/device_timing.hpp"
 #include "ps2native/gs_registers.hpp"
 
@@ -29,10 +30,13 @@ public:
     void write_mode(std::uint32_t value);
     // One quadword written to the GIF FIFO (PATH3).
     void write_fifo(std::uint64_t low, std::uint64_t high, GsRegisters& gs);
+    void write_path2(std::uint64_t low, std::uint64_t high, GsRegisters& gs);
     // One line per completed GIF packet (for traces and tests).
     [[nodiscard]] const std::vector<std::string>& packets() const noexcept { return packets_; }
 
 private:
+    void write_path(std::uint64_t low, std::uint64_t high, GsRegisters& gs, unsigned path);
+    unsigned path_{3};
     void consume();
     void packed(unsigned descriptor, std::uint64_t low, std::uint64_t high, GsRegisters& gs);
     std::uint32_t ctrl_{}, mode_{};

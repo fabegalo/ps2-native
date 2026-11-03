@@ -1,0 +1,50 @@
+# Shared bare-metal runtime; independent of the desktop launcher.
+target_sources(ps2n_core PRIVATE src/vif.cpp src/executable.cpp)
+add_executable(ps2n-run tools/ps2n-run.cpp)
+target_link_libraries(ps2n-run PRIVATE ps2n_core)
+set(PS2N_ELF_AOT_SOURCE "" CACHE FILEPATH "Verified ps2n-aot ELF translation for ps2n-run-hybrid")
+if(PS2N_ELF_AOT_SOURCE)
+    add_executable(ps2n-run-hybrid tools/ps2n-run.cpp)
+    ps2n_target_aot_source(ps2n-run-hybrid "${PS2N_ELF_AOT_SOURCE}")
+    target_compile_definitions(ps2n-run-hybrid PRIVATE PS2N_RUN_WITH_AOT=1)
+    target_link_libraries(ps2n-run-hybrid PRIVATE ps2n_core)
+endif()
+if(BUILD_TESTING)
+    add_executable(ps2n-direct-fixture tests/make_direct_elf.cpp)
+    target_link_libraries(ps2n-direct-fixture PRIVATE ps2n_core)
+    foreach(program IN ITEMS cpu dma frame)
+        set(elf "${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-${program}.elf")
+        set(aot "${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-${program}.cpp")
+        add_custom_command(OUTPUT "${elf}"
+            COMMAND $<TARGET_FILE:ps2n-direct-fixture> "${program}" "${elf}"
+            DEPENDS ps2n-direct-fixture VERBATIM)
+        add_custom_command(OUTPUT "${aot}"
+            COMMAND $<TARGET_FILE:ps2n-aot> "${elf}" "${aot}" --hybrid
+            DEPENDS ps2n-aot "${elf}" VERBATIM)
+        add_executable(ps2n-direct-${program} tests/direct_runtime.cpp "${aot}")
+        target_link_libraries(ps2n-direct-${program} PRIVATE ps2n_core)
+        add_test(NAME native-m30-direct-${program} COMMAND ps2n-direct-${program}
+            "${program}" "${elf}" "${CMAKE_CURRENT_BINARY_DIR}/direct-${program}.bmp")
+        set_tests_properties(native-m30-direct-${program} PROPERTIES TIMEOUT 30)
+    endforeach()
+    foreach(kind IN ITEMS dynamic overlay)
+        set(elf "${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-${kind}.elf")
+        set(aot "${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-${kind}.cpp")
+        add_custom_command(OUTPUT "${elf}"
+            COMMAND $<TARGET_FILE:ps2n-direct-fixture> "${kind}" "${elf}"
+            DEPENDS ps2n-direct-fixture VERBATIM)
+        add_custom_command(OUTPUT "${aot}"
+            COMMAND $<TARGET_FILE:ps2n-aot> "${elf}" "${aot}" --hybrid
+            DEPENDS ps2n-aot "${elf}" VERBATIM)
+    endforeach()
+    set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-overlay.cpp" PROPERTIES
+        COMPILE_DEFINITIONS "aot_module=overlay_aot_module;run_recompiled=run_overlay_recompiled")
+    add_executable(ps2n-direct-overlay tests/overlay_runtime.cpp
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-dynamic.cpp"
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-overlay.cpp")
+    target_link_libraries(ps2n-direct-overlay PRIVATE ps2n_core)
+    add_test(NAME native-m30-offline-overlay COMMAND ps2n-direct-overlay
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-dynamic.elf"
+        "${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-overlay.elf")
+    set_tests_properties(native-m30-offline-overlay PROPERTIES TIMEOUT 30)
+endif()

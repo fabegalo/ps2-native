@@ -161,7 +161,18 @@ void check_relocation_evidence(const m13::Program& program, const std::vector<st
                 mismatched.rejected_code_pointers[0].reason.find("differs from STT_FUNC") != std::string::npos,
             "STT_FUNC/value mismatch rejected with reason");
     const auto mismatched_cfg = ps2native::analyze_control_flow(mismatched, {});
-    require(!mismatched_cfg.instructions.contains(m13::kCallback), "rejected evidence seeds nothing");
+    require(mismatched_cfg.instructions.contains(m13::kCallback) &&
+            std::any_of(mismatched_cfg.constant_jumps.begin(),mismatched_cfg.constant_jumps.end(),[&](const auto& jump) {
+                return jump.jump_site==program.at("callback_call") && jump.target==m13::kCallback;
+            }), "rejected relocations stay rejected; independent constant JALR proof discovers callback");
+    auto dynamic_bytes=m13::build_elf(program,false);
+    const auto plain=ps2native::parse_ee_elf(dynamic_bytes);
+    const auto site=program.at("callback_lo");const auto& segment=plain.code_segment_at(site);
+    // A loaded target must not be accepted by the LUI proof merely because its
+    // previous register contents happened to resemble a function address.
+    write32(dynamic_bytes,segment.file_offset+site-segment.vaddr,(0x23u<<26)|(m13::t0<<21)|(m13::t0<<16));
+    const auto dynamic_cfg=ps2native::analyze_control_flow(ps2native::parse_ee_elf(dynamic_bytes),{});
+    require(!dynamic_cfg.instructions.contains(m13::kCallback),"unproved load-derived callback seeds nothing");
 }
 } // namespace
 
@@ -208,22 +219,13 @@ int test_main(int argc, Char** argv) {
         for (const auto* label : {"u_case0", "e_case0"})
             require(!cfg.instructions.contains(program.at(label)), "unproven tables seed nothing");
         require(cfg.function_entries.contains(program.at("alu")), "JAL target is a function root");
-        require(cfg.instructions.contains(m13::kCallback) == !stripped, "callback only with evidence or hint");
+        require(cfg.instructions.contains(m13::kCallback), "callback proved from linked code, with or without metadata");
         const auto cpp = ps2native::generate_aot_cpp(elf, {hints, {}});
         require(cpp.find("proven jump tables: 2") != std::string::npos, "generated provenance");
 
         ps2native::Memory memory;
         memory.load(elf);
         auto state = start_state(elf);
-        if (stripped) {
-            rejects([&] { (void)ps2native::run_recompiled(state, memory, m13::kHostReturn, 100000u); },
-                    "AOT target not compiled");
-            require(state.pc == m13::kCallback, "undiscovered callback identified");
-            require(memory.read32(m13::kResults) == 12u && memory.read32(m13::kResults + 4u) == 0u,
-                    "R_MIPS_26 call ran; no fabricated callback result");
-            std::cout << "M1.3 stripped ELF failed closed at the address-taken callback\n";
-            return 0;
-        }
 
         const auto count = ps2native::run_recompiled(state, memory, m13::kHostReturn, 100000u);
         require(count == state.retired_instructions, "retired instruction accounting");
@@ -262,7 +264,7 @@ int test_main(int argc, Char** argv) {
         rejects([&] { (void)ps2native::run_recompiled(missing, memory, m13::kHostReturn, 100000u); },
                 "AOT target not compiled");
 
-        std::cout << "M1.3 PASS (" << (reloc ? "relocations" : "stripped + --entry")
+        std::cout << "M1.3 PASS (" << (reloc ? "relocations" : hinted ? "stripped + --entry" : "stripped + constant JALR proof")
                   << "): 2 proven jump tables, " << count << " native guest instructions\n";
         return 0;
     } catch (const std::exception& error) {

@@ -167,6 +167,23 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
     asid_ = 0;
     error_level_ = true;
     registers_.reset(hardware, rom_, nvm, assumptions);
+    registers_.attach_ee_ram(ram_);
+}
+
+void Memory::load_direct_elf(const ElfImage& elf) {
+    load(elf);
+    mapping_ = Mapping::DirectElf;
+    scratchpad_.assign(kScratchpadBytes, 0);
+    tlb_defined_ = {};
+    asid_ = 0;
+    error_level_ = false;
+    registers_.reset(); // No firmware, NVM, kernel services or running IOP.
+    registers_.attach_ee_ram(ram_);
+}
+
+void Memory::load_iop_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry) {
+    if (mapping_ != Mapping::DirectElf) throw std::runtime_error("IOP development payload requires Direct ELF mode");
+    registers_.load_iop_program(bytes, address, entry);
 }
 
 void Memory::set_translation_context(std::uint8_t asid, bool error_level) noexcept {
@@ -256,7 +273,12 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
         return {static_cast<std::uint32_t>(offset), BusRegion::MainRam, static_cast<std::uint32_t>(offset)};
     }
     std::uint32_t physical = 0;
-    if (address >= 0x80000000u && address < 0xC0000000u) {
+    if (mapping_ == Mapping::DirectElf && address < kMainRamBytes) {
+        physical = address;
+    } else if (mapping_ == Mapping::DirectElf && address >= 0x70000000u &&
+               address - 0x70000000u < kScratchpadBytes) {
+        return {address - 0x70000000u, BusRegion::Scratchpad, address - 0x70000000u};
+    } else if (address >= 0x80000000u && address < 0xC0000000u) {
         physical = address & 0x1FFFFFFFu; // KSEG0 (cached) / KSEG1 (uncached): unmapped.
     } else {
         if (address < 0x80000000u && error_level_)
@@ -276,6 +298,7 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
         case BusRegion::MainRam:
             return {physical, region, physical};
         case BusRegion::BiosRom:
+            if (rom_.empty()) throw refuse(BusFault::Unmapped);
             if (write) throw refuse(BusFault::RomWrite);
             return {physical, region, physical - kBiosRomPhysical};
         case BusRegion::Unmapped:
@@ -312,6 +335,8 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
     return value;
 }
 void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t value, const char* what) {
+    // The lazy IOP must consume old EE source bytes before this CPU store.
+    if (registers_.dma_reads_ram()) registers_.sync_iop();
     const auto target = resolve(address, size, true, what);
     if (is_ee_register_region(target.region)) {
         try {

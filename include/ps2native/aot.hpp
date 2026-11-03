@@ -9,7 +9,7 @@ namespace ps2native {
 struct AotOptions {
     std::vector<std::uint32_t> additional_function_entries;
     std::vector<AotJumpTable> jump_tables;
-    // Hybrid translation (boot firmware): discovery stops at instructions the
+    // Hybrid translation (firmware or Direct ELF): discovery stops at instructions the
     // AOT does not translate and at targets outside the static image; those
     // addresses are listed as interpreter boundaries instead of failing.
     bool interpreter_boundaries{};

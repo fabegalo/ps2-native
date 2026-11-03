@@ -11,7 +11,7 @@
 template <typename Character>
 int aot_main(int argc, Character** argv) {
     if (argc < 3) {
-        std::cerr << "Usage: ps2n-aot <owned-mips-elf> <output.cpp> [--entry=0xADDRESS ...] [--table=0xADDRESS:COUNT ...]\n"
+        std::cerr << "Usage: ps2n-aot <owned-mips-elf> <output.cpp> [--hybrid] [--entry=0xADDRESS ...] [--table=0xADDRESS:COUNT ...]\n"
                      "       ps2n-aot <your-rom0.bin> <output.cpp> --bios [--expect-sha256=HEX] [--entry=0xADDRESS ...]\n";
         return 2;
     }
@@ -44,12 +44,14 @@ int aot_main(int argc, Character** argv) {
                     parse_u32(argument.substr(0, colon), "--table address"),
                     parse_u32(argument.substr(colon + 1), "--table entry count")
                 });
+            } else if (flag == "--hybrid") {
+                options.interpreter_boundaries = true;
             } else if (flag == "--bios") {
                 bios_input = true;
             } else if (flag.starts_with("--expect-sha256=")) {
                 expected_sha256 = flag.substr(16);
             } else {
-                throw std::runtime_error("Unrecognized argument; expected --entry, --table, --bios or --expect-sha256");
+                throw std::runtime_error("Unrecognized argument; expected --entry, --table, --hybrid, --bios or --expect-sha256");
             }
         }
         const auto input = ps2native::read_file(std::filesystem::path(argv[1]));

@@ -1,5 +1,6 @@
 #include "ps2native/boot.hpp"
 #include "ps2native/interpreter.hpp"
+#include "ps2native/sha256.hpp"
 
 #include <deque>
 #include <iomanip>
@@ -148,6 +149,30 @@ void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state
     memory.set_translation_context(0, (state.cp0(Cop0::Status) & kStatusERL) != 0u);
 }
 
+void prepare_direct_elf(const ElfImage& elf, const AotModule* aot, EEState& state, Memory& memory,
+                        const DirectElfEnvironment& environment) {
+    // Revalidate public ElfImage fields before making any runtime changes.
+    const auto checked = parse_ee_elf(elf.bytes);
+    if (aot && (std::string(aot->source_kind) != "elf" || sha256_hex(checked.bytes) != aot->source_sha256))
+        throw std::runtime_error("Direct ELF AOT provenance mismatch (kind or SHA-256)");
+    const auto sp = environment.stack_pointer;
+    if ((sp & 15u) || sp < 16u || sp >= Memory::kMainRamBytes)
+        throw std::runtime_error("Direct ELF stack must be 16-byte aligned in low EE RAM");
+    for (const auto& segment : checked.segments) {
+        const auto begin = segment.vaddr & 0x1FFFFFFFu;
+        if (sp >= begin && sp - begin < segment.memory_size)
+            throw std::runtime_error("Direct ELF stack overlaps a PT_LOAD segment");
+    }
+    memory.load_direct_elf(checked);
+    state = ee_reset_state();
+    state.pc = checked.entry;
+    state.set_cp0(Cop0::Status, 0u);
+    state.set_reg32(29u, sp);
+    state.set_reg32(28u, environment.global_pointer);
+    memory.set_clock(&state.retired_instructions);
+    memory.set_translation_context(0, false);
+}
+
 BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, const BootOptions& options) {
     BootReport report;
     Tracer tracer(options, report, state, memory);
@@ -167,10 +192,16 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                     report.outcome = BootOutcome::BudgetExhausted;
                     break;
                 }
+                (void)poll_ee_timer_interrupt(state);
                 // Hybrid mode: every address may continue in the interpreter, so
                 // the AOT-only verified-entry restriction does not apply here.
                 state.indirect_entry_pending = false;
                 const auto* block = aot != nullptr ? find_aot_block(*aot, state.pc) : nullptr;
+                for (const auto& overlay : options.aot_overlays) {
+                    const auto* candidate = find_aot_block(overlay.module_for(memory),state.pc);
+                    if (candidate && block) throw std::runtime_error("overlapping AOT modules at " + hex32(state.pc));
+                    if (candidate) block = candidate;
+                }
                 if (block != nullptr) {
                     const auto before = executed;
                     // A stop address inside a block ends it early, like the budget.
@@ -213,7 +244,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
     }
     report.retired = state.retired_instructions - start_retired;
     report.sio_output = memory.sio_output();
-    if (memory.mapping() == Memory::Mapping::HardwareReset) {
+    if (memory.mapping() != Memory::Mapping::ElfProgram) {
         memory.sync_iop();
         const auto& iop = memory.iop();
         report.iop_instructions = iop.cycle();

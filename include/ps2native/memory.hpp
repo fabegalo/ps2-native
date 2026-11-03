@@ -83,12 +83,18 @@ public:
         // A loaded EE program: kuseg 0..32 MiB and KSEG0/KSEG1 reach main RAM
         // directly, as the PS2 kernel maps them for user ELFs.
         ElfProgram,
+        // Explicit bare-metal development environment: low RAM and scratchpad
+        // mapped directly, KSEG0/1 use the same physical device bus as ROM boot.
+        DirectElf,
         // Power-on: KSEG0/KSEG1 decode the physical bus (RAM, ROM, devices);
         // kuseg/KSEG2/KSEG3 only through TLB entries written by the guest.
         HardwareReset
     };
     Memory();
     void load(const ElfImage& elf);
+    void load_direct_elf(const ElfImage& elf);
+    // Explicit optional R3000A bare-metal payload for Direct ELF development.
+    void load_iop_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry);
     // Zeroes RAM and scratchpad, maps the 4 MiB ROM0 at 0x1FC00000, clears the TLB
     // and resets the device registers of console `hardware` (may be nullptr),
     // whose MECHACON holds `nvm` (may be nullptr; must outlive the memory).

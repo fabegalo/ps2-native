@@ -328,7 +328,7 @@ void check_partial_values() {
             "SIF_BD6 bits 0-11 are not established");
     refuses([](Assembler& p) { p.lhu(a0, 0x60, t3); }, "only 32-bit reads are modeled");
     refuses([](Assembler& p) { p.lui(a0, 0x4100u); p.ori(a0, a0, 0x0300u); p.sw(a0, 0x1538, t1); },
-            "DMA transfers are not modeled");
+            "only destination chain mode without TTE supported");
 }
 
 // SIF semaphores and mailboxes between an EE (EeRegisters) and the IOP.

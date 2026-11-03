@@ -63,6 +63,7 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
     intc_mask_ = 0u;
     // Hypothesis: GIF not stopped, PATH3 unmasked, continuous mode at power-on.
     gif_.reset();
+    vif1_.reset();
     video_encoder_.reset(assumptions);
     encoder_master_190x_.reset();
     encoder_master_1a_.reset();
@@ -141,6 +142,12 @@ std::uint32_t EeRegisters::read_timer(unsigned index, unsigned reg) {
 }
 
 std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
+    if ((physical >= 0x1000C400u && physical < 0x1000C440u) ||
+        physical == 0x1000E000u || physical == 0x1000E010u) {
+        if (bytes != 4u) throw DeviceRefusal("SIF1/DMAC requires 32-bit accesses");
+        sync_iop();
+        return iop_.ee_dma_read(physical);
+    }
     if (physical >= kIopRamEePhysical && physical < kIopRamEePhysical + 0x00800000u) {
         sync_iop();
         return iop_.ee_read(physical - kIopRamEePhysical, bytes);
@@ -223,11 +230,22 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
 }
 
 void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint64_t high) {
+    if (physical == 0x10005000u) {
+        vif1_.write_fifo(low, high, gif_, gs_);
+        return;
+    }
     if (physical == kGifFifo) return gif_.write_fifo(low, high, gs_);
     throw DeviceRefusal("128-bit store: no register model");
 }
 
 void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value) {
+    if ((physical >= 0x1000C400u && physical < 0x1000C440u) ||
+        physical == 0x1000E000u || physical == 0x1000E010u) {
+        if (bytes != 4u) throw DeviceRefusal("SIF1/DMAC requires 32-bit accesses");
+        sync_iop();
+        iop_.ee_dma_write(physical, static_cast<std::uint32_t>(value));
+        return;
+    }
     if (physical >= kIopRamEePhysical && physical < kIopRamEePhysical + 0x00800000u)
         throw DeviceRefusal("EE write to IOP RAM is not modeled (the IOP model owns its RAM)");
     if (physical >= kTimersBase && physical < kTimersEnd) {

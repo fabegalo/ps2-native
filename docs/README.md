@@ -19,6 +19,7 @@ Os relatórios abaixo registram evidências históricas e hipóteses **como esta
 | Firmware/EE inicial | [M2.0](M2.0-STATUS.md), [M2.1](M2.1-STATUS.md), [M2.2](M2.2-STATUS.md) |
 | Controlador de memória | [M2.3](M2.3-STATUS.md), [M2.4](M2.4-STATUS.md), [M2.5](M2.5-STATUS.md) |
 | IOP, NVM e dispositivos | [M2.6](M2.6-STATUS.md), [M2.7](M2.7-STATUS.md), [M2.8](M2.8-STATUS.md) |
+| Frames e runtime Direct ELF | [M2.9](M2.9-STATUS.md), [M3.0](M3.0-STATUS.md) |
 
 ## Política editorial permanente
 

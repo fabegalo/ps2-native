@@ -2,6 +2,7 @@
 #include "ps2native/aot_runtime.hpp"
 #include "ps2native/bios.hpp"
 #include "ps2native/ee.hpp"
+#include "ps2native/executable.hpp"
 #include "ps2native/memory.hpp"
 
 #include <cstdint>
@@ -24,6 +25,9 @@ struct BootOptions {
     // Optional headless presentation hook, called at modeled VBLANK starts.
     // Frame ownership may be copied by the host. No scanout work when absent.
     std::function<void(const Framebuffer&)> on_frame;
+    // Previously compiled, verified dynamic regions. Lifetimes of their modules
+    // and the Memory used for verification must cover this run.
+    std::vector<VerifiedAotOverlay> aot_overlays;
 };
 enum class BootOutcome : std::uint8_t {
     BlockPoint,      // execution reached behavior that is not modeled (or a guest fault)
@@ -68,6 +72,17 @@ struct BootReport {
 void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state, Memory& memory,
                      const ConsoleHardware* hardware = nullptr, const NvmImage* nvm = nullptr,
                      const DiagnosticAssumptions* assumptions = nullptr);
+
+// Bare-metal ELF development mode, not an emulation of ExecPS2 or Sony BIOS.
+// Zero RAM/BSS/GPRs, kernel mode, interrupts disabled, entry from ELF. SP is
+// explicit (16-byte aligned, in RAM, outside loaded segments); GP defaults to 0.
+// No syscalls/services are replaced. Uses run_ee_boot and the shared devices.
+struct DirectElfEnvironment {
+    std::uint32_t stack_pointer{0x01FFF000u};
+    std::uint32_t global_pointer{};
+};
+void prepare_direct_elf(const ElfImage& elf, const AotModule* aot, EEState& state, Memory& memory,
+                        const DirectElfEnvironment& environment = {});
 
 // Runs the EE from its current state: AOT blocks where the module has a block
 // for the exact PC, the interpreter (explicitly traced) everywhere else. Never

@@ -14,7 +14,7 @@
 namespace m13 {
 constexpr std::uint32_t kTextBase = 0x00100000u;
 // Fixed so that CMake can pass it to ps2n-aot as an --entry hint for the
-// stripped variant (the callback is only discoverable through relocations).
+// stripped variant; M3.0 also discovers this callback through constant JALR proof.
 constexpr std::uint32_t kCallback = 0x00100400u;
 constexpr std::uint32_t kDataBase = 0x00110000u;        // .rodata
 constexpr std::uint32_t kTableA = kDataBase + 0x00u;    // 4 entries, SLTIU-bounded

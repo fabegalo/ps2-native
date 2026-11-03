@@ -38,7 +38,7 @@ std::uint32_t Gif::read_stat() const {
     if ((ctrl_ & kCtrlStop) != 0u) stat |= kStatPse;
     // Hypothesis: while a PATH3 packet still expects quadwords, PATH3 is the
     // active path and the GIF is outputting (APATH = 3, OPH = 1).
-    if (in_packet_) stat |= kStatOph | (3u << kStatApathShift);
+    if (in_packet_) stat |= kStatOph | (path_ << kStatApathShift);
     return stat; // FQC = 0: the FIFO never holds data here
 }
 
@@ -63,9 +63,17 @@ void Gif::write_mode(std::uint32_t value) {
 }
 
 void Gif::write_fifo(std::uint64_t low, std::uint64_t high, GsRegisters& gs) {
-    const auto shown = "GIF FIFO quadword " + hex(high, 16) + "_" + hex(low, 16);
-    if ((ctrl_ & kCtrlStop) != 0u) throw DeviceRefusal(shown + " while GIF_CTRL.PSE stops the GIF: not modeled");
-    if ((mode_ & kModeMaskPath3) != 0u) throw DeviceRefusal(shown + " with PATH3 masked (GIF_MODE.M3R): not modeled");
+    write_path(low, high, gs, 3u);
+}
+void Gif::write_path2(std::uint64_t low, std::uint64_t high, GsRegisters& gs) {
+    write_path(low, high, gs, 2u);
+}
+void Gif::write_path(std::uint64_t low, std::uint64_t high, GsRegisters& gs, unsigned path) {
+    const auto shown = [&] { return "GIF FIFO quadword " + hex(high, 16) + "_" + hex(low, 16); };
+    if ((ctrl_ & kCtrlStop) != 0u) throw DeviceRefusal(shown() + " while GIF_CTRL.PSE stops the GIF: not modeled");
+    if (path == 3u && (mode_ & kModeMaskPath3) != 0u) throw DeviceRefusal(shown() + " with PATH3 masked (GIF_MODE.M3R): not modeled");
+    if (in_packet_ && path_ != path) throw DeviceRefusal("GIF concurrent paths: arbitration not modeled");
+    path_ = path;
     if (!in_packet_ || loops_left_ == 0u) {
         // GIFtag.
         const auto nloop = static_cast<std::uint32_t>(low & 0x7FFFu);
@@ -75,12 +83,12 @@ void Gif::write_fifo(std::uint64_t low, std::uint64_t high, GsRegisters& gs) {
         auto nreg = static_cast<std::uint32_t>((low >> 60) & 0xFu);
         if (nreg == 0u) nreg = 16u;
         if (nloop && (low & 0x00003FFFFFFF0000ull) != 0u)
-            throw DeviceRefusal(shown + ": GIFtag bits 16-45 are reserved; their effect is not documented");
+            throw DeviceRefusal(shown() + ": GIFtag bits 16-45 are reserved; their effect is not documented");
         if (nloop && flg < 2u)
             for (std::uint32_t i = 0; i < nreg; ++i) {
                 const auto descriptor = (high >> (4u * i)) & 15u;
                 if (descriptor == 0xBu || (flg == 1u && descriptor == 0xEu))
-                    throw DeviceRefusal(shown + ": invalid register descriptor for GIF format");
+                    throw DeviceRefusal(shown() + ": invalid register descriptor for GIF format");
             }
         if (nloop && pre && flg == 0u) gs.general_write(0x00u, (low >> 47) & 0x7FFu);
         if (!in_packet_) written_ = 0u;
@@ -92,7 +100,7 @@ void Gif::write_fifo(std::uint64_t low, std::uint64_t high, GsRegisters& gs) {
         reg_index_ = 0u;
         format_ = flg;
         q_ = 0x3F800000u;
-        if (!in_packet_) packets_.push_back("PATH3 packet: " + std::to_string(written_) + " A+D writes");
+        if (!in_packet_) packets_.push_back("PATH" + std::to_string(path_) + " packet: " + std::to_string(written_) + " A+D writes");
         return;
     }
     if (format_ >= 2u) {
@@ -122,7 +130,7 @@ void Gif::consume() {
         reg_index_ = 0u;
         if (--loops_left_ == 0u && end_of_packet_) {
             in_packet_ = false;
-            packets_.push_back("PATH3 packet: " + std::to_string(written_) + " register/image writes");
+            packets_.push_back("PATH" + std::to_string(path_) + " packet: " + std::to_string(written_) + " register/image writes");
         }
     }
 }

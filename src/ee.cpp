@@ -4,6 +4,22 @@
 #include <stdexcept>
 
 namespace ps2native {
+bool poll_ee_timer_interrupt(EEState& state) {
+    auto cause = state.cp0(Cop0::Cause);
+    if (state.compare_written && state.count() == state.cp0(Cop0::Compare)) cause |= kStatusIM7;
+    state.set_cp0(Cop0::Cause, cause);
+    const auto status = state.cp0(Cop0::Status);
+    if ((status & (kStatusEXL | kStatusERL)) || !(status & kStatusIE) || !(status & kStatusEIE) ||
+        !(status & cause & kStatusIM7)) return false;
+    state.set_cp0(Cop0::Epc, state.delay_pending ? state.pc - 4u : state.pc);
+    state.set_cp0(Cop0::Cause, (cause & ~0x8000007Cu) | (state.delay_pending ? 0x80000000u : 0u));
+    state.set_cp0(Cop0::Status, status | kStatusEXL);
+    state.pc = (status & kStatusBEV) ? 0xBFC00400u : 0x80000200u;
+    state.delay_pending = false;
+    state.delay_indirect = false;
+    state.indirect_entry_pending = false;
+    return true;
+}
 namespace {
 void check_index(std::size_t index, std::size_t count) {
     if (index >= count) throw std::out_of_range("Invalid R5900 GPR index");

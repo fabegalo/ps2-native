@@ -209,7 +209,152 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     stop_.reset();
     stop_cycle_ = 0;
     events_.clear();
+    ee_ram_ = {};
+    ee_dctrl_ = ee_dstat_ = ee_sif1_chcr_ = ee_sif1_madr_ = ee_sif1_qwc_ = 0;
+    iop_sif1_ = {};
+    sif1_fifo_.clear();
+    sif1_have_tag_ = sif1_end_ = false;
+    sif1_words_ = 0;
+    sif1_metrics_ = {};
     if (rom_.size() != kRomBytes) stop_ = "no ROM0 mapped for the IOP";
+}
+
+void Iop::load_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry) {
+    if ((address & 3u) || (entry & 3u) || address >= kIopRamBytes || bytes.empty() ||
+        bytes.size() > kIopRamBytes - address || entry < address ||
+        static_cast<std::uint64_t>(entry) + 4u > address + bytes.size())
+        throw std::runtime_error("invalid IOP bare-metal image range or entry");
+    const auto ee_ram = ee_ram_;
+    reset({}, nullptr);
+    ee_ram_ = ee_ram;
+    std::copy(bytes.begin(), bytes.end(), ram_.begin() + address);
+    std::fill_n(ram_written_.begin() + address, bytes.size(), std::uint8_t{1});
+    pc_ = entry;
+    stop_.reset();
+    // Documented development environment: known registers, no firmware services.
+    gpr_defined_ = ~0u;
+    cop0_[Sr] = 0u;
+    hi_ = lo_ = 0u;
+}
+
+std::uint32_t Iop::ee_dma_read(std::uint32_t address) const {
+    switch (address) {
+        case 0x1000E000u: return ee_dctrl_;
+        case 0x1000E010u: return ee_dstat_;
+        case 0x1000C400u: return ee_sif1_chcr_;
+        case 0x1000C410u: return ee_sif1_madr_;
+        case 0x1000C420u: return ee_sif1_qwc_;
+        default: throw DeviceRefusal("EE SIF1 DMA register not modeled");
+    }
+}
+void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
+    if (address == 0x1000E000u) {
+        if (value & ~1u) throw DeviceRefusal("D_CTRL: only DMAE supported (no stall/MFIFO/arbitration)");
+        ee_dctrl_ = value; return;
+    }
+    if (address == 0x1000E010u) {
+        // Only channel 6 is implemented. Do not invent flags of other channels.
+        if (value & ~0x00400040u) throw DeviceRefusal("D_STAT: only SIF1 status/mask supported");
+        ee_dstat_ = (ee_dstat_ & ~(value & 0x40u)) ^ (value & 0x00400000u); return;
+    }
+    if (ee_sif1_chcr_ & 0x100u) throw DeviceRefusal("EE SIF1 DMA register write while busy");
+    if (address == 0x1000C400u) {
+        if (value != 0u && value != 1u && value != 0x101u)
+            throw DeviceRefusal("EE SIF1: only normal source mode supported; chain/interleave/TTE/TIE unsupported");
+        const auto size = static_cast<std::size_t>(ee_sif1_qwc_) * 16u;
+        if ((value & 0x100u) && (ee_sif1_madr_ > ee_ram_.size() || size > ee_ram_.size() - ee_sif1_madr_))
+            throw DeviceRefusal("EE SIF1 DMA source outside main RAM");
+        ee_sif1_chcr_ = value; return;
+    }
+    if (address == 0x1000C410u) {
+        if (value & 15u) throw DeviceRefusal("EE SIF1 MADR must be qword aligned (scratchpad unsupported)");
+        ee_sif1_madr_ = value; return;
+    }
+    if (address == 0x1000C420u) { ee_sif1_qwc_ = value & 0xFFFFu; return; }
+    throw DeviceRefusal("EE SIF1 DMA register not modeled");
+}
+std::uint32_t Iop::iop_sif1_read(std::uint32_t address) const {
+    return iop_sif1_.at((address - 0x1F801530u) / 4u);
+}
+void Iop::iop_sif1_write(std::uint32_t address, std::uint32_t value) {
+    const auto field = (address - 0x1F801530u) / 4u;
+    if (iop_sif1_[2] & kChcrStart) throw IopStop{"IOP SIF1 register write while busy"};
+    if (field == 2u && value != 0u && value != 0x01000600u)
+        throw IopStop{"IOP SIF1: only destination chain mode without TTE supported"};
+    iop_sif1_[field] = value;
+}
+
+void Iop::pump_sif1() {
+    // Experimental throughput: one qword per IOP instruction, bounded at 32
+    // words. It preserves backpressure/order, not physical bus latency.
+    if ((ee_dctrl_ & 1u) && (ee_sif1_chcr_ & 0x100u)) {
+        if (ee_sif1_qwc_ && sif1_fifo_.size() <= 28u) {
+            for (unsigned w = 0; w < 4u; ++w) {
+                std::uint32_t word = 0;
+                for (unsigned b = 0; b < 4u; ++b)
+                    word |= std::uint32_t{ee_ram_[ee_sif1_madr_ + w * 4u + b]} << (8u * b);
+                sif1_fifo_.push_back(word);
+            }
+            ee_sif1_madr_ += 16u;
+            --ee_sif1_qwc_;
+            sif1_metrics_.peak_fifo_words = std::max(sif1_metrics_.peak_fifo_words,sif1_fifo_.size());
+        } else if (ee_sif1_qwc_) {
+            ++sif1_metrics_.source_full_cycles;
+        }
+        if (!ee_sif1_qwc_) {
+            ee_sif1_chcr_ &= ~0x100u;
+            ee_dstat_ |= 0x40u;
+            events_.push_back({cycle_, "SIF1 EE source complete (FIFO may still contain data)"});
+        }
+    }
+    const auto enabled = [&](std::uint32_t address, std::uint32_t mask) {
+        const auto* value = latch(address);
+        return value && value->has_value() && ((**value & mask) == mask);
+    };
+    if (!(iop_sif1_[2] & kChcrStart) || !enabled(0x1F801578u, 1u) ||
+        !enabled(0x1F801570u, 0x8000u)) return;
+    if (!sif1_have_tag_) {
+        if (sif1_fifo_.size() < 4u) { ++sif1_metrics_.destination_empty_cycles; return; }
+        const auto tag = sif1_fifo_[0], words = sif1_fifo_[1];
+        if ((tag & 0x7F000000u) || (words & 0xFF000003u) || sif1_fifo_[2] || sif1_fifo_[3])
+            throw IopStop{"SIF1 destination tag: unsupported IRQ/reserved bits or non-qword word count"};
+        const auto dest = tag & 0xFFFFFFu;
+        if ((dest & 3u) || dest > ram_.size() || std::uint64_t{words} * 4u > ram_.size() - dest)
+            throw IopStop{"SIF1 DMA destination outside aligned IOP RAM"};
+        for (unsigned w = 0; w < 4u; ++w) sif1_fifo_.pop_front();
+        iop_sif1_[0] = dest;
+        sif1_words_ = words;
+        sif1_end_ = (tag & 0x80000000u) != 0;
+        sif1_have_tag_ = true;
+        events_.push_back({cycle_, "SIF1 IOP tag destination=" + hex(dest) + " bytes=" + std::to_string(words * 4u)});
+    }
+    if (sif1_words_) {
+        if (sif1_fifo_.size() < 4u) { ++sif1_metrics_.destination_empty_cycles; return; }
+        for (unsigned w = 0; w < 4u; ++w) {
+            const auto value = sif1_fifo_.front(); sif1_fifo_.pop_front();
+            for (unsigned b = 0; b < 4u; ++b) {
+                ram_[iop_sif1_[0]] = static_cast<std::uint8_t>(value >> (8u * b));
+                ram_written_[iop_sif1_[0]++] = 1u;
+            }
+        }
+        sif1_words_ -= 4u;
+        sif1_metrics_.bytes += 16u;
+    }
+    if (!sif1_words_) {
+        sif1_have_tag_ = false;
+        if (sif1_end_) {
+            iop_sif1_[2] &= ~kChcrStart;
+            // Channel 10 -> DICR2 mask 19 / completion flag 27.
+            for (auto& [address, value] : latches_)
+                if (address == kDicr2 && value && (*value & (1u << 19))) *value |= 1u << 27;
+            if (enabled(kDicr, 1u << 23) && enabled(kDicr2, 1u << 27)) {
+                const auto* control = latch(0x1F80157Cu);
+                if (!control || !control->has_value()) throw IopStop{"SIF1 DMA completion: DMACINTEN not programmed"};
+                if ((**control & 3u) == 1u) istat_ |= kDmaIrq;
+            }
+            events_.push_back({cycle_, "SIF1 IOP destination complete"});
+        }
+    }
 }
 
 void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
@@ -223,6 +368,7 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
         const auto saved_target = branch_target_;
         const bool saved_slot = in_delay_slot_;
         try {
+            pump_sif1();
             step();
             ++cycle_;
             if (timers_running_) tick_timers();
@@ -375,6 +521,10 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
 }
 
 std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char* what) {
+    if (physical >= 0x1F801530u && physical < 0x1F801540u) {
+        if (bytes != 4u) throw IopStop{"SIF1 DMA requires 32-bit accesses"};
+        return iop_sif1_read(physical);
+    }
     const auto name = std::string("load ") + what + " of IOP register " + hex(physical);
     if (physical == kToolBoardIdPhysical) {
         if (bytes != 1u) throw IopStop{name + ": only 8-bit reads are modeled"};
@@ -456,7 +606,13 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         for (auto& [address, value] : latches_)
             if (address == physical) {
                 if (!value && !undefined_load_) undefined_load_ = name + " at IOP " + hex(pc_) + ": unknown value written back";
-                const auto result = value.value_or(0u);
+                auto result = value.value_or(0u);
+                if (physical == kDicr) {
+                    const auto* second = latch(kDicr2);
+                    const auto flags = result & 0x7F000000u;
+                    const auto flags2 = second ? second->value_or(0u) & 0x3F000000u : 0u;
+                    if ((result & (1u << 15)) || ((result & (1u << 23)) && (flags || flags2))) result |= 1u << 31;
+                }
                 if (physical == kICtrl) {
                     // Only bit 0 exists; the read clears it.
                     value = 0u;
@@ -472,6 +628,11 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
 }
 
 void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what) {
+    if (physical >= 0x1F801530u && physical < 0x1F801540u) {
+        if (bytes != 4u || !value) throw IopStop{"SIF1 DMA requires known 32-bit accesses"};
+        iop_sif1_write(physical, *value);
+        return;
+    }
     const auto name = std::string("store ") + what + " of IOP register " + hex(physical);
     if (physical == kPostPhysical && (bytes == 1u || bytes == 4u)) {
         if (!value) throw IopStop{name + ": unknown value"};
@@ -538,8 +699,13 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
             throw IopStop{name + " = " + (value ? hex(*value) : std::string("(unknown)")) +
                           ": DMA transfers are not modeled"};
         if (physical == kICtrl && value) value = *value & 1u;
-        if (physical == kDicr && value) value = *value & kDicrWritable;
-        if (physical == kDicr2 && value) value = *value & kDicr2Writable;
+        if ((physical == kDicr || physical == kDicr2) && value) {
+            const auto old = latch(physical);
+            const auto flags = physical == kDicr ? 0x7F000000u : 0x3F000000u;
+            const auto previous = old ? old->value_or(0u) : 0u;
+            value = (*value & (physical == kDicr ? kDicrWritable : kDicr2Writable)) |
+                    (previous & flags & ~*value); // completion flags are W1C
+        }
         for (auto& [address, latched] : latches_)
             if (address == physical) {
                 latched = value;

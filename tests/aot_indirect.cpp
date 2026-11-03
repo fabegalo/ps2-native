@@ -56,10 +56,10 @@ int indirect_main(int argc, Character** argv) {
             check(elf.function_entries.empty(), "stripped ELF has no symbols");
             fails_with([&] { (void)ps2native::run_recompiled(state, memory, host_return, 128); },
                        "AOT target not compiled");
-            check(state.pc == base + 20u * 4u && state.retired_instructions == 5,
-                  "unknown JALR destination rejected after its delay slot");
-            check(memory.read32(0x40) == 0, "no made-up function result");
-            std::cout << "Unknown function target rejected with PC diagnostic\n";
+            check(state.pc == base + 23u * 4u && state.retired_instructions == 13,
+                  "constant JALR A is native; loaded unknown B rejected after its delay slot");
+            check(memory.read32(0x40) == 12 && memory.read32(0x44) == 0, "proved function result, no made-up unknown result");
+            std::cout << "Constant JALR discovered; unknown loaded function target rejected with PC diagnostic\n";
             return 0;
         }
 

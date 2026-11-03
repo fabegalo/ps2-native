@@ -27,6 +27,28 @@ Uma base C++20 compartilhada para Windows x64/ARM64, Linux x64/ARM64 (inclui Ste
 | `ps2n-aot` | ELF (ou ROM0 com `--bios`) e destino do `.cpp`, `--entry`/`--table`/`--expect-sha256` opcionais | código traduzido e resumo de evidências | reusa `.cpp` idêntico; nunca copia o ELF/jogo/firmware inteiro |
 | `ps2n-boot` | ROM0 do usuário, orçamento, nível de trace | identidade da BIOS, ROMDIR, trace, cauda de instruções, ponto de bloqueio | interpretador puro, ou híbrido quando compilado com a tradução da mesma ROM0 (`PS2N_BIOS_AOT_SOURCE`) |
 
+## Direct ELF e regiões dinâmicas verificadas
+
+`prepare_direct_elf` é um ambiente de desenvolvimento bare-metal explícito, separado de `prepare_ee_boot`.
+Carrega `PT_LOAD`/BSS pelo loader comum, inicia kernel mode sem interrupções, SP alinhado e GP explícito;
+não instala kernel Sony, serviços HLE ou respostas de syscall. `Memory::DirectElf` mapeia RAM baixa e
+scratchpad, enquanto KSEG0/1 usam os mesmos dispositivos do boot ROM0. O IOP fica parado até um payload
+R3000A explícito, carregado por `load_iop_program`; isso não é um loader/linker IRX.
+
+Ambos usam `run_ee_boot`, semântica R5900, clocks, IOP, GIF, GS e framebuffer comuns. Count/Compare
+sinaliza IP7 e entrega a exceção nos dois motores, com EXL/EPC/BD/BEV e ERET; mantém a hipótese de
+um ciclo por instrução. INTC do EE e timing superscalar continuam incompletos.
+
+`snapshot_ee_code` exporta uma região explícita de RAM Direct ELF somente após conferir um SHA-256
+independentemente conhecido; produz ELF determinístico para regeneração AOT offline. `VerifiedAotOverlay`
+confere ELF, módulo compilado e bytes já carregados, vincula a prova à instância de memória e permite
+retomar o dispatcher comum. Cada instrução AOT continua conferindo seus bytes; modificação posterior
+falha explicitamente. Não há JIT, execução de compilador em runtime ou cache de firmware compartilhado.
+
+SIF1 implementa o subconjunto EE canal 6 normal → FIFO limitada → IOP canal 10 destination chain,
+com transferência real e backpressure. VIF1 implementa NOP/DIRECT → GIF PATH2; outros comandos e
+arbitragem concorrente falham. Contratos, métricas, instruções e limites em [M3.0](M3.0-STATUS.md).
+
 ## Organização futura (interfaces propostas, NÃO implementadas)
 
 - **disc/importer:** detectar disco, serial, região, hash e preservar caminho original; biblioteca indexada sem copiar ISOs.

@@ -43,8 +43,9 @@ public:
                                    (status & kStatusERL) != 0u);
         if (!exception_level && (status & kStatusKSU) != 0u)
             stop(StopKind::NotModeled, "Status.KSU selects supervisor/user mode; only kernel mode is modeled");
-        if (!exception_level && (status & kStatusIE) && (status & kStatusEIE) && (status & kStatusIM7))
-            stop(StopKind::NotModeled, "COP0 timer interrupt (IM7) enabled; Count/Compare timing is not modeled");
+        if (!exception_level && (status & kStatusIE) && (status & kStatusEIE) &&
+            (status & kStatusIM7) && !s_.compare_written)
+            stop(StopKind::NotModeled, "COP0 timer interrupt enabled with undefined Compare");
     }
 
     void mfc0(unsigned rt, unsigned rd) {
@@ -84,7 +85,11 @@ public:
             case Cop0::Count:
                 s_.count_anchor = s_.retired_instructions;
                 break;
-            case Cop0::Compare: case Cop0::Epc: case Cop0::ErrorEpc:
+            case Cop0::Compare:
+                s_.compare_written = true;
+                s_.set_cp0(Cop0::Cause, s_.cp0(Cop0::Cause) & ~kStatusIM7);
+                break;
+            case Cop0::Epc: case Cop0::ErrorEpc:
             case Cop0::BadPAddr: case Cop0::TagLo: case Cop0::TagHi:
                 break;
             case Cop0::Status: stored = value & kStatusWritable; break;
@@ -223,6 +228,7 @@ const char* stop_kind_name(StopKind kind) noexcept {
 void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
     auto& state = ctx.state;
     auto& memory = ctx.memory;
+    (void)poll_ee_timer_interrupt(state);
     const auto pc = state.pc;
     state.instruction_pc = pc;
     state.instruction_in_delay_slot = state.delay_pending;

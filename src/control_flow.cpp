@@ -378,7 +378,8 @@ AotControlFlow analyze_control_flow(
         drain();
         std::vector<std::uint32_t> jumps;
         for (const auto& [pc, instruction] : graph.instructions) {
-            if (instruction.opcode == MipsOpcode::Jr && instruction.rs != 31 && !attempted.contains(pc))
+            if (((instruction.opcode == MipsOpcode::Jr && instruction.rs != 31) ||
+                 instruction.opcode == MipsOpcode::Jalr) && !attempted.contains(pc))
                 jumps.push_back(pc);
         }
         bool grew = false;
@@ -405,7 +406,7 @@ AotControlFlow analyze_control_flow(
                     continue;
                 }
                 graph.constant_jumps.push_back(jump);
-                seed(jump.target, false);
+                seed(jump.target, graph.instructions.at(jump_site).opcode == MipsOpcode::Jalr);
                 graph.indirect_entries.insert(jump.target);
                 graph.resolved_indirect_targets.push_back({jump_site, jump.target, "constant LUI/ORI JR"});
                 grew = true;
