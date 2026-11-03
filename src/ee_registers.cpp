@@ -15,6 +15,11 @@ std::string hex(std::uint32_t value, int digits = 8) {
 constexpr std::uint32_t kTimersBase = 0x10000000u;
 constexpr std::uint32_t kTimersEnd = 0x10002000u;
 constexpr std::uint32_t kF500 = 0x1000F500u;
+// SIF registers, EE side (ps2tek): MSCOM, SMCOM, MSFLG, SMFLG, CTRL, BD6 at
+// 0x1000F200 + n * 0x10; the state is shared with the IOP, which owns it.
+constexpr std::uint32_t kSifBase = 0x1000F200u, kSifEnd = 0x1000F270u;
+constexpr std::uint32_t kGifCtrl = 0x10003000u, kGifMode = 0x10003010u;
+constexpr std::uint32_t kGifCtrlReset = 1u << 0, kGifCtrlStop = 1u << 3, kGifModeBits = (1u << 0) | (1u << 2);
 // Tn_MODE fields (ps2tek).
 constexpr std::uint32_t kModeClock = 3u << 0;
 constexpr std::uint32_t kModeGateEnable = 1u << 2;
@@ -57,11 +62,19 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
     // Hypothesis: every source masked at power-on. The kernel reads I_MASK
     // before writing it (EnableIntc tests the bit, then reverses it).
     intc_mask_ = 0u;
+    // Hypothesis: GIF not stopped, PATH3 unmasked, continuous mode at power-on.
+    gif_ctrl_ = 0u;
+    gif_mode_ = 0u;
     undocumented_190x_ = {};
     undocumented_1a_ = {};
 }
 
-void EeRegisters::sync_iop() { iop_.run_until(now() / kEeCyclesPerIopCycle); }
+// Deterministic EE/IOP ordering: the IOP never runs ahead of the EE, and it
+// is brought up to the EE time before every EE access that reads IOP state or
+// changes state the IOP observes (the GS video timing). IOP events at or
+// before an EE access are therefore ordered before it, and both EE engines
+// see the same IOP.
+void EeRegisters::sync_iop() { iop_.run_until(now() / kEeCyclesPerIopCycle, &gs_); }
 
 std::uint64_t EeRegisters::now() const {
     if (clock_ == nullptr) throw DeviceRefusal("no EE clock is attached to the EE registers");
@@ -70,8 +83,8 @@ std::uint64_t EeRegisters::now() const {
 
 std::uint16_t EeRegisters::timer_count(const Timer& timer) const {
     if ((timer.mode & kModeEnable) == 0u) return timer.count_at_anchor;
-    // The anchor never precedes the clock epoch: a GS line clock change is
-    // refused while a timer counts HBLANK (see write()).
+    // The anchor never precedes the clock epoch: a GS line clock change
+    // re-anchors every timer counting HBLANK (see write()).
     const auto clock = timer_clock(timer.mode, gs_);
     const auto ticks = (now() - clock.epoch) / clock.period - (timer.anchor_cycle - clock.epoch) / clock.period;
     return static_cast<std::uint16_t>(timer.count_at_anchor + ticks);
@@ -141,6 +154,13 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
         return read_timer((physical >> 11) & 3u, offset / 16u);
     }
     if (physical >= kGsPrivilegedBase && physical < kGsPrivilegedEnd) return gs_.read(physical, bytes);
+    if (physical >= kSifBase && physical < kSifEnd) {
+        if (bytes != 4u || (physical & 0xFu) != 0u)
+            throw DeviceRefusal("SIF access of " + std::to_string(bytes) + " byte(s) at " + hex(physical) +
+                                " is not modeled (32-bit registers only)");
+        sync_iop();
+        return iop_.ee_sif_read((physical - kSifBase) / 0x10u);
+    }
     if (physical == kF500) {
         // Unidentified register; what reads return has not been verified.
         throw DeviceRefusal("0x1000F500 read: an unidentified register; its read value is not verified");
@@ -164,6 +184,14 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
                                 " byte(s) is not modeled (8-bit read only)");
         return kRetailToolBoardId; // no tool board (retail value: hypothesis)
     }
+    if (physical == kDev9Revision) {
+        if (bytes != 1u)
+            throw DeviceRefusal("DEV9_R_REV access of " + std::to_string(bytes) +
+                                " byte(s) is not modeled (8-bit read only)");
+        if (hardware_ == nullptr || !hardware_->dev9_revision)
+            throw DeviceRefusal("DEV9_R_REV read: no console profile with the SSBUS revision is selected");
+        return *hardware_->dev9_revision;
+    }
     if (physical == kDev9Reg1470 || physical == kDev9Reg1472)
         throw DeviceRefusal("DEV9 " + hex(physical) + " read: an undocumented register; its read value is not verified");
     if (physical >= kMchBase && physical < kMchEnd) return mch_.read(physical, bytes, now());
@@ -171,8 +199,8 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
         if (bytes != 4u) throw DeviceRefusal("I_MASK read of " + std::to_string(bytes) + " byte(s) is not modeled");
         return intc_mask_;
     }
-    if ((physical >= kUndocumented190x && physical < kUndocumented190x + 16u) ||
-        (physical >= kUndocumented1A && physical < kUndocumented1A + 16u))
+    if ((physical >= kUndocumented190x && physical < kUndocumented190x + kUndocumentedBlockBytes) ||
+        (physical >= kUndocumented1A && physical < kUndocumented1A + kUndocumentedBlockBytes))
         throw DeviceRefusal(hex(physical) + " read: an undocumented register; its read value is not verified");
     if (physical == kIntcStat)
         throw DeviceRefusal("I_STAT read: no EE interrupt source (GS, SBUS, VBLANK, VIF, VU, IPU, timers, SFIFO) "
@@ -202,12 +230,43 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
         return;
     }
     if (physical >= kGsPrivilegedBase && physical < kGsPrivilegedEnd) {
+        sync_iop(); // the IOP's VBLANK sources follow the GS timing
         gs_.write(physical, bytes, value, now(), [this] {
-            for (unsigned n = 0; n < timers_.size(); ++n)
-                if ((timers_[n].mode & kModeEnable) != 0u && (timers_[n].mode & kModeClock) == kModeHblank)
-                    throw DeviceRefusal("changing the GS line clock while T" + std::to_string(n) +
-                                        " counts HBLANK is not modeled");
+            // A timer counting HBLANK keeps the edges of the old line clock up
+            // to now and counts those of the new one from now on; a later read
+            // refuses if the new state has no HBLANK.
+            for (auto& timer : timers_)
+                if ((timer.mode & kModeEnable) != 0u && (timer.mode & kModeClock) == kModeHblank) {
+                    timer.count_at_anchor = timer_count(timer);
+                    timer.anchor_cycle = now();
+                }
         });
+        return;
+    }
+    if (physical >= kSifBase && physical < kSifEnd) {
+        if (bytes != 4u || (physical & 0xFu) != 0u)
+            throw DeviceRefusal("SIF access of " + std::to_string(bytes) + " byte(s) at " + hex(physical) +
+                                " is not modeled (32-bit registers only)");
+        sync_iop(); // the IOP sees the write only from now on
+        iop_.ee_sif_write((physical - kSifBase) / 0x10u, static_cast<std::uint32_t>(value));
+        return;
+    }
+    if (physical == kGifCtrl || physical == kGifMode) {
+        const auto v = static_cast<std::uint32_t>(value);
+        const auto allowed = physical == kGifCtrl ? kGifCtrlReset | kGifCtrlStop : kGifModeBits;
+        if (bytes != 4u || (v & ~allowed) != 0u)
+            throw DeviceRefusal(std::string(physical == kGifCtrl ? "GIF_CTRL" : "GIF_MODE") + " = " + hex(v) + " (" +
+                                std::to_string(bytes) + " byte(s)): only 32-bit writes of the documented bits are "
+                                "modeled");
+        if (physical == kGifMode) {
+            gif_mode_ = v;
+            return;
+        }
+        // Reset: the GIF drops its state; with no path modeled it holds no
+        // transfer to drop. Hypothesis: GIF_MODE and the stop bit return to
+        // their power-on values (ps2tek does not say what the reset clears).
+        if ((v & kGifCtrlReset) != 0u) gif_mode_ = 0u;
+        gif_ctrl_ = v & kGifCtrlStop;
         return;
     }
     if (physical == kF500 && bytes == 4u) {
@@ -262,8 +321,8 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
     }
     for (auto [base, latch] : {std::pair{kUndocumented190x, &undocumented_190x_},
                                std::pair{kUndocumented1A, &undocumented_1a_}}) {
-        if (physical < base || physical >= base + 16u) continue;
-        if (physical + bytes > base + 16u)
+        if (physical < base || physical >= base + kUndocumentedBlockBytes) continue;
+        if (physical + bytes > base + kUndocumentedBlockBytes)
             throw DeviceRefusal(hex(physical) + " write crosses the end of the undocumented " + hex(base) + " block");
         // Latched as written; its function is unknown and nothing reads it back.
         for (std::size_t i = 0; i < bytes; ++i)

@@ -16,6 +16,7 @@
 // engines (interpreter and AOT) see the same IOP state at the same EE cycle.
 #include "ps2native/console.hpp"
 #include "ps2native/device_timing.hpp"
+#include "ps2native/gs_registers.hpp"
 #include "ps2native/nvm.hpp"
 
 #include <array>
@@ -39,6 +40,9 @@ inline constexpr std::uint32_t kIopRamEePhysical = 0x1C000000u;
 // classes (high nibble 1-3, or 0x60/0x61), which 0xFF is not.
 inline constexpr std::uint32_t kToolBoardIdPhysical = 0x1F803204u;
 inline constexpr std::uint8_t kRetailToolBoardId = 0xFFu;
+// DEV9_R_REV (ps2sdk dev9regs.h), the same register for the EE and the IOP:
+// its value comes from the console profile (ConsoleHardware::dev9_revision).
+inline constexpr std::uint32_t kDev9Revision = 0x1F80146Eu;
 
 class Iop {
 public:
@@ -53,11 +57,19 @@ public:
     // must have been validated for `hardware` and outlive the IOP.
     void reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware, const NvmImage* nvm = nullptr);
     // Runs until `cycle` IOP cycles since reset, or until the IOP stops.
-    void run_until(std::uint64_t cycle);
+    // `video` (nullptr: none) is the GS whose vertical clock raises VBLANK
+    // start/end (I_STAT bits 0 and 11); its timing must not change while the
+    // IOP runs (the EE syncs the IOP before every GS write).
+    void run_until(std::uint64_t cycle, const GsRegisters* video = nullptr);
     // EE read of IOP RAM at `offset` (the IOP must have been run up to now).
     // Throws DeviceRefusal when the bytes were never written by the IOP, or
     // when the IOP stopped before this time (its later state is unknown).
     [[nodiscard]] std::uint64_t ee_read(std::uint32_t offset, std::size_t bytes) const;
+    // SIF register `index` (0 MSCOM, 1 SMCOM, 2 MSFLG, 3 SMFLG, 4 CTRL, 6 BD6;
+    // EE 0x1000F200 + index * 0x10) as the EE reads or writes it; the IOP must
+    // have been run up to now. Throws DeviceRefusal for what is not modeled.
+    [[nodiscard]] std::uint32_t ee_sif_read(unsigned index) const;
+    void ee_sif_write(unsigned index, std::uint32_t value);
 
     [[nodiscard]] std::uint64_t cycle() const noexcept { return cycle_; }
     [[nodiscard]] std::uint32_t pc() const noexcept { return pc_; }
@@ -96,12 +108,22 @@ private:
     [[nodiscard]] std::optional<bool> interrupt_line() const;
     [[nodiscard]] const std::optional<std::uint32_t>* latch(std::uint32_t physical) const;
     void tick_timers();
+    void tick_video(const GsRegisters& video);
+    // I_STAT bits whose state is modeled: the timers, and VBLANK once the GS
+    // vertical clock is known.
+    [[nodiscard]] std::uint32_t modeled_irqs() const noexcept;
     [[nodiscard]] std::uint32_t timer_read(unsigned index, std::uint32_t reg, const std::string& name);
     void timer_write(unsigned index, std::uint32_t reg, std::optional<std::uint32_t> value, const std::string& name);
     [[nodiscard]] std::uint32_t reg(unsigned index) const;
     // Register value of which only the bits in `mask` are used: known when
     // those bits are, even if others are not.
     [[nodiscard]] std::uint32_t masked_reg(unsigned index, std::uint32_t mask) const;
+    // AND of two registers, either possibly partly unknown: a bit is known
+    // when known in both, or known 0 in one of them.
+    void and_regs(unsigned rd, unsigned rs, unsigned rt);
+    // rs == rt, decided when the known bits already differ even if some
+    // bits are unknown; otherwise both must be known.
+    [[nodiscard]] bool regs_equal(unsigned rs, unsigned rt) const;
     // Value to store: may be unknown (copied as unknown into RAM or a latch).
     [[nodiscard]] std::optional<std::uint32_t> stored_reg(unsigned index) const;
     void set_reg(unsigned index, std::uint32_t value);
@@ -150,7 +172,16 @@ private:
     std::optional<OpenConfig> config_;
     std::array<Timer, 6> timers_{};
     bool timers_running_{};
-    std::uint32_t istat_{}; // I_STAT bits of the modeled sources (timers)
+    std::uint32_t istat_{}; // I_STAT bits of the modeled sources
+    // SIF registers shared with the EE (ps2tek "SIF Registers"): MSCOM is
+    // written by the EE, SMCOM by the IOP (empty: never written); MSFLG bits
+    // are set by the EE and cleared by the IOP, SMFLG the other way round.
+    std::optional<std::uint32_t> sif_mscom_, sif_smcom_;
+    std::uint32_t sif_msflg_{}, sif_smflg_{};
+    // GS vertical clock as last seen (generation), and the next edges.
+    std::optional<std::uint64_t> video_generation_;
+    GsRegisters::VerticalClock video_{};
+    std::uint64_t next_vblank_start_{}, next_vblank_end_{}; // EE cycles
     // i.LINK link controller: a bus reset was started through the PHY.
     bool ilink_bus_reset_{};
     const NvmImage* nvm_{};

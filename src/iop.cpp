@@ -29,10 +29,17 @@ constexpr std::uint32_t kPostPhysical = 0x1F802070u;
 constexpr std::uint32_t kIStat = 0x1F801070u;
 constexpr std::uint32_t kIMask = 0x1F801074u;
 constexpr std::uint32_t kICtrl = 0x1F801078u;
-// I_STAT lines (ps2tek "IOP Interrupts"). Only the timers raise them here;
-// every other source is unknown, so its bits are never reported as 0.
+// I_STAT lines (ps2tek "IOP Interrupts"). The timers, VBLANK start/end (from
+// the GS vertical clock, when known) and DMA raise them here; every other
+// source is unknown, so its bits are never reported as 0.
 constexpr std::array<unsigned, 6> kTimerIrq{4u, 5u, 6u, 14u, 15u, 16u};
-constexpr std::uint32_t kModeledIrqs = (1u << 4) | (1u << 5) | (1u << 6) | (1u << 14) | (1u << 15) | (1u << 16);
+constexpr std::uint32_t kTimerIrqs = (1u << 4) | (1u << 5) | (1u << 6) | (1u << 14) | (1u << 15) | (1u << 16);
+constexpr std::uint32_t kVblankStartIrq = 1u << 0, kVblankEndIrq = 1u << 11;
+// IRQ 3 (DMA) follows the DICR master flag (ps2tek: bus error bit 15, or
+// master enable bit 23 with a channel flag in DICR 24-30 or DICR2 24-29).
+// Flags rise only when a transfer ends or hits a bus error, and no transfer
+// can start here (see CHCR below), so the source is known and never raised.
+constexpr std::uint32_t kDmaIrq = 1u << 3;
 constexpr const char* kIrqNames[] = {"VBLANK start", "GPU", "CDVD", "DMA", "timer 0", "timer 1", "timer 2", "SIO0",
                                      "SIO1", "SPU2", "PIO", "VBLANK end", "DVD", "PCMCIA", "timer 3", "timer 4",
                                      "timer 5", "SIO2", "HTR0", "HTR1", "HTR2", "HTR3", "USB", "EXTR", "FWRE", "FDMA"};
@@ -67,13 +74,16 @@ std::optional<unsigned> timer_index(std::uint32_t physical) {
 // every console profile is a slim model, whose network adapter is on the
 // mainboard (fact).
 constexpr std::uint32_t kCdvdNStatus = 0x1F402005u;
-constexpr std::uint32_t kDev9Revision = 0x1F80146Eu; // DEV9_R_REV
 // Expansion-bay device window (IOP 0xB6000000; ps2sdk's arcade drivers put
 // their ATA registers there). EECONF writes 0 to 0xB600000A on consoles whose
 // DEV9_R_REV high nibble is 3 (expansion bay); what the slim models decode
 // there is not established, so the write is recorded as an event (no other
 // effect) and reads stop the IOP.
 constexpr std::uint32_t kExpansionBayRegister = 0x1600000Au;
+// SIF registers, IOP side (ps2tek "SIF Registers"; ps2sdk sif_mmio_hwport.h).
+constexpr std::uint32_t kSifMscom = 0x1D000000u, kSifSmcom = 0x1D000010u, kSifMsflg = 0x1D000020u,
+                        kSifSmflg = 0x1D000030u;
+constexpr std::uint32_t kSifBd6 = 0x1D000060u;
 // i.LINK (IEEE 1394) link controller, ps2sdk iop_mmio_hwport.h names. EECONF
 // (2.20+ ROMs; ps2sdk eeconf.c) checks the high nibble of register 0x7C for 1,
 // then starts a bus reset through the PHY and waits for NodeID bit 0.
@@ -172,6 +182,16 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     timers_ = {};
     timers_running_ = false;
     istat_ = 0u;
+    // SIF: the communication registers are unknown until written. The flags
+    // are 0 (hypothesis: SIFMAN and the EE kernel each wait for the other side
+    // to set a flag, which presumes it clear at power-on; PCSX2 also starts
+    // them at 0).
+    sif_mscom_.reset();
+    sif_smcom_.reset();
+    sif_msflg_ = 0u;
+    sif_smflg_ = 0u;
+    video_generation_.reset();
+    video_ = {};
     gpr_known_ = {};
     latches_.clear();
     // Reset values the reset code reads before writing (hypotheses):
@@ -192,7 +212,12 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     if (rom_.size() != kRomBytes) stop_ = "no ROM0 mapped for the IOP";
 }
 
-void Iop::run_until(std::uint64_t cycle) {
+void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
+    if (video == nullptr && video_generation_) {
+        // Detached: the VBLANK sources are unknown again.
+        video_generation_.reset();
+        video_ = {};
+    }
     while (!stop_ && cycle_ < cycle) {
         const auto pc = pc_;
         const auto saved_target = branch_target_;
@@ -201,6 +226,7 @@ void Iop::run_until(std::uint64_t cycle) {
             step();
             ++cycle_;
             if (timers_running_) tick_timers();
+            if (video != nullptr) tick_video(*video);
         } catch (const IopStop& stop) {
             pc_ = pc;
             branch_target_ = saved_target;
@@ -238,6 +264,20 @@ std::uint32_t Iop::reg(unsigned index) const {
 std::uint32_t Iop::masked_reg(unsigned index, std::uint32_t mask) const {
     if ((gpr_defined_ & (1u << index)) == 0u && (gpr_known_[index] & mask) != mask) return reg(index);
     return gpr_[index];
+}
+void Iop::and_regs(unsigned rd, unsigned rs, unsigned rt) {
+    const auto known = [&](unsigned r) { return (gpr_defined_ & (1u << r)) != 0u ? ~0u : gpr_known_[r]; };
+    const auto a = gpr_[rs], b = gpr_[rt], ka = known(rs), kb = known(rt);
+    const auto k = (ka & kb) | (ka & ~a) | (kb & ~b);
+    if (k == ~0u) return set_reg(rd, a & b);
+    if (rd == 0u) return;
+    const auto& origin = (ka != ~0u ? gpr_origin_[rs] : gpr_origin_[rt]);
+    write_ = PendingLoad{rd, a & b & k, false, origin, k};
+}
+bool Iop::regs_equal(unsigned rs, unsigned rt) const {
+    const auto known = [&](unsigned r) { return (gpr_defined_ & (1u << r)) != 0u ? ~0u : gpr_known_[r]; };
+    if (((gpr_[rs] ^ gpr_[rt]) & known(rs) & known(rt)) != 0u) return false;
+    return reg(rs) == reg(rt);
 }
 std::optional<std::uint32_t> Iop::stored_reg(unsigned index) const {
     if ((gpr_defined_ & (1u << index)) == 0u) return std::nullopt;
@@ -340,6 +380,27 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         if (bytes != 1u) throw IopStop{name + ": only 8-bit reads are modeled"};
         return kRetailToolBoardId;
     }
+    if (physical == kSifMscom || physical == kSifSmcom || physical == kSifMsflg || physical == kSifSmflg) {
+        if (bytes != 4u) throw IopStop{name + ": only 32-bit SIF accesses are modeled"};
+        if (physical == kSifMsflg) return sif_msflg_;
+        if (physical == kSifSmflg) return sif_smflg_;
+        const auto& value = physical == kSifMscom ? sif_mscom_ : sif_smcom_;
+        if (!value && !undefined_load_)
+            undefined_load_ = name + " at IOP " + hex(pc_) + " before any write (reset value unknown)";
+        return value.value_or(0u);
+    }
+    if (physical == kSifBd6) {
+        if (bytes != 4u) throw IopStop{name + ": only 32-bit reads are modeled"};
+        // SIFMAN stays resident only when BD6 reads 0x1D000060 or a value
+        // below 0x1000 (ps2sdk sifman.c, "based on the module from SCE SDK
+        // 3.1.0"), as on every retail console. Hypothesis: the value below
+        // 0x1000 (PCSX2 reads 0 on the IOP side); its low 12 bits are unknown.
+        if (!undefined_load_) {
+            undefined_load_ = name + " at IOP " + hex(pc_) + ": SIF_BD6 bits 0-11 are not established";
+            undefined_known_ = 0xFFFFF000u;
+        }
+        return 0u;
+    }
     if (physical == kIlinkRegister7C) {
         if (bytes != 4u) throw IopStop{name + ": only 32-bit reads are modeled"};
         return kIlinkRegister7CValue;
@@ -381,11 +442,12 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
     if (const auto timer = timer_index(physical)) return timer_read(*timer, physical & 0xFu, name);
     if (physical == kIStat) {
         if (bytes != 4u) throw IopStop{name + ": only 32-bit accesses are modeled"};
-        // Timer bits are known; the other sources are not modeled.
+        // Timer, DMA and (when the GS timing is known) VBLANK bits are known;
+        // the other sources are not modeled.
         if (!undefined_load_) {
-            undefined_load_ = name + " at IOP " + hex(pc_) + ": I_STAT bits of sources other than the timers "
-                              "(VBLANK, CDVD, DMA, SIO2, SPU2, ...) are not modeled";
-            undefined_known_ = kModeledIrqs;
+            undefined_load_ = name + " at IOP " + hex(pc_) + ": I_STAT bits of sources other than the timers, "
+                              "VBLANK and DMA (CDVD, SIO2, SPU2, ...) are not modeled";
+            undefined_known_ = modeled_irqs();
         }
         return istat_;
     }
@@ -452,6 +514,15 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         if (!value) throw IopStop{name + ": unknown value"};
         events_.push_back({cycle_, "expansion-bay register " + hex(physical) + " = " + hex(*value & 0xFFFFu, 4) +
                                        " (effect not modeled)"});
+        return;
+    }
+    if (physical == kSifMscom || physical == kSifSmcom || physical == kSifMsflg || physical == kSifSmflg) {
+        if (bytes != 4u) throw IopStop{name + ": only 32-bit SIF accesses are modeled"};
+        if (!value) throw IopStop{name + ": unknown value"};
+        if (physical == kSifMscom) throw IopStop{name + ": SIF_MSCOM is written by the EE only (IOP write effect unknown)"};
+        if (physical == kSifSmcom) sif_smcom_ = *value;
+        if (physical == kSifMsflg) sif_msflg_ &= ~*value; // the IOP clears the bits it writes
+        if (physical == kSifSmflg) sif_smflg_ |= *value;  // and sets its own flags
         return;
     }
     if (const auto timer = timer_index(physical)) return timer_write(*timer, physical & 0xFu, value, name);
@@ -623,9 +694,61 @@ std::optional<bool> Iop::interrupt_line() const {
     if ((**ctrl & 1u) == 0u) return false;
     const auto* mask = latch(kIMask);
     if (mask == nullptr || !*mask) return std::nullopt;
-    if ((istat_ & **mask & kModeledIrqs) != 0u) return true;
-    if ((**mask & ~kModeledIrqs) != 0u) return std::nullopt;
+    if ((istat_ & **mask & modeled_irqs()) != 0u) return true;
+    if ((**mask & ~modeled_irqs()) != 0u) return std::nullopt;
     return false;
+}
+
+std::uint32_t Iop::modeled_irqs() const noexcept {
+    return kTimerIrqs | kDmaIrq |
+           (video_.state != GsRegisters::VerticalClock::State::Unknown ? kVblankStartIrq | kVblankEndIrq : 0u);
+}
+
+void Iop::tick_video(const GsRegisters& video) {
+    const auto now = cycle_ * kEeCyclesPerIopCycle; // EE cycle at the end of this IOP cycle
+    if (video_generation_ != video.timing_generation()) {
+        // The timing changed during this IOP cycle (the EE syncs the IOP
+        // before every GS write): edges of the new timing from the start of
+        // the cycle on belong to it (IOP-cycle granularity).
+        const auto from = now - kEeCyclesPerIopCycle;
+        video_generation_ = video.timing_generation();
+        video_ = video.vertical_clock();
+        if (video_.state == GsRegisters::VerticalClock::State::Running) {
+            next_vblank_start_ = video_.next_edge(from, false);
+            next_vblank_end_ = video_.next_edge(from, true);
+        }
+    }
+    if (video_.state != GsRegisters::VerticalClock::State::Running) return;
+    const auto period = video_.half_line * video_.field;
+    for (; next_vblank_start_ <= now; next_vblank_start_ += period) istat_ |= kVblankStartIrq;
+    for (; next_vblank_end_ <= now; next_vblank_end_ += period) istat_ |= kVblankEndIrq;
+}
+
+std::uint32_t Iop::ee_sif_read(unsigned index) const {
+    const auto name = "SIF register " + hex(0x1000F200u + index * 0x10u) + " read";
+    if (stop_) throw DeviceRefusal(name + " after the IOP stopped (its later state is unknown): " + *stop_);
+    switch (index) {
+        case 0:
+            if (!sif_mscom_) throw DeviceRefusal(name + ": SIF_MSCOM not written since reset");
+            return *sif_mscom_;
+        case 1:
+            if (!sif_smcom_) throw DeviceRefusal(name + ": SIF_SMCOM not written by the IOP since reset");
+            return *sif_smcom_;
+        case 2: return sif_msflg_;
+        case 3: return sif_smflg_;
+        default: throw DeviceRefusal(name + ": not modeled");
+    }
+}
+
+void Iop::ee_sif_write(unsigned index, std::uint32_t value) {
+    const auto name = "SIF register " + hex(0x1000F200u + index * 0x10u) + " = " + hex(value);
+    switch (index) {
+        case 0: sif_mscom_ = value; return;
+        case 2: sif_msflg_ |= value; return;  // the EE sets its flags
+        case 3: sif_smflg_ &= ~value; return; // and clears the IOP's
+        case 1: throw DeviceRefusal(name + ": SIF_SMCOM is written by the IOP only (EE write effect unknown)");
+        default: throw DeviceRefusal(name + ": not modeled");
+    }
 }
 
 void Iop::tick_timers() {
@@ -732,8 +855,10 @@ void Iop::step() {
             std::string sources;
             const auto* mask = latch(kIMask);
             for (unsigned bit = 0; bit < std::size(kIrqNames); ++bit)
-                if (mask != nullptr && *mask && (**mask & ~kModeledIrqs & (1u << bit)) != 0u)
+                if (mask != nullptr && *mask && (**mask & ~modeled_irqs() & (1u << bit)) != 0u)
                     sources += std::string(sources.empty() ? "" : ", ") + kIrqNames[bit];
+            if (mask != nullptr && *mask && (**mask & (kVblankStartIrq | kVblankEndIrq) & ~modeled_irqs()) != 0u)
+                sources += "; VBLANK: " + (video_.reason.empty() ? std::string("no GS attached") : video_.reason);
             throw IopStop{"interrupts enabled while the interrupt line depends on " +
                           (sources.empty() ? std::string("I_MASK or I_CTRL, never written")
                                            : "sources that are not modeled (" + sources + ")")};
@@ -835,7 +960,7 @@ void Iop::step() {
                     break;
                 }
                 case 0x23: set_reg(rd, reg(rs) - reg(rt)); break;                               // SUBU
-                case 0x24: set_reg(rd, reg(rs) & reg(rt)); break;
+                case 0x24: and_regs(rd, rs, rt); break;                                          // AND
                 case 0x25: set_reg(rd, reg(rs) | reg(rt)); break;
                 case 0x26: set_reg(rd, reg(rs) ^ reg(rt)); break;
                 case 0x27: set_reg(rd, ~(reg(rs) | reg(rt))); break;
@@ -858,8 +983,8 @@ void Iop::step() {
         case 0x02: branch = true; target = ((pc + 4u) & 0xF0000000u) | ((word & 0x03FFFFFFu) << 2); break;  // J
         case 0x03: branch = true; target = ((pc + 4u) & 0xF0000000u) | ((word & 0x03FFFFFFu) << 2);         // JAL
                    set_reg(31, pc + 8u); break;
-        case 0x04: branch_if(reg(rs) == reg(rt)); break;
-        case 0x05: branch_if(reg(rs) != reg(rt)); break;
+        case 0x04: branch_if(regs_equal(rs, rt)); break;                                    // BEQ
+        case 0x05: branch_if(!regs_equal(rs, rt)); break;                                   // BNE
         case 0x06: branch_if(static_cast<std::int32_t>(reg(rs)) <= 0); break;
         case 0x07: branch_if(static_cast<std::int32_t>(reg(rs)) > 0); break;
         case 0x08: {                                                                            // ADDI

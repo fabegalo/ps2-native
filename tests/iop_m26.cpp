@@ -266,7 +266,7 @@ void check_exceptions() {
     Iop vblank;
     vblank.reset(vrom, &kProfile);
     vblank.run_until(32u);
-    require_stop(vblank, "sources that are not modeled (VBLANK start)");
+    require_stop(vblank, "sources that are not modeled (VBLANK start; VBLANK: no GS attached)");
     refuses([](Assembler& p) { p.ori(a0, zero, 1u); p.sw(a0, 0x1078, t1); p.ori(s2, zero, 0x0401u); p.mtc0(s2, Status); },
             kProfile,
             "I_MASK or I_CTRL, never written");

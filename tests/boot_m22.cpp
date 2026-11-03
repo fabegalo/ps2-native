@@ -128,10 +128,7 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     require(m.read32(0xB0000000u) == 0u, "no HBLANK before one line after the sync restart");
     cycles = 1000u + kNtscLine;
     require(m.read32(0xB0000000u) == 1u, "first HBLANK one line after the sync restart");
-    device_refused([&] { m.write64(0xB2000010u, kCmodPal); }, "while T0 counts HBLANK is not modeled");
-    device_refused([&] { m.write32(0xB2001000u, static_cast<std::uint32_t>(kCsrReset)); },
-                   "while T0 counts HBLANK is not modeled");
-    require(m.gs().latched(kGsSmode1) == kCmodNtsc, "refused retiming keeps SMODE1");
+    // (Retiming while T0 counts HBLANK re-anchors the count: native-m27-iop.)
     m.write64(0xB2000010u, kCmodNtsc);           // same line length: no retiming, allowed
     m.write64(0xB2000040u, m20::kM22Synch1);     // sync registers do not retime
     cycles = 1000u + 3u * kNtscLine;

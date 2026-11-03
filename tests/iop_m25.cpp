@@ -195,7 +195,7 @@ void check_ee_view(const IopRom& rom) {
     registers.write(kUndocumented1A + 8u, 2u, 3u);
     rejects([&] { (void)registers.read(kUndocumented190x + 0xCu, 1u); }, "an undocumented register");
     rejects([&] { (void)registers.read(kUndocumented1A + 8u, 2u); }, "an undocumented register");
-    rejects([&] { registers.write(kUndocumented1A + 0xEu, 4u, 0u); }, "crosses the end");
+    rejects([&] { registers.write(kUndocumented1A + 0x1Eu, 4u, 0u); }, "crosses the end");
 }
 
 void check_mmi_logical() {

@@ -37,6 +37,7 @@ std::optional<std::size_t> mode_index(std::uint32_t physical) {
 } // namespace
 
 void GsRegisters::reset(std::uint64_t now) {
+    ++generation_;
     mode_ = {};
     csr_written_.reset();
     line_ = {Sync::Running, 2u, {now, kEeCyclesPerBusCycle * kBusCyclesPerNtscLine}};
@@ -56,6 +57,7 @@ void GsRegisters::change_line_state(const LineState& next, const LineClockGuard&
     if (next == line_) return;
     if (guard) guard();
     line_ = next;
+    ++generation_;
 }
 
 void GsRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value, std::uint64_t now,
@@ -87,6 +89,7 @@ void GsRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
             }
             change_line_state(next, guard);
         }
+        if (physical == kGsSyncv && mode_[*index] != value) ++generation_;
         mode_[*index] = value;
         return;
     }
@@ -102,6 +105,7 @@ void GsRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
             // state (PCSX2 clears them too); the line clock restarts as NTSC.
             change_line_state({Sync::Running, 2u, {now, kEeCyclesPerBusCycle * kBusCyclesPerNtscLine}}, guard);
             mode_ = {};
+            ++generation_;
         }
         // SIGNAL/FINISH/HSINT/VSINT/EDWINT: 1 clears the event and re-enables
         // it. This model never raises GS events (no GIF, no GS interrupts),
@@ -124,6 +128,52 @@ GsRegisters::LineClock GsRegisters::line_clock() const {
     }
     throw DeviceRefusal("HBLANK timing for SMODE1.CMOD = " + std::to_string(line_.cmod) +
                         " is not modeled (NTSC 2 and PAL 3 only)");
+}
+
+GsRegisters::VerticalClock GsRegisters::vertical_clock() const {
+    VerticalClock clock;
+    switch (line_.sync) {
+        case Sync::Stopped:
+            clock.state = VerticalClock::State::Held;
+            return clock;
+        case Sync::UnsupportedMode:
+            clock.reason = "VBLANK timing for SMODE1.CMOD = " + std::to_string(line_.cmod) +
+                           " is not modeled (NTSC 2 and PAL 3 only)";
+            return clock;
+        case Sync::Running:
+            break;
+    }
+    const auto& syncv = mode_[(kGsSyncv - kGsSmode1) / 16u];
+    if (!syncv) {
+        clock.reason = "GS SYNCV not written since reset: the vertical timing is unknown";
+        return clock;
+    }
+    const auto v = *syncv;
+    const auto vfp = v & 0x3FFu, vfpe = (v >> 10) & 0x3FFu, vbp = (v >> 20) & 0xFFFu, vbpe = (v >> 32) & 0x3FFu,
+               vdp = (v >> 42) & 0x7FFu, vs = (v >> 53) & 0x7FFu;
+    const auto field = vfp + vfpe + vbp + vbpe + vdp + vs;
+    if (vdp == 0u || field == vdp) {
+        clock.reason = "GS SYNCV " + hex(v, 16) + " has no display or no blanking half-lines";
+        return clock;
+    }
+    if (line_.clock.period % 2u != 0u) {
+        clock.reason = "the line length is not a whole number of EE cycles per half-line";
+        return clock;
+    }
+    clock.state = VerticalClock::State::Running;
+    clock.epoch = line_.clock.epoch;
+    clock.half_line = line_.clock.period / 2u;
+    clock.field = static_cast<std::uint32_t>(field);
+    clock.blank = static_cast<std::uint32_t>(field - vdp);
+    return clock;
+}
+
+std::uint64_t GsRegisters::VerticalClock::next_edge(std::uint64_t from, bool end) const {
+    const auto period = half_line * field;
+    const auto first = epoch + (end ? half_line * blank : 0u);
+    if (from <= first) return first;
+    const auto fields = (from - first + period - 1u) / period;
+    return first + fields * period;
 }
 
 std::optional<std::uint64_t> GsRegisters::latched(std::uint32_t physical) const {

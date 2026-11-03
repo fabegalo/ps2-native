@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 
 namespace ps2native {
 inline constexpr std::uint32_t kGsPrivilegedBase = 0x12000000u;
@@ -47,6 +48,27 @@ public:
         std::uint64_t period{};
         bool operator==(const LineClock&) const = default;
     };
+    // VBLANK source (IOP INTC IRQ 0/11, EE INTC VBON/VBOF). A field is the sum
+    // of the SYNCV half-line fields (VFP, VFPE, VBP, VBPE, VDP, VS; ps2sdk
+    // gs_privileged.h layout); VDP half-lines carry video, the others are the
+    // vertical blank (the BIOS's NTSC SYNCV gives 525 = 480 + 45, ps2tek's
+    // 240 visible and 22 blank lines). A half-line is half the line clock.
+    // Hypothesis: the field starts with VBLANK start at the line clock epoch.
+    struct VerticalClock {
+        enum class State : std::uint8_t {
+            Unknown, // no edge times can be given: `reason` says why
+            Held,    // SMODE1.SINT = 1: video sync held, no edges
+            Running
+        };
+        State state{State::Unknown};
+        std::uint64_t epoch{};     // EE cycle of a VBLANK start
+        std::uint64_t half_line{}; // EE cycles
+        std::uint32_t field{};     // half-lines per field
+        std::uint32_t blank{};     // half-lines from VBLANK start to VBLANK end
+        std::string reason;
+        // First VBLANK start (`end` false) or end at an EE cycle >= `from`.
+        [[nodiscard]] std::uint64_t next_edge(std::uint64_t from, bool end) const;
+    };
     // Called with the reason before a write changes the line clock; it may
     // throw DeviceRefusal to reject the write (nothing is modified then).
     using LineClockGuard = std::function<void()>;
@@ -59,6 +81,9 @@ public:
                const LineClockGuard& guard);
     // Throws DeviceRefusal when no HBLANK is generated or its timing is not modeled.
     [[nodiscard]] LineClock line_clock() const;
+    [[nodiscard]] VerticalClock vertical_clock() const;
+    // Incremented whenever the line or vertical clock may change.
+    [[nodiscard]] std::uint64_t timing_generation() const noexcept { return generation_; }
     // Last value written to a modeled register since reset (for traces and tests).
     [[nodiscard]] std::optional<std::uint64_t> latched(std::uint32_t physical) const;
 
@@ -76,5 +101,6 @@ private:
     std::array<std::optional<std::uint64_t>, kModeRegisters> mode_{};
     std::optional<std::uint64_t> csr_written_;
     LineState line_{};
+    std::uint64_t generation_{};
 };
 } // namespace ps2native

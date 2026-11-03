@@ -344,4 +344,10 @@ if(BUILD_TESTING)
     target_link_libraries(ps2n-iop-m26 PRIVATE ps2n_core)
     add_test(NAME native-m26-iop COMMAND ps2n-iop-m26)
 
+    # M2.7: VBLANK from the GS vertical timing (IOP IRQ 0/11), the EE/IOP ordering,
+    # the SIF registers, partly known values and the EE devices after the GS reset.
+    add_executable(ps2n-iop-m27 tests/iop_m27.cpp)
+    target_link_libraries(ps2n-iop-m27 PRIVATE ps2n_core)
+    add_test(NAME native-m27-iop COMMAND ps2n-iop-m27)
+
 endif()

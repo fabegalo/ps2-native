@@ -97,7 +97,7 @@ BusRegion classify_physical(std::uint32_t p) noexcept {
     }
     if (p >= 0x11000000u && p < 0x11010000u) return BusRegion::VuMemory;
     if (p >= 0x12000000u && p < 0x12002000u) return BusRegion::GsRegisters;
-    if (p >= 0x1A000000u && p < 0x1A000010u) return BusRegion::Block1A;
+    if (p >= 0x1A000000u && p < 0x1A000020u) return BusRegion::Block1A;
     if (p >= 0x1C000000u && p < 0x1C800000u) return BusRegion::IopMemory;
     if (p >= 0x1E000000u && p < 0x1E400000u) return BusRegion::Rom1;
     if (p >= 0x1E400000u && p < 0x1E800000u) return BusRegion::Rom2;
