@@ -108,3 +108,33 @@ Fontes adicionais:
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/GS.cpp
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Counters.cpp
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/HwRead.cpp
+
+## Consulta para a M2.3 — 03/11/2026
+
+Somente leitura de especificação e de comportamento; **nenhum trecho foi copiado ou traduzido**. Os datasheets foram lidos localmente e não entraram no repositório. O firmware do usuário foi executado e desmontado apenas localmente.
+
+- **Rambus, *Direct RDRAM 64/72-Mbit Advance Information* (3/12/98):**
+  - formatos `SRQ`/`SA`/`SINT`/`SD` e comprimentos das transações;
+  - códigos `SOP`;
+  - registrador `INIT` (0x021) e valores de reset;
+  - Algorithm InitDev;
+  - `tCYCLE1` mínimo de 1000 ns.
+- **Samsung K4R271669F** (128 Mbit, F-die, v1.4 2003): `tCYCLE1` de 1000 ns nas transações seriais. Este datasheet não traz o mapa de registradores.
+- **PCSX2** (GPL-3.0+, só comportamento observável):
+  - `pcsx2/HwRead.cpp`/`HwWrite.cpp`: `MCH_RICM`/`MCH_DRD` com respostas fixas de `INIT`/`CNFGA`/`CNFGB`, e `F410` desconhecido.
+  - **Nada adotado:** as respostas fixas não são documentação.
+- **MAME** `ps2sony.cpp` (BSD-3-Clause, consultado só como comportamento): mesma abordagem de respostas fixas e nenhum mapeamento de `F410`.
+- **ps2tek** (fork israpps), página RDRAM_Init: repete a lógica dos emuladores e não cobre `F410`.
+- **BIOS real do usuário** (comportamento observado):
+  - layout de `MCH_RICM` nas rotinas seriais;
+  - espera do bit 31;
+  - enumeração por `INIT`;
+  - ordem dos acessos ao bloco `F400–F4C0`;
+  - leitura de `0x1000F520`;
+  - uso de `SOP 0xB`/`0xE`.
+- **Não obtido:** datasheet de 128/144 Mbit com o mapa de registradores e os `SOP` estendidos. Os espelhos recusaram download automatizado.
+
+Fontes adicionais:
+- https://retrocdn.net/images/6/68/Direct_RDRAM_datasheet.pdf
+- https://www.digchip.com/datasheets/download_datasheet.php?id=467210&part-number=K4R271669F-TbCS8
+- https://github.com/mamedev/mame/blob/master/src/mame/sony/ps2sony.cpp

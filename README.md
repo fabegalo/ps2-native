@@ -2,9 +2,23 @@
 **Languages:** English | [Português (Brasil)](README.pt-BR.md)
 
 
-**Status: experimental prototype, M2.2 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps run their first ~637,600 EE instructions and then stop at an unmodeled register. Nothing is rendered.**
+**Status: experimental prototype, M2.3 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps run their first ~637,600 EE instructions and then stop at an unmodeled register. Nothing is rendered.**
 
-### Current progress — M2.2: GS privileged registers and the BIOS memory setup
+### Current progress — M2.3: MCH serial interface and the Direct RDRAM chain
+
+- **`MCH_RICM`/`MCH_DRD`** (`0x1000F430/0x1000F440`) start Direct RDRAM serial control transactions:
+  - The field layout is the one the BIOS serial helpers build. Bit 31 stays busy for the transaction length in SCK cycles at the data sheet's 1000 ns minimum period (hypothesis).
+  - A `CLRR` sooner than 16 SCK cycles after `SETR` is refused.
+- **`RdramChain`** follows the Rambus Direct RDRAM data sheet:
+  - `SETR`/`CLRR`/`SETF` and `SWR`/`SRD` of `INIT`;
+  - the SIO repeater daisy chain and `SDEVID` selection.
+  
+  Reserved opcodes, other registers, access before `SETR`, and reads nobody (or several devices) answer are refused without changing state.
+- A synthetic ROM0 runs Algorithm InitDev for two devices, identically interpreter-only and hybrid.
+- **The real BIOS block point does not move.** The three dumps still retire 637,620/637,598 instructions and stop at `SW` to `0x1000F410`. The BIOS writes this undocumented register before any serial transaction, then uses `0x1000F520`, `F480/F490/F4C0` and serial opcodes `0xE`/`0xB`, which the available data sheet lists as reserved. Each needs evidence or a maintainer decision.
+- **18/18 tests** pass locally (MSVC, LLVM clang++). [M2.3 evidence, BIOS access order and pending decision](docs/M2.3-STATUS.md).
+
+### M2.2: GS privileged registers and the BIOS memory setup
 
 The same three user-supplied ROM0 dumps now retire **637,620** instructions (SCPH-70012/77008) and **637,598** (SCPH-90006), identically interpreter-only and hybrid. They:
 
@@ -109,6 +123,6 @@ The CI matrix targets Windows (x86-64/ARM64), Linux (x86-64/ARM64) and macOS (In
 
 `ps2n-aot input.elf output.cpp` produces a translation unit only; a host must link it with `ps2n_core` and initialize memory/state. The current integration is implemented for synthetic fixtures, not for real commercial games or the PS2 BIOS.
 
-See [architecture](docs/ARCHITECTURE.md), [M2.2 status](docs/M2.2-STATUS.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
+See [architecture](docs/ARCHITECTURE.md), [M2.3 status](docs/M2.3-STATUS.md), [M2.2 status](docs/M2.2-STATUS.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
 
-Next engineering increment: [M2.2 continued](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.
+Next engineering increment: [M2.3 continued](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.
