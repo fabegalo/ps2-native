@@ -133,13 +133,26 @@ template<class Char> int test_main(int argc, Char** argv) {
         // Optional real network I/O, never silently reported as covered.
         if (argc == 8 && fs::path(argv[7]) != fs::path("")) {
             const auto network_root = fs::path(argv[7]) / "ps2n-io-network-test";
+#ifdef _WIN32
+            require(native_io_path(network_root).native().starts_with(L"\\\\?\\UNC\\"), "real network test requires a UNC path");
+#endif
             require(!file_exists(network_root), "network test root is unused");
             ps2native::create_directories(network_root);
-            const auto network_file = network_root / fs::path(u8"\u65e5\U0001f680.txt");
-            require(write_text_if_changed(network_file, "UNC") && text_file(network_file) == "UNC", "UNC real I/O");
+            try {
+                for (auto target : {260u, 500u, 1000u}) {
+                    auto directory = network_root / std::to_string(target);
+                    const fs::path name(u8"\u65e5\U0001f680.txt");
+                    while ((directory / name).native().size() < target) directory /= "network_012345678901234567890123456789";
+                    const auto network_file = directory / name;
+                    require(write_text_if_changed(network_file, "UNC") && text_file(network_file) == "UNC", "UNC real I/O");
+                    const auto stamp = file_write_time(network_file);
+                    require(!write_text_if_changed(network_file, "UNC") && file_write_time(network_file) == stamp, "UNC idempotence");
 #ifdef _WIN32
-            require(text_file(native_io_path(network_file)) == "UNC", "extended UNC real I/O");
+                    require(text_file(native_io_path(network_file)) == "UNC", "extended UNC real I/O");
 #endif
+                    std::cout << "PASS real UNC path length " << network_file.native().size() << '\n';
+                }
+            } catch (...) { remove_directory_tree(network_root); throw; }
             remove_directory_tree(network_root);
             std::cout << "PASS real UNC I/O\n";
         } else std::cout << "UNC real network I/O NOT VALIDATED (no test share supplied)\n";

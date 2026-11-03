@@ -50,7 +50,7 @@ Validacao local em 2026-11-03: Windows x86-64, MSVC 19.44, CMake 3.31.6;
 Os 25 testes da base M2.8 passaram no build isolado (26 com o novo teste de I/O). O teste de I/O foi incluido
 na matriz CI de seis alvos, com uma etapa verbosa propria (Windows x86-64/ARM64,
 Linux x86-64/ARM64 e macOS Intel/Apple Silicon).
-I/O UNC real nao validado localmente: nenhum compartilhamento foi fornecido.
+I/O UNC real aprovado localmente no compartilhamento administrativo ja existente de localhost, restrito a out: caminhos de 277, 511 e 1019 unidades UTF-16, nomes Unicode, leitura normal/estendida, escrita idempotente e limpeza. Nenhum compartilhamento, servico, credencial ou Registro foi alterado. A CI sem compartilhamento continua registrando a cobertura UNC real como nao validada.
 
 ## Limites reais e ferramentas externas
 
