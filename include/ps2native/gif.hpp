@@ -1,11 +1,8 @@
 #pragma once
 // GIF (ps2tek "GIF", "GIF I/O"; ps2sdk gif_tags.h): the EE writes GIF packets
 // for PATH3 directly into the GIF FIFO at 0x10006000, one quadword per SQ.
-// Modeled: GIF_CTRL (reset, temporary stop), GIF_MODE (PATH3 mask,
-// intermittent mode), GIF_STAT reads, and PATH3 packets of GIFtags in PACKED
-// mode whose register descriptors are A+D (0xE), which write GS general
-// registers (GsRegisters::general_write). Everything that would move pixels or
-// draw (PRE, REGLIST, IMAGE, other descriptors, vertex kicks) is refused.
+// PATH3 PACKED (including PRE and vertex unpacking), REGLIST (two registers
+// per quadword, final padding discarded), IMAGE/IMAGE2 and chained tags.
 //
 // Timing: the GS takes each quadword as it arrives, so the FIFO never holds
 // data (FQC = 0; hypothesis: no back-pressure is modeled, and the firmware
@@ -36,6 +33,8 @@ public:
     [[nodiscard]] const std::vector<std::string>& packets() const noexcept { return packets_; }
 
 private:
+    void consume();
+    void packed(unsigned descriptor, std::uint64_t low, std::uint64_t high, GsRegisters& gs);
     std::uint32_t ctrl_{}, mode_{};
     // Current PATH3 packet: a GIFtag was taken and loops remain.
     bool in_packet_{};
@@ -45,6 +44,8 @@ private:
     std::uint64_t regs_{};
     std::uint32_t reg_index_{};
     std::uint32_t written_{}; // A+D writes in this packet
+    unsigned format_{};
+    std::uint32_t q_{0x3F800000u};
     std::vector<std::string> packets_;
 };
 } // namespace ps2native

@@ -10,7 +10,7 @@ add_library(ps2n_core STATIC
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
     src/interpreter.cpp src/boot.cpp src/ee_registers.cpp
     src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp src/nvm.cpp
-    src/video_encoder.cpp src/gif.cpp)
+    src/video_encoder.cpp src/gif.cpp src/gs_vram.cpp src/gs_renderer.cpp src/framebuffer.cpp)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(MSVC)
     target_compile_options(ps2n_core PRIVATE /W4 /permissive-)
@@ -354,5 +354,21 @@ if(BUILD_TESTING)
     add_executable(ps2n-m28 tests/m28.cpp)
     target_link_libraries(ps2n-m28 PRIVATE ps2n_core)
     add_test(NAME native-m28-video-gif COMMAND ps2n-m28)
+
+    set(M29_ROM "${FIXTURE_DIR}/synthetic-gs.bin")
+    set(M29_AOT "${FIXTURE_DIR}/synthetic_gs_aot.cpp")
+    add_custom_command(OUTPUT "${M29_ROM}"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M29_ROM}" gs
+        DEPENDS ps2n-make-fixture VERBATIM)
+    add_custom_command(OUTPUT "${M29_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M29_ROM}" "${M29_AOT}" --bios
+        DEPENDS ps2n-aot "${M29_ROM}" VERBATIM)
+    add_executable(ps2n-gs-m29 tests/gs_m29.cpp "${M29_AOT}")
+    target_link_libraries(ps2n-gs-m29 PRIVATE ps2n_core)
+    foreach(GS_CASE IN ITEMS vram gif drawing)
+        add_test(NAME native-m29-${GS_CASE} COMMAND ps2n-gs-m29 ${GS_CASE})
+    endforeach()
+    add_test(NAME native-m29-gs COMMAND ps2n-gs-m29 guest "${M29_ROM}" "${CMAKE_CURRENT_BINARY_DIR}/synthetic-gs.bmp")
+    set_tests_properties(native-m29-gs PROPERTIES TIMEOUT 30)
 
 endif()

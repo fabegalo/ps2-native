@@ -39,7 +39,8 @@ std::optional<std::size_t> mode_index(std::uint32_t physical) {
 void GsRegisters::reset(std::uint64_t now) {
     ++generation_;
     mode_ = {};
-    general_ = {};
+    reset_drawing();
+    vram_.invalidate();
     csr_written_.reset();
     line_ = {Sync::Running, 2u, {now, kEeCyclesPerBusCycle * kBusCyclesPerNtscLine}};
 }
@@ -63,6 +64,24 @@ void GsRegisters::change_line_state(const LineState& next, const LineClockGuard&
 
 void GsRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value, std::uint64_t now,
                         const LineClockGuard& guard) {
+    if (physical == kGsPmode || physical == kGsDispfb1 || physical == kGsDisplay1 ||
+        physical == kGsDispfb2 || physical == kGsDisplay2 || physical == kGsBgcolor) {
+        if (bytes != 8u) throw DeviceRefusal("GS display register requires a 64-bit store");
+        const std::uint64_t mask = physical == kGsPmode ? 0xFFFFull :
+            (physical == kGsBgcolor ? 0xFFFFFFull :
+             ((physical == kGsDispfb1 || physical == kGsDispfb2) ? 0x003FFFFF000FFFFFull :
+                                                               0x007FFFFF1FFFFFFFull));
+        if (value & ~mask) throw DeviceRefusal("GS display register reserved bits set");
+        display_[(physical - kGsPmode) / 16u] = value;
+        return;
+    }
+    if (physical == kGsImr) {
+        if (bytes != 8u && bytes != 4u) throw DeviceRefusal("GS IMR requires a 32/64-bit store");
+        if ((value & ~0x7F00ull) || (value & 0x6000u) != 0x6000u)
+            throw DeviceRefusal("GS IMR reserved bits (13/14 must be one)");
+        imr_ = static_cast<std::uint32_t>(value);
+        return;
+    }
     if (const auto index = mode_index(physical)) {
         const auto& reg = kModeLayouts[*index];
         if (bytes != 8u)
@@ -106,7 +125,7 @@ void GsRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
             // state (PCSX2 clears them too); the line clock restarts as NTSC.
             change_line_state({Sync::Running, 2u, {now, kEeCyclesPerBusCycle * kBusCyclesPerNtscLine}}, guard);
             mode_ = {};
-            general_ = {}; // hypothesis: the general registers are back to unknown as well
+            reset_drawing(); // VRAM survives a soft GS reset
             ++generation_;
         }
         // SIGNAL/FINISH/HSINT/VSINT/EDWINT: 1 clears the event and re-enables
@@ -185,7 +204,12 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
         // CLAMP, FOG, TEX1, TEX2, XYOFFSET, PRMODECONT, PRMODE, TEXCLUT,
         // SCANMSK, MIPTBP1/2, TEXA, FOGCOL, TEXFLUSH, SCISSOR, ALPHA, DIMX,
         // DTHE, COLCLAMP, TEST, PABE, FBA, FRAME, ZBUF, BITBLTBUF, TRXPOS, TRXREG.
-        case 0x00: case 0x01: case 0x02: case 0x03: case 0x06: case 0x07: case 0x08: case 0x09: case 0x0A:
+        case 0x00:
+            if (value & ~0x7FFull) throw DeviceRefusal(shown + ": PRIM reserved bits set");
+            first_vertex_.reset();
+            general_[index] = value;
+            return;
+        case 0x01: case 0x02: case 0x03: case 0x06: case 0x07: case 0x08: case 0x09: case 0x0A:
         case 0x14: case 0x15: case 0x16: case 0x17: case 0x18: case 0x19: case 0x1A: case 0x1B: case 0x1C:
         case 0x22: case 0x34: case 0x35: case 0x36: case 0x37: case 0x3B: case 0x3D: case 0x3F: case 0x40:
         case 0x41: case 0x42: case 0x43: case 0x44: case 0x45: case 0x46: case 0x47: case 0x48: case 0x49:
@@ -193,27 +217,20 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
             general_[index] = value;
             return;
         case 0x53: { // TRXDIR: XDIR 0 host->local, 1 local->host, 2 local->local, 3 off
-            const auto xdir = value & 3u;
-            if ((value & ~3ull) != 0u) throw DeviceRefusal(shown + ": TRXDIR bits above 1 are reserved");
-            if (xdir != 3u) {
-                const auto& trxreg = general_[0x52];
-                if (!trxreg) throw DeviceRefusal(shown + ": transmission started with TRXREG never written");
-                const auto width = *trxreg & 0xFFFu, height = (*trxreg >> 32) & 0xFFFu;
-                // An empty area moves no pixel (hypothesis: the transmission
-                // ends at once and expects no IMAGE data).
-                if (width != 0u && height != 0u)
-                    throw DeviceRefusal(shown + ": a " + std::to_string(width) + "x" + std::to_string(height) +
-                                        " transmission moves pixels; GS local memory is not modeled");
-            }
+            start_transfer(value);
             general_[index] = value;
             return;
         }
         case 0x04: case 0x05: case 0x0C: case 0x0D:
-            throw DeviceRefusal(shown + ": a vertex write (XYZ/XYZF) draws; drawing is not modeled");
+            vertex(index, value);
+            general_[index] = value;
+            return;
         case 0x54:
-            throw DeviceRefusal(shown + ": HWREG moves pixels; GS local memory is not modeled");
+            transfer_data(value);
+            return;
+        case 0x7F: return; // NOP
         case 0x60: case 0x61: case 0x62:
-            throw DeviceRefusal(shown + ": SIGNAL/FINISH/LABEL raise GS events; not modeled");
+            throw DeviceRefusal(shown + ": SIGNAL/FINISH/LABEL event and ID semantics are not modeled");
         default:
             throw DeviceRefusal(shown + ": no GS general register at this address");
     }
@@ -222,6 +239,9 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
 std::optional<std::uint64_t> GsRegisters::latched(std::uint32_t physical) const {
     if (const auto index = mode_index(physical)) return mode_[*index];
     if (physical == kGsCsr) return csr_written_;
+    if (physical == kGsImr) return imr_;
+    if (physical <= kGsBgcolor && physical >= kGsPmode && physical % 16u == 0u)
+        return display_[(physical - kGsPmode) / 16u];
     return std::nullopt;
 }
 } // namespace ps2native

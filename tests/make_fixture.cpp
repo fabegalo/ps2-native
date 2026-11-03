@@ -1,5 +1,6 @@
 // Synthetic, independently-authored MIPS instructions. No Sony or game binaries.
 #include "bios_program.hpp"
+#include "gs_program.hpp"
 #include "m13_program.hpp"
 #include "ps2native/io.hpp"
 
@@ -34,6 +35,11 @@ template <typename Character>
 int fixture_main(int argc, Character** argv) {
     if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym|jump-table|jump-table-nosym|m13|m13-stripped|bios|bios-m21|bios-m22|bios-m23|bios-m24|bios-m25]\n"; return 2; }
     constexpr std::uint32_t start = 0x00100000u;
+    if (argc == 3 && std::filesystem::path(argv[2]) == std::filesystem::path("gs")) {
+        if (!write_fixture(std::filesystem::path(argv[1]), m29::build().rom)) return 1;
+        std::cout << "Created synthetic GS test program (not Sony firmware)\n";
+        return 0;
+    }
 
     // Synthetic M2.0 (and M2.1-M2.5 variants) boot firmware in the ROM0 container format (not Sony code).
     if (argc == 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("bios") ||

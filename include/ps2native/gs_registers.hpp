@@ -1,12 +1,14 @@
 #pragma once
 // GS privileged registers (physical 0x12000000..0x12001FFF) as seen by the EE,
-// independent of any graphics backend: control state only, nothing is drawn.
+// independent of any graphics backend, with a deterministic software GS subset.
 //
 // Modeled: SMODE1, SMODE2, SRFSH, SYNCH1, SYNCH2, SYNCV (write-only, 64-bit
-// stores) and CSR writes. Field layouts follow ps2sdk gs_privileged.h; the
-// SMODE1 PRST/SINT start-up sequence follows ps2sdk graph_mode.c. Everything
-// else (reads, other registers, other widths, reserved bits) is refused.
+// stores), CSR/IMR writes, PMODE/DISPFB/DISPLAY/BGCOLOR and a software drawing
+// subset. Field layouts follow the GS manual and ps2sdk headers. CSR reads
+// still refuse unknown field/revision state; unsupported effects fail at use.
 #include "ps2native/device_timing.hpp"
+#include "ps2native/framebuffer.hpp"
+#include "ps2native/gs_vram.hpp"
 
 #include <array>
 #include <cstddef>
@@ -25,6 +27,13 @@ inline constexpr std::uint32_t kGsSynch1 = 0x12000040u;
 inline constexpr std::uint32_t kGsSynch2 = 0x12000050u;
 inline constexpr std::uint32_t kGsSyncv = 0x12000060u;
 inline constexpr std::uint32_t kGsCsr = 0x12001000u;
+inline constexpr std::uint32_t kGsPmode = 0x12000000u;
+inline constexpr std::uint32_t kGsDispfb1 = 0x12000070u;
+inline constexpr std::uint32_t kGsDisplay1 = 0x12000080u;
+inline constexpr std::uint32_t kGsDispfb2 = 0x12000090u;
+inline constexpr std::uint32_t kGsDisplay2 = 0x120000A0u;
+inline constexpr std::uint32_t kGsBgcolor = 0x120000E0u;
+inline constexpr std::uint32_t kGsImr = 0x12001010u;
 
 // SMODE1 fields used by the line clock.
 inline constexpr std::uint64_t kSmode1Prst = 1ull << 16;
@@ -84,11 +93,13 @@ public:
     [[nodiscard]] VerticalClock vertical_clock() const;
     // Incremented whenever the line or vertical clock may change.
     [[nodiscard]] std::uint64_t timing_generation() const noexcept { return generation_; }
-    // GS general register `index` written through the GIF (A+D). Registers
-    // hold state only: anything that draws or moves pixels (vertex kicks, a
-    // non-empty TRXDIR transmission, HWREG) or raises a GS event (SIGNAL,
-    // FINISH, LABEL) is refused, as are unassigned addresses.
+    // GS general register writes from GIF. Unsupported effects fail at use.
     void general_write(std::uint8_t index, std::uint64_t value);
+    void image_write(std::uint64_t low, std::uint64_t high);
+    [[nodiscard]] const GsVram& vram() const noexcept { return vram_; }
+    // Snapshot of a single progressive read circuit. No scaling or invented
+    // display size/timing; disabled output and unsupported merge modes refuse.
+    [[nodiscard]] Framebuffer scanout(std::uint64_t ee_cycle) const;
     // Value last written to general register `index` since reset.
     [[nodiscard]] std::optional<std::uint64_t> general(std::uint8_t index) const { return general_[index]; }
     // Last value written to a modeled register since reset (for traces and tests).
@@ -104,10 +115,25 @@ private:
     };
     static constexpr std::size_t kModeRegisters = 6u; // SMODE1..SYNCV
     void change_line_state(const LineState& next, const LineClockGuard& guard);
+    [[nodiscard]] std::uint64_t required(std::uint8_t index) const;
+    void vertex(std::uint8_t index, std::uint64_t value);
+    void start_transfer(std::uint64_t value);
+    void transfer_data(std::uint64_t value);
+    void reset_drawing();
 
     std::array<std::optional<std::uint64_t>, kModeRegisters> mode_{};
     std::optional<std::uint64_t> csr_written_;
     std::array<std::optional<std::uint64_t>, 256> general_{};
+    std::array<std::optional<std::uint64_t>, 15> display_{};
+    GsVram vram_;
+    struct Vertex { int x{}, y{}; };
+    std::optional<Vertex> first_vertex_;
+    struct Transfer {
+        bool active{};
+        unsigned base{}, bw{}, psm{}, x{}, y{}, width{}, height{}, pixel{}, pending_bytes{};
+        std::uint32_t pending{};
+    } transfer_;
+    std::uint32_t imr_{0x7F00u};
     LineState line_{};
     std::uint64_t generation_{};
 };

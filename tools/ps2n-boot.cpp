@@ -34,6 +34,7 @@ int boot_main(int argc, Character** argv) {
         std::cerr << "Usage: ps2n-boot <your-rom0.bin> [--expect-sha256=HEX] [--max-instructions=N]\n"
                      "                 [--console=MODEL[:MAINBOARD]] [--nvm=FILE] [--expect-nvm-sha256=HEX]\n"
                      "                 [--trace=events|full] [--trace-out=FILE] [--tail=N] [--stop-at=0xADDRESS]\n"
+                     "                 [--frame-out=FILE.bmp] (GS VRAM snapshot at stop, when supported)\n"
                      "                 [--assume-video-encoder=0xREG:0xVALUE]... (diagnostic experiments only)\n";
         return 2;
     }
@@ -41,6 +42,7 @@ int boot_main(int argc, Character** argv) {
         ps2native::BiosLoadOptions load;
         ps2native::BootOptions options;
         std::optional<std::filesystem::path> trace_out;
+        std::optional<std::filesystem::path> frame_out;
         const ps2native::ConsoleHardware* hardware = nullptr;
         std::optional<std::filesystem::path> nvm_path;
         ps2native::NvmLoadOptions nvm_options;
@@ -86,6 +88,8 @@ int boot_main(int argc, Character** argv) {
                 options.trace = ps2native::TraceLevel::Full;
             } else if (flag.starts_with("--trace-out=")) {
                 trace_out = std::filesystem::path(argv[i]).native().substr(12);
+            } else if (flag.starts_with("--frame-out=")) {
+                frame_out = std::filesystem::path(argv[i]).native().substr(12);
             } else if (flag.starts_with("--tail=")) {
                 options.tail_instructions = static_cast<std::size_t>(number(flag.substr(7), "--tail"));
             } else if (flag.starts_with("--stop-at=")) {
@@ -157,6 +161,20 @@ int boot_main(int argc, Character** argv) {
         ps2native::prepare_ee_boot(bios, module, state, memory, hardware, nvm ? &*nvm : nullptr,
                                    assumptions.empty() ? nullptr : &assumptions);
         const auto report = ps2native::run_ee_boot(state, memory, module, options);
+        std::cout << "# GS VRAM revision " << memory.gs().vram().revision() << '\n';
+        std::cout << "# GS pixel writes " << memory.gs().vram().pixel_writes() << '\n';
+        for (const auto& packet : report.gif_packets) std::cout << "# GIF " << packet << '\n';
+        if (frame_out) {
+            std::optional<ps2native::Framebuffer> frame;
+            try { frame = memory.gs().scanout(state.retired_instructions); }
+            catch (const ps2native::DeviceRefusal& error) { std::cout << "# frame unavailable: " << error.what() << '\n'; }
+            if (frame) {
+                ps2native::save_framebuffer_bmp(*frame_out, *frame);
+                std::cout << "# GS VRAM snapshot " << frame->width << 'x' << frame->height
+                          << ", RGBA8 sha256 " << ps2native::sha256_hex(frame->rgba)
+                          << ", file " << ps2native::path_utf8(*frame_out) << '\n';
+            }
+        }
 
         if (trace_out) {
             std::string text = header.str();

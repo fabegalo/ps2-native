@@ -5,6 +5,7 @@
 #include "ps2native/memory.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -20,6 +21,9 @@ struct BootOptions {
     std::size_t tail_instructions{32};
     // Optional address at which to stop (diagnostics/tests); the BIOS never "returns".
     std::optional<std::uint32_t> stop_at;
+    // Optional headless presentation hook, called at modeled VBLANK starts.
+    // Frame ownership may be copied by the host. No scanout work when absent.
+    std::function<void(const Framebuffer&)> on_frame;
 };
 enum class BootOutcome : std::uint8_t {
     BlockPoint,      // execution reached behavior that is not modeled (or a guest fault)
@@ -45,8 +49,11 @@ struct BootReport {
     std::vector<std::string> iop_events;
     // Video encoder serial-bus transactions, in order.
     std::vector<std::string> video_encoder_transactions;
+    std::vector<std::string> gif_packets;
     std::vector<std::string> trace;
     std::vector<std::string> tail;
+    std::uint64_t frames_presented{};
+    std::optional<std::string> frame_unavailable;
 };
 
 // Power-on state for ROM0: RAM/scratchpad cleared, ROM0 mapped, TLB undefined,

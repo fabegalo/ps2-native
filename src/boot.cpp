@@ -40,9 +40,11 @@ std::string instruction_line(const RetiredInstruction& r) {
 // Collects the reproducible boot trace; attached to the bus only while running.
 class Tracer final : public InstructionObserver, public BusObserver, public SystemEventObserver {
 public:
-    Tracer(const BootOptions& options, BootReport& report) : options_(options), report_(report) {}
+    Tracer(const BootOptions& options, BootReport& report, const EEState& state, const Memory& memory)
+        : options_(options), report_(report), state_(state), memory_(memory) {}
 
     void on_instruction(std::uint32_t pc, std::uint32_t word, ExecutionEngine engine) override {
+        if (options_.on_frame) present();
         const RetiredInstruction r{++sequence_, pc, word, engine};
         if (engine == ExecutionEngine::Aot) ++report_.aot_instructions;
         else ++report_.interpreted_instructions;
@@ -74,8 +76,33 @@ public:
     }
 
 private:
+    void present() {
+        const auto& gs = memory_.gs();
+        const auto cycle = state_.retired_instructions;
+        if (generation_ != gs.timing_generation()) {
+            generation_ = gs.timing_generation();
+            const auto clock = gs.vertical_clock();
+            next_frame_.reset();
+            if (clock.state == GsRegisters::VerticalClock::State::Running)
+                next_frame_ = clock.next_edge(cycle, false);
+        }
+        if (!next_frame_ || cycle < *next_frame_) return;
+        // The observer runs before every instruction in both execution engines.
+        const auto stamp = *next_frame_;
+        next_frame_ = gs.vertical_clock().next_edge(cycle + 1u, false);
+        std::optional<Framebuffer> frame;
+        try { frame = gs.scanout(stamp); }
+        catch (const DeviceRefusal& error) { report_.frame_unavailable = error.what(); return; }
+        options_.on_frame(*frame);
+        ++report_.frames_presented;
+        report_.frame_unavailable.reset();
+    }
     const BootOptions& options_;
     BootReport& report_;
+    const EEState& state_;
+    const Memory& memory_;
+    std::uint64_t generation_{~0ull};
+    std::optional<std::uint64_t> next_frame_;
     std::uint64_t sequence_{};
     std::optional<ExecutionEngine> engine_;
     std::deque<RetiredInstruction> tail_;
@@ -123,7 +150,7 @@ void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state
 
 BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, const BootOptions& options) {
     BootReport report;
-    Tracer tracer(options, report);
+    Tracer tracer(options, report, state, memory);
     std::uint64_t executed = 0;
     // An unaligned stop address can never match an instruction PC.
     ExecutionContext ctx{state, memory, executed, options.max_instructions, 0xFFFFFFFFu, &tracer};
@@ -195,6 +222,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
         for (const auto& event : iop.events())
             report.iop_events.push_back("IOP " + std::to_string(event.cycle) + " " + event.text);
         report.video_encoder_transactions = memory.video_encoder().transactions();
+        report.gif_packets = memory.gif().packets();
     }
     tracer.finish();
     std::ostringstream stop;

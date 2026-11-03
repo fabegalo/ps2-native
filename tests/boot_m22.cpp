@@ -52,9 +52,11 @@ void check_gs() {
         rejects([&] { (void)gs.read(reg, 8u); }, "read (8 byte(s)): write-only register");
     rejects([&] { (void)gs.read(kGsCsr, 4u); }, "GS CSR read");
     rejects([&] { (void)gs.read(kGsPrivilegedBase, 8u); }, "no register model");          // PMODE
-    rejects([&] { gs.write(kGsPrivilegedBase, 8u, 0u, 200u, counted); }, "no register model");
+    gs.write(kGsPrivilegedBase, 8u, 0u, 200u, counted);
+    require(gs.latched(kGsPmode) == 0u, "PMODE disabled output latched");
     rejects([&] { gs.write(kGsSmode1 + 8u, 8u, 0u, 200u, counted); }, "no register model");  // misaligned
-    rejects([&] { gs.write(kGsSyncv + 0x10u, 8u, 0u, 200u, counted); }, "no register model");
+    gs.write(kGsDispfb1, 8u, 0u, 200u, counted);
+    require(gs.latched(kGsDispfb1) == 0u, "DISPFB1 latched");
 
     // SRFSH and SYNCV have no reserved bits; neither touches the line clock.
     gs.write(kGsSrfsh, 8u, ~0ull, 250u, counted);
@@ -115,8 +117,8 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     device_refused([&] { (void)m.read64(0xB2000010u); }, "write-only register");
     device_refused([&] { (void)m.read32(0xB2001000u); }, "GS CSR read");
     device_refused([&] { m.write32(0xB2001000u, 1u << 12); }, "reserved or read-only bits");
-    device_refused([&] { m.write64(0xB2000000u, 0u); },
-                   "GS privileged registers): device not implemented (no register model)");
+    m.write64(0xB2000000u, 0u);
+    require(m.gs().latched(kGsPmode) == 0u, "PMODE through the bus");
     device_refused([&] { (void)m.fetch32(0xB2000010u); }, "instruction fetch from device registers");
     device_refused([&] { m.write32(0xB0000010u, 0x83u); }, "GS video sync is held (SMODE1.SINT = 1)");
     m.write32(0xB0000810u, 0x80u); // BUSCLK timers do not depend on the GS

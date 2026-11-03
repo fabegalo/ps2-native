@@ -19,8 +19,6 @@ constexpr unsigned kStatApathShift = 10u;
 // GIFtag (ps2sdk gif_tags.h): NLOOP 0-14, EOP 15, PRE 46, PRIM 47-57, FLG
 // 58-59 (0 PACKED, 1 REGLIST, 2 and 3 IMAGE), NREG 60-63 (0 means 16); the
 // high doubleword holds the 4-bit register descriptors.
-constexpr unsigned kFlgPacked = 0u;
-constexpr std::uint64_t kDescriptorAd = 0xEu;
 } // namespace
 
 void Gif::reset() {
@@ -29,6 +27,7 @@ void Gif::reset() {
     in_packet_ = false;
     end_of_packet_ = false;
     loops_left_ = 0u;
+    q_ = 0x3F800000u;
     packets_.clear();
 }
 
@@ -75,16 +74,15 @@ void Gif::write_fifo(std::uint64_t low, std::uint64_t high, GsRegisters& gs) {
         const auto flg = static_cast<unsigned>((low >> 58) & 3u);
         auto nreg = static_cast<std::uint32_t>((low >> 60) & 0xFu);
         if (nreg == 0u) nreg = 16u;
-        if ((low & 0x00003FFFFFFF0000ull & ~(1ull << 15)) != 0u)
+        if (nloop && (low & 0x00003FFFFFFF0000ull) != 0u)
             throw DeviceRefusal(shown + ": GIFtag bits 16-45 are reserved; their effect is not documented");
-        if (pre) throw DeviceRefusal(shown + ": GIFtag PRE (PRIM write) starts drawing state; drawing is not modeled");
-        if (flg != kFlgPacked)
-            throw DeviceRefusal(shown + ": GIFtag FLG " + std::to_string(flg) +
-                                " (REGLIST or IMAGE) is not modeled (PACKED only)");
-        for (std::uint32_t i = 0; i < nreg; ++i)
-            if (((high >> (4u * i)) & 0xFu) != kDescriptorAd)
-                throw DeviceRefusal(shown + ": register descriptor " + hex((high >> (4u * i)) & 0xFu, 1) +
-                                    " is not modeled (A+D only)");
+        if (nloop && flg < 2u)
+            for (std::uint32_t i = 0; i < nreg; ++i) {
+                const auto descriptor = (high >> (4u * i)) & 15u;
+                if (descriptor == 0xBu || (flg == 1u && descriptor == 0xEu))
+                    throw DeviceRefusal(shown + ": invalid register descriptor for GIF format");
+            }
+        if (nloop && pre && flg == 0u) gs.general_write(0x00u, (low >> 47) & 0x7FFu);
         if (!in_packet_) written_ = 0u;
         in_packet_ = nloop != 0u || !eop;
         end_of_packet_ = eop;
@@ -92,19 +90,66 @@ void Gif::write_fifo(std::uint64_t low, std::uint64_t high, GsRegisters& gs) {
         nreg_ = nreg;
         regs_ = high;
         reg_index_ = 0u;
+        format_ = flg;
+        q_ = 0x3F800000u;
         if (!in_packet_) packets_.push_back("PATH3 packet: " + std::to_string(written_) + " A+D writes");
         return;
     }
-    // A+D: data in the low doubleword, register address in bits 64-71.
-    if ((high & ~0xFFull) != 0u) throw DeviceRefusal(shown + ": A+D bits 72-127 set; their effect is not documented");
-    gs.general_write(static_cast<std::uint8_t>(high), low);
-    ++written_;
+    if (format_ >= 2u) {
+        gs.image_write(low, high);
+        ++written_;
+        // IMAGE counts quadwords, irrespective of NREG.
+        reg_index_ = nreg_ - 1u;
+        consume();
+        return;
+    }
+    if (format_ == 0u) {
+        packed(static_cast<unsigned>((regs_ >> (reg_index_ * 4u)) & 15u), low, high, gs);
+        consume();
+        return;
+    }
+    // REGLIST: each half is a raw 64-bit GS register, odd final half is padding.
+    for (const auto data : {low, high}) {
+        if (loops_left_ == 0u) break;
+        const auto descriptor = static_cast<std::uint8_t>((regs_ >> (reg_index_ * 4u)) & 15u);
+        if (descriptor != 15u) gs.general_write(descriptor, data);
+        ++written_;
+        consume();
+    }
+}
+void Gif::consume() {
     if (++reg_index_ == nreg_) {
         reg_index_ = 0u;
         if (--loops_left_ == 0u && end_of_packet_) {
             in_packet_ = false;
-            packets_.push_back("PATH3 packet: " + std::to_string(written_) + " A+D writes");
+            packets_.push_back("PATH3 packet: " + std::to_string(written_) + " register/image writes");
         }
     }
+}
+void Gif::packed(unsigned d, std::uint64_t lo, std::uint64_t hi, GsRegisters& gs) {
+    if (d == 0xEu) {
+        if (hi & ~0xFFull) throw DeviceRefusal("GIF A+D bits 72-127 set; their effect is not documented");
+        gs.general_write(static_cast<std::uint8_t>(hi), lo);
+    } else if (d == 1u) {
+        const auto rgba = (lo & 255u) | (((lo >> 32) & 255u) << 8) |
+                          ((hi & 255u) << 16) | (((hi >> 32) & 255u) << 24);
+        gs.general_write(1u, rgba | (std::uint64_t{q_} << 32));
+    } else if (d == 2u) {
+        gs.general_write(2u, lo); q_ = static_cast<std::uint32_t>(hi);
+    } else if (d == 3u) {
+        gs.general_write(3u, (lo & 0x3FFFu) | (((lo >> 32) & 0x3FFFu) << 16));
+    } else if (d == 4u || d == 5u || d == 0xCu || d == 0xDu) {
+        auto index = static_cast<std::uint8_t>(d);
+        const auto xy = (lo & 0xFFFFu) | (((lo >> 32) & 0xFFFFu) << 16);
+        std::uint64_t zf = hi << 32;
+        if (d == 4u || d == 0xCu) zf = (((hi >> 4) & 0xFFFFFFu) << 32) | (((hi >> 36) & 255u) << 56);
+        if (hi & (1ull << 47)) index |= 8u;
+        gs.general_write(index, xy | zf);
+    } else if (d == 0xAu) {
+        gs.general_write(0xAu, ((hi >> 36) & 255u) << 56);
+    } else if (d != 15u) {
+        gs.general_write(static_cast<std::uint8_t>(d), d == 0u ? lo & 0x7FFu : lo);
+    }
+    ++written_;
 }
 } // namespace ps2native

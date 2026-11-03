@@ -11,10 +11,16 @@
 | AOT MIPS/R5900 | ELF32 sintéticos, CFG conservador, relocations como evidência, geração C++ e testes end-to-end | Cobertura incompleta de jogos e código dinâmico |
 | Boot EE | ROM0 reais, COP0/TLB, memória, RDRAM, início do kernel em RAM e AOT híbrido com trace | CPU e dispositivos ainda parciais |
 | IOP | Inicialização R3000A, NVM externa, MECHACON, timers/VBLANK e registradores SIF compartilhados | Sem serviços completos, DMA SIF ou interrupções de hardware completas |
-| GS/GIF | Registradores de controle, timing e pacotes limitados GIF PATH3 PACKED A+D | Sem memória local, framebuffer, imagem de jogo ou renderização |
+| GS/GIF | VRAM 4 MiB PSMCT32/24, PATH3 PACKED/REGLIST/IMAGE, transferências, pontos/sprites, scanout RGBA8/BMP e eventos; imagem sintética determinística | Sem pixels da BIOS real; formatos, primitivas, efeitos e timing ainda parciais |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
-## Última evidência: M2.8
+## Última evidência: M2.9
+
+- **Primeiro frame GS sintético:** 256×160, gerado por instruções R5900/GIF/GS; digest RGBA8 `43564b22…2e3f54`, igual no interpretador e no híbrido. API de framebuffer/eventos compartilhada e exportação BMP disponíveis, sem dependência gráfica obrigatória.
+- **BIOS real repetida nos dois perfis SCPH-70004:** mantém 17.690.079 instruções EE, parada em `0x80007D20`; diagnóstico com IDs assumidos mantém 17.690.770 e parada em `0x8000E628`. Zero escritas de pixels em ambas as rotas; não houve avanço do Browser. As máscaras de IMR após reset foram estabelecidas pelo manual; fase vertical e INTC seguem pendentes.
+- Relatório, comandos, contratos, testes e limites: [M2.9](docs/M2.9-STATUS.md). A evidência anterior de identificação de firmware permanece abaixo.
+
+## Evidência anterior: M2.8
 
 - **Firmware com NVM fornecidos localmente:** arquivo ROM0 SCPH-70004 (ROMVER `0200EC20040614`) e NVM Dragon de 1.024 bytes, compatíveis por identidade verificada; ambos **fora do Git**. Foram exercitados dois perfis possíveis de placa GH-032 que a NVM não permite distinguir.
 - **Boot interpretado e híbrido:** 17.690.079 instruções EE e 2.210.789 IOP, traces equivalentes (desconsiderando marcadores do motor), com mensagens `Initialize Start.` e `Initialize GS ...`. A parada do EE é a leitura do ID `0x7E` do codificador de vídeo (I²C endereço `0x21`, controlador em `0x1A000000` na ROMVER 0200); o valor real não foi medido.

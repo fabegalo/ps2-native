@@ -217,7 +217,7 @@ void check_gif() {
     require(registers.gif().packets().empty(), "packet still open");
     registers.write128(kGifFifo, 0x55u, 0x18u);           // XYOFFSET_1
     require(registers.read(kGifStat, 4u) == 0u && registers.gif().packets() ==
-                std::vector<std::string>{"PATH3 packet: 4 A+D writes"},
+                std::vector<std::string>{"PATH3 packet: 4 register/image writes"},
             "packet complete");
     require(registers.gs().general(0x06u) == 0x1234u && registers.gs().general(0x18u) == 0x55u &&
                 registers.gs().general(0x52u) == 0x0000000100000002ull,
@@ -231,19 +231,23 @@ void check_gif() {
     require(registers.gif().packets().back() == "PATH3 packet: 16 A+D writes", "EOP tag closes the packet");
     require(registers.gs().general(0x00u) == 15u, "last PRIM value");
 
-    rejects([&] { registers.write128(kGifFifo, giftag(1u, true, 1u) | (1ull << 46), kAllAd); }, "GIFtag PRE");
-    rejects([&] { registers.write128(kGifFifo, giftag(1u, true, 1u, 1u), kAllAd); }, "FLG 1 (REGLIST or IMAGE)");
-    rejects([&] { registers.write128(kGifFifo, giftag(1u, true, 1u, 2u), kAllAd); }, "FLG 2");
+    registers.write128(kGifFifo, giftag(1u, true, 1u) | (1ull << 46), kAllAd);
+    require(registers.gs().general(0) == 0u, "PRE writes PRIM");
+    registers.write128(kGifFifo, 0u, 0x01u);
+    rejects([&] { registers.write128(kGifFifo, giftag(1u, true, 1u, 1u), kAllAd); }, "invalid register descriptor");
     rejects([&] { registers.write128(kGifFifo, giftag(1u, true, 1u) | (1ull << 20), kAllAd); }, "bits 16-45");
-    rejects([&] { registers.write128(kGifFifo, giftag(1u, true, 2u), 0x1Eu); }, "register descriptor 0x1");
+    rejects([&] { registers.write128(kGifFifo, giftag(1u, true, 2u), 0xBEu); }, "invalid register descriptor");
     registers.write128(kGifFifo, giftag(1u, true, 1u), kAllAd);
     rejects([&] { registers.write128(kGifFifo, 0u, 0x105u); }, "A+D bits 72-127");
-    rejects([&] { registers.write128(kGifFifo, 0u, 0x05u); }, "a vertex write (XYZ/XYZF) draws");
-    rejects([&] { registers.write128(kGifFifo, 0u, 0x54u); }, "HWREG moves pixels");
+    rejects([&] { registers.write128(kGifFifo, 0u, 0x05u); }, "has not been written since reset");
+    const auto revision = registers.gs().vram().revision();
+    registers.write128(kGifFifo, 0u, 0x54u);
+    require(registers.gs().vram().revision() == revision, "inactive HWREG is a documented NOP");
+    registers.write128(kGifFifo, giftag(1u, true, 1u), kAllAd);
     rejects([&] { registers.write128(kGifFifo, 0u, 0x61u); }, "SIGNAL/FINISH/LABEL");
     rejects([&] { registers.write128(kGifFifo, 0u, 0x30u); }, "no GS general register");
     rejects([&] { registers.write128(kGifFifo, 0x0000000100000002ull, 0x53u); }, "TRXDIR bits above 1");
-    rejects([&] { registers.write128(kGifFifo, 0u, 0x53u); }, "a 2x1 transmission moves pixels");
+    rejects([&] { registers.write128(kGifFifo, 0u, 0x53u); }, "has not been written since reset");
     registers.write128(kGifFifo, 3u, 0x53u); // XDIR 3: off
     registers.write128(kGifFifo, giftag(2u, true, 1u), kAllAd);
     registers.write128(kGifFifo, 0u, 0x52u); // TRXREG 0x0

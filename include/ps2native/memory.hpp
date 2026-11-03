@@ -124,6 +124,7 @@ public:
     // EE cycle counter used by the timed EE registers (boot mapping only).
     void set_clock(const std::uint64_t* ee_cycles) noexcept { registers_.set_clock(ee_cycles); }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return registers_.gs(); }
+    [[nodiscard]] const Gif& gif() const noexcept { return registers_.gif(); }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
     [[nodiscard]] const Iop& iop() const noexcept { return registers_.iop(); }
     [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return registers_.video_encoder(); }
