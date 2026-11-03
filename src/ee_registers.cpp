@@ -122,6 +122,12 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
         // Unidentified register; what reads return has not been verified.
         throw DeviceRefusal("0x1000F500 read: an unidentified register; its read value is not verified");
     }
+    if (physical == kToolBoardIdPhysical) {
+        if (bytes != 1u)
+            throw DeviceRefusal("tool board id access of " + std::to_string(bytes) +
+                                " byte(s) is not modeled (8-bit read only)");
+        return kRetailToolBoardId; // no tool board (retail value: hypothesis)
+    }
     throw DeviceRefusal("no register model");
 }
 
@@ -141,6 +147,8 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
         f500_ = static_cast<std::uint32_t>(value);
         return;
     }
+    if (physical == kToolBoardIdPhysical)
+        throw DeviceRefusal("tool board id write: no evidence of what a write does");
     throw DeviceRefusal("no register model");
 }
 } // namespace ps2native

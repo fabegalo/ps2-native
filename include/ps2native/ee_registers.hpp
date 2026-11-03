@@ -1,7 +1,9 @@
 #pragma once
-// EE hardware registers at physical 0x10000000..0x1000FFFF that the boot path
-// models. Each register documents what is known and what is a hypothesis;
-// every other address, access size or mode still fails with a reason.
+// Device registers the EE boot path models: the EE registers at physical
+// 0x10000000..0x1000FFFF and, in the IOP register window 0x1F800000..0x1F9FFFFF,
+// only the tool board id byte. Each register documents what is known and what
+// is a hypothesis; every other address, access size or mode still fails with a
+// reason.
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -21,6 +23,13 @@ inline constexpr std::uint64_t kEeCyclesPerBusCycle = 2u;
 // cycles (ps2tek). Hypothesis for the reset state; the BIOS itself converts
 // its HBLANK measurement with 15734 Hz, an NTSC line rate.
 inline constexpr std::uint64_t kBusCyclesPerNtscLine = 9370u;
+// 0x1F803204: tool (DTL-T) board id, read as a byte by the EE RDRAM module and
+// the IOP EECONF module. Retail consoles have no tool board; 0xFF (bus pulled
+// high) is a hypothesis backed by 0xBF803800 reading 0xFFFF on every retail
+// console in the PS2Ident database. The firmware only checks for tool board
+// classes (high nibble 1-3, or 0x60/0x61), which 0xFF is not.
+inline constexpr std::uint32_t kToolBoardIdPhysical = 0x1F803204u;
+inline constexpr std::uint8_t kRetailToolBoardId = 0xFFu;
 
 // A modeled register refused this access: the reason names the register and
 // what is missing. Memory turns it into a BusError with the full address.

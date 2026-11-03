@@ -42,6 +42,7 @@ constexpr unsigned kM21MulDivCount = 12u;
 constexpr std::uint32_t kM21CountResult = kM21ResultRam + 0x80u;   // Count after 5 NOPs
 constexpr std::uint32_t kM21HblankResult = kM21ResultRam + 0x84u;  // Count over two HBLANK edges
 constexpr std::uint32_t kM21T0Result = kM21ResultRam + 0x88u;      // T0_COUNT at the last edge
+constexpr std::uint32_t kM21BoardIdResult = kM21ResultRam + 0x8Cu; // LBU of the tool board id
 constexpr std::uint32_t kM21ScratchpadAlias = 0x70010000u;          // TLB entry 2: S bit, PageMask 0
 
 enum Reg : unsigned {
@@ -78,6 +79,7 @@ public:
     void ori(unsigned rt, unsigned rs, std::uint32_t imm) { i(0x0du, rs, rt, imm); }
     void sltiu(unsigned rt, unsigned rs, std::uint32_t imm) { i(0x0bu, rs, rt, imm); }
     void lw(unsigned rt, std::int32_t offset, unsigned base) { i(0x23u, base, rt, static_cast<std::uint32_t>(offset)); }
+    void lbu(unsigned rt, std::int32_t offset, unsigned base) { i(0x24u, base, rt, static_cast<std::uint32_t>(offset)); }
     void sw(unsigned rt, std::int32_t offset, unsigned base) { i(0x2bu, base, rt, static_cast<std::uint32_t>(offset)); }
     void sd(unsigned rt, std::int32_t offset, unsigned base) { i(0x3fu, base, rt, static_cast<std::uint32_t>(offset)); }
     void addu(unsigned rd, unsigned rs, unsigned rt) { r(rs, rt, rd, 0u, 0x21u); }
@@ -191,7 +193,8 @@ inline std::vector<std::uint32_t> payload_code() {
 // M2.1, still at error level (KSEG0/KSEG1 only): PADDUW on two SYNDATA quads,
 // the MMI pipeline-1 multiply/divide group next to pipeline 0, COP0 Count over
 // five NOPs, two HBLANK edges of EE timer 0 measured with Count (as the real
-// BIOS calibrates its clock) and the 0x1000F500 store the real BIOS performs.
+// BIOS calibrates its clock), the 0x1000F500 store the real BIOS performs and
+// its LBU of the tool board id.
 inline void emit_m21_core(Assembler& a, std::uint32_t table_rom) {
     const auto low = [](std::uint32_t address) { return static_cast<std::int32_t>(address & 0xffffu); };
     a.label("m21_mmi");
@@ -252,6 +255,9 @@ inline void emit_m21_core(Assembler& a, std::uint32_t table_rom) {
     a.addiu(t0, zero, 0xFFFFu);
     a.lui(t5, 0xB001u);
     a.sw(t0, -0x0B00, t5);           // 0x1000F500 <- 0xFFFFFFFF
+    a.lui(t5, 0xBF80u);
+    a.lbu(t0, 0x3204, t5);           // tool board id, as the RDRAM module reads it
+    a.sw(t0, low(kM21BoardIdResult), a1);
 }
 // M2.1, after ERET: a scratchpad entry written like the real BIOS does
 // (PageMask 0, S bit) still spans the whole 16 KiB.

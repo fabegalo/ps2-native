@@ -172,7 +172,20 @@ void check_registers(const std::vector<std::uint8_t>& rom) {
     device_refused([&] { m.write32(0xB000F510u, 1u); }, "DMAC extended): device not implemented (no register model)");
     device_refused([&] { (void)m.read32(0xB000F000u); }, "INTC): device not implemented (no register model)");
     device_refused([&] { (void)m.read32(0xB000F430u); }, "MCH (RDRAM controller)");
-    device_refused([&] { (void)m.fetch32(0xB0000000u); }, "instruction fetch from EE registers");
+    device_refused([&] { (void)m.fetch32(0xB0000000u); }, "instruction fetch from device registers");
+
+    // Tool board id: a retail console has no tool board (0xFF is a hypothesis).
+    require(m.read8(0xBF803204u) == kRetailToolBoardId && m.read8(0x9F803204u) == 0xFFu,
+            "tool board id byte through KSEG1 and KSEG0");
+    require((kRetailToolBoardId & 0xF0u) != 0x10u && (kRetailToolBoardId & 0xF0u) != 0x20u &&
+            (kRetailToolBoardId & 0xF0u) != 0x30u && kRetailToolBoardId != 0x60u &&
+            kRetailToolBoardId != 0x61u, "retail value is outside the tool board classes");
+    device_refused([&] { (void)m.read16(0xBF803204u); }, "tool board id access of 2 byte(s)");
+    device_refused([&] { (void)m.read32(0xBF803204u); }, "tool board id access of 4 byte(s)");
+    device_refused([&] { m.write8(0xBF803204u, 0u); }, "tool board id write");
+    device_refused([&] { (void)m.read8(0xBF803205u); }, "IOP registers): device not implemented (no register model)");
+    device_refused([&] { (void)m.read8(0xBF803100u); }, "IOP registers): device not implemented (no register model)");
+    device_refused([&] { (void)m.fetch32(0xBF803204u); }, "instruction fetch from device registers");
 }
 
 std::vector<std::string> normalized(const std::vector<std::string>& trace) {
@@ -220,6 +233,7 @@ void check_results(const EEState& state, const Memory& memory, const std::string
     require(hblank >= 2u * 18740u - 2u && hblank <= 2u * 18740u + 2u,
             run + ": two HBLANK periods measured with Count: " + std::to_string(hblank));
     require(memory.read32(m20::kM21T0Result) >= 2u, run + ": T0 counted HBLANK edges");
+    require(memory.read32(m20::kM21BoardIdResult) == 0xFFu, run + ": LBU of the tool board id zero-extends 0xFF");
     require(memory.read32(m20::kM21ScratchpadAlias + 0x3FF0u) == m20::table_checksum() &&
             memory.read32(m20::kScratchpadBase + 0x3FF0u) == m20::table_checksum(),
             run + ": PageMask-0 scratchpad entry spans 16 KiB");
@@ -250,6 +264,7 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
         require(contains(report->trace, "  M W32 v=B0000010 p=10000010 EE timers = 00000083"), name + " T0_MODE");
         require(contains(report->trace, "  M R32 v=B0000000 p=10000000 EE timers = "), name + " T0_COUNT reads");
         require(contains(report->trace, "  M W32 v=B000F500 p=1000F500 DMAC extended = FFFFFFFF"), name + " F500");
+        require(contains(report->trace, "  M R8 v=BF803204 p=1F803204 IOP registers = FF"), name + " tool board id");
         require(contains(report->trace, "  S MTC0 Count <- 0x00000000"), name + " MTC0 Count");
         require(contains(report->trace, "  S TLBWI 2: PageMask 0x00000000 EntryHi 0x70010000 EntryLo0 0x80000007"),
                 name + " PageMask-0 scratchpad entry");

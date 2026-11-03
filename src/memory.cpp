@@ -33,9 +33,10 @@ std::string access_name(bool write, std::size_t size, const char* what) {
     stream << (write ? 'W' : 'R') << size * 8u << " (" << what << ')';
     return stream.str();
 }
-// EE register regions handled (or refused) by EeRegisters.
+// Register regions handled (or refused) by EeRegisters.
 bool is_ee_register_region(BusRegion region) {
-    return region >= BusRegion::EeTimers && region <= BusRegion::EeRegisters;
+    return (region >= BusRegion::EeTimers && region <= BusRegion::EeRegisters) ||
+           region == BusRegion::IopRegisters;
 }
 BusError device_refusal(BusFault fault, bool write, std::size_t size, std::uint32_t address,
                         std::uint32_t physical, BusRegion region, const char* what, const std::string& detail) {
@@ -288,7 +289,7 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
         // Only instruction fetches are not notified: never execute from registers.
         if (!notify)
             throw device_refusal(BusFault::Device, false, size, address, target.physical, target.region, what,
-                                 "instruction fetch from EE registers");
+                                 "instruction fetch from device registers");
         try {
             value = registers_.read(target.physical, size);
         } catch (const DeviceRefusal& refusal) {
