@@ -2,7 +2,7 @@
 
 Leia também `README.md` / `README.pt-BR.md`, `docs/ARCHITECTURE.md` (contratos
 implementados e interfaces propostas), o status do marco mais recente
-(`docs/M2.3-STATUS.md`, em andamento, com `docs/M2.2-STATUS.md`, `docs/M2.1-STATUS.md`, `docs/M2.0-STATUS.md`, `docs/M1.3-STATUS.md`, `docs/M1.2-STATUS.md`,
+(`docs/M2.4-STATUS.md`, em andamento, com `docs/M2.3-STATUS.md`, `docs/M2.2-STATUS.md`, `docs/M2.1-STATUS.md`, `docs/M2.0-STATUS.md`, `docs/M1.3-STATUS.md`, `docs/M1.2-STATUS.md`,
 `docs/M1.1-STATUS.md` e `docs/M0-STATUS.md` como histórico) e `docs/NEXT-TASK.md`. Licenças e referências estão em
 `docs/LICENSE-DECISION.md` e `docs/REFERENCE-AUDIT.md`. Atualizar status e
 READMEs (inglês e português) somente com o que foi demonstrado por teste.
@@ -42,7 +42,8 @@ reais; não forçar Browser ou jogos com stubs.
 
 ## Estado atual (2026-11-03)
 
-- M0, M1.1, M1.2, M1.3, M2.0, M2.1 e M2.2 concluídos; M2.3 em andamento. 18 testes CTest (ver `docs/M2.3-STATUS.md`).
+- M0, M1.1, M1.2, M1.3, M2.0, M2.1, M2.2 e M2.3 concluídos; M2.4 em andamento. 19 testes CTest (ver `docs/M2.4-STATUS.md`).
+- M2.4: transações seriais do MCH validadas no início e aplicadas na conclusão (`chain(now)`); `TCYCLE`/`TFRM`/`TRDLY`/`TEST77` da RDRAM (layout 64/72 Mbit; `TPARM` recusado). `0x1000F520` (`D_ENABLER`) é a chave de uma tabela de 16 gerações do MCH nas três BIOS; valor por console desconhecido, recusado. Bloqueio inalterado em `0x1000F410` (`0x9FC4135C`).
 - M2.3: `MchRegisters` (`MCH_RICM`/`MCH_DRD`, bit 31 ocupado pela duração em SCK × 1000 ns, hipótese) sobre `RdramChain` (datasheet Direct RDRAM 64/72 Mbit da Rambus: `SETR`/`CLRR`/`SETF`, `SWR`/`SRD` de `INIT`, repetidor SIO, `SDEVID`); InitDev sintético para dois dispositivos. A BIOS real continua parando no `SW` em `0x1000F410` (`0x9FC4135C`, 637.620/637.598 instruções): `F410`, `0x1000F520`, `F480/F490/F4C0` e os `SOP` `0xE`/`0xB` (reservados no datasheet de 64 Mbit) vêm antes de qualquer `SETR` e aguardam evidência ou decisão do mantenedor.
 - M2.2: as três BIOS reais param no `SW` em `0x1000F410` (MCH). Adicionados `GsRegisters` (`SMODE1/2`, `SRFSH`, `SYNCH1/2`, `SYNCV`, escritas de `CSR`; nada é desenhado) com relógio de linha NTSC/PAL que gera o HBLANK dos timers, latches DEV9 `0x1F801470/2`, transmissão do EE SIO (`ps2n-boot` mostra a saída), `LWC1`/`SWC1` com `Status.CU1` e prova AOT de `JR` constante (`LUI`+`ORI`/`ADDIU`), que leva a tradução da BIOS de 12 para 107 instruções estáticas.
 - M2.1: `0x1F803204` ("tool board id") lê `0xFF` por hipótese (sem placa de ferramenta; evidência em `docs/M2.1-STATUS.md`). MMI do pipeline 1 + `PADDUW`, relógio do EE (1 ciclo/instrução, hipótese) com `COP0 Count` e timers T0–T3 (`EeRegisters`), latch `0x1000F500`, entrada S da TLB cobrindo 16 KiB e entradas não escritas que não correspondem.
@@ -53,9 +54,9 @@ reais; não forçar Browser ou jogos com stubs.
 - M1.3: relocations `R_MIPS_26` e `R_MIPS_HI16/LO16` lidas como evidência
   (nunca aplicadas), jump tables provadas por `SLTIU` + `BEQ $zero`, entradas
   indiretas verificadas em runtime e subconjunto inteiro R5900 de 64 bits.
-- Próximo passo: continuação da **M2.3** (`docs/NEXT-TASK.md`) — decisão sobre `F410`/`F520`
-  e datasheet de 128/144 Mbit (`SOP 0xE`/`0xB`, mapa de registradores), sempre
-  seguindo o trace da BIOS real.
+- Próximo passo: continuação da **M2.4** (`docs/NEXT-TASK.md`) — insumos de hardware:
+  `D_ENABLER` medido por console, datasheet de 128/144 Mbit (`SOP 0xE`/`0xB`,
+  estado ao ligar) e decisão sobre `F410`/`F480`/`F490`/`F4C0`.
 - Fixtures são somente sintéticos. Nenhum jogo comercial, Browser, IOP,
   VU, GS, SPU2 ou DMA é suportado. Nenhum jogo é declarado compatível.
 
@@ -162,11 +163,11 @@ BIOS, traces e traduções de firmware ficam fora do repositório
 - CI: `.github/workflows/build.yml`, matriz de seis alvos, `fail-fast: false`.
   Resultado local não substitui a CI; confirmar os jobs do commit
   correspondente (`gh run list`, `gh run view`) antes de declarar aprovação.
-- Resultado de referência (M2.3): 18/18 testes — `core-validation`,
+- Resultado de referência (M2.4): 19/19 testes — `core-validation`,
   `native-aot-smoke`, `native-aot-ops`, `native-indirect-{sym,hints,unresolved}`,
   `native-jump-{relocations,explicit,unresolved}`,
   `native-m13-{relocations,stripped,stripped-hint}`, `native-m20-boot`,
-  `cli-m20-boot-{interpreter,hybrid}`, `native-m21-boot`, `native-m22-boot`, `native-m23-boot`. Qualquer falha é regressão.
+  `cli-m20-boot-{interpreter,hybrid}`, `native-m21-boot`, `native-m22-boot`, `native-m23-boot`, `native-m24-boot`. Qualquer falha é regressão.
 
 ## Estrutura
 
@@ -195,8 +196,8 @@ BIOS, traces e traduções de firmware ficam fora do repositório
   por argumento); `m13_program.hpp` é o mini-assembler com rótulos + construtor
   ELF compartilhado entre gerador e teste; `bios_program.hpp` monta a ROM0
   sintética (ROMDIR/EXTINFO/ROMVER + programa de reset) usada por
-  `boot_m20.cpp` e, nas variantes `build_firmware(Stage::M21/M22/M23)`, por
-  `boot_m21.cpp`/`boot_m22.cpp`/`boot_m23.cpp`; `boot_checks.hpp` reúne os auxiliares de teste
+  `boot_m20.cpp` e, nas variantes `build_firmware(Stage::M21..M24)`, por
+  `boot_m21.cpp`..`boot_m24.cpp`; `boot_checks.hpp` reúne os auxiliares de teste
   (endereços definidos uma vez); cada
   teste E2E compila a TU gerada com `ps2n_core` e valida registradores, RAM,
   contagem de instruções e falhas esperadas.

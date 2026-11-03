@@ -138,3 +138,25 @@ Fontes adicionais:
 - https://retrocdn.net/images/6/68/Direct_RDRAM_datasheet.pdf
 - https://www.digchip.com/datasheets/download_datasheet.php?id=467210&part-number=K4R271669F-TbCS8
 - https://github.com/mamedev/mame/blob/master/src/mame/sony/ps2sony.cpp
+
+## Consulta para a M2.4 — 03/11/2026
+
+Somente leitura de especificação e de comportamento; **nenhum trecho foi copiado ou traduzido**.
+
+- **Sony, *EE User's Manual* 6.0** (documentação do PS2 Linux Kit, espelho em ninjadynamics/PS2Docs; lida localmente, não incluída):
+  - mapa de endereços do EE, onde o bloco `0x1000F400–F4F0` não aparece;
+  - `D_ENABLER`/`D_ENABLEW`: só `CPND` (bit 16) é definido, e `D_ENABLER` lê o conteúdo de `D_ENABLEW`.
+- **Rambus 64/72-Mbit** (já registrado na M2.3): layouts de `TPARM`, `TFRM`, `TRDLY`, `TCYCLE` e `TEST75–79`.
+- **ps2tek:** `D_ENABLER` com bits "lixo, mas graváveis", e a SCPH-39001 "parece esperar" `0x1201`. Esse valor **não foi adotado**.
+- **Iris** (allkern/iris, MIT, só comportamento): mesmas respostas fixas do PCSX2 para `MCH_DRD`, `F410` lendo 0 e `D_ENABLER = 0x1201`. **Nada adotado.**
+- **PCSX2** `pcsx2/Hw.cpp` (GPL-3.0+, só comportamento): `D_ENABLER`/`D_ENABLEW = 0x1201` no reset. **Não adotado:** sem justificativa de hardware para os modelos testados.
+- **BIOS real do usuário** (comportamento observado):
+  - tabela de 16 gerações do MCH indexada por `D_ENABLER`;
+  - escrita de `F480`/`F4C0` conforme a geração;
+  - valores escritos em `TEST77`/`TCYCLE`.
+
+Fontes adicionais:
+- https://github.com/ninjadynamics/PS2Docs
+- https://psi-rockin.github.io/ps2tek/
+- https://github.com/allkern/iris
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Hw.cpp

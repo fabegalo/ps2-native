@@ -2,9 +2,21 @@
 **Idiomas:** [English](README.md) | Português (Brasil)
 
 
-> **Status:** protótipo experimental, M2.3 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS executam as primeiras ~637.600 instruções do EE e param num registrador não modelado. Nada é renderizado.
+> **Status:** protótipo experimental, M2.4 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS executam as primeiras ~637.600 instruções do EE e param num registrador não modelado. Nada é renderizado.
 
-## Novidades da M2.3 — interface serial do MCH e cadeia Direct RDRAM
+## Novidades da M2.4 — registradores de temporização da RDRAM e transações concluídas no tempo certo
+
+- **Efeitos na conclusão:**
+  - As transações seriais do MCH são validadas na escrita de `MCH_RICM`; uma recusa nomeia esse `SW` e não altera nada.
+  - O efeito na cadeia RDRAM e o dado do `SRD` só aparecem quando o bit 31 zera.
+- **`TCYCLE`, `TFRM`, `TRDLY` e `TEST77` da RDRAM** seguem os layouts do datasheet de 64/72 Mbit da Rambus (reset indefinido). A BIOS escreve exatamente esses endereços antes da enumeração, o que confirma o mapa. `TPARM` continua recusado.
+- **Evidência sobre `0x1000F520` (`D_ENABLER`):**
+  - As três BIOS o usam como chave da mesma tabela de 16 gerações do controlador de memória (`0x1201`…`0x4212`). Uma chave desconhecida aborta a inicialização de memória.
+  - O valor nesses modelos de console não é documentado, por isso continua recusado em vez de copiar a constante de um emulador.
+- **O ponto de bloqueio da BIOS real não muda:** continua em 637.620/637.598 instruções, no `SW` em `0x1000F410`. Os traces do interpretador e do híbrido são idênticos.
+- **19/19 testes** aprovados localmente (MSVC, LLVM clang++). [Evidências da M2.4 e insumos de hardware pendentes](docs/M2.4-STATUS.md).
+
+## M2.3 — interface serial do MCH e cadeia Direct RDRAM
 
 - **`MCH_RICM`/`MCH_DRD`** (`0x1000F430/0x1000F440`) iniciam transações seriais de controle da Direct RDRAM:
   - O layout dos campos é o que as rotinas seriais da BIOS montam. O bit 31 fica ocupado pela duração da transação em ciclos de SCK, no período mínimo de 1000 ns do datasheet (hipótese).
@@ -152,7 +164,7 @@ O build gera seu próprio ELF de teste em `out/build/fixtures/synthetic.elf` e r
 - `tests/`: firmware/jogos **não** são necessários; fixture MIPS de autoria própria.
 - `.github/workflows/build.yml`: matriz dos seis sistemas/arquiteturas, sem releases prematuras.
 
-A API permanece uniforme por plataforma. Consultar [M2.3](docs/M2.3-STATUS.md), [M2.2](docs/M2.2-STATUS.md), [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
+A API permanece uniforme por plataforma. Consultar [M2.4](docs/M2.4-STATUS.md), [M2.3](docs/M2.3-STATUS.md), [M2.2](docs/M2.2-STATUS.md), [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
 
 ## Próximos marcos
 
@@ -160,4 +172,4 @@ A API permanece uniforme por plataforma. Consultar [M2.3](docs/M2.3-STATUS.md), 
 
 **Licença:** BSD-3-Clause apenas para o código original deste protótipo. Código GPL de projetos de referência não foi incorporado. Consulte `docs/LICENSE-DECISION.md` antes de integrar bibliotecas de terceiros.
 
-Próxima tarefa objetiva: [continuação da M2.3](docs/NEXT-TASK.md).
+Próxima tarefa objetiva: [continuação da M2.4](docs/NEXT-TASK.md).

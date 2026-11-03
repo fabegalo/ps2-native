@@ -2,9 +2,21 @@
 **Languages:** English | [Português (Brasil)](README.pt-BR.md)
 
 
-**Status: experimental prototype, M2.3 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps run their first ~637,600 EE instructions and then stop at an unmodeled register. Nothing is rendered.**
+**Status: experimental prototype, M2.4 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps run their first ~637,600 EE instructions and then stop at an unmodeled register. Nothing is rendered.**
 
-### Current progress — M2.3: MCH serial interface and the Direct RDRAM chain
+### Current progress — M2.4: RDRAM timing registers and completion-time serial transactions
+
+- **Completion-time commits:**
+  - MCH serial transactions are validated when `MCH_RICM` is written, so a refusal names that store and changes nothing.
+  - Their effect on the RDRAM chain and their `SRD` data become visible only when bit 31 clears.
+- **RDRAM `TCYCLE`, `TFRM`, `TRDLY` and `TEST77`** follow the Rambus 64/72-Mbit layouts (reset values undefined). The BIOS writes exactly these addresses before enumerating, which confirms the map. `TPARM` stays refused.
+- **Evidence for `0x1000F520` (`D_ENABLER`):**
+  - All three BIOSes use it as the key of the same 16-entry memory-controller generation table (`0x1201`…`0x4212`). An unknown key aborts memory init.
+  - The value on these console models is not documented, so it stays refused instead of copying an emulator constant.
+- **The real BIOS block point does not move:** still 637,620/637,598 instructions, stopping at `SW` to `0x1000F410`. Interpreter and hybrid traces are identical.
+- **19/19 tests** pass locally (MSVC, LLVM clang++). [M2.4 evidence and pending hardware inputs](docs/M2.4-STATUS.md).
+
+### M2.3: MCH serial interface and the Direct RDRAM chain
 
 - **`MCH_RICM`/`MCH_DRD`** (`0x1000F430/0x1000F440`) start Direct RDRAM serial control transactions:
   - The field layout is the one the BIOS serial helpers build. Bit 31 stays busy for the transaction length in SCK cycles at the data sheet's 1000 ns minimum period (hypothesis).
@@ -123,6 +135,6 @@ The CI matrix targets Windows (x86-64/ARM64), Linux (x86-64/ARM64) and macOS (In
 
 `ps2n-aot input.elf output.cpp` produces a translation unit only; a host must link it with `ps2n_core` and initialize memory/state. The current integration is implemented for synthetic fixtures, not for real commercial games or the PS2 BIOS.
 
-See [architecture](docs/ARCHITECTURE.md), [M2.3 status](docs/M2.3-STATUS.md), [M2.2 status](docs/M2.2-STATUS.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
+See [architecture](docs/ARCHITECTURE.md), [M2.4 status](docs/M2.4-STATUS.md), [M2.3 status](docs/M2.3-STATUS.md), [M2.2 status](docs/M2.2-STATUS.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
 
-Next engineering increment: [M2.3 continued](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.
+Next engineering increment: [M2.4 continued](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.
