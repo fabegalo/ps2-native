@@ -31,17 +31,12 @@ RdramSerialRequest request(std::uint8_t sop, bool broadcast, std::uint8_t sdev =
     return {sop, broadcast, sdev, sop == kRdramSrd || sop == kRdramSwr ? sa : std::uint16_t{0}, sd};
 }
 
-bool same(const RdramChain::Device& a, const RdramChain::Device& b) {
-    return a.reset_applied == b.reset_applied && a.reset_bit == b.reset_bit && a.fast_clock == b.fast_clock &&
-           a.init == b.init && a.init_defined == b.init_defined;
-}
-
 // A refused transaction leaves every device as it was.
 void refused_unchanged(RdramChain& chain, const RdramSerialRequest& r, const std::string& reason) {
     const auto before = chain.devices();
     rejects([&] { (void)chain.transact(r); }, reason);
     for (std::size_t n = 0; n < before.size(); ++n)
-        require(same(before[n], chain.devices()[n]), "refusal changed RDRAM " + std::to_string(n) + ": " + reason);
+        require(before[n] == chain.devices()[n], "refusal changed RDRAM " + std::to_string(n) + ": " + reason);
 }
 
 void check_chain() {
@@ -121,7 +116,7 @@ void check_mch() {
             "RICM encoding");
     MchRegisters mch;
     mch.reset();
-    require(mch.chain().devices().size() == kPs2RdramDevices, "two RDRAMs");
+    require(mch.chain(0u).devices().size() == kPs2RdramDevices, "two RDRAMs");
     require(mch.read(kMchRicm, 4u, 0u) == 0u, "idle after reset");
     rejects([&] { (void)mch.read(kMchDrd, 4u, 0u); }, "MCH_DRD read without a completed SRD");
     for (const auto reg : {0x1000F400u, 0x1000F410u, 0x1000F420u, 0x1000F450u, 0x1000F460u, 0x1000F480u,
@@ -151,7 +146,7 @@ void check_mch() {
     rejects([&] { (void)mch.read(kMchDrd, 4u, 100u); }, "MCH_DRD read while a serial transaction is in progress");
     const auto setr_done = 100u + kShortBusy;
     require(mch.read(kMchRicm, 4u, setr_done) == 0x000000A0u, "idle when the SETR completes");
-    require(mch.chain().devices()[1].reset_bit, "SETR reached both devices");
+    require(mch.chain(setr_done).devices()[1].reset_bit, "SETR reached both devices");
     // InitDev step 3: 16 SCK cycles between SETR and CLRR.
     rejects([&] { mch.write(kMchRicm, 4u, mch_ricm(kRdramClrr, true, 0u, 0u), setr_done + kShortBusy - 1u); },
             "CLRR less than 16 SCK cycles after SETR");
@@ -176,7 +171,7 @@ void check_mch() {
     mch.write(kMchDrd, 4u, 0x0080u, t);
     rejects([&] { (void)mch.read(kMchDrd, 4u, t); }, "without a completed SRD");
     mch.reset();
-    require(mch.read(kMchRicm, 4u, 0u) == 0u && !mch.chain().devices()[0].reset_applied, "reset");
+    require(mch.read(kMchRicm, 4u, 0u) == 0u && !mch.chain(0u).devices()[0].reset_applied, "reset");
 }
 
 void check_bus(const std::vector<std::uint8_t>& rom) {
@@ -189,17 +184,16 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     m.write32(0xB000F430u, mch_ricm(kRdramSetr, true, 0u, 0u));
     require(m.read32(0xB000F430u) == 0x800000A0u, "busy through the bus");
     cycles += kShortBusy;
-    require(m.read32(0xB000F430u) == 0x000000A0u && m.mch().chain().devices()[0].reset_bit, "SETR through the bus");
+    require(m.read32(0xB000F430u) == 0x000000A0u && m.mch().chain(cycles).devices()[0].reset_bit, "SETR through the bus");
     device_refused([&] { m.write32(0xB000F410u, 0u); }, "MCH (RDRAM controller) register 0x1000F410 is not modeled");
     device_refused([&] { (void)m.read16(0xB000F480u); }, "register 0x1000F480 is not modeled");
     device_refused([&] { m.write32(0xB000F430u, mch_ricm(0xBu, true, 0u, 0u)); }, "serial opcode 0xB is reserved");
     device_refused([&] { (void)m.read16(0xB000F430u); }, "(32-bit only)");
     m.reset_for_boot(rom);
-    require(!m.mch().chain().devices()[0].reset_applied && m.read32(0xB000F430u) == 0u, "boot reset powers RDRAM on");
+    require(!m.mch().chain(cycles).devices()[0].reset_applied && m.read32(0xB000F430u) == 0u, "boot reset powers RDRAM on");
 }
 
 void check_results(const EEState& state, const Memory& memory, const std::string& run) {
-    (void)state;
     const auto setr = memory.read32(m20::kM23SetrResult);
     require(setr >= kShortBusy && setr <= kShortBusy + 12u, run + ": SETR busy measured with Count: " + std::to_string(setr));
     const auto swr = memory.read32(m20::kM23SwrResult);
@@ -208,7 +202,7 @@ void check_results(const EEState& state, const Memory& memory, const std::string
             run + ": SDEV 0x1F answered by device 0, then device 1");
     require(memory.read32(m20::kM23Device0Read) == 0x0080u && memory.read32(m20::kM23Device1Read) == 0x0081u,
             run + ": devices numbered 0 and 1");
-    const auto& devices = memory.mch().chain().devices();
+    const auto& devices = memory.mch().chain(state.retired_instructions).devices();
     require(devices.size() == 2u, run + ": two devices");
     for (std::size_t n = 0; n < devices.size(); ++n)
         require(devices[n].reset_applied && !devices[n].reset_bit && devices[n].fast_clock &&

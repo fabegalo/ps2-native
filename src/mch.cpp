@@ -22,8 +22,18 @@ std::string refusal(std::uint32_t physical) {
 }
 } // namespace
 
+void MchRegisters::settle(std::uint64_t now) {
+    if (!pending_ || now < busy_until_) return;
+    chain_ = std::move(*pending_);
+    pending_.reset();
+    read_data_ = pending_read_;
+    pending_read_.reset();
+}
+
 void MchRegisters::reset() {
     chain_.power_on();
+    pending_.reset();
+    pending_read_.reset();
     ricm_ = 0u;
     busy_until_ = 0u;
     write_data_.reset();
@@ -34,6 +44,7 @@ void MchRegisters::reset() {
 std::uint64_t MchRegisters::read(std::uint32_t physical, std::size_t bytes, std::uint64_t now) {
     if (physical != kMchRicm && physical != kMchDrd) throw DeviceRefusal(refusal(physical));
     if (bytes != 4u) throw DeviceRefusal("MCH access of " + std::to_string(bytes) + " byte(s) is not modeled (32-bit only)");
+    settle(now);
     const bool busy = now < busy_until_;
     if (physical == kMchRicm) return ricm_ | (busy ? kMchRicmBusy : 0u);
     if (busy) throw DeviceRefusal("MCH_DRD read while a serial transaction is in progress");
@@ -44,6 +55,7 @@ std::uint64_t MchRegisters::read(std::uint32_t physical, std::size_t bytes, std:
 void MchRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value, std::uint64_t now) {
     if (physical != kMchRicm && physical != kMchDrd) throw DeviceRefusal(refusal(physical));
     if (bytes != 4u) throw DeviceRefusal("MCH access of " + std::to_string(bytes) + " byte(s) is not modeled (32-bit only)");
+    settle(now);
     const auto word = static_cast<std::uint32_t>(value);
     if (now < busy_until_) throw DeviceRefusal("MCH write of " + hex(physical) + " while a serial transaction is in progress");
     if (physical == kMchDrd) {
@@ -71,11 +83,14 @@ void MchRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_
     if (request.sop == kRdramClrr && setr_done_ &&
         now < *setr_done_ + mch_busy_cycles(kRdramSckSetrToClrr))
         throw DeviceRefusal("MCH CLRR less than 16 SCK cycles after SETR (Algorithm InitDev step 3)");
-    const auto data = chain_.transact(request); // refuses before any change
+    auto next = chain_;
+    const auto data = next.transact(request); // refuses before any change
     const auto sck = RdramChain::sck_cycles(request.sop);
     ricm_ = word & kMchRicmFields;
     busy_until_ = now + mch_busy_cycles(sck);
-    read_data_ = data;
+    pending_ = std::move(next);
+    pending_read_ = data;
+    read_data_.reset();
     if (request.sop == kRdramSetr) setr_done_ = busy_until_;
 }
 } // namespace ps2native

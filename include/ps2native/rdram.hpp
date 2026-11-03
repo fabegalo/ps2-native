@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -32,6 +33,15 @@ inline constexpr std::uint16_t kRdramInitFields = 0x07DFu;
 // Reset values (SETR): SDEVID = 0x1F, SRP = 1; PSX/NSR/PSR/LSR are undefined,
 // so these are also the only INIT bits with a defined value after a SETR.
 inline constexpr std::uint16_t kRdramInitReset = kRdramInitSrp | kRdramInitSdevid;
+
+// Timing and test registers the PS2 BIOS writes before enumerating the chain,
+// with the 64/72-Mbit layouts (reset values undefined; reads before a write
+// are refused). TPARM (0x048) is not modeled: its field positions could not be
+// recovered reliably from the data sheet text.
+inline constexpr std::uint16_t kRdramTfrm = 0x049u;   // TFRM3..0 in bits 0-3
+inline constexpr std::uint16_t kRdramTrdly = 0x04Au;  // TRDLY1..0 in bits 0-1, values 0-2
+inline constexpr std::uint16_t kRdramTcycle = 0x04Cu; // TCYCLE13..0 in 64 ps units
+inline constexpr std::uint16_t kRdramTest77 = 0x04Du; // test register, written with zero
 
 // Transaction lengths in SCK cycles: SWR and SRD are four 16-bit packets
 // (Figures 24/25, T0..T64); SETR/CLRR/SETF are one SRQ packet (Figure 26).
@@ -62,6 +72,8 @@ public:
         bool fast_clock{};     // SETF received
         std::uint16_t init{};
         std::uint16_t init_defined{}; // INIT bits with a defined value
+        std::map<std::uint16_t, std::uint16_t> timing; // TFRM/TRDLY/TCYCLE/TEST77 as written
+        bool operator==(const Device&) const = default;
     };
 
     explicit RdramChain(std::size_t devices);

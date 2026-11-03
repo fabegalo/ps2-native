@@ -15,6 +15,23 @@ std::string hex(std::uint32_t value, int digits) {
 bool is_modeled_opcode(std::uint8_t sop) {
     return sop == kRdramSrd || sop == kRdramSwr || sop == kRdramSetr || sop == kRdramClrr || sop == kRdramSetf;
 }
+
+struct Layout {
+    std::uint16_t sa;
+    const char* name;
+    std::uint16_t fields; // writable bits; the rest are defined as 0
+    std::uint16_t max;    // largest value the data sheet allows
+};
+constexpr Layout kLayouts[] = {
+    {kRdramInit, "INIT", kRdramInitFields, 0xFFFFu},   {kRdramTfrm, "TFRM", 0x000Fu, 0xFFFFu},
+    {kRdramTrdly, "TRDLY", 0x0003u, 0x0002u},          {kRdramTcycle, "TCYCLE", 0x3FFFu, 0xFFFFu},
+    {kRdramTest77, "TEST77", 0x0000u, 0xFFFFu},
+};
+const Layout* find_layout(std::uint16_t sa) {
+    for (const auto& layout : kLayouts)
+        if (layout.sa == sa) return &layout;
+    return nullptr;
+}
 } // namespace
 
 RdramChain::RdramChain(std::size_t devices) : devices_(devices) {
@@ -40,11 +57,16 @@ std::optional<std::uint16_t> RdramChain::transact(const RdramSerialRequest& requ
                             " is reserved in the Direct RDRAM 64/72-Mbit data sheet; no evidence of its effect");
     if (request.sdev > kRdramInitSdevid) throw DeviceRefusal("RDRAM SDEV " + hex(request.sdev, 2) + " exceeds 5 bits");
     const bool access = sop == kRdramSrd || sop == kRdramSwr;
-    if (access && request.sa != kRdramInit)
+    const auto* layout = access ? find_layout(request.sa) : nullptr;
+    if (access && layout == nullptr)
         throw DeviceRefusal("RDRAM control register " + hex(request.sa, 3) +
-                            " is not modeled (only INIT 0x021 has a verified layout)");
-    if (sop == kRdramSwr && (request.sd & ~kRdramInitFields) != 0u)
-        throw DeviceRefusal("RDRAM INIT write " + hex(request.sd, 4) + " sets bits defined as 0 (5, 11-15)");
+                            " is not modeled (only INIT, TFRM, TRDLY, TCYCLE and TEST77 have verified layouts)");
+    if (sop == kRdramSwr && (request.sd & ~layout->fields) != 0u)
+        throw DeviceRefusal(std::string("RDRAM ") + layout->name + " write " + hex(request.sd, 4) +
+                            " sets bits defined as 0");
+    if (sop == kRdramSwr && request.sd > layout->max)
+        throw DeviceRefusal(std::string("RDRAM ") + layout->name + " write " + hex(request.sd, 4) +
+                            " exceeds the largest value the data sheet allows (" + hex(layout->max, 4) + ")");
 
     // Which devices the request reaches (SIO repeated by every device before
     // them) and which of those it selects; validated before any state changes.
@@ -77,9 +99,15 @@ std::optional<std::uint16_t> RdramChain::transact(const RdramSerialRequest& requ
                                 ": no device answered, and what the controller samples on an undriven SIO0 is not documented");
         if (selected.size() > 1u) throw DeviceRefusal("RDRAM SRD selects several devices driving SIO0 at once");
         const auto& device = devices_[selected.front()];
+        const auto name = "RDRAM " + std::to_string(selected.front());
+        if (request.sa != kRdramInit) {
+            const auto value = device.timing.find(request.sa);
+            if (value == device.timing.end())
+                throw DeviceRefusal(name + " " + layout->name + " read before any write: its reset value is undefined");
+            return value->second;
+        }
         if (device.init_defined != kRdramInitFields)
-            throw DeviceRefusal("RDRAM " + std::to_string(selected.front()) +
-                                " INIT read: PSX/NSR/PSR/LSR are undefined until INIT is written after SETR");
+            throw DeviceRefusal(name + " INIT read: PSX/NSR/PSR/LSR are undefined until INIT is written after SETR");
         return device.init;
     }
     for (const auto n : selected) {
@@ -90,12 +118,17 @@ std::optional<std::uint16_t> RdramChain::transact(const RdramSerialRequest& requ
                 device.reset_bit = true;
                 device.init = kRdramInitReset;
                 device.init_defined = kRdramInitReset;
+                device.timing.clear(); // reset values undefined
                 break;
             case kRdramClrr: device.reset_bit = false; break;
             case kRdramSetf: device.fast_clock = true; break;
             default:
-                device.init = request.sd;
-                device.init_defined = kRdramInitFields;
+                if (request.sa == kRdramInit) {
+                    device.init = request.sd;
+                    device.init_defined = kRdramInitFields;
+                } else {
+                    device.timing[request.sa] = request.sd;
+                }
                 break;
         }
     }

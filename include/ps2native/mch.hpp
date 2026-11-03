@@ -11,14 +11,22 @@
 // Hypotheses: SCK runs at the data sheet's maximum serial rate (tCYCLE1 =
 // 1000 ns), so a transaction stays busy for its SCK length at that rate; the
 // MCH is idle with RICM fields 0 after reset; read data is zero-extended in
-// MCH_DRD. Everything else in the block (F400, F410 command register, F420,
-// F450-F4C0) and every other access shape is refused.
+// MCH_DRD.
+//
+// A request is validated when MCH_RICM is written (a refusal names that store
+// and changes nothing), but its effect on the RDRAMs and its SRD data become
+// visible only when it completes: SWR data reaches the device in the last
+// packets and SRD data travels back in the last one.
+//
+// Everything else in the block (F400, F410 command register, F420, F450-F4C0)
+// and every other access shape is refused.
 #include "ps2native/device_timing.hpp"
 #include "ps2native/rdram.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 namespace ps2native {
 inline constexpr std::uint32_t kMchBase = 0x1000F400u;
@@ -49,10 +57,17 @@ public:
     void reset();
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes, std::uint64_t now);
     void write(std::uint32_t physical, std::size_t bytes, std::uint64_t value, std::uint64_t now);
-    [[nodiscard]] const RdramChain& chain() const noexcept { return chain_; }
+    // The RDRAM chain as of EE cycle `now`: a transaction changes it only when it completes.
+    [[nodiscard]] const RdramChain& chain(std::uint64_t now) const noexcept {
+        return pending_ && now >= busy_until_ ? *pending_ : chain_;
+    }
 
 private:
-    RdramChain chain_;
+    void settle(std::uint64_t now);
+
+    RdramChain chain_;                     // state before the transaction in progress
+    std::optional<RdramChain> pending_;    // state once it completes
+    std::optional<std::uint16_t> pending_read_; // SRD data it returns
     std::uint32_t ricm_{};                 // fields of the last transaction, bit 31 excluded
     std::uint64_t busy_until_{};           // EE cycle the transaction completes
     std::optional<std::uint16_t> write_data_; // SD for the next SWR

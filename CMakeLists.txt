@@ -291,4 +291,21 @@ if(BUILD_TESTING)
     target_link_libraries(ps2n-boot-m23 PRIVATE ps2n_core)
     add_test(NAME native-m23-boot COMMAND ps2n-boot-m23 "${M23_ROM}")
 
+    # M2.4: RDRAM timing/test registers after InitDev and serial transactions
+    # that commit on completion, plus chain and controller unit checks.
+    set(M24_ROM "${FIXTURE_DIR}/synthetic-rom0-m24.bin")
+    set(M24_AOT "${FIXTURE_DIR}/synthetic_rom0_m24_aot.cpp")
+    add_custom_command(
+        OUTPUT "${M24_ROM}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M24_ROM}" bios-m24
+        DEPENDS ps2n-make-fixture VERBATIM)
+    add_custom_command(
+        OUTPUT "${M24_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M24_ROM}" "${M24_AOT}" --bios
+        DEPENDS ps2n-aot "${M24_ROM}" VERBATIM)
+    add_executable(ps2n-boot-m24 tests/boot_m24.cpp "${M24_AOT}")
+    target_link_libraries(ps2n-boot-m24 PRIVATE ps2n_core)
+    add_test(NAME native-m24-boot COMMAND ps2n-boot-m24 "${M24_ROM}")
+
 endif()
