@@ -52,7 +52,8 @@ public:
             case Cop0::Random:
                 stop(StopKind::NotModeled, "MFC0 Random: its per-cycle decrement is not modeled");
             case Cop0::Count:
-                stop(StopKind::NotModeled, "MFC0 Count: cycle timing is not modeled");
+                s_.set_reg32_sign_extended(rt, s_.count());
+                return;
             case Cop0::Debug: case Cop0::Perf:
                 stop(StopKind::NotModeled, std::string("MFC0 ") + cop0_name(rd) + " (breakpoint/performance counters)");
             case Cop0::Index: case Cop0::EntryLo0: case Cop0::EntryLo1: case Cop0::Context:
@@ -80,7 +81,10 @@ public:
                 s_.set_cp0(Cop0::Random, 47u); // Writing Wired resets Random to its upper bound.
                 break;
             case Cop0::EntryHi: stored = value & 0xFFFFE0FFu; break;
-            case Cop0::Count: case Cop0::Compare: case Cop0::Epc: case Cop0::ErrorEpc:
+            case Cop0::Count:
+                s_.count_anchor = s_.retired_instructions;
+                break;
+            case Cop0::Compare: case Cop0::Epc: case Cop0::ErrorEpc:
             case Cop0::BadPAddr: case Cop0::TagLo: case Cop0::TagHi:
                 break;
             case Cop0::Status: stored = value & kStatusWritable; break;

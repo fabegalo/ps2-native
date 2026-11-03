@@ -28,12 +28,13 @@ std::uint32_t i(unsigned op, unsigned rs, unsigned rt, std::int16_t imm) {
 
 template <typename Character>
 int fixture_main(int argc, Character** argv) {
-    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym|jump-table|jump-table-nosym|m13|m13-stripped|bios]\n"; return 2; }
+    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym|jump-table|jump-table-nosym|m13|m13-stripped|bios|bios-m21]\n"; return 2; }
     constexpr std::uint32_t start = 0x00100000u;
 
-    // Synthetic M2.0 boot firmware in the ROM0 container format (not Sony code).
-    if (argc == 3 && std::filesystem::path(argv[2]) == std::filesystem::path("bios")) {
-        const auto firmware = m20::build_firmware();
+    // Synthetic M2.0 (and M2.1 variant) boot firmware in the ROM0 container format (not Sony code).
+    if (argc == 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("bios") ||
+                      std::filesystem::path(argv[2]) == std::filesystem::path("bios-m21"))) {
+        const auto firmware = m20::build_firmware(std::filesystem::path(argv[2]) == std::filesystem::path("bios-m21"));
         std::ofstream out(std::filesystem::path(argv[1]), std::ios::binary | std::ios::trunc);
         if (!out || !out.write(reinterpret_cast<const char*>(firmware.rom.data()),
                                static_cast<std::streamsize>(firmware.rom.size()))) return 1;

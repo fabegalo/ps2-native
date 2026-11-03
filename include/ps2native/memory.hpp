@@ -1,4 +1,5 @@
 #pragma once
+#include "ps2native/ee_registers.hpp"
 #include "ps2native/elf.hpp"
 #include <array>
 #include <cstddef>
@@ -9,8 +10,10 @@
 #include <string>
 #include <vector>
 namespace ps2native {
-// Physical EE bus regions. Only main RAM, the BIOS ROM and the scratchpad are
-// backed by storage; every device region fails with a named diagnostic.
+// Physical EE bus regions. Main RAM, the BIOS ROM and the scratchpad are
+// backed by storage; EE register regions (0x10000000..0x1000FFFF) go to
+// EeRegisters, which models some registers and refuses the rest; every other
+// device region fails with a named diagnostic.
 enum class BusRegion : std::uint8_t {
     MainRam, BiosRom, Scratchpad,
     EeTimers, Ipu, Gif, Vif0, Vif1, EeFifos, Dmac, Intc, Sio, Sif, Mch, DmacExtended, EeRegisters,
@@ -111,6 +114,8 @@ public:
     // Current ASID (EntryHi) and Status.ERL, which change how addresses translate.
     void set_translation_context(std::uint8_t asid, bool error_level) noexcept;
     void set_observer(BusObserver* observer) noexcept { observer_ = observer; }
+    // EE cycle counter used by the timed EE registers (boot mapping only).
+    void set_clock(const std::uint64_t* ee_cycles) noexcept { registers_.set_clock(ee_cycles); }
 
 private:
     struct Target {
@@ -127,6 +132,8 @@ private:
                                         bool notify) const;
     void write_le(std::uint32_t guest_address, std::size_t size, std::uint64_t value, const char* what);
     std::vector<std::uint8_t> ram_;
+    // EE register reads can have side effects (timers sample the clock).
+    mutable EeRegisters registers_;
     std::vector<std::uint8_t> rom_;
     std::vector<std::uint8_t> scratchpad_;
     std::array<TlbEntry, kTlbEntries> tlb_{};

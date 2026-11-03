@@ -8,7 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(ps2n_core STATIC
     src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
-    src/interpreter.cpp src/boot.cpp)
+    src/interpreter.cpp src/boot.cpp src/ee_registers.cpp)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(MSVC)
     target_compile_options(ps2n_core PRIVATE /W4 /permissive-)
@@ -238,5 +238,22 @@ if(BUILD_TESTING)
     add_test(NAME cli-m20-boot-hybrid COMMAND ps2n-boot-synthetic-hybrid "${M20_ROM}")
     set_tests_properties(cli-m20-boot-hybrid PROPERTIES
         PASS_REGULAR_EXPRESSION "# engine hybrid: AOT blocks [0-9]+ \\+ interpreter fallback.*${M20_BLOCK_POINT}")
+
+    # M2.1: the synthetic ROM0 extended with MMI, COP0 Count, EE timers and the
+    # 0x1000F500 store (blocks the real BIOS needs), plus EE register unit checks.
+    set(M21_ROM "${FIXTURE_DIR}/synthetic-rom0-m21.bin")
+    set(M21_AOT "${FIXTURE_DIR}/synthetic_rom0_m21_aot.cpp")
+    add_custom_command(
+        OUTPUT "${M21_ROM}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${FIXTURE_DIR}"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M21_ROM}" bios-m21
+        DEPENDS ps2n-make-fixture VERBATIM)
+    add_custom_command(
+        OUTPUT "${M21_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M21_ROM}" "${M21_AOT}" --bios
+        DEPENDS ps2n-aot "${M21_ROM}" VERBATIM)
+    add_executable(ps2n-boot-m21 tests/boot_m21.cpp "${M21_AOT}")
+    target_link_libraries(ps2n-boot-m21 PRIVATE ps2n_core)
+    add_test(NAME native-m21-boot COMMAND ps2n-boot-m21 "${M21_ROM}")
 
 endif()

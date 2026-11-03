@@ -18,11 +18,31 @@ constexpr std::uint32_t kEntryHiBits = 0xFFFFE0FFu;  // VPN2 | ASID
 constexpr std::uint32_t kEntryLo0Bits = 0x83FFFFFFu; // S | PFN | C | D | V | G
 constexpr std::uint32_t kEntryLo1Bits = 0x03FFFFFFu; // PFN | C | D | V | G
 constexpr std::uint32_t kEntryLoScratchpad = 0x80000000u;
+constexpr std::uint32_t kScratchpadSpan = 16u * 1024u;
+
+// Address bits compared against VPN2. An entry with the S bit maps the whole
+// 16 KiB scratchpad whatever its PageMask: the real BIOS writes PageMask 0
+// for its scratchpad entry and then uses its stack at 0x70003FF0.
+std::uint32_t entry_vpn_mask(const TlbEntry& e) {
+    if ((e.entry_lo0 & kEntryLoScratchpad) != 0u) return ~(kScratchpadSpan - 1u);
+    return ~(e.page_mask | 0x1FFFu);
+}
 
 std::string access_name(bool write, std::size_t size, const char* what) {
     std::ostringstream stream;
     stream << (write ? 'W' : 'R') << size * 8u << " (" << what << ')';
     return stream.str();
+}
+// EE register regions handled (or refused) by EeRegisters.
+bool is_ee_register_region(BusRegion region) {
+    return region >= BusRegion::EeTimers && region <= BusRegion::EeRegisters;
+}
+BusError device_refusal(BusFault fault, bool write, std::size_t size, std::uint32_t address,
+                        std::uint32_t physical, BusRegion region, const char* what, const std::string& detail) {
+    return BusError(fault, write, static_cast<std::uint8_t>(size), address, physical, region,
+                    "EE bus " + access_name(write, size, what) + " at " + hex32(address) + " (physical " +
+                    hex32(physical) + ", " + bus_region_name(region) + "): " + bus_fault_name(fault) +
+                    (detail.empty() ? std::string() : " (" + detail + ")"));
 }
 } // namespace
 
@@ -141,6 +161,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0) {
     tlb_defined_ = {};
     asid_ = 0;
     error_level_ = true;
+    registers_.reset();
 }
 
 void Memory::set_translation_context(std::uint8_t asid, bool error_level) noexcept {
@@ -163,15 +184,14 @@ const TlbEntry& Memory::tlb_entry(unsigned index) const {
     return tlb_[index];
 }
 
+// Entries never written since reset hold unknown contents. They are assumed
+// not to match any address (hypothesis): the real BIOS writes only entry 0
+// (scratchpad) before using it, which would be unsafe otherwise.
 std::optional<unsigned> Memory::tlb_probe(std::uint32_t entry_hi) const {
     for (unsigned i = 0; i < kTlbEntries; ++i) {
-        if (!tlb_defined_[i])
-            throw std::runtime_error("TLBP with entry " + std::to_string(i) +
-                                     " undefined since reset (software must initialize the TLB)");
-    }
-    for (unsigned i = 0; i < kTlbEntries; ++i) {
+        if (!tlb_defined_[i]) continue;
         const auto& e = tlb_[i];
-        const auto vpn_mask = ~(e.page_mask | 0x1FFFu);
+        const auto vpn_mask = entry_vpn_mask(e);
         const bool global = (e.entry_lo0 & e.entry_lo1 & 1u) != 0u;
         if (((entry_hi ^ e.entry_hi) & vpn_mask) == 0u &&
             (global || (e.entry_hi & 0xFFu) == (entry_hi & 0xFFu)))
@@ -188,14 +208,11 @@ std::uint32_t Memory::translate_tlb(std::uint32_t address, std::size_t size, boo
                         "EE bus " + access_name(write, size, "TLB") + " at " + hex32(address) + ": " +
                         bus_fault_name(fault) + " exception not modeled (" + detail + ")");
     };
-    const auto undefined = static_cast<unsigned>(std::count(tlb_defined_.begin(), tlb_defined_.end(), false));
-    if (undefined != 0u)
-        throw fail(BusFault::TlbRefill, std::to_string(undefined) +
-                   " TLB entries undefined since reset; software must initialize all 48");
     std::optional<unsigned> match;
     for (unsigned i = 0; i < kTlbEntries; ++i) {
+        if (!tlb_defined_[i]) continue; // assumed not to match (see tlb_probe)
         const auto& e = tlb_[i];
-        const auto vpn_mask = ~(e.page_mask | 0x1FFFu);
+        const auto vpn_mask = entry_vpn_mask(e);
         if (((address ^ e.entry_hi) & vpn_mask) != 0u) continue;
         const bool global = (e.entry_lo0 & e.entry_lo1 & 1u) != 0u;
         if (!global && (e.entry_hi & 0xFFu) != asid_) continue;
@@ -203,16 +220,19 @@ std::uint32_t Memory::translate_tlb(std::uint32_t address, std::size_t size, boo
                               " and " + std::to_string(i));
         match = i;
     }
-    if (!match) throw fail(BusFault::TlbRefill, "no entry for ASID " + std::to_string(asid_));
+    if (!match) {
+        const auto undefined = std::count(tlb_defined_.begin(), tlb_defined_.end(), false);
+        throw fail(BusFault::TlbRefill, "no entry for ASID " + std::to_string(asid_) +
+                   (undefined != 0 ? "; " + std::to_string(undefined) +
+                                     " TLB entries undefined since reset are assumed not to match"
+                                   : std::string()));
+    }
     const auto& e = tlb_[*match];
-    const auto vpn_mask = ~(e.page_mask | 0x1FFFu);
     if ((e.entry_lo0 & kEntryLoScratchpad) != 0u) {
-        // The S bit maps the 16 KiB scratchpad at the entry's (16 KiB aligned) VPN2.
-        const auto offset = address - (e.entry_hi & vpn_mask);
-        if (offset >= kScratchpadBytes || size > kScratchpadBytes - offset)
-            throw fail(BusFault::Device, "beyond the 16 KiB scratchpad of entry " + std::to_string(*match));
+        // The S bit maps the 16 KiB scratchpad at the entry's 16 KiB aligned VPN2;
+        // the match above already bounds the (naturally aligned) access to it.
         scratchpad = true;
-        return offset;
+        return address & (kScratchpadSpan - 1u);
     }
     const auto half = ((e.page_mask | 0x1FFFu) + 1u) >> 1;
     const auto lo = (address & half) != 0u ? e.entry_lo1 : e.entry_lo0;
@@ -245,10 +265,7 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
     }
     const auto region = classify_physical(physical);
     auto refuse = [&](BusFault fault) {
-        return BusError(fault, write, static_cast<std::uint8_t>(size), address, physical, region,
-                        "EE bus " + access_name(write, size, what) + " at " + hex32(address) +
-                        " (physical " + hex32(physical) + ", " + bus_region_name(region) + "): " +
-                        bus_fault_name(fault));
+        return device_refusal(fault, write, size, address, physical, region, what, {});
     };
     switch (region) {
         case BusRegion::MainRam:
@@ -259,17 +276,31 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
         case BusRegion::Unmapped:
             throw refuse(BusFault::Unmapped);
         default:
+            if (is_ee_register_region(region)) return {physical, region, 0u};
             throw refuse(BusFault::Device);
     }
 }
 
 std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const char* what, bool notify) const {
     const auto target = resolve(address, size, false, what);
-    const auto& storage = target.region == BusRegion::BiosRom ? rom_
-                        : target.region == BusRegion::Scratchpad ? scratchpad_ : ram_;
     std::uint64_t value = 0;
-    for (std::size_t i = 0; i < size; ++i)
-        value |= static_cast<std::uint64_t>(storage[target.offset + i]) << (8u * i);
+    if (is_ee_register_region(target.region)) {
+        // Only instruction fetches are not notified: never execute from registers.
+        if (!notify)
+            throw device_refusal(BusFault::Device, false, size, address, target.physical, target.region, what,
+                                 "instruction fetch from EE registers");
+        try {
+            value = registers_.read(target.physical, size);
+        } catch (const DeviceRefusal& refusal) {
+            throw device_refusal(BusFault::Device, false, size, address, target.physical, target.region, what,
+                                 refusal.what());
+        }
+    } else {
+        const auto& storage = target.region == BusRegion::BiosRom ? rom_
+                            : target.region == BusRegion::Scratchpad ? scratchpad_ : ram_;
+        for (std::size_t i = 0; i < size; ++i)
+            value |= static_cast<std::uint64_t>(storage[target.offset + i]) << (8u * i);
+    }
     if (notify && observer_ != nullptr)
         observer_->on_bus_access({false, static_cast<std::uint8_t>(size), address, target.physical,
                                   target.region, value});
@@ -277,9 +308,18 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
 }
 void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t value, const char* what) {
     const auto target = resolve(address, size, true, what);
-    auto& storage = target.region == BusRegion::Scratchpad ? scratchpad_ : ram_;
-    for (std::size_t i = 0; i < size; ++i)
-        storage[target.offset + i] = static_cast<std::uint8_t>(value >> (8u * i));
+    if (is_ee_register_region(target.region)) {
+        try {
+            registers_.write(target.physical, size, value);
+        } catch (const DeviceRefusal& refusal) {
+            throw device_refusal(BusFault::Device, true, size, address, target.physical, target.region, what,
+                                 refusal.what());
+        }
+    } else {
+        auto& storage = target.region == BusRegion::Scratchpad ? scratchpad_ : ram_;
+        for (std::size_t i = 0; i < size; ++i)
+            storage[target.offset + i] = static_cast<std::uint8_t>(value >> (8u * i));
+    }
     if (observer_ != nullptr)
         observer_->on_bus_access({true, static_cast<std::uint8_t>(size), address, target.physical,
                                   target.region, value});

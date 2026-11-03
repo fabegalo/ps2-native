@@ -109,6 +109,7 @@ void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state
                                  "); firmware revisions are never mixed");
     memory.reset_for_boot(bios.rom0);
     state = ee_reset_state();
+    memory.set_clock(&state.retired_instructions);
     memory.set_translation_context(0, (state.cp0(Cop0::Status) & kStatusERL) != 0u);
 }
 

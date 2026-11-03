@@ -8,6 +8,7 @@
 #include "ps2native/mips.hpp"
 
 #include <cstdint>
+#include <tuple>
 
 namespace ps2native {
 enum class ExecutionEngine : std::uint8_t { Aot, Interpreter };
@@ -84,6 +85,37 @@ inline void branch(EEState& state, bool taken, std::uint32_t pc, std::uint32_t w
     state.delay_target = taken ? mips_branch_target(pc, word) : pc + 8u;
 }
 
+// R5900 MULT/MULTU: sign-extended 32-bit halves in LO/HI; LO also goes to rd.
+inline void multiply(EEState& s, std::uint64_t& lo, std::uint64_t& hi, unsigned rd, std::uint64_t product) {
+    lo = sx32(static_cast<std::uint32_t>(product));
+    hi = sx32(static_cast<std::uint32_t>(product >> 32));
+    s.set_reg64(rd, lo);
+}
+// R5900 DIV/DIVU never trap: overflow and division by zero have defined results.
+inline void divide_signed(std::uint64_t& lo, std::uint64_t& hi, std::uint32_t dividend, std::uint32_t divisor) {
+    const auto n = static_cast<std::int32_t>(dividend);
+    const auto d = static_cast<std::int32_t>(divisor);
+    if (n == INT32_MIN && d == -1) {
+        lo = sx32(0x80000000u);
+        hi = 0u;
+    } else if (d != 0) {
+        lo = sx32(static_cast<std::uint32_t>(n / d));
+        hi = sx32(static_cast<std::uint32_t>(n % d));
+    } else {
+        lo = n < 0 ? 1u : ~0ull;
+        hi = sx32(static_cast<std::uint32_t>(n));
+    }
+}
+inline void divide_unsigned(std::uint64_t& lo, std::uint64_t& hi, std::uint32_t n, std::uint32_t d) {
+    if (d != 0u) {
+        lo = sx32(n / d);
+        hi = sx32(n % d);
+    } else {
+        lo = ~0ull;
+        hi = sx32(n);
+    }
+}
+
 template <MipsOpcode>
 inline constexpr bool kSystemInstruction = false;
 
@@ -154,43 +186,22 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         if (s.reg64(t_) == 0u) s.set_reg64(d_, s.reg64(s_));
     } else if constexpr (Op == O::Movn) {
         if (s.reg64(t_) != 0u) s.set_reg64(d_, s.reg64(s_));
-    // R5900 MULT/MULTU: sign-extended 32-bit halves in LO/HI; LO also goes to rd.
-    } else if constexpr (Op == O::Mult) {
-        const auto product = static_cast<std::uint64_t>(
+    // MULT/DIV families: pipeline 0 uses the lower halves of LO/HI, the MMI
+    // pipeline-1 forms (MULT1, DIV1, ...) the upper halves, with identical rules.
+    } else if constexpr (Op == O::Mult || Op == O::Mult1) {
+        auto [lo, hi] = Op == O::Mult ? std::tie(s.lo, s.hi) : std::tie(s.lo1, s.hi1);
+        multiply(s, lo, hi, d_, static_cast<std::uint64_t>(
             static_cast<std::int64_t>(static_cast<std::int32_t>(s.reg32(s_))) *
-            static_cast<std::int64_t>(static_cast<std::int32_t>(s.reg32(t_))));
-        s.lo = sx32(static_cast<std::uint32_t>(product));
-        s.hi = sx32(static_cast<std::uint32_t>(product >> 32));
-        s.set_reg64(d_, s.lo);
-    } else if constexpr (Op == O::Multu) {
-        const auto product = static_cast<std::uint64_t>(s.reg32(s_)) * s.reg32(t_);
-        s.lo = sx32(static_cast<std::uint32_t>(product));
-        s.hi = sx32(static_cast<std::uint32_t>(product >> 32));
-        s.set_reg64(d_, s.lo);
-    // R5900 DIV/DIVU never trap: overflow and division by zero have defined results.
-    } else if constexpr (Op == O::Div) {
-        const auto n = static_cast<std::int32_t>(s.reg32(s_));
-        const auto d = static_cast<std::int32_t>(s.reg32(t_));
-        if (n == INT32_MIN && d == -1) {
-            s.lo = sx32(0x80000000u);
-            s.hi = 0u;
-        } else if (d != 0) {
-            s.lo = sx32(static_cast<std::uint32_t>(n / d));
-            s.hi = sx32(static_cast<std::uint32_t>(n % d));
-        } else {
-            s.lo = n < 0 ? 1u : ~0ull;
-            s.hi = sx32(static_cast<std::uint32_t>(n));
-        }
-    } else if constexpr (Op == O::Divu) {
-        const auto n = s.reg32(s_);
-        const auto d = s.reg32(t_);
-        if (d != 0u) {
-            s.lo = sx32(n / d);
-            s.hi = sx32(n % d);
-        } else {
-            s.lo = ~0ull;
-            s.hi = sx32(n);
-        }
+            static_cast<std::int64_t>(static_cast<std::int32_t>(s.reg32(t_)))));
+    } else if constexpr (Op == O::Multu || Op == O::Multu1) {
+        auto [lo, hi] = Op == O::Multu ? std::tie(s.lo, s.hi) : std::tie(s.lo1, s.hi1);
+        multiply(s, lo, hi, d_, static_cast<std::uint64_t>(s.reg32(s_)) * s.reg32(t_));
+    } else if constexpr (Op == O::Div || Op == O::Div1) {
+        auto [lo, hi] = Op == O::Div ? std::tie(s.lo, s.hi) : std::tie(s.lo1, s.hi1);
+        divide_signed(lo, hi, s.reg32(s_), s.reg32(t_));
+    } else if constexpr (Op == O::Divu || Op == O::Divu1) {
+        auto [lo, hi] = Op == O::Divu ? std::tie(s.lo, s.hi) : std::tie(s.lo1, s.hi1);
+        divide_unsigned(lo, hi, s.reg32(s_), s.reg32(t_));
     } else if constexpr (Op == O::Mfhi) {
         s.set_reg64(d_, s.hi);
     } else if constexpr (Op == O::Mflo) {
@@ -199,6 +210,27 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         s.hi = s.reg64(s_);
     } else if constexpr (Op == O::Mtlo) {
         s.lo = s.reg64(s_);
+    } else if constexpr (Op == O::Mfhi1) {
+        s.set_reg64(d_, s.hi1);
+    } else if constexpr (Op == O::Mflo1) {
+        s.set_reg64(d_, s.lo1);
+    } else if constexpr (Op == O::Mthi1) {
+        s.hi1 = s.reg64(s_);
+    } else if constexpr (Op == O::Mtlo1) {
+        s.lo1 = s.reg64(s_);
+    // PADDUW: four 32-bit lanes, unsigned saturation at 0xFFFFFFFF; all 128 bits written.
+    } else if constexpr (Op == O::Padduw) {
+        const auto a = s.reg128(s_);
+        const auto b = s.reg128(t_);
+        auto lanes = [](std::uint64_t x, std::uint64_t y) {
+            std::uint64_t out = 0;
+            for (unsigned shift = 0; shift < 64u; shift += 32u) {
+                const auto sum = ((x >> shift) & 0xFFFFFFFFull) + ((y >> shift) & 0xFFFFFFFFull);
+                out |= (sum > 0xFFFFFFFFull ? 0xFFFFFFFFull : sum) << shift;
+            }
+            return out;
+        };
+        s.set_reg128(d_, lanes(a.low, b.low), lanes(a.high, b.high));
     } else if constexpr (Op == O::Addiu) {
         s.set_reg32_sign_extended(t_, s.reg32(s_) + simm32(w));
     } else if constexpr (Op == O::Daddiu) {

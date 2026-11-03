@@ -134,8 +134,16 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     bus_fault([&] { (void)memory.read32(0xA4000000u); }, BusFault::Unmapped, "unmapped physical address");
 
     memory.set_translation_context(0, false);
-    bus_fault([&] { (void)memory.read32(0x00010000u); }, BusFault::TlbRefill, "48 TLB entries undefined");
-    rejects([&] { (void)memory.tlb_probe(0x00010000u); }, "undefined since reset");
+    bus_fault([&] { (void)memory.read32(0x00010000u); }, BusFault::TlbRefill,
+              "48 TLB entries undefined since reset are assumed not to match");
+    require(!memory.tlb_probe(0x00010000u), "TLBP never matches entries undefined since reset");
+    rejects([&] { (void)memory.tlb_entry(5); }, "undefined since reset");
+    // Only entry 0 written, as the real BIOS does (PageMask 0, S bit): it maps the
+    // whole 16 KiB scratchpad and the 47 undefined entries never match.
+    memory.tlb_write(0, {0u, 0x70000000u, 0x80000007u, 7u});
+    memory.write32(0x70003FF0u, 0xA5A5A5A5u);
+    require(memory.read32(0x70003FF0u) == 0xA5A5A5A5u, "S entry with PageMask 0 spans 16 KiB");
+    require(memory.tlb_probe(0x70000000u) == 0u, "TLBP finds the only defined entry");
     for (unsigned n = 0; n < Memory::kTlbEntries; ++n)
         memory.tlb_write(n, {0u, 0xE0000000u + 0x2000u * n, 0u, 0u});
     // Entry 1: 0x00010000 -> physical 0x2000 (writable), 0x00011000 -> 0x3000 (read-only).
@@ -156,7 +164,7 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     bus_fault([&] { (void)memory.read32(0x00400000u); }, BusFault::TlbRefill, "TLB refill");
     memory.write64(0x70003FF8u, 0x0123456789ABCDEFull);
     require(memory.read64(0x70003FF8u) == 0x0123456789ABCDEFull, "scratchpad through the S bit");
-    bus_fault([&] { (void)memory.read32(0x70004000u); }, BusFault::Device, "16 KiB scratchpad");
+    bus_fault([&] { (void)memory.read32(0x70004000u); }, BusFault::TlbRefill, "no entry for ASID 0"); // past 16 KiB
     require(memory.tlb_probe(0x00010000u) == 1u && !memory.tlb_probe(0x00400000u), "TLBP");
     memory.tlb_write(4, {0u, 0x00010000u, 0x1Fu, 0x1Fu});
     bus_fault([&] { (void)memory.read32(0x00010000u); }, BusFault::TlbMultipleMatch, "entries 1 and 4");
@@ -195,7 +203,7 @@ void check_interpreter_stops(const std::vector<std::uint8_t>& rom) {
                 report.reason.find(reason) != std::string::npos,
                 "stop for " + hex8(word) + ": [" + report.category + "] " + report.reason);
     };
-    started(0x40084800u, "not modeled", "MFC0 Count");
+    started(0x40080800u, "not modeled", "MFC0 Random"); // Count is modeled since M2.1 (boot_m21)
     started(0x40083800u, "architecturally undefined", "reserved7");
     started(0x42000001u, "unsupported", "TLBR of entry 0, undefined since reset");
 }

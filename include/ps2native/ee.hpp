@@ -29,9 +29,12 @@ inline constexpr std::uint32_t kStatusWritable = 0xF0C79C1Fu;
 
 struct EEState {
     std::array<Register128, 32> gpr{};
-    // Lower 64 bits of LO/HI (pipeline 0). LO1/HI1 (MMI pipeline 1) are not modeled.
+    // LO/HI are 128 bits: lo/hi are the lower halves (pipeline 0), lo1/hi1 the
+    // upper halves written by the MMI pipeline-1 instructions (MULT1, DIV1, ...).
     std::uint64_t lo{};
     std::uint64_t hi{};
+    std::uint64_t lo1{};
+    std::uint64_t hi1{};
     std::uint32_t pc{};
     bool delay_pending{};
     std::uint32_t delay_target{};
@@ -43,8 +46,16 @@ struct EEState {
     std::uint32_t instruction_pc{};
     // The instruction at instruction_pc executes in a branch delay slot.
     bool instruction_in_delay_slot{};
+    // Also the EE time base during boot: one cycle per retired instruction
+    // (see ee_registers.hpp).
     std::uint64_t retired_instructions{};
     std::array<std::uint32_t, 32> cop0{};
+    // COP0 Count advances once per EE cycle: it reads as cop0[Count] plus the
+    // cycles retired since the last MTC0 Count (count_anchor).
+    std::uint64_t count_anchor{};
+    [[nodiscard]] std::uint32_t count() const noexcept {
+        return cop0[9] + static_cast<std::uint32_t>(retired_instructions - count_anchor);
+    }
     [[nodiscard]] std::uint32_t reg32(unsigned index) const;
     [[nodiscard]] std::uint64_t reg64(unsigned index) const;
     [[nodiscard]] Register128 reg128(unsigned index) const;

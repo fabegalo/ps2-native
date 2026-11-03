@@ -34,12 +34,22 @@ inline std::uint32_t table_checksum() {
     return sum;
 }
 
+// M2.1 variant: results of the MMI / Count / timer block, stored in RAM.
+constexpr std::uint32_t kM21ResultRam = 0x80000200u;
+constexpr std::uint32_t kM21PaddResult = kM21ResultRam;         // SQ of PADDUW (16 bytes)
+constexpr std::uint32_t kM21MulDivResults = kM21ResultRam + 0x20u; // 12 doublewords (SD)
+constexpr unsigned kM21MulDivCount = 12u;
+constexpr std::uint32_t kM21CountResult = kM21ResultRam + 0x80u;   // Count after 5 NOPs
+constexpr std::uint32_t kM21HblankResult = kM21ResultRam + 0x84u;  // Count over two HBLANK edges
+constexpr std::uint32_t kM21T0Result = kM21ResultRam + 0x88u;      // T0_COUNT at the last edge
+constexpr std::uint32_t kM21ScratchpadAlias = 0x70010000u;          // TLB entry 2: S bit, PageMask 0
+
 enum Reg : unsigned {
-    zero = 0, at = 1, v0 = 2, v1 = 3, a0 = 4, a1 = 5, a2 = 6, t0 = 8, t1 = 9, t2 = 10, t3 = 11,
-    s0 = 16, t9 = 25, k0 = 26, ra = 31
+    zero = 0, at = 1, v0 = 2, v1 = 3, a0 = 4, a1 = 5, a2 = 6, a3 = 7, t0 = 8, t1 = 9, t2 = 10, t3 = 11,
+    t4 = 12, t5 = 13, t6 = 14, t7 = 15, s0 = 16, t9 = 25, k0 = 26, ra = 31
 };
 enum Cp0 : unsigned {
-    Index = 0, EntryLo0 = 2, EntryLo1 = 3, PageMask = 5, EntryHi = 10, Status = 12, Cause = 13,
+    Index = 0, EntryLo0 = 2, EntryLo1 = 3, PageMask = 5, Count = 9, EntryHi = 10, Status = 12, Cause = 13,
     PRid = 15, TagLo = 28, TagHi = 29, ErrorEPC = 30
 };
 
@@ -87,7 +97,25 @@ public:
     void tlbp() { raw(0x42000008u); }
     void eret() { raw(0x42000018u); }
     void cache(unsigned op, std::int32_t offset, unsigned base) { i(0x2fu, base, op, static_cast<std::uint32_t>(offset)); }
+    void lq(unsigned rt, std::int32_t offset, unsigned base) { i(0x1eu, base, rt, static_cast<std::uint32_t>(offset)); }
+    void sq(unsigned rt, std::int32_t offset, unsigned base) { i(0x1fu, base, rt, static_cast<std::uint32_t>(offset)); }
+    // SPECIAL MULT/DIV and MFLO/MFHI; MMI (opcode 0x1C) pipeline-1 forms and MMI1 (funct 0x28).
+    void mult(unsigned rd, unsigned rs, unsigned rt) { r(rs, rt, rd, 0u, 0x18u); }
+    void mflo(unsigned rd) { r(0u, 0u, rd, 0u, 0x12u); }
+    void mfhi(unsigned rd) { r(0u, 0u, rd, 0u, 0x10u); }
+    void mmi(unsigned rs, unsigned rt, unsigned rd, unsigned sa, unsigned funct) {
+        raw((0x1cu << 26) | (rs << 21) | (rt << 16) | (rd << 11) | (sa << 6) | funct);
+    }
+    void padduw(unsigned rd, unsigned rs, unsigned rt) { mmi(rs, rt, rd, 0x10u, 0x28u); }
+    void multu1(unsigned rd, unsigned rs, unsigned rt) { mmi(rs, rt, rd, 0u, 0x19u); }
+    void div1(unsigned rs, unsigned rt) { mmi(rs, rt, 0u, 0u, 0x1au); }
+    void divu1(unsigned rs, unsigned rt) { mmi(rs, rt, 0u, 0u, 0x1bu); }
+    void mfhi1(unsigned rd) { mmi(0u, 0u, rd, 0u, 0x10u); }
+    void mthi1(unsigned rs) { mmi(rs, 0u, 0u, 0u, 0x11u); }
+    void mflo1(unsigned rd) { mmi(0u, 0u, rd, 0u, 0x12u); }
+    void mtlo1(unsigned rs) { mmi(rs, 0u, 0u, 0u, 0x13u); }
     void bne(unsigned rs, unsigned rt, const std::string& target) { branch(0x05u, rs, rt, target); }
+    void beq(unsigned rs, unsigned rt, const std::string& target) { branch(0x04u, rs, rt, target); }
     void branch(unsigned op, unsigned rs, unsigned rt, const std::string& target) {
         fixups_.emplace_back(words_.size(), target);
         i(op, rs, rt, 0u);
@@ -160,7 +188,98 @@ inline std::vector<std::uint32_t> payload_code() {
     return p.finish();
 }
 
-inline Firmware build_firmware() {
+// M2.1, still at error level (KSEG0/KSEG1 only): PADDUW on two SYNDATA quads,
+// the MMI pipeline-1 multiply/divide group next to pipeline 0, COP0 Count over
+// five NOPs, two HBLANK edges of EE timer 0 measured with Count (as the real
+// BIOS calibrates its clock) and the 0x1000F500 store the real BIOS performs.
+inline void emit_m21_core(Assembler& a, std::uint32_t table_rom) {
+    const auto low = [](std::uint32_t address) { return static_cast<std::int32_t>(address & 0xffffu); };
+    a.label("m21_mmi");
+    a.la(a0, table_rom);
+    a.lq(t0, 0, a0);
+    a.lq(t1, 16, a0);
+    a.padduw(t2, t0, t1);
+    a.lui(a1, 0x8000u);
+    a.sq(t2, low(kM21PaddResult), a1);
+    a.addiu(t0, zero, 0xFFF9u);      // -7
+    a.addiu(t1, zero, 3u);
+    a.mult(t3, t0, t1);              // pipeline 0: LO -21, HI -1
+    a.multu1(t4, t0, t1);            // 0xFFFFFFF9 * 3 = 0x2_FFFFFFEB in LO1/HI1
+    a.mfhi1(t5);
+    a.div1(t0, t1);                  // -7 / 3: LO1 -2, HI1 -1
+    a.mflo1(t6);
+    a.mfhi1(t7);
+    a.mflo(a2);                      // pipeline 0 untouched by pipeline 1
+    a.mfhi(a3);
+    unsigned slot = 0;
+    for (const auto reg : {t3, t4, t5, t6, t7, a2, a3})
+        a.sd(reg, low(kM21MulDivResults) + 8 * static_cast<std::int32_t>(slot++), a1);
+    a.divu1(t0, zero);               // division by zero: LO1 -1, HI1 dividend
+    a.mflo1(t6);
+    a.mfhi1(t7);
+    a.mtlo1(t1);
+    a.mthi1(t0);
+    a.mflo1(t2);
+    a.mfhi1(t3);
+    a.lui(t0, 0x8000u);              // INT32_MIN / -1: LO1 INT32_MIN, HI1 0
+    a.addiu(t1, zero, 0xFFFFu);
+    a.div1(t0, t1);
+    a.mflo1(t4);
+    for (const auto reg : {t6, t7, t2, t3, t4})
+        a.sd(reg, low(kM21MulDivResults) + 8 * static_cast<std::int32_t>(slot++), a1);
+    a.label("m21_count");
+    a.mtc0(zero, Count);
+    for (unsigned n = 0; n < 5u; ++n) a.nop();
+    a.mfc0(t0, Count);               // 6: MTC0 and the five NOPs
+    a.sw(t0, low(kM21CountResult), a1);
+    a.lui(a0, 0xB000u);
+    a.addiu(t0, zero, 0x83u);
+    a.sw(t0, 0x10, a0);              // T0_MODE: HBLANK clock, counting
+    a.lw(t1, 0, a0);
+    a.label("m21_edge");
+    a.lw(t2, 0, a0);                 // wait for an HBLANK edge
+    a.beq(t2, t1, "m21_edge");
+    a.nop();
+    a.mtc0(zero, Count);
+    a.addiu(t3, t2, 2u);
+    a.label("m21_edges");
+    a.lw(t1, 0, a0);                 // two more edges
+    a.bne(t1, t3, "m21_edges");
+    a.nop();
+    a.mfc0(t4, Count);
+    a.sw(t4, low(kM21HblankResult), a1);
+    a.sw(t1, low(kM21T0Result), a1);
+    a.addiu(t0, zero, 0xFFFFu);
+    a.lui(t5, 0xB001u);
+    a.sw(t0, -0x0B00, t5);           // 0x1000F500 <- 0xFFFFFFFF
+}
+// M2.1, after ERET: a scratchpad entry written like the real BIOS does
+// (PageMask 0, S bit) still spans the whole 16 KiB.
+inline void emit_m21_scratchpad(Assembler& a) {
+    a.label("m21_scratchpad");
+    a.addiu(t0, zero, 2u);
+    a.mtc0(t0, Index);
+    a.mtc0(zero, PageMask);
+    a.lui(t0, kM21ScratchpadAlias >> 16);
+    a.mtc0(t0, EntryHi);
+    a.lui(t0, 0x8000u);
+    a.ori(t0, t0, 7u);
+    a.mtc0(t0, EntryLo0);
+    a.addiu(t0, zero, 7u);
+    a.mtc0(t0, EntryLo1);
+    a.tlbwi();
+    a.lui(t1, kM21ScratchpadAlias >> 16);
+    a.sw(v0, 0x3FF0, t1);
+    a.lui(t2, kScratchpadBase >> 16);
+    a.lw(t3, 0x3FF0, t2);            // the same bytes through entry 0
+    a.bne(t3, v0, "fail");
+    a.nop();
+}
+
+// m21 = true adds the M2.1 blocks (MMI, COP0 Count, EE timers, 0x1000F500 before
+// ERET, where the AOT reaches them; a PageMask-0 scratchpad entry after it).
+// The default (M2.0) firmware is unchanged.
+inline Firmware build_firmware(bool m21 = false) {
     std::vector<File> files;
     files.push_back({"RESET", {}, {}});
     files.push_back({"ROMDIR", {}, {}});
@@ -275,6 +394,7 @@ inline Firmware build_firmware() {
     a.addiu(a2, a2, 0xFFFFu);
     a.bne(a2, zero, "copy_loop");
     a.nop();
+    if (m21) emit_m21_core(a, fw.table_rom);
     a.label("leave_error_level");
     a.la(t0, 0u);                    // patched below: ErrorEPC = after_eret
     a.mtc0(t0, ErrorEPC);
@@ -293,6 +413,7 @@ inline Firmware build_firmware() {
     a.nop();
     a.lui(t0, 0x8000u);
     a.sd(v1, static_cast<std::int32_t>(kPayloadResultRam & 0xffffu), t0);
+    if (m21) emit_m21_scratchpad(a);
     a.label("mmio");
     a.lui(t0, 0xB001u);
     a.lw(t1, -0x1000, t0);           // INTC_STAT (0x1000F000 through KSEG1): not modeled yet
@@ -312,6 +433,9 @@ inline Firmware build_firmware() {
                  {"sum_loop", a.at("sum_loop")}, {"copy_loop", a.at("copy_loop")},
                  {"after_eret", a.at("after_eret")}, {"mmio", a.at("mmio")}, {"fail", a.at("fail")},
                  {"iop_path", a.at("iop_path")}};
+    if (m21)
+        for (const char* name : {"m21_mmi", "m21_count", "m21_edge", "m21_edges", "m21_scratchpad"})
+            fw.labels.emplace(name, a.at(name));
 
     // ROMDIR: name[10], EXTINFO size (u16), file size (u32); zero terminator.
     auto& romdir = files[1].data;

@@ -4,7 +4,8 @@
 #include <optional>
 
 namespace ps2native {
-// R5900 integer subset with lower 64-bit GPR semantics. These are the only
+// R5900 integer subset with lower 64-bit GPR semantics, plus the MMI
+// pipeline-1 multiply/divide group and PADDUW (128-bit). These are the only
 // instructions the AOT translates; their semantics live in ee_semantics.hpp
 // and are shared with the interpreter.
 #define PS2N_R5900_AOT_OPCODES(X) \
@@ -17,7 +18,8 @@ namespace ps2native {
     X(Lb) X(Lbu) X(Lh) X(Lhu) X(Lw) X(Lwu) X(Ld) X(Lq) X(Sb) X(Sh) X(Sw) X(Sd) X(Sq) \
     X(Beq) X(Bne) X(Blez) X(Bgtz) X(Bltz) X(Bgez) X(Bltzal) X(Bgezal) \
     X(Beql) X(Bnel) X(Blezl) X(Bgtzl) X(Bltzl) X(Bgezl) X(Bltzall) X(Bgezall) \
-    X(J) X(Jal) X(Jr) X(Jalr)
+    X(J) X(Jal) X(Jr) X(Jalr) \
+    X(Mult1) X(Multu1) X(Div1) X(Divu1) X(Mfhi1) X(Mflo1) X(Mthi1) X(Mtlo1) X(Padduw)
 // System instructions executed only by the interpreter (boot path): COP0
 // moves, TLB maintenance, ERET, EI/DI, CACHE, PREF and the trap-style
 // exceptions SYSCALL/BREAK, which stop with a diagnostic (no vectoring yet).
