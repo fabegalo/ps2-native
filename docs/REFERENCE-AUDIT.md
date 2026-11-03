@@ -41,3 +41,19 @@ Fontes adicionais:
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/R5900OpcodeImpl.cpp
 - https://github.com/ran-j/PS2Recomp/blob/main/ps2xRecomp/src/lib/elf_parser.cpp
 - https://github.com/ran-j/PS2Recomp/blob/main/ps2xRecomp/src/lib/ps2_recompiler.cpp
+## Consulta para a M2.0 — 03/11/2026
+
+Somente leitura de comportamento e formato; **nenhum trecho foi copiado ou traduzido**.
+
+- **PCSX2** `pcsx2/R5900.cpp` (`cpuReset`): PC `0xBFC00000`, `PRid = 0x2E20`, `Config = 0x440`; o PCSX2 também liga CU0–CU2 em `Status`, o ps2-native usa só `BEV | ERL` (os demais campos do reset não são garantidos e o firmware escreve `Status` antes de depender deles). `pcsx2/COP0.cpp`: layout de `EntryHi/EntryLo/PageMask`, bit S do scratchpad, G efetivo só com as duas metades, `TLBR/TLBP`, `ERET` via `ErrorEPC`/`EPC`, condição de efetividade de `EI/DI`, máscara de bits de `Status`. `pcsx2/Cache.cpp`: códigos das operações `CACHE`. `pcsx2/Hw.h` e `pcsx2/Memory.cpp`: mapa físico do EE (timers, IPU, GIF, VIF, FIFOs, DMAC, INTC, SIO, SBUS, MCH, VU, GS, IOP, ROM0/1/2). `pcsx2/ps2/BiosTools.cpp`: localização do ROMDIR pela entrada `RESET`, arquivos em sequência alinhados a 16 bytes, campos de `ROMVER` e códigos de região.
+- **ps2sdk** `tools/romimg/src/romimg.h`/`romimg.c`: formato da entrada ROMDIR (nome de 10 bytes, tamanho de EXTINFO, tamanho do arquivo), ordem obrigatória `RESET`/`ROMDIR`/`EXTINFO`, tamanho de `ROMDIR` incluindo o terminador, campos EXTINFO (`valor`, `tamanho`, `tipo`: data, versão, comentário, `0x7F`) com dados alinhados a 4 bytes.
+- **SHA-256:** FIPS 180-4 e seus vetores de teste oficiais.
+- Diferenças deliberadas em relação ao PCSX2: TLB indefinida até ser escrita (o PCSX2 zera), kuseg com `ERL = 1` recusado, `Count`/`Random` não lidos sem temporização, exceções e interrupções param em vez de vetorizar — todas registradas como limitações, nunca como sucesso.
+
+Fontes adicionais:
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/R5900.cpp
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/COP0.cpp
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Cache.cpp
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Hw.h
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/ps2/BiosTools.cpp
+- https://github.com/ps2dev/ps2sdk/tree/master/tools/romimg/src

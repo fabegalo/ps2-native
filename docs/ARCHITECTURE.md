@@ -10,12 +10,18 @@ Uma base C++20 compartilhada para Windows x64/ARM64, Linux x64/ARM64 (inclui Ste
 |---|---|---|---|
 | `read_file(path)` / `write_text_if_changed(path, text)` | caminho nativo Unicode do host | leitura binária / escrita idempotente | I/O centralizado, 128 MiB de limite de entrada; no Windows CLI `wmain` para paths UTF-16 e prefixo Win32 estendido para long paths, sem editar Registro |
 | `parse_ee_elf(span<uint8_t>)` | bytes não confiáveis | `ElfImage` com `PT_LOAD`, entrada, símbolos ELF `STT_FUNC` verificados, evidências de relocation (`R_MIPS_32`, `R_MIPS_26`, pares `HI16/LO16`), contagem de tipos não usados, bytes próprios | valida ELF32 LE/MIPS/ET_EXEC, tabelas de símbolos, limites, alinhamento, sobreposições, faixa EE física e `e_entry`; relocations são lidas como evidência e **nunca aplicadas**; pareamento `HI16/LO16` do ABI; erros explícitos para metadados inconsistentes |
-| `Memory::load(ElfImage)` | segmentos validados | 32 MiB RAM carregados, zero BSS; acessos de 8/16/32/64 bits | sem alterações ao ELF de entrada; só RAM física e seus espelhos KSEG0/1; desalinhamento e MMIO falham explicitamente |
-| `EEState` | estado por execução | 32×`Register128`, LO/HI (pipeline 0), PC, pendência de branch e de transferência indireta | `$zero` imutável; operações de 64 bits preservam a metade alta, `LQ/SQ` movem 128 bits; sem global; sem alegar cobertura total R5900 |
+| `Memory::load(ElfImage)` | segmentos validados | 32 MiB RAM carregados, zero BSS; acessos de 8/16/32/64 bits | modo `ElfProgram`: sem alterações ao ELF de entrada; só RAM física e seus espelhos KSEG0/1; desalinhamento e MMIO falham explicitamente |
+| `Memory::reset_for_boot(rom0)` | ROM0 validada | modo `HardwareReset`: RAM, ROM0 em `0x1FC00000`, scratchpad, TLB de 48 entradas | KSEG0/1 pelo barramento físico; kuseg/KSEG2/3 só pela TLB escrita pelo convidado (V/D/G/ASID/S); regiões de dispositivo nomeadas e `BusError` tipado para toda recusa; observador de acessos para o trace |
+| `EEState` | estado por execução | 32×`Register128`, LO/HI (pipeline 0), PC, pendência de branch e de transferência indireta, COP0, PC da instrução em curso | `ee_reset_state()` dá o estado de reset do EE; `$zero` imutável; operações de 64 bits preservam a metade alta, `LQ/SQ` movem 128 bits; sem global; sem alegar cobertura total R5900 |
 | `analyze_control_flow(ElfImage, entry_roots, tables)` | entrada ELF, funções simbólicas, evidências de relocation, raízes e tabelas opcionais | mapa de instruções, blocos, funções, entradas indiretas verificadas, jump tables provadas e `JR` não resolvidos com motivo | fluxo direto, alvos `JAL` como funções, tabelas provadas por `SLTIU` + `BEQ $zero` em janela sem entradas externas; ponto fixo e reverificação final; nada é aceito por semelhança |
-| `generate_aot_cpp(ElfImage, AotOptions)` | CFG e raízes verificadas | TU C++20 com funções por bloco, tabela de despacho e tabela de entradas indiretas; cabeçalho com proveniência | rejeita opcode/delay slot não suportado; **sem** JIT/interpretador implícito |
+| `generate_aot_cpp(ElfImage, AotOptions)` | CFG e raízes verificadas | TU C++20 com funções por bloco, tabela de despacho e tabela de entradas indiretas; cabeçalho com proveniência | rejeita opcode/delay slot não suportado; **sem** JIT/interpretador implícito; com `interpreter_boundaries` (só `--bios`) lista as fronteiras para o interpretador em vez de falhar; módulo exporta tipo e SHA-256 da entrada |
+| `load_bios_rom0(bytes, expected_sha256)` | dump de ROM0 do usuário | `BiosImage`: SHA-256, ROMDIR, EXTINFO, ROMVER (versão, região, tipo, data) | exatamente 4 MiB; ROMDIR/EXTINFO autoconsistentes; recusa qualquer inconsistência; nunca embute firmware |
+| `ee::exec<Op>` (`ee_semantics.hpp`) | estado, memória, pc e palavra | efeito R5900 de uma instrução inteira | fonte única para AOT e interpretador |
+| `interpret_instruction(ctx)` | estado no PC atual | uma instrução, inclusive COP0/TLB/ERET/EI/DI/CACHE | para com `GuestStop`, `BusError` ou instrução não implementada; nada é ignorado |
+| `prepare_ee_boot` / `run_ee_boot` | `BiosImage`, módulo AOT opcional | `BootReport` (trace, cauda de instruções, ponto de bloqueio) | estado de reset do EE; bloco AOT só no PC exato, senão interpretador registrado; recusa módulo de outra ROM0 |
 | `run_recompiled(EEState&, Memory&, stop, budget)` | TU C++ já compilada e estado | número de instruções executadas | delay slots (incluindo anulação de branch-likely), `JR/JALR` só para entradas verificadas, valida instrução não modificada em RAM; rejeita PC dinâmico não coberto, limite esgotado e memória inválida |
-| `ps2n-aot` | ELF de entrada e destino do `.cpp`, `--entry`/`--table` opcionais | código traduzido e resumo de evidências | reusa `.cpp` idêntico; nunca copia o ELF/jogo inteiro |
+| `ps2n-aot` | ELF (ou ROM0 com `--bios`) e destino do `.cpp`, `--entry`/`--table`/`--expect-sha256` opcionais | código traduzido e resumo de evidências | reusa `.cpp` idêntico; nunca copia o ELF/jogo/firmware inteiro |
+| `ps2n-boot` | ROM0 do usuário, orçamento, nível de trace | identidade da BIOS, ROMDIR, trace, cauda de instruções, ponto de bloqueio | interpretador puro, ou híbrido quando compilado com a tradução da mesma ROM0 (`PS2N_BIOS_AOT_SOURCE`) |
 
 ## Organização futura (interfaces propostas, NÃO implementadas)
 
@@ -26,7 +32,7 @@ Uma base C++20 compartilhada para Windows x64/ARM64, Linux x64/ARM64 (inclui Ste
 - **VU0/VU1 + VIF/GIF/DMA:** macro/micro, tempos e semântica vetorial reais.
 - **GS (fiel):** interfaces de comandos VRAM/texturas, provas de imagem e backends modernos; **Native** renderizará através de contratos compartilhados, nunca alterando física/temporização.
 - **SPU2, controles e memory cards:** I/O persistente e seguro, áudio e sincronização.
-- **BIOS host:** exigir dumps do usuário, sistema original e diferenças regionais; não distribuir firmware.
+- **BIOS host:** exigir dumps do usuário, sistema original e diferenças regionais; não distribuir firmware. (M2.0 já valida a ROM0 e inicia o EE; ROM1/ROM2/EROM/NVM, IOP e dispositivos seguem pendentes.)
 - **launcher:** gerenciador gráfico, importação sem duplicar, AOT automático, diagnóstico, salvamento e handoff para boot original.
 - **platform:** filesystem Unicode, paths longos, SIMD, memória executável, GPU, áudio e input isolados por backend; API multiplataforma única.
 
@@ -53,3 +59,21 @@ Fluxo de evidência, do mais forte ao mais fraco, sem heurística de semelhança
 4. **Indicações explícitas do desenvolvedor:** `--entry`, `--table` (validadas, nunca embutidas por jogo).
 
 Em runtime, `JR/JALR` só alcançam `indirect_entries` (raízes, continuações, alvos de tabelas provadas); o resto falha fechado. Detalhes, testes e limitações: [M1.3-STATUS.md](M1.3-STATUS.md).
+
+## M2.0 — Boot do EE a partir do vetor de reset
+
+```
+ROM0 do usuário ──load_bios_rom0──► BiosImage (SHA-256, ROMDIR, EXTINFO, ROMVER)
+        │                                   │
+        │ ps2n-aot --bios                   │ prepare_ee_boot (recusa módulo de outra ROM0)
+        ▼                                   ▼
+AotModule (blocos + SHA-256) ──► run_ee_boot ──► bloco AOT no PC exato ──┐
+                                      │                                  ├─► ee::exec<Op> (semântica única)
+                                      └──► interpret_instruction ────────┘     + COP0/TLB/ERET/CACHE no interpretador
+                                                   │
+                       Memory (HardwareReset: RAM, ROM0, scratchpad, TLB, dispositivos nomeados)
+                                                   │
+                         BootReport: trace reproduzível, cauda, ponto de bloqueio explícito
+```
+
+O interpretador é o fallback **explícito** previsto desde o M0: cada troca de motor aparece no trace e nada que não seja modelado é ignorado. Detalhes, testes e limitações: [M2.0-STATUS.md](M2.0-STATUS.md).

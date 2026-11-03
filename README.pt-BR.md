@@ -2,9 +2,23 @@
 **Idiomas:** [English](README.md) | Português (Brasil)
 
 
-> **Status:** protótipo experimental M1.3. Ainda não é um emulador PS2, um launcher, nem executa a BIOS, o Browser ou jogos comerciais.
+> **Status:** protótipo experimental M2.0. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais, e a execução de uma BIOS real da Sony ainda não foi demonstrada.
 
-## Novidades da M1.3
+## Novidades da M2.0 — infraestrutura de boot do PS2 original
+
+- **Loader de BIOS para o seu dump de ROM0:** exatamente 4 MiB; ROMDIR, EXTINFO e ROMVER (versão, região, tipo de console, data de build) validados campo a campo; identidade por SHA-256 com `--expect-sha256` opcional. ROM1/ROM2/EROM/NVM ainda não são carregados, então revisões nunca são misturadas. Nada da Sony é distribuído.
+- **Barramento e MMU do EE:** KSEG0/KSEG1 decodificam o barramento físico (RAM de 32 MiB, ROM0 somente leitura em `0x1FC00000`); kuseg/KSEG2/KSEG3 só pela TLB de 48 entradas escrita pelo convidado (page mask, ASID, global, valid/dirty, bit S do scratchpad de 16 KiB). Toda região de dispositivo do EE (timers, DMAC, INTC, SIO, SIF, MCH, GIF, VIF, IPU, VU, GS, IOP) falha com seu nome; falhas de TLB são informadas pelo tipo de exceção.
+- **Reset do EE e COP0:** PC `0xBFC00000`, `Status = BEV | ERL`, `PRid 0x2E20`, `Config 0x440`; `MFC0/MTC0` com regras por registrador, `TLBWI/TLBR/TLBP`, `ERET`, `EI/DI`, `CACHE` (só invalidação/write-back, pois a memória é coerente), `PREF`. Temporização de ciclos, conteúdo de cache, interrupções e vetorização de exceções não são modelados e param com diagnóstico.
+- **Execução híbrida:** um único cabeçalho de semântica R5900 (`ee_semantics.hpp`) usado pelos blocos AOT e pelo novo interpretador. `ps2n-aot <rom0> <saida.cpp> --bios` traduz o código do firmware estaticamente alcançável e lista cada fronteira do interpretador; `ps2n-boot` executa blocos AOT quando o PC coincide exatamente e o interpretador nos demais casos, sempre visível no trace. Tradução de outra ROM0 é recusada.
+- **Trace reproduzível:** eventos COP0/TLB/CACHE, trocas de motor, opcionalmente cada instrução e acesso de dados, e o ponto exato de bloqueio (PC, palavra, dispositivo, endereço físico).
+
+Uma ROM0 sintética de autoria própria inicia no vetor de reset, passa por inicialização da TLB, mapeamento do scratchpad, invalidação de cache, cópia ROM→RAM, `ERET` e um payload em RAM, e para em `INTC_STAT` (`0x1000F000`), ainda não modelado: **582 instruções**, resultados idênticos com interpretador puro e híbrido (370 AOT + 213 interpretadas). **15/15 testes** aprovados localmente no Windows x86-64 (MSVC 19.44, LLVM clang++ 22). [Evidências da M2.0, uso com firmware real e limitações](docs/M2.0-STATUS.md).
+
+```sh
+./out/build/ps2n-boot /caminho/para/sua-rom0.bin --trace=full --trace-out=boot-trace.txt
+```
+
+## M1.3
 
 - **Relocations MIPS como evidência, nunca aplicadas.** Em ELF32 `ET_EXEC` já vinculados que mantêm registros `SHT_REL`, `R_MIPS_26` (em `J`/`JAL` validados) e pares `R_MIPS_HI16`/`R_MIPS_LO16` (pareamento do ABI, vários HI16 por LO16, `LUI` + `%lo` com sinal) são conferidos contra os bytes vinculados e os símbolos. Um par HI16/LO16 que forma endereço de código (`ADDIU`) prova uma função cujo endereço é tomado. Registros malformados (HI16 órfão, instrução errada, símbolo inválido, sítio fora da seção de código) geram erro explícito; tipos não usados, como `R_MIPS_GPREL16`, são contados e informados, não descartados em silêncio.
 - **Jump tables provadas pelo próprio código**, sem configuração por jogo: um `JR` só é aceito quando um caminho em linha reta mostra o limite `SLTIU`, o guarda `BEQ …, $zero`, o índice escalado por palavra, a base da tabela e o `LW` da entrada, sem desvio externo para dentro dessa janela. Formas GCC e ee-gcc são reconhecidas; toda entrada precisa ser código executável do mesmo segmento. `JR` não provados são informados com motivo.
@@ -85,7 +99,7 @@ O build gera seu próprio ELF de teste em `out/build/fixtures/synthetic.elf` e r
 - `tests/`: firmware/jogos **não** são necessários; fixture MIPS de autoria própria.
 - `.github/workflows/build.yml`: matriz dos seis sistemas/arquiteturas, sem releases prematuras.
 
-A API permanece uniforme por plataforma. Consultar [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
+A API permanece uniforme por plataforma. Consultar [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
 
 ## Próximos marcos
 
@@ -93,4 +107,4 @@ A API permanece uniforme por plataforma. Consultar [M1.3](docs/M1.3-STATUS.md), 
 
 **Licença:** BSD-3-Clause apenas para o código original deste protótipo. Código GPL de projetos de referência não foi incorporado. Consulte `docs/LICENSE-DECISION.md` antes de integrar bibliotecas de terceiros.
 
-Próxima tarefa objetiva: [M1.4](docs/NEXT-TASK.md).
+Próxima tarefa objetiva: [M2.1](docs/NEXT-TASK.md).
