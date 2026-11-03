@@ -1,4 +1,4 @@
-name: M0 - Build and tests (six native targets)
+name: Core - Build and AOT tests (six native targets)
 
 on:
   push:
@@ -48,7 +48,7 @@ jobs:
       - name: Configure (Windows / MSVC)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: cmake -S . -B out/build -G "Visual Studio 17 2022" -A "${{ matrix.arch }}"
+        run: cmake -S . -B out/build -G "Visual Studio 18 2026" -A "${{ matrix.arch }}"
 
       - name: Build
         run: cmake --build out/build --config Release --parallel 2
@@ -56,4 +56,4 @@ jobs:
       - name: Test AOT end-to-end
         run: ctest --test-dir out/build -C Release --output-on-failure
 
-# M0 is a developer prototype. No publishing or release automation.
+# Developer-only proof of concept. No publishing or release automation.

@@ -1,8 +1,22 @@
-# ps2-native — Recompilação Nativa do PlayStation 2
-
+# ps2-native — Recompilação nativa do PlayStation 2
 **Idiomas:** [English](README.md) | Português (Brasil)
 
-> **Status:** protótipo experimental. Ainda não é um emulador PS2, um launcher, nem executa a BIOS ou jogos comerciais.
+
+> **Status:** protótipo experimental M1.1. Ainda não é um emulador PS2, um launcher, nem executa a BIOS ou jogos comerciais.
+
+## Novidades da M1.1
+
+O recompilador AOT agora separa **decodificação MIPS, análise de fluxo e geração de C++**. Identifica funções por símbolos ELF32 `STT_FUNC` validados ou por entradas verificadas `--entry=0xADDRESS` em arquivos sem símbolos. Gera **funções nativas por bloco básico e uma tabela de despacho**: `JALR/JR` podem chamar funções recompiladas sem interpretar as instruções MIPS em tempo de execução.
+
+Um ELF sintético executou **28 instruções**, três chamadas indiretas, preservando delay slots e registradores de retorno (inclusive `JALR rs==rd`). Alvos desconhecidos, código modificado na RAM e símbolos inválidos provocam erro em vez de sucesso falso. Foram aprovados **6/6 testes** no Linux x86-64 com GCC 14.2 e Clang 17 + ASan/UBSan. [Evidência e limites do M1.1](docs/M1.1-STATUS.md).
+
+```sh
+./out/build/ps2n-aot input.elf out/build/generated/output.cpp --entry=0x00100050
+```
+
+A opção informa uma função já identificada; **não transforma jogos comerciais em executáveis nativos automaticamente**.
+
+## Base anterior — M0
 
 Projeto independente inspirado na **visão** do [x360-native](https://github.com/fabegalo/x360-native): rodar o sistema original e jogos do PlayStation 2 em computadores, priorizando recompilação estática AOT e interfaces de runtime verificáveis. **O x360-native não foi modificado.**
 
@@ -47,13 +61,15 @@ O build gera seu próprio ELF de teste em `out/build/fixtures/synthetic.elf` e r
 - `include/ps2native/elf.hpp` / `src/elf.cpp`: contrato de validação ELF.
 - `include/ps2native/memory.hpp` / `src/memory.cpp`: RAM/espelhos e acesso seguro.
 - `include/ps2native/ee.hpp` / `src/ee.cpp`: estado EE sem estado global.
-- `include/ps2native/aot.hpp` / `src/aot.cpp`: CFG limitado e emissão AOT.
+- `include/ps2native/mips.hpp` / `src/mips.cpp`: decodificador do subconjunto R5900.
+- `include/ps2native/control_flow.hpp` / `src/control_flow.cpp`: análise de funções e fluxos.
+- `include/ps2native/aot.hpp` / `src/aot.cpp`: geração AOT e despachante.
 - `include/ps2native/aot_runtime.hpp`: ponto de entrada da tradução compilada.
 - `tools/ps2n-aot.cpp`: CLI de geração.
 - `tests/`: firmware/jogos **não** são necessários; fixture MIPS de autoria própria.
-- `.github/workflows/m0-build.yml`: matriz dos seis sistemas/arquiteturas, sem releases prematuras.
+- `.github/workflows/build.yml`: matriz dos seis sistemas/arquiteturas, sem releases prematuras.
 
-A API permanece uniforme por plataforma. Consultar [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
+A API permanece uniforme por plataforma. Consultar [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
 
 ## Próximos marcos
 
@@ -61,4 +77,4 @@ A API permanece uniforme por plataforma. Consultar [arquitetura](docs/ARCHITECTU
 
 **Licença:** BSD-3-Clause apenas para o código original deste protótipo. Código GPL de projetos de referência não foi incorporado. Consulte `docs/LICENSE-DECISION.md` antes de integrar bibliotecas de terceiros.
 
-Próxima task objetiva para o agente: [M1.1](docs/NEXT-TASK.md).
+Próxima tarefa objetiva: [M1.2](docs/NEXT-TASK.md).

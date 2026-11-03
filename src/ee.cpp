@@ -5,7 +5,7 @@
 namespace ps2native {
 std::uint32_t EEState::reg32(unsigned index) const {
     if (index >= gpr.size()) throw std::out_of_range("Invalid R5900 GPR index");
-    return static_cast<std::uint32_t>(gpr[index].low);
+    return index == 0 ? 0u : static_cast<std::uint32_t>(gpr[index].low);
 }
 void EEState::set_reg32(unsigned index, std::uint32_t value) {
     if (index >= gpr.size()) throw std::out_of_range("Invalid R5900 GPR index");

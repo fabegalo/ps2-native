@@ -5,3 +5,5 @@
 #include "ps2native/memory.hpp"
 #include "ps2native/ee.hpp"
 #include "ps2native/aot.hpp"
+#include "ps2native/mips.hpp"
+#include "ps2native/control_flow.hpp"

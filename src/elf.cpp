@@ -74,6 +74,51 @@ ElfImage parse_ee_elf(std::span<const std::uint8_t> data) {
             entry_found = true;
     }
     if (!entry_found) throw std::runtime_error("Entry not in file-backed executable segment");
+    // AOT roots from defined ELF32 STT_FUNC symbols. Only validated, file-backed
+    // executable segment addresses are admitted; undefined/external symbols are skipped.
+    const auto shoff = u32(data, 32);
+    const auto shentsize = u16(data, 46);
+    const auto shnum = u16(data, 48);
+    if (shoff != 0 || shnum != 0) {
+        if (shoff == 0 || shnum == 0 || shnum > 4096 || shentsize != 40 ||
+            !in_range(data.size(), shoff, static_cast<std::uint64_t>(shnum) * shentsize))
+            throw std::runtime_error("Invalid ELF section header table");
+        for (std::uint32_t section = 0; section < shnum; ++section) {
+            const auto pos = static_cast<std::size_t>(shoff) + section * 40u;
+            const auto type = u32(data, pos + 4);
+            if (type != 2 && type != 11) continue; // SHT_SYMTAB / SHT_DYNSYM
+            const auto offset = u32(data, pos + 16);
+            const auto size = u32(data, pos + 20);
+            const auto link = u32(data, pos + 24);
+            const auto entsize = u32(data, pos + 36);
+            if (link >= shnum || entsize != 16 || size % 16 != 0 ||
+                !in_range(data.size(), offset, size))
+                throw std::runtime_error("Invalid ELF symbol table bounds");
+            const auto string_section = static_cast<std::size_t>(shoff) + 40u * link;
+            if (u32(data, string_section + 4) != 3)
+                throw std::runtime_error("Invalid ELF symbol table bounds");
+            for (std::uint64_t entry = offset; entry < static_cast<std::uint64_t>(offset) + size; entry += 16) {
+                const auto sym = static_cast<std::size_t>(entry);
+                const auto symbol_value = u32(data, sym + 4);
+                const auto symbol_type = data[sym + 12] & 0x0fu;
+                const auto shndx = u16(data, sym + 14);
+                if (symbol_type != 2 || shndx == 0 || shndx >= shnum ||
+                    (symbol_value & 3u) != 0)
+                    continue;
+                for (const auto& segment : elf.segments) {
+                    if ((segment.flags & 1u) && symbol_value >= segment.vaddr &&
+                        static_cast<std::uint64_t>(symbol_value) + 4 <=
+                            static_cast<std::uint64_t>(segment.vaddr) + segment.file_size) {
+                        elf.function_entries.push_back(symbol_value);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    std::sort(elf.function_entries.begin(), elf.function_entries.end());
+    elf.function_entries.erase(std::unique(elf.function_entries.begin(), elf.function_entries.end()),
+                               elf.function_entries.end());
     elf.bytes.assign(data.begin(), data.end());
     return elf;
 }

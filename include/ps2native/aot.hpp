@@ -1,8 +1,17 @@
 #pragma once
 #include "ps2native/elf.hpp"
 #include <string>
+#include <cstdint>
+#include <vector>
 namespace ps2native {
-// Emits host-compilable C++ only for reachable, supported M0 instructions.
-// Throws for unsupported opcodes / unresolved direct control flow.
-[[nodiscard]] std::string generate_aot_cpp(const ElfImage& image);
+// Optional known code entry points for stripped ELF or verified function pointers.
+// Never guess arbitrary data words as executable code.
+struct AotOptions {
+    std::vector<std::uint32_t> additional_function_entries;
+};
+
+// Emits compiled native basic-block functions and a dispatch table.
+// The runtime fails closed for unknown dynamic targets and modified code.
+[[nodiscard]] std::string generate_aot_cpp(const ElfImage& image,
+                                           const AotOptions& options = {});
 } // namespace ps2native

@@ -15,6 +15,8 @@ class ElfImage {
 public:
     std::uint32_t entry{};
     std::vector<LoadSegment> segments;
+    // STT_FUNC symbols verified against executable PT_LOAD contents.
+    std::vector<std::uint32_t> function_entries;
     std::vector<std::uint8_t> bytes;
     [[nodiscard]] std::uint32_t instruction_at(std::uint32_t address) const;
 };

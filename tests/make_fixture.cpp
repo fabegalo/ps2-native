@@ -25,7 +25,7 @@ std::uint32_t i(unsigned op, unsigned rs, unsigned rt, std::int16_t imm) {
 
 template <typename Character>
 int fixture_main(int argc, Character** argv) {
-    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops]\n"; return 2; }
+    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym]\n"; return 2; }
     constexpr std::uint32_t start = 0x00100000u;
     const std::vector<std::uint32_t> standard{
         r(31, 0, 16, 0x21),  // 00: addu $s0, $ra, $zero
@@ -63,9 +63,47 @@ int fixture_main(int argc, Character** argv) {
         r(31, 0, 0, 0x08),           // 08: jr ra
         0                              // 09: nop
     };
-    const auto& instr = argc == 3 && std::filesystem::path(argv[2]) == std::filesystem::path("ops") ? ops : standard;
+    // Three independently authored functions called through JALR/JR.
+    // The non-symbol variant requires --entry hints; no "guess all words" heuristic.
+    const std::vector<std::uint32_t> indirect{
+        r(31, 0, 16, 0x21),                  // 00: save host return in s0
+        i(0x0f, 0, 8, 0x0010),               // 01: lui t0, 0x10
+        i(0x0d, 8, 8, 20 * 4),               // 02: t0 = function A
+        r(8, 0, 31, 0x09),                   // 03: jalr ra, t0
+        i(0x09, 0, 9, 10),                   // 04: delay slot t1 = 10
+        i(0x2b, 0, 2, 0x40),                 // 05: store A result (12)
+        i(0x0f, 0, 11, 0x0010),              // 06: lui t3, 0x10
+        i(0x23, 11, 8, 0x80),                // 07: lw t0, 0x80(t3); pointer to B from data
+        r(8, 0, 31, 0x09),                   // 08: jalr ra, t0
+        i(0x09, 9, 9, 5),                    // 09: delay slot t1 = 15
+        i(0x2b, 0, 2, 0x44),                 // 10: store B result (18)
+        i(0x0f, 0, 12, 0x0010),              // 11: lui t4, 0x10
+        i(0x0d, 12, 12, 26 * 4),             // 12: pointer to C
+        r(12, 0, 12, 0x09),                  // 13: jalr t4, t4; read source BEFORE overwriting link
+        i(0x09, 9, 9, 1),                    // 14: delay slot t1 = 16
+        i(0x2b, 0, 2, 0x48),                 // 15: store C result (20)
+        r(16, 0, 31, 0x21),                  // 16: restore host return address
+        r(31, 0, 0, 0x08),                   // 17: jr ra
+        0,                                    // 18: return delay slot
+        0xffffffffu,                          // 19: unreachable unsupported opcode
+        i(0x09, 9, 2, 1),                    // 20: A: v0 = t1+1
+        r(31, 0, 0, 0x08),                   // 21: jr ra
+        i(0x09, 2, 2, 1),                    // 22: delay v0++ => 12
+        i(0x09, 9, 2, 2),                    // 23: B: v0 = t1+2
+        r(31, 0, 0, 0x08),                   // 24: jr ra
+        i(0x09, 2, 2, 1),                    // 25: delay v0++ => 18
+        i(0x09, 9, 2, 3),                    // 26: C: v0 = t1+3
+        r(12, 0, 0, 0x08),                   // 27: jr t4
+        i(0x09, 2, 2, 1)                     // 28: delay v0++ => 20
+    };
+    const auto fixture_mode = argc == 3 ? std::filesystem::path(argv[2]) : std::filesystem::path{};
+    const bool indirect_mode = fixture_mode == std::filesystem::path("indirect") ||
+                               fixture_mode == std::filesystem::path("indirect-nosym");
+    const bool with_symbols = fixture_mode == std::filesystem::path("indirect");
+    const auto& instr = indirect_mode ? indirect : (fixture_mode == std::filesystem::path("ops") ? ops : standard);
     constexpr std::size_t code_file_offset = 0x100;
-    std::vector<std::uint8_t> bytes(code_file_offset + instr.size() * 4, 0);
+    const auto load_bytes = indirect_mode ? std::size_t{0x84} : instr.size() * 4;
+    std::vector<std::uint8_t> bytes(code_file_offset + load_bytes, 0);
     bytes[0] = 0x7f; bytes[1] = 'E'; bytes[2] = 'L'; bytes[3] = 'F';
     bytes[4] = 1; bytes[5] = 1; bytes[6] = 1;
     write16(bytes, 16, 2);             // ET_EXEC
@@ -80,12 +118,61 @@ int fixture_main(int argc, Character** argv) {
     write32(bytes, 56, code_file_offset);
     write32(bytes, 60, start);         // p_vaddr
     write32(bytes, 64, start);         // p_paddr
-    write32(bytes, 68, static_cast<std::uint32_t>(instr.size() * 4));
+    write32(bytes, 68, static_cast<std::uint32_t>(load_bytes));
     write32(bytes, 72, 0x100);         // p_memsz, BSS tail
     write32(bytes, 76, 5);             // PF_R | PF_X
     write32(bytes, 80, 0x100);         // alignment
     for (std::size_t n = 0; n < instr.size(); ++n)
         write32(bytes, code_file_offset + n * 4, instr[n]);
+    if (indirect_mode) {
+        write32(bytes, code_file_offset + 0x80, start + 23u * 4u); // B function pointer
+    }
+    if (with_symbols) {
+        // Valid minimal ELF32 section and symbol tables. The function names are
+        // illustrative; parsing relies on STT_FUNC + executable PT_LOAD address.
+        constexpr std::size_t sym_offset = 0x200;
+        constexpr std::size_t str_offset = 0x250;
+        constexpr std::size_t sections_offset = 0x300;
+        bytes.resize(sections_offset + 4 * 40, 0);
+        constexpr char names[] = "\0main\0fn_a\0fn_b\0fn_c";
+        for (std::size_t n = 0; n < sizeof(names); ++n) bytes[str_offset + n] = names[n];
+        const std::uint32_t entry_indexes[] = {0, 20, 23, 26};
+        const std::uint32_t name_indexes[] = {1, 6, 11, 16};
+        for (std::size_t n = 0; n < 4; ++n) {
+            const auto sym = sym_offset + (n + 1) * 16;
+            write32(bytes, sym, name_indexes[n]);
+            write32(bytes, sym + 4, start + entry_indexes[n] * 4);
+            bytes[sym + 12] = 0x12;  // STB_GLOBAL | STT_FUNC
+            write16(bytes, sym + 14, 1); // defined in .text (section 1)
+        }
+        // ELF header: section table location, section count, entry size.
+        write32(bytes, 32, sections_offset);
+        write16(bytes, 46, 40);
+        write16(bytes, 48, 4);
+        // Section #1: code + data, SHT_PROGBITS, SHF_ALLOC/EXECINSTR.
+        const auto text_section = sections_offset + 40;
+        write32(bytes, text_section + 4, 1);
+        write32(bytes, text_section + 8, 6);
+        write32(bytes, text_section + 12, start);
+        write32(bytes, text_section + 16, code_file_offset);
+        write32(bytes, text_section + 20, static_cast<std::uint32_t>(load_bytes));
+        write32(bytes, text_section + 32, 4);
+        // Section #2: SHT_SYMTAB with five entries incl. null symbol.
+        const auto sym_section = sections_offset + 80;
+        write32(bytes, sym_section + 4, 2);
+        write32(bytes, sym_section + 16, sym_offset);
+        write32(bytes, sym_section + 20, 5 * 16);
+        write32(bytes, sym_section + 24, 3); // link to .strtab
+        write32(bytes, sym_section + 28, 1); // one local null symbol
+        write32(bytes, sym_section + 32, 4);
+        write32(bytes, sym_section + 36, 16);
+        // Section #3: SHT_STRTAB.
+        const auto str_section = sections_offset + 120;
+        write32(bytes, str_section + 4, 3);
+        write32(bytes, str_section + 16, str_offset);
+        write32(bytes, str_section + 20, sizeof(names));
+        write32(bytes, str_section + 32, 1);
+    }
     std::ofstream out(std::filesystem::path(argv[1]), std::ios::binary | std::ios::trunc);
     if (!out || !out.write(reinterpret_cast<const char*>(bytes.data()),
                            static_cast<std::streamsize>(bytes.size()))) {

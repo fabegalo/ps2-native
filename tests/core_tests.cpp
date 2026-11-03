@@ -48,6 +48,7 @@ int core_tests_main(int argc, Character** argv) {
         check(state.reg32(8) == 0xffffffffu &&
               state.gpr[8].low == 0xffffffffffffffffull, "M0 word sign extension");
         state.set_reg32(0, 123);
+        state.gpr[0].low = 0xdeadbeefu; // Even externally corrupted storage cannot change $zero reads.
         check(state.reg32(0) == 0, "R5900 constant zero register");
 
         auto malformed = bytes;
@@ -65,6 +66,27 @@ int core_tests_main(int argc, Character** argv) {
         const auto unsupported = ps2native::parse_ee_elf(malformed);
         throws([&] { (void)ps2native::generate_aot_cpp(unsupported); },
                "unsupported reachable opcode fails instead of being silently stubbed");
+        // Malformed known control-flow must fail analysis before generating C++.
+        malformed = bytes;
+        // The loop's branch delay slot at index 6 is replaced with a J instruction.
+        constexpr std::size_t delay = 0x100u + 6u * 4u;
+        malformed[delay] = 0; malformed[delay + 1] = 0; malformed[delay + 2] = 0; malformed[delay + 3] = 0x08;
+        throws([&] { (void)ps2native::generate_aot_cpp(ps2native::parse_ee_elf(malformed)); },
+               "branch in delay slot rejected");
+        ps2native::AotOptions invalid_root;
+        invalid_root.additional_function_entries.push_back(0x70000000u);
+        throws([&] { (void)ps2native::generate_aot_cpp(elf, invalid_root); },
+               "explicit entry outside executable segment rejected");
+
+        // Verify generated C++ is content-addressed in practice: identical
+        // content is never rewritten, so downstream CMake targets don't rebuild.
+        auto probe = std::filesystem::path(argv[1]);
+        probe += ".aot-cache-check.txt";
+        std::filesystem::remove(probe);
+        check(ps2native::write_text_if_changed(probe, "AOT-1"), "first cache write");
+        check(!ps2native::write_text_if_changed(probe, "AOT-1"), "identical AOT reused");
+        check(ps2native::write_text_if_changed(probe, "AOT-2"), "changed AOT rewritten");
+        std::filesystem::remove(probe);
         std::cout << "Core tests OK: ELF validation, segment/BSS, RAM aliases, EE GPR, fail-closed AOT\n";
         return 0;
     } catch (const std::exception& e) {
