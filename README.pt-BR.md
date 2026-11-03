@@ -2,9 +2,18 @@
 **Idiomas:** [English](README.md) | Português (Brasil)
 
 
-> **Status:** protótipo experimental M1.1. Ainda não é um emulador PS2, um launcher, nem executa a BIOS ou jogos comerciais.
+> **Status:** protótipo experimental M1.3. Ainda não é um emulador PS2, um launcher, nem executa a BIOS, o Browser ou jogos comerciais.
 
-## Novidades da M1.1
+## Novidades da M1.3
+
+- **Relocations MIPS como evidência, nunca aplicadas.** Em ELF32 `ET_EXEC` já vinculados que mantêm registros `SHT_REL`, `R_MIPS_26` (em `J`/`JAL` validados) e pares `R_MIPS_HI16`/`R_MIPS_LO16` (pareamento do ABI, vários HI16 por LO16, `LUI` + `%lo` com sinal) são conferidos contra os bytes vinculados e os símbolos. Um par HI16/LO16 que forma endereço de código (`ADDIU`) prova uma função cujo endereço é tomado. Registros malformados (HI16 órfão, instrução errada, símbolo inválido, sítio fora da seção de código) geram erro explícito; tipos não usados, como `R_MIPS_GPREL16`, são contados e informados, não descartados em silêncio.
+- **Jump tables provadas pelo próprio código**, sem configuração por jogo: um `JR` só é aceito quando um caminho em linha reta mostra o limite `SLTIU`, o guarda `BEQ …, $zero`, o índice escalado por palavra, a base da tabela e o `LW` da entrada, sem desvio externo para dentro dessa janela. Formas GCC e ee-gcc são reconhecidas; toda entrada precisa ser código executável do mesmo segmento. `JR` não provados são informados com motivo.
+- **Entradas indiretas verificadas em runtime:** `JR`/`JALR` só alcançam raízes de função, continuações de chamada ou alvos de tabelas provadas; o resto falha fechado.
+- **Subconjunto inteiro do R5900** com semântica de 64 bits que preserva a metade alta do GPR: deslocamentos de 32/64 bits, `DADDU/DSUBU/DADDIU`, lógicas, `SLT*` de 64 bits, `MOVZ/MOVN`, `MULT/MULTU` de três operandos, `DIV/DIVU` (resultados definidos na divisão por zero), `MFHI/MFLO/MTHI/MTLO`, loads/stores de byte a quadword (`LQ/SQ`), `BLEZ/BGTZ/BLTZ/BGEZ`, `BxxZAL`, todas as formas branch-likely com anulação do delay slot e `SYNC`. `ORI` e `BEQ/BNE` passaram ao comportamento de 64 bits do R5900.
+
+Um ELF sintético M1.3 (com e sem seções) é gerado, recompilado para C++, compilado nativamente e executado: **263 instruções**, 2 jump tables provadas, 61 valores de 64 bits de ALU/memória conferidos, registradores de link, anulação de branch-likely e destinos indiretos que falham fechados. **12/12 testes** aprovados localmente no Windows x86-64 (MSVC 19.44 e LLVM clang++ 22); os seis alvos são validados pelo [GitHub Actions](https://github.com/fabegalo/ps2-native/actions). [Evidências e limitações da M1.3](docs/M1.3-STATUS.md).
+
+## M1.1
 
 O recompilador AOT agora separa **decodificação MIPS, análise de fluxo e geração de C++**. Identifica funções por símbolos ELF32 `STT_FUNC` validados ou por entradas verificadas `--entry=0xADDRESS` em arquivos sem símbolos. Gera **funções nativas por bloco básico e uma tabela de despacho**: `JALR/JR` podem chamar funções recompiladas sem interpretar as instruções MIPS em tempo de execução.
 
@@ -76,7 +85,7 @@ O build gera seu próprio ELF de teste em `out/build/fixtures/synthetic.elf` e r
 - `tests/`: firmware/jogos **não** são necessários; fixture MIPS de autoria própria.
 - `.github/workflows/build.yml`: matriz dos seis sistemas/arquiteturas, sem releases prematuras.
 
-A API permanece uniforme por plataforma. Consultar [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
+A API permanece uniforme por plataforma. Consultar [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
 
 ## Próximos marcos
 
@@ -84,4 +93,4 @@ A API permanece uniforme por plataforma. Consultar [M1.1](docs/M1.1-STATUS.md), 
 
 **Licença:** BSD-3-Clause apenas para o código original deste protótipo. Código GPL de projetos de referência não foi incorporado. Consulte `docs/LICENSE-DECISION.md` antes de integrar bibliotecas de terceiros.
 
-Próxima tarefa objetiva: [M1.2](docs/NEXT-TASK.md).
+Próxima tarefa objetiva: [M1.4](docs/NEXT-TASK.md).

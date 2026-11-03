@@ -2,8 +2,8 @@
 
 Leia também `README.md` / `README.pt-BR.md`, `docs/ARCHITECTURE.md` (contratos
 implementados e interfaces propostas), o status do marco mais recente
-(`docs/M1.2-STATUS.md`, com `docs/M1.1-STATUS.md` e `docs/M0-STATUS.md` como
-histórico) e `docs/NEXT-TASK.md`. Licenças e referências estão em
+(`docs/M1.3-STATUS.md`, com `docs/M1.2-STATUS.md`, `docs/M1.1-STATUS.md` e
+`docs/M0-STATUS.md` como histórico) e `docs/NEXT-TASK.md`. Licenças e referências estão em
 `docs/LICENSE-DECISION.md` e `docs/REFERENCE-AUDIT.md`. Atualizar status e
 READMEs (inglês e português) somente com o que foi demonstrado por teste.
 
@@ -40,13 +40,12 @@ reais; não forçar Browser ou jogos com stubs.
 
 ## Estado atual (2026-11-03)
 
-- M0, M1.1 e M1.2 concluídos. 9 testes CTest aprovados nos seis alvos da CI.
-- Próximo incremento: **M1.3** (`docs/NEXT-TASK.md`) — relocations
-  `R_MIPS_HI16/LO16` e `R_MIPS_26` com pares, símbolos, offsets e erros;
-  descoberta de funções, jump tables e destinos indiretos por evidência
-  verificável; mais instruções de cálculo de endereço e fluxo; fixtures ELF
-  sintéticos E2E (ELF → C++ AOT → compilação nativa → execução → validação de
-  registradores, memória e fluxo).
+- M0, M1.1, M1.2 e M1.3 concluídos. 12 testes CTest (ver `docs/M1.3-STATUS.md`).
+- M1.3: relocations `R_MIPS_26` e `R_MIPS_HI16/LO16` lidas como evidência
+  (nunca aplicadas), jump tables provadas por `SLTIU` + `BEQ $zero`, entradas
+  indiretas verificadas em runtime e subconjunto inteiro R5900 de 64 bits.
+- Próximo incremento: **M1.4** (`docs/NEXT-TASK.md`) — fronteira explícita de
+  exceções/syscalls do EE e loads/stores desalinhados, sem kernel falso.
 - Fixtures são somente sintéticos. Nenhum jogo comercial, BIOS, Browser, IOP,
   VU, GS, SPU2 ou DMA é suportado. Nenhum jogo é declarado compatível.
 
@@ -148,9 +147,10 @@ ctest --test-dir out/build -C Release --output-on-failure
 - CI: `.github/workflows/build.yml`, matriz de seis alvos, `fail-fast: false`.
   Resultado local não substitui a CI; confirmar os jobs do commit
   correspondente (`gh run list`, `gh run view`) antes de declarar aprovação.
-- Resultado de referência (M1.2): 9/9 testes — `core-validation`,
+- Resultado de referência (M1.3): 12/12 testes — `core-validation`,
   `native-aot-smoke`, `native-aot-ops`, `native-indirect-{sym,hints,unresolved}`,
-  `native-jump-{relocations,explicit,unresolved}`. Qualquer falha é regressão.
+  `native-jump-{relocations,explicit,unresolved}`,
+  `native-m13-{relocations,stripped,stripped-hint}`. Qualquer falha é regressão.
 
 ## Estrutura
 
@@ -165,8 +165,10 @@ ctest --test-dir out/build -C Release --output-on-failure
 - `tools/ps2n-aot.cpp` — CLI AOT; reusa o `.cpp` gerado se idêntico
   (`write_text_if_changed`), nunca copia o ELF de entrada.
 - `tests/` — `make_fixture.cpp` gera os ELFs sintéticos no build (modo por
-  argumento); cada teste E2E compila a TU gerada com `ps2n_core` e valida
-  registradores, RAM, contagem de instruções e falhas esperadas.
+  argumento); `m13_program.hpp` é o mini-assembler com rótulos + construtor
+  ELF compartilhado entre gerador e teste (endereços definidos uma vez); cada
+  teste E2E compila a TU gerada com `ps2n_core` e valida registradores, RAM,
+  contagem de instruções e falhas esperadas.
 - `docs/` — arquitetura, status por marco, próxima tarefa, auditoria de
   referências e decisão de licença.
 - `out/`, `build/`, `generated/` — ignorados; artefatos locais.

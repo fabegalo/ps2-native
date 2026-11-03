@@ -2,9 +2,18 @@
 **Languages:** English | [Português (Brasil)](README.pt-BR.md)
 
 
-**Status: M1.1 experimental AOT proof of concept. NOT a PS2 emulator or playable game launcher.**
+**Status: M1.3 experimental AOT proof of concept. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported.**
 
-### Current progress — M1.1
+### Current progress — M1.3
+
+- **MIPS relocations as evidence, never applied.** For already-linked ELF32 `ET_EXEC` files that keep `SHT_REL` records, `R_MIPS_26` (validated `J`/`JAL`), and `R_MIPS_HI16`/`R_MIPS_LO16` pairs (ABI pairing, several HI16 per LO16, `LUI` + sign-extended `%lo` carriers) are checked against the linked bytes and symbols. A HI16/LO16 pair that forms a code address (`ADDIU`) proves an address-taken function. Malformed records (orphan HI16, wrong instruction, bad symbol, site outside the code section) fail explicitly; unused types such as `R_MIPS_GPREL16` are counted and reported, not dropped silently.
+- **Jump tables proven from the code itself**, with no per-game configuration: a `JR` is accepted only when a straight-line path shows an `SLTIU` bound, a `BEQ …, $zero` guard, a word-scaled index, the table base and the `LW` of the entry, with no outside branch into that window. GCC and ee-gcc shapes are recognized; every table entry must be executable code in the same segment. Unprovable `JR`s are reported with a reason.
+- **Verified indirect entries at runtime:** `JR`/`JALR` may only reach function roots, call continuations or proven table targets; anything else fails closed.
+- **R5900 integer subset** with 64-bit semantics that preserve the upper GPR half: 32/64-bit shifts, `DADDU/DSUBU/DADDIU`, logic ops, 64-bit `SLT*`, `MOVZ/MOVN`, three-operand `MULT/MULTU`, `DIV/DIVU` (defined division-by-zero results), `MFHI/MFLO/MTHI/MTLO`, byte/half/word/double/quad loads and stores (`LQ/SQ`), `BLEZ/BGTZ/BLTZ/BGEZ`, `BxxZAL`, all branch-likely forms with delay-slot nullification, and `SYNC`. `ORI` and `BEQ/BNE` now use the R5900 64-bit behavior.
+
+A synthetic M1.3 ELF (with and without sections) is generated, recompiled to C++, compiled natively and executed: **263 guest instructions**, 2 proven jump tables, 61 checked 64-bit ALU/memory values, link registers, branch-likely nullification and fail-closed indirect targets. **12/12 tests** pass locally on Windows x86-64 (MSVC 19.44 and LLVM clang++ 22); see the [GitHub Actions results](https://github.com/fabegalo/ps2-native/actions) for the six targets. [M1.3 evidence and limitations](docs/M1.3-STATUS.md).
+
+### M1.1
 
 The AOT tool discovers validated ELF32 `STT_FUNC` symbols or explicit `--entry=0xADDRESS` hints, builds a conservative control-flow graph, and emits **native C++ basic-block functions with an address-based dispatcher**. A synthetic MIPS ELF executes three indirect `JALR/JR` calls with real delay slots, including the `JALR rs==rd` case. Unknown targets and modified executable instructions fail explicitly; the project has no silent interpreter fallback.
 
@@ -47,6 +56,6 @@ The CI matrix targets Windows (x86-64/ARM64), Linux (x86-64/ARM64) and macOS (In
 
 `ps2n-aot input.elf output.cpp` produces a translation unit only; a host must link it with `ps2n_core` and initialize memory/state. The current integration is implemented for synthetic fixtures, not for real commercial games or the PS2 BIOS.
 
-See [architecture](docs/ARCHITECTURE.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
+See [architecture](docs/ARCHITECTURE.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
 
-Next engineering increment: [M1.2](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.
+Next engineering increment: [M1.4](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.

@@ -28,3 +28,16 @@ Fontes:
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Memory.cpp
 - https://github.com/open-goal/jak-project
 - https://github.com/moesuito/gt4-staticrecomp
+
+## Consulta para a M1.3 — 03/11/2026
+
+Somente leitura de comportamento; **nenhum trecho foi copiado ou traduzido**.
+
+- **PCSX2** `pcsx2/R5900OpcodeImpl.cpp` e `pcsx2/Interpreter.cpp`: confirmam comparações de 64 bits em `BEQ/BNE/BLEZ/BGTZ/BLTZ/BGEZ/SLT/SLTI/SLTIU`, `ORI/ANDI/XORI` em 64 bits com imediato estendido com zero, deslocamentos de 32 bits com resultado estendido com sinal, `MULT/MULTU` de três operandos (LO também em `rd`), resultados de `DIV/DIVU` para divisão por zero e `INT32_MIN / -1`, link sempre escrito em `BxxZAL(L)`, anulação do delay slot em branch-likely não tomado, `LQ/SQ` ignorando os 4 bits baixos e `SYNC` sem efeito no interpretador. O ps2-native reimplementou essas regras de forma independente e as verifica com fixture sintético.
+- **PS2Recomp** `ps2xRecomp/src/lib/elf_parser.cpp`, `ps2_recompiler.cpp`: relocations são carregadas, jump tables vêm de configuração (`m_config.jumpTables`) e há varredura heurística de `LUI/ADDIU`. O ps2-native **não** adota configuração por jogo nem aceita endereços por semelhança: exige relocation verificada ou prova no código (`SLTIU` + `BEQ $zero` + tabela escalada).
+- **ABI MIPS SysV / binutils:** pareamento `R_MIPS_HI16` com o próximo `R_MIPS_LO16` do mesmo símbolo, vários `HI16` por `LO16`, `%hi` com ajuste de carry para o `%lo` com sinal, e `R_MIPS_26` dentro da região de 256 MiB de `PC + 4`.
+
+Fontes adicionais:
+- https://github.com/PCSX2/pcsx2/blob/master/pcsx2/R5900OpcodeImpl.cpp
+- https://github.com/ran-j/PS2Recomp/blob/main/ps2xRecomp/src/lib/elf_parser.cpp
+- https://github.com/ran-j/PS2Recomp/blob/main/ps2xRecomp/src/lib/ps2_recompiler.cpp
