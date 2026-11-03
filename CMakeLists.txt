@@ -419,3 +419,11 @@ if(BUILD_TESTING)
     set_tests_properties(native-m29-gs PROPERTIES TIMEOUT 30)
 
 endif()
+
+# Desktop launcher (Qt 6 Quick). Optional: AUTO builds it only when Qt is found,
+# so headless and core-only builds never depend on a GUI toolkit.
+set(PS2N_LAUNCHER "AUTO" CACHE STRING "Build the ps2-native desktop launcher (Qt 6): AUTO, ON or OFF")
+set_property(CACHE PS2N_LAUNCHER PROPERTY STRINGS AUTO ON OFF)
+if(NOT PS2N_LAUNCHER STREQUAL "OFF")
+    add_subdirectory(launcher)
+endif()
