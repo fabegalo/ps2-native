@@ -97,3 +97,7 @@ Cada bloqueio da ROM0 do usuário vira o menor modelo sustentado por evidência 
 ## M2.4 — Conclusão das transações e registradores de temporização
 
 `MchRegisters` guarda o estado da cadeia antes e depois da transação em andamento. A cadeia (`chain(now)`) e o dado do `SRD` só mudam quando o bit 31 zera, mas a validação acontece no `SW` que inicia a transação. `RdramChain` modela os registradores de temporização que a BIOS escreve antes da enumeração. Evidência sobre `F520`/`F410` e insumos pendentes: [M2.4-STATUS.md](M2.4-STATUS.md).
+
+## M2.5 — Perfis de hardware e controle do MCH
+
+`ConsoleHardware` (`console.hpp`) guarda o que a BIOS lê do próprio hardware e nenhum ROM0 contém, por modelo, placa e ROMVER: hoje `D_ENABLER`, com a evidência de cada valor. `prepare_ee_boot` recusa um perfil de outra revisão de BIOS; `EeRegisters` lê `0x1000F520` do perfil ou recusa com nome. `MchRegisters` acrescenta os latches de controle `F400`–`F4C0` e a operação do `F410`, além da inicialização dos pinos SIO (`SOP 1110`), que chega à `RdramChain` como `sio_pin_initialization()`. Hipóteses e evidência: [M2.5-STATUS.md](M2.5-STATUS.md).

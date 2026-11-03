@@ -2,9 +2,17 @@
 **Languages:** English | [Português (Brasil)](README.pt-BR.md)
 
 
-**Status: experimental prototype, M2.4 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps run their first ~637,600 EE instructions and then stop at an unmodeled register. Nothing is rendered.**
+**Status: experimental prototype, M2.5 in progress. NOT a PS2 emulator or playable game launcher. No commercial game, BIOS or Browser is supported: real BIOS dumps, run with a console hardware profile, execute 1.1–1.85 million EE instructions and then stop at the first read of IOP RAM (the IOP is not modeled). Nothing is rendered.**
 
-### Current progress — M2.4: RDRAM timing registers and completion-time serial transactions
+### Current progress — M2.5: past the MCH/RDRAM block
+
+- **Real BIOS progress:** SCPH-70012 and SCPH-77008 now reach 1,845,848/1,845,866 instructions and the 2006-09 Japanese dump 1,111,255 (was ~637,600 at `0x1000F410`). They print `# Initialize memory (rev:3.70, ... detected)` and stop at `LW 0xBC0003F0`, the IOP boot-mode table that the memory init queries. Interpreter and hybrid traces are identical.
+- **Console hardware profiles (`--console=MODEL[:MAINBOARD]`):** `D_ENABLER` (`0x1000F520`) comes from the board, not from a global value. SCPH-77008 is measured (`0x4111`); SCPH-70012 GH-032 and SCPH-90000/90006 use values measured on consoles with the same chip revisions (marked as hypotheses); SCPH-70012 GH-035 stays unknown and refused. A profile is refused with a BIOS of another ROMVER.
+- **MCH control registers** `F400`–`F4C0` as latches and the `F410` operation (bit 31 alone, busy for 16 SCK; hypothesis), the SIO pin initialization (`SOP 1110`, hypothesis) and the later Direct RDRAM opcode encoding (`CLRR` = `1011`).
+- **RDRAM:** registers programmed before the first `SETR` and kept by it (hypothesis), more register layouts (`DEVID`, `CCA/CCB`, `NAPX`, `PDNXA/B`, `TPARM`, `SKIP`, test registers) and an `SRD` no device answers reading 0 (hypothesis).
+- **20/20 tests** pass locally (MSVC). [M2.5 evidence, hypotheses and the IOP block](docs/M2.5-STATUS.md).
+
+### M2.4: RDRAM timing registers and completion-time serial transactions
 
 - **Completion-time commits:**
   - MCH serial transactions are validated when `MCH_RICM` is written, so a refusal names that store and changes nothing.
@@ -80,7 +88,7 @@ Three user-supplied ROM0 dumps (SCPH-70012 v2.00 USA, SCPH-77008 v2.20 Europe, S
 A synthetic, self-authored ROM0 boots from the reset vector through TLB init, scratchpad mapping, cache invalidation, a ROM→RAM copy, `ERET` and a RAM payload, then stops at `INTC_STAT` (`0x1000F000`), which is not modeled yet: **582 instructions**, identical results interpreter-only and hybrid (370 AOT + 213 interpreted). **15/15 tests** pass locally on Windows x86-64 (MSVC 19.44, LLVM clang++ 22). [M2.0 evidence, real-firmware workflow and limitations](docs/M2.0-STATUS.md).
 
 ```sh
-./out/build/ps2n-boot /path/to/your-rom0.bin --trace=full --trace-out=boot-trace.txt
+./out/build/ps2n-boot /path/to/your-rom0.bin --console=SCPH-77008 --trace=full --trace-out=boot-trace.txt
 ```
 
 ### M1.3
@@ -135,6 +143,6 @@ The CI matrix targets Windows (x86-64/ARM64), Linux (x86-64/ARM64) and macOS (In
 
 `ps2n-aot input.elf output.cpp` produces a translation unit only; a host must link it with `ps2n_core` and initialize memory/state. The current integration is implemented for synthetic fixtures, not for real commercial games or the PS2 BIOS.
 
-See [architecture](docs/ARCHITECTURE.md), [M2.4 status](docs/M2.4-STATUS.md), [M2.3 status](docs/M2.3-STATUS.md), [M2.2 status](docs/M2.2-STATUS.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
+See [architecture](docs/ARCHITECTURE.md), [M2.5 status](docs/M2.5-STATUS.md), [M2.4 status](docs/M2.4-STATUS.md), [M2.3 status](docs/M2.3-STATUS.md), [M2.2 status](docs/M2.2-STATUS.md), [M2.1 status](docs/M2.1-STATUS.md), [M2.0 status](docs/M2.0-STATUS.md), [M1.3 status](docs/M1.3-STATUS.md), [M1.2 status](docs/M1.2-STATUS.md), [M1.1 status](docs/M1.1-STATUS.md), [M0 baseline](docs/M0-STATUS.md), [reference audit](docs/REFERENCE-AUDIT.md), and [license decision](docs/LICENSE-DECISION.md). Generated translations of copyrighted guest binaries must not be redistributed without permission. No Sony firmware, game data or third-party GPL implementation is bundled.
 
-Next engineering increment: [M2.4 continued](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.
+Next engineering increment: [M2.5 continued: the IOP on the boot path](docs/NEXT-TASK.md). Licensed BSD-3-Clause for independently authored code; no GPL source or Sony firmware is included.

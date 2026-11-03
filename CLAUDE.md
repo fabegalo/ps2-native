@@ -2,7 +2,7 @@
 
 Leia também `README.md` / `README.pt-BR.md`, `docs/ARCHITECTURE.md` (contratos
 implementados e interfaces propostas), o status do marco mais recente
-(`docs/M2.4-STATUS.md`, em andamento, com `docs/M2.3-STATUS.md`, `docs/M2.2-STATUS.md`, `docs/M2.1-STATUS.md`, `docs/M2.0-STATUS.md`, `docs/M1.3-STATUS.md`, `docs/M1.2-STATUS.md`,
+(`docs/M2.5-STATUS.md`, em andamento, com `docs/M2.4-STATUS.md`, `docs/M2.3-STATUS.md`, `docs/M2.2-STATUS.md`, `docs/M2.1-STATUS.md`, `docs/M2.0-STATUS.md`, `docs/M1.3-STATUS.md`, `docs/M1.2-STATUS.md`,
 `docs/M1.1-STATUS.md` e `docs/M0-STATUS.md` como histórico) e `docs/NEXT-TASK.md`. Licenças e referências estão em
 `docs/LICENSE-DECISION.md` e `docs/REFERENCE-AUDIT.md`. Atualizar status e
 READMEs (inglês e português) somente com o que foi demonstrado por teste.
@@ -42,8 +42,9 @@ reais; não forçar Browser ou jogos com stubs.
 
 ## Estado atual (2026-11-03)
 
-- M0, M1.1, M1.2, M1.3, M2.0, M2.1, M2.2 e M2.3 concluídos; M2.4 em andamento. 19 testes CTest (ver `docs/M2.4-STATUS.md`).
-- M2.4: transações seriais do MCH validadas no início e aplicadas na conclusão (`chain(now)`); `TCYCLE`/`TFRM`/`TRDLY`/`TEST77` da RDRAM (layout 64/72 Mbit; `TPARM` recusado). `0x1000F520` (`D_ENABLER`) é a chave de uma tabela de 16 gerações do MCH nas três BIOS; valor por console desconhecido, recusado. Bloqueio inalterado em `0x1000F410` (`0x9FC4135C`).
+- M0, M1.1, M1.2, M1.3, M2.0, M2.1, M2.2, M2.3 e M2.4 concluídos; M2.5 em andamento. 20 testes CTest (ver `docs/M2.5-STATUS.md`).
+- M2.5: bloqueio do `F410` superado. Perfis `ConsoleHardware` (`--console=MODELO[:PLACA]`) fornecem `D_ENABLER` por placa e ROMVER (SCPH-77008 `0x4111` medido; demais por mesma revisão de chip, hipótese). Latches de controle `F400`–`F4C0` e operação do `F410` (hipótese), `SOP 0xE` = inicialização dos pinos SIO (hipótese), `CLRR` = `0xB`, registradores da RDRAM programados antes do `SETR` e mantidos por ele (hipótese), `SRD` sem resposta lê 0 (hipótese). BIOS reais: 1.845.848 (SCPH-70012), 1.845.866 (SCPH-77008) e 1.111.255 (dump J de 2006-09) instruções, bloqueio no `LW` de `0xBC0003F0` (RAM do IOP, `QueryBootMode(2)`, PC `0x9FC43954`/`0x9FC43A2C`).
+- M2.4: transações seriais do MCH validadas no início e aplicadas na conclusão (`chain(now)`); `TCYCLE`/`TFRM`/`TRDLY`/`TEST77` da RDRAM (layout 64/72 Mbit). `0x1000F520` (`D_ENABLER`) é a chave de uma tabela de 16 gerações do MCH nas três BIOS.
 - M2.3: `MchRegisters` (`MCH_RICM`/`MCH_DRD`, bit 31 ocupado pela duração em SCK × 1000 ns, hipótese) sobre `RdramChain` (datasheet Direct RDRAM 64/72 Mbit da Rambus: `SETR`/`CLRR`/`SETF`, `SWR`/`SRD` de `INIT`, repetidor SIO, `SDEVID`); InitDev sintético para dois dispositivos. A BIOS real continua parando no `SW` em `0x1000F410` (`0x9FC4135C`, 637.620/637.598 instruções): `F410`, `0x1000F520`, `F480/F490/F4C0` e os `SOP` `0xE`/`0xB` (reservados no datasheet de 64 Mbit) vêm antes de qualquer `SETR` e aguardam evidência ou decisão do mantenedor.
 - M2.2: as três BIOS reais param no `SW` em `0x1000F410` (MCH). Adicionados `GsRegisters` (`SMODE1/2`, `SRFSH`, `SYNCH1/2`, `SYNCV`, escritas de `CSR`; nada é desenhado) com relógio de linha NTSC/PAL que gera o HBLANK dos timers, latches DEV9 `0x1F801470/2`, transmissão do EE SIO (`ps2n-boot` mostra a saída), `LWC1`/`SWC1` com `Status.CU1` e prova AOT de `JR` constante (`LUI`+`ORI`/`ADDIU`), que leva a tradução da BIOS de 12 para 107 instruções estáticas.
 - M2.1: `0x1F803204` ("tool board id") lê `0xFF` por hipótese (sem placa de ferramenta; evidência em `docs/M2.1-STATUS.md`). MMI do pipeline 1 + `PADDUW`, relógio do EE (1 ciclo/instrução, hipótese) com `COP0 Count` e timers T0–T3 (`EeRegisters`), latch `0x1000F500`, entrada S da TLB cobrindo 16 KiB e entradas não escritas que não correspondem.
@@ -54,9 +55,8 @@ reais; não forçar Browser ou jogos com stubs.
 - M1.3: relocations `R_MIPS_26` e `R_MIPS_HI16/LO16` lidas como evidência
   (nunca aplicadas), jump tables provadas por `SLTIU` + `BEQ $zero`, entradas
   indiretas verificadas em runtime e subconjunto inteiro R5900 de 64 bits.
-- Próximo passo: continuação da **M2.4** (`docs/NEXT-TASK.md`) — insumos de hardware:
-  `D_ENABLER` medido por console, datasheet de 128/144 Mbit (`SOP 0xE`/`0xB`,
-  estado ao ligar) e decisão sobre `F410`/`F480`/`F490`/`F4C0`.
+- Próximo passo: continuação da **M2.5** (`docs/NEXT-TASK.md`) — o IOP (R3000A, RAM,
+  `IsC`) no caminho de boot até a tabela de modos de boot em `0x3F0`.
 - Fixtures são somente sintéticos. Nenhum jogo comercial, Browser, IOP,
   VU, GS, SPU2 ou DMA é suportado. Nenhum jogo é declarado compatível.
 
@@ -153,7 +153,7 @@ ctest --test-dir out/build -C Release --output-on-failure
 ```sh
 ./out/build/ps2n-aot input.elf out.cpp [--entry=0xADDR]... [--table=0xADDR:COUNT]...
 ./out/build/ps2n-aot rom0.bin out.cpp --bios [--expect-sha256=HEX]
-./out/build/ps2n-boot rom0.bin [--trace=events|full] [--trace-out=FILE] [--max-instructions=N] [--stop-at=0xADDR]
+./out/build/ps2n-boot rom0.bin [--console=MODEL[:MAINBOARD]] [--trace=events|full] [--trace-out=FILE] [--max-instructions=N] [--stop-at=0xADDR]
 ```
 
 BIOS, traces e traduções de firmware ficam fora do repositório
@@ -163,11 +163,11 @@ BIOS, traces e traduções de firmware ficam fora do repositório
 - CI: `.github/workflows/build.yml`, matriz de seis alvos, `fail-fast: false`.
   Resultado local não substitui a CI; confirmar os jobs do commit
   correspondente (`gh run list`, `gh run view`) antes de declarar aprovação.
-- Resultado de referência (M2.4): 19/19 testes — `core-validation`,
+- Resultado de referência (M2.5): 20/20 testes — `core-validation`,
   `native-aot-smoke`, `native-aot-ops`, `native-indirect-{sym,hints,unresolved}`,
   `native-jump-{relocations,explicit,unresolved}`,
   `native-m13-{relocations,stripped,stripped-hint}`, `native-m20-boot`,
-  `cli-m20-boot-{interpreter,hybrid}`, `native-m21-boot`, `native-m22-boot`, `native-m23-boot`, `native-m24-boot`. Qualquer falha é regressão.
+  `cli-m20-boot-{interpreter,hybrid}`, `native-m21-boot`, `native-m22-boot`, `native-m23-boot`, `native-m24-boot`, `native-m25-boot`. Qualquer falha é regressão.
 
 ## Estrutura
 
@@ -175,7 +175,8 @@ BIOS, traces e traduções de firmware ficam fora do repositório
   `ee_semantics` (semântica inteira R5900 única para AOT e interpretador),
   `ee_registers` (timers, SIO e registradores do EE em `0x10000000`),
   `gs_registers` (registradores privilegiados do GS e relógio de linha),
-  `mch` (interface serial do MCH), `rdram` (cadeia Direct RDRAM),
+  `mch` (interface serial e controle do MCH), `console` (perfis de hardware por
+  placa/ROMVER, `D_ENABLER`), `rdram` (cadeia Direct RDRAM),
   `device_timing` (`DeviceRefusal`, relógio do EE e comprimentos de linha),
   `control_flow`, `aot`, `aot_runtime`, `interpreter`, `bios`, `boot`,
   `sha256`, `io`, `core`.
@@ -186,7 +187,7 @@ BIOS, traces e traduções de firmware ficam fora do repositório
   funções (`control_flow.cpp`), emissor C++ (`aot.cpp`), despacho AOT
   (`aot_runtime.cpp`), interpretador com COP0/TLB/ERET/CACHE
   (`interpreter.cpp`), loader de ROM0 (`bios.cpp`), boot híbrido e trace
-  (`boot.cpp`), registradores do EE (`ee_registers.cpp`), GS (`gs_registers.cpp`), MCH (`mch.cpp`), cadeia RDRAM (`rdram.cpp`), SHA-256 (`sha256.cpp`), I/O centralizado Unicode/long paths
+  (`boot.cpp`), registradores do EE (`ee_registers.cpp`), GS (`gs_registers.cpp`), MCH (`mch.cpp`), cadeia RDRAM (`rdram.cpp`), perfis de console (`console.cpp`), SHA-256 (`sha256.cpp`), I/O centralizado Unicode/long paths
   (`io.cpp`). Todo novo `.cpp` entra em `ps2n_core` no `CMakeLists.txt`.
 - `tools/ps2n-aot.cpp` — CLI AOT (ELF ou ROM0 com `--bios`); reusa o `.cpp`
   gerado se idêntico (`write_text_if_changed`), nunca copia a entrada.
@@ -196,8 +197,8 @@ BIOS, traces e traduções de firmware ficam fora do repositório
   por argumento); `m13_program.hpp` é o mini-assembler com rótulos + construtor
   ELF compartilhado entre gerador e teste; `bios_program.hpp` monta a ROM0
   sintética (ROMDIR/EXTINFO/ROMVER + programa de reset) usada por
-  `boot_m20.cpp` e, nas variantes `build_firmware(Stage::M21..M24)`, por
-  `boot_m21.cpp`..`boot_m24.cpp`; `boot_checks.hpp` reúne os auxiliares de teste
+  `boot_m20.cpp` e, nas variantes `build_firmware(Stage::M21..M25)`, por
+  `boot_m21.cpp`..`boot_m25.cpp`; `boot_checks.hpp` reúne os auxiliares de teste
   (endereços definidos uma vez); cada
   teste E2E compila a TU gerada com `ps2n_core` e valida registradores, RAM,
   contagem de instruções e falhas esperadas.

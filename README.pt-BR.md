@@ -2,9 +2,17 @@
 **Idiomas:** [English](README.md) | Português (Brasil)
 
 
-> **Status:** protótipo experimental, M2.4 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS executam as primeiras ~637.600 instruções do EE e param num registrador não modelado. Nada é renderizado.
+> **Status:** protótipo experimental, M2.5 em andamento. Ainda não é um emulador PS2 nem um launcher; não executa o Browser nem jogos comerciais. Dumps reais de BIOS, com um perfil de hardware do console, executam de 1,1 a 1,85 milhão de instruções do EE e param na primeira leitura da RAM do IOP (o IOP não é modelado). Nada é renderizado.
 
-## Novidades da M2.4 — registradores de temporização da RDRAM e transações concluídas no tempo certo
+## Novidades da M2.5 — bloqueio do MCH/RDRAM superado
+
+- **Avanço com BIOS real:** SCPH-70012 e SCPH-77008 chegam a 1.845.848/1.845.866 instruções e o dump japonês de 2006-09 a 1.111.255 (antes ~637.600, em `0x1000F410`). Imprimem `# Initialize memory (rev:3.70, ... detected)` e param no `LW 0xBC0003F0`, a tabela de modos de boot do IOP consultada pela inicialização de memória. Os traces do interpretador e do híbrido são idênticos.
+- **Perfis de hardware (`--console=MODELO[:PLACA]`):** `D_ENABLER` (`0x1000F520`) vem da placa, nunca de um valor global. SCPH-77008 é medido (`0x4111`); SCPH-70012 GH-032 e SCPH-90000/90006 usam valores medidos em consoles com as mesmas revisões de chip (hipóteses marcadas); SCPH-70012 GH-035 continua desconhecido e recusado. Um perfil é recusado com BIOS de outro ROMVER.
+- **Registradores de controle do MCH** `F400`–`F4C0` como latches e a operação do `F410` (só o bit 31, ocupado por 16 SCK; hipótese), a inicialização dos pinos SIO (`SOP 1110`, hipótese) e a codificação de opcodes das Direct RDRAM posteriores (`CLRR` = `1011`).
+- **RDRAM:** registradores programados antes do primeiro `SETR` e mantidos por ele (hipótese), novos layouts (`DEVID`, `CCA/CCB`, `NAPX`, `PDNXA/B`, `TPARM`, `SKIP`, registradores de teste) e `SRD` sem resposta lendo 0 (hipótese).
+- **20/20 testes** aprovados localmente (MSVC). [Evidências, hipóteses e o bloqueio do IOP](docs/M2.5-STATUS.md).
+
+## M2.4 — registradores de temporização da RDRAM e transações concluídas no tempo certo
 
 - **Efeitos na conclusão:**
   - As transações seriais do MCH são validadas na escrita de `MCH_RICM`; uma recusa nomeia esse `SW` e não altera nada.
@@ -80,7 +88,7 @@ Três dumps de ROM0 fornecidos pelo usuário (SCPH-70012 v2.00 EUA, SCPH-77008 v
 Uma ROM0 sintética de autoria própria inicia no vetor de reset, passa por inicialização da TLB, mapeamento do scratchpad, invalidação de cache, cópia ROM→RAM, `ERET` e um payload em RAM, e para em `INTC_STAT` (`0x1000F000`), ainda não modelado: **582 instruções**, resultados idênticos com interpretador puro e híbrido (370 AOT + 213 interpretadas). **15/15 testes** aprovados localmente no Windows x86-64 (MSVC 19.44, LLVM clang++ 22). [Evidências da M2.0, uso com firmware real e limitações](docs/M2.0-STATUS.md).
 
 ```sh
-./out/build/ps2n-boot /caminho/para/sua-rom0.bin --trace=full --trace-out=boot-trace.txt
+./out/build/ps2n-boot /caminho/para/sua-rom0.bin --console=SCPH-77008 --trace=full --trace-out=boot-trace.txt
 ```
 
 ## M1.3
@@ -164,7 +172,7 @@ O build gera seu próprio ELF de teste em `out/build/fixtures/synthetic.elf` e r
 - `tests/`: firmware/jogos **não** são necessários; fixture MIPS de autoria própria.
 - `.github/workflows/build.yml`: matriz dos seis sistemas/arquiteturas, sem releases prematuras.
 
-A API permanece uniforme por plataforma. Consultar [M2.4](docs/M2.4-STATUS.md), [M2.3](docs/M2.3-STATUS.md), [M2.2](docs/M2.2-STATUS.md), [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
+A API permanece uniforme por plataforma. Consultar [M2.5](docs/M2.5-STATUS.md), [M2.4](docs/M2.4-STATUS.md), [M2.3](docs/M2.3-STATUS.md), [M2.2](docs/M2.2-STATUS.md), [M2.1](docs/M2.1-STATUS.md), [M2.0](docs/M2.0-STATUS.md), [M1.3](docs/M1.3-STATUS.md), [M1.2](docs/M1.2-STATUS.md), [M1.1](docs/M1.1-STATUS.md), [arquitetura](docs/ARCHITECTURE.md), [auditoria das referências](docs/REFERENCE-AUDIT.md), [status técnico](docs/M0-STATUS.md) e [licenciamento](docs/LICENSE-DECISION.md).
 
 ## Próximos marcos
 
@@ -172,4 +180,4 @@ A API permanece uniforme por plataforma. Consultar [M2.4](docs/M2.4-STATUS.md), 
 
 **Licença:** BSD-3-Clause apenas para o código original deste protótipo. Código GPL de projetos de referência não foi incorporado. Consulte `docs/LICENSE-DECISION.md` antes de integrar bibliotecas de terceiros.
 
-Próxima tarefa objetiva: [continuação da M2.4](docs/NEXT-TASK.md).
+Próxima tarefa objetiva: [continuação da M2.5: o IOP no caminho de boot](docs/NEXT-TASK.md).
