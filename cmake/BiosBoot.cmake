@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-sio2-dma tests/sio2_dma.cpp)
+    target_link_libraries(ps2n-sio2-dma PRIVATE ps2n_core)
+    add_test(NAME native-sio2-dma COMMAND ps2n-sio2-dma)
+    set_tests_properties(native-sio2-dma PROPERTIES TIMEOUT 30)
     add_executable(ps2n-ee-memory-copy tests/ee_memory_copy.cpp)
     target_link_libraries(ps2n-ee-memory-copy PRIVATE ps2n_core)
     add_test(NAME native-ee-memory-copy COMMAND ps2n-ee-memory-copy)

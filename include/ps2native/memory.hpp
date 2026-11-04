@@ -153,6 +153,8 @@ public:
     [[nodiscard]] const GsRegisters& gs() const noexcept { return registers_.gs(); }
     [[nodiscard]] const Gif& gif() const noexcept { return registers_.gif(); }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
+    void diagnostic_sio2_infrared_timeout(std::uint32_t cycles) { registers_.diagnostic_sio2_infrared_timeout(cycles); }
+    void diagnostic_sio2_dma_word_cycles(std::uint32_t cycles) { registers_.diagnostic_sio2_dma_word_cycles(cycles); }
     [[nodiscard]] const Iop& iop() const noexcept { return registers_.iop(); }
     void diagnostic_spu2_7ca_latch() { registers_.diagnostic_spu2_7ca_latch(); }
     void diagnostic_spu2_reserved_latches() { registers_.diagnostic_spu2_reserved_latches(); }

@@ -123,6 +123,17 @@ public:
     void set_ee_dma_suspended(bool suspended) noexcept { ee_dma_suspended_=suspended; }
     [[nodiscard]] bool ee_dma_suspended() const noexcept { return ee_dma_suspended_; }
 
+    // Explicit experiment only: no external IR dongle, command timeout in
+    // IOP cycles, self-clearing CTRL command bits, retained configuration and
+    // completion flag bit 0. Timing and
+    // these control/status details are not physical measurements. Reset
+    // disables it. Other peripherals and SIO2 DMA remain unsupported.
+    void diagnostic_sio2_infrared_timeout(std::uint32_t cycles);
+    void diagnostic_sio2_dma_word_cycles(std::uint32_t cycles);
+    [[nodiscard]] std::uint64_t sio2_dma_words(unsigned channel) const { return sio2_dma_.at(channel).words; }
+    [[nodiscard]] std::optional<std::uint8_t> sio2_input_byte(std::size_t n) const {
+        return n<sio2_input_.size() ? std::optional<std::uint8_t>{sio2_input_[n]} : std::nullopt;
+    }
     // Unknown SPDIF 0x7CA write side effects: explicit diagnostic hypothesis
     // of a configuration latch only. Reads remain unsupported; reset disables it.
     void diagnostic_spu2_7ca_latch() { diagnostic_spu2_7ca_latch_=true; }
@@ -262,6 +273,19 @@ private:
     void store(std::uint32_t address, std::size_t bytes, std::optional<std::uint32_t> value, const char* what,
                const ObservedWord* observed=nullptr,std::uint64_t sio2_epoch=0);
     void reset_sio2_observed(ObservedWord word,std::uint64_t epoch);
+    void write_sio2_dma(unsigned channel,unsigned field,std::size_t bytes,std::uint32_t value);
+    [[nodiscard]] std::uint32_t read_sio2_dma(unsigned channel,unsigned field,std::size_t bytes) const;
+    void pump_sio2_dma();
+    struct Sio2Dma {
+        std::array<std::uint32_t,3> registers{};
+        std::uint32_t block_words{},words_left{};
+        std::uint8_t written{};
+        std::uint64_t words{};
+    };
+    std::array<Sio2Dma,2> sio2_dma_{};
+    std::uint32_t diagnostic_sio2_dma_cycles_{};
+    std::uint64_t sio2_dma_next_{};
+    unsigned sio2_dma_turn_{};
     void write_spu2_control(std::uint32_t physical,ObservedWord word);
     [[nodiscard]] bool spu2_effects_active(unsigned core) const;
     [[nodiscard]] std::pair<std::uint32_t,std::uint32_t> spu2_effect_area(unsigned core) const;
@@ -273,6 +297,7 @@ private:
     void consume_spu2_input(unsigned core,std::uint64_t sample_cycle);
     void write_spu2_dma(unsigned core,std::uint32_t field,std::size_t bytes,std::uint32_t value);
     [[nodiscard]] std::uint32_t read_spu2_dma(unsigned core,std::uint32_t field,std::size_t bytes) const;
+    void start_sio2_infrared(std::uint32_t interrupt_enable);
     [[nodiscard]] std::uint32_t io_read(std::uint32_t physical, std::size_t bytes, const char* what);
     void io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what);
     void mechacon_command(std::uint8_t command, const char* what);
@@ -297,6 +322,13 @@ private:
     std::uint32_t undefined_known_{};            // bits of that value that are known
     std::array<std::uint64_t,32> gpr_sio2_epoch_{};
     std::uint64_t sio2_control_epoch_{},undefined_sio2_epoch_{};
+    std::vector<std::uint8_t> sio2_input_;
+    std::deque<std::uint8_t> sio2_output_;
+    std::optional<std::uint64_t> sio2_complete_at_;
+    std::uint32_t diagnostic_sio2_timeout_cycles_{};
+    std::uint32_t sio2_reply_bytes_{},sio2_interrupt_enable_{};
+    std::optional<std::uint32_t> sio2_diagnostic_control_;
+    bool sio2_completion_flag_{},sio2_response_valid_{};
     std::array<std::optional<std::uint32_t>, 16> cop0_{};
     const ConsoleHardware* hardware_{};
     // Bus configuration as written; empty value: unknown (reset value never

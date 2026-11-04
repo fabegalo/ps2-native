@@ -72,6 +72,8 @@ public:
     [[nodiscard]] const Gif& gif() const noexcept { return gif_; }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return gs_; }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return mch_; }
+    void diagnostic_sio2_infrared_timeout(std::uint32_t cycles) { iop_.diagnostic_sio2_infrared_timeout(cycles); }
+    void diagnostic_sio2_dma_word_cycles(std::uint32_t cycles) { iop_.diagnostic_sio2_dma_word_cycles(cycles); }
     [[nodiscard]] const Iop& iop() const noexcept { return iop_; }
     void diagnostic_spu2_7ca_latch() { iop_.diagnostic_spu2_7ca_latch(); }
     void diagnostic_spu2_reserved_latches() { iop_.diagnostic_spu2_reserved_latches(); }

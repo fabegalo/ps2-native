@@ -204,6 +204,9 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     std::fill(ram_written_.begin(), ram_written_.end(), std::uint8_t{0});
     gpr_ = {};
     gpr_sio2_epoch_={};sio2_control_epoch_=undefined_sio2_epoch_=0;
+    sio2_input_.clear();sio2_output_.clear();sio2_complete_at_.reset();
+    diagnostic_sio2_timeout_cycles_=sio2_reply_bytes_=sio2_interrupt_enable_=0;
+    sio2_completion_flag_=sio2_response_valid_=false;sio2_diagnostic_control_.reset();
     gpr_defined_ = 1u;
     gpr_origin_.fill("undefined since reset");
     hi_.reset();
@@ -270,6 +273,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     video_ = {};
     gpr_known_ = {};
     latches_.clear();
+    sio2_dma_={};diagnostic_sio2_dma_cycles_=0;sio2_dma_next_=0;sio2_dma_turn_=0;
     if(diagnostic_dmacinten)latches_.push_back({0x1F80157Cu,*diagnostic_dmacinten});
     // Reset values the reset code reads before writing (hypotheses):
     // 0x1F801010 (boot ROM delay/size): the code keeps only bit 12 (ROM bus
@@ -892,6 +896,15 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
             pump_sif1();
             pump_sif0();
             pump_cdvd();
+            if(diagnostic_sio2_dma_cycles_)pump_sio2_dma();
+            if(sio2_complete_at_ && cycle_>=*sio2_complete_at_) {
+                sio2_complete_at_.reset();
+                sio2_output_.assign(sio2_reply_bytes_,0xFFu); // no device drives the serial data line
+                sio2_response_valid_=true;
+                if(!sio2_completion_flag_ && (sio2_interrupt_enable_&0x200u))istat_|=1u<<17u;
+                sio2_completion_flag_=true;
+                events_.push_back({cycle_,"DIAGNOSTIC SIO2 absent infrared timeout"});
+            }
             if(cdvd_complete_at_ && cycle_>=*cdvd_complete_at_) {
                 cdvd_complete_at_.reset(); cdvd_irq_|=2u;
                 events_.push_back({cycle_,"CDVD N command completion"});
@@ -990,9 +1003,9 @@ void Iop::or_value(unsigned rd,unsigned rs,std::uint32_t b,std::uint32_t kb,cons
     if(known==~0u)return set_reg(rd,a|b);
     if(!rd)return;
     const auto& origin=ka!=~0u ? gpr_origin_[rs] : b_origin;
-    // Only OR with known reset bits preserves the opaque sample. Mixing
+    // Only OR with known reset/start bits preserves the opaque sample. Mixing
     // another unknown value or changing configuration discards the proof.
-    const auto epoch=kb==~0u && !(b&~0xCu) ? gpr_sio2_epoch_[rs] : 0u;
+    const auto epoch=kb==~0u && !(b&~0xDu) ? gpr_sio2_epoch_[rs] : 0u;
     write_=PendingLoad{rd,(a|b)&known,false,origin,known,epoch};
 }
 bool Iop::regs_equal(unsigned rs, unsigned rt) const {
@@ -1140,6 +1153,121 @@ std::uint32_t Iop::load(std::uint32_t address, std::size_t bytes, const char* wh
     return io_read(a.physical, bytes, what);
 }
 
+
+void Iop::diagnostic_sio2_dma_word_cycles(std::uint32_t cycles) {
+    if(!cycles || cycle_)throw DeviceRefusal("SIO2 DMA experiment requires positive word cycles before guest execution");
+    diagnostic_sio2_dma_cycles_=cycles;
+}
+void Iop::write_sio2_dma(unsigned channel,unsigned field,std::size_t bytes,std::uint32_t value) {
+    auto& dma=sio2_dma_[channel];
+    if(dma.registers[2]&kChcrStart)throw IopStop{"SIO2 DMA register write while busy"};
+    if(field==4u && bytes==2u) {
+        dma.registers[1]=(dma.registers[1]&0xFFFF0000u)|(value&0xFFFFu);dma.written|=8u;
+    } else if(field==6u && bytes==2u) {
+        dma.registers[1]=(dma.registers[1]&0xFFFFu)|((value&0xFFFFu)<<16u);dma.written|=16u;
+    } else {
+        if(bytes!=4u || field>8u || (field&3u))throw IopStop{"SIO2 DMA requires word registers or BCR halfwords"};
+        const auto index=field/4u;
+        if(index==2u && (value&kChcrStart)) {
+            if(!diagnostic_sio2_dma_cycles_)throw IopStop{"SIO2 DMA transfers are not modeled without explicit word-cycle timing"};
+            // Bit 30 requests snooping; this IOP RAM model is coherent.
+            if((value&~0x40000000u)!=(0x01000201u-channel))throw IopStop{"SIO2 DMA supports incrementing slice transfers in the channel direction only: "+hex(value)};
+            if((dma.written&3u)!=3u)throw IopStop{"SIO2 DMA requires known MADR and both BCR halves"};
+            const auto size=dma.registers[1]&0xFFFFu,blocks=dma.registers[1]>>16u;
+            if(!size || !blocks)throw IopStop{"SIO2 DMA zero block fields are not modeled"};
+            const auto at=dma.registers[0];const auto total=std::uint64_t{size}*blocks*4u;
+            if((at&3u) || at>ram_.size() || total>ram_.size()-at)
+                throw IopStop{"SIO2 DMA range or alignment is outside IOP RAM"};
+            dma.block_words=size;dma.words_left=size;
+        }
+        dma.registers[index]=value;dma.written|=1u<<index;
+        if(index==1u)dma.written|=24u;
+    }
+    if((dma.written&24u)==24u)dma.written|=2u;
+}
+std::uint32_t Iop::read_sio2_dma(unsigned channel,unsigned field,std::size_t bytes) const {
+    const auto& dma=sio2_dma_[channel];
+    if(bytes==2u && (field==4u || field==6u)) {
+        if(!(dma.written&(field==4u ? 8u : 16u)))throw IopStop{"SIO2 DMA register read before write"};
+        return (dma.registers[1]>>((field&2u)*8u))&0xFFFFu;
+    }
+    if(bytes!=4u || field>8u || (field&3u))throw IopStop{"SIO2 DMA requires word registers or BCR halfwords"};
+    if(!(dma.written&(1u<<(field/4u))))throw IopStop{"SIO2 DMA register read before write"};
+    return dma.registers[field/4u];
+}
+void Iop::pump_sio2_dma() {
+    if(!diagnostic_sio2_dma_cycles_ || cycle_<sio2_dma_next_)return;
+    const auto enabled=latch(0x1F801578u),priority=latch(0x1F801570u);
+    if(!enabled || !*enabled || !(**enabled&1u) || !priority || !*priority)return;
+    int chosen=-1;unsigned best=8;
+    for(unsigned n=0;n<2;++n) {
+        const auto channel=(sio2_dma_turn_+n)&1u;const auto& dma=sio2_dma_[channel];
+        const auto shift=16u+channel*4u,field=(**priority>>shift)&0xFu;
+        if(!(dma.registers[2]&kChcrStart) || !(field&8u))continue;
+        if(channel==0u ? sio2_input_.size()>252u : sio2_output_.size()<4u)continue;
+        if((field&7u)<best){chosen=static_cast<int>(channel);best=field&7u;}
+    }
+    if(chosen<0)return;
+    const auto channel=static_cast<unsigned>(chosen);auto& dma=sio2_dma_[channel];const auto at=dma.registers[0];
+    if(!channel) {
+        for(unsigned b=0;b<4;++b)if(!ram_written_[at+b])
+            throw IopStop{"SIO2 DMA input requires known source byte at "+hex(at+b)};
+        for(unsigned b=0;b<4;++b)sio2_input_.push_back(ram_[at+b]);
+    } else for(unsigned b=0;b<4;++b) {
+        ram_[at+b]=sio2_output_.front();sio2_output_.pop_front();ram_written_[at+b]=1;
+    }
+    ++dma.words;dma.registers[0]+=4u;
+    if(!--dma.words_left) {
+        dma.registers[1]-=1u<<16u;
+        if(dma.registers[1]>>16u)dma.words_left=dma.block_words;
+        else {
+            dma.registers[2]&=~kChcrStart;
+            const auto address=0x1F801574u;
+            for(auto& [physical,value]:latches_)if(physical==address && value) {
+                if(*value&(1u<<(20u+channel)))*value|=1u<<(28u+channel);
+                break;
+            }
+            update_dma_irq();events_.push_back({cycle_,"SIO2 DMA"+std::to_string(11u+channel)+" complete after actual FIFO payload"});
+        }
+    }
+    sio2_dma_turn_=channel^1u;sio2_dma_next_=cycle_+diagnostic_sio2_dma_cycles_;
+}
+
+void Iop::diagnostic_sio2_infrared_timeout(std::uint32_t cycles) {
+    if(!cycles || cycle_ || sio2_control_epoch_)
+        throw DeviceRefusal("SIO2 infrared experiment requires positive timeout cycles before guest execution");
+    diagnostic_sio2_timeout_cycles_=cycles;
+}
+void Iop::start_sio2_infrared(std::uint32_t interrupt_enable) {
+    if(!diagnostic_sio2_timeout_cycles_)
+        throw IopStop{"SIO2 transfer is not modeled (explicit infrared timeout experiment required)"};
+    if(sio2_complete_at_ || !sio2_control_epoch_ || !sio2_output_.empty())
+        throw IopStop{"SIO2 infrared start while busy, unconfigured, or with unread data"};
+    std::size_t consumed=0;
+    for(unsigned n=0;n<16;++n) {
+        const auto descriptor=latch(0x1F808200u+4u*n);
+        if(!descriptor || !*descriptor)throw IopStop{"SIO2 command descriptor is unknown"};
+        const auto word=**descriptor;
+        if(!word)break;
+        const auto tx=(word>>8u)&0x1FFu,rx=(word>>18u)&0x1FFu;
+        // Restrict this experiment to equal-length PIO probes. The public
+        // descriptions disagree about larger lengths and DMA padding.
+        if((word&0xF80200CCu)!=0x40u || ((word&0x30u)!=0u && (word&0x30u)!=0x30u) || (word&3u)>1u || !tx || tx>127u || tx!=rx)
+            throw IopStop{"SIO2 infrared descriptor length or port is unsupported"};
+        if(consumed+tx>sio2_input_.size())throw IopStop{"SIO2 infrared command input is incomplete"};
+        if(sio2_input_[consumed]!=0x61u)
+            throw IopStop{"SIO2 peripheral is not modeled by the absent infrared experiment"};
+        consumed+=tx;
+    }
+    if(!consumed || consumed!=sio2_input_.size())
+        throw IopStop{"SIO2 infrared command input does not match its descriptors"};
+    sio2_interrupt_enable_=interrupt_enable&0x300u;
+    sio2_diagnostic_control_=interrupt_enable&~0xDu;
+    sio2_reply_bytes_=static_cast<std::uint32_t>(consumed);
+    sio2_complete_at_=cycle_+diagnostic_sio2_timeout_cycles_;
+    sio2_input_.clear();sio2_response_valid_=false;++sio2_control_epoch_;
+    events_.push_back({cycle_,"DIAGNOSTIC SIO2 absent infrared start: "+std::to_string(consumed)+" bytes"});
+}
 void Iop::diagnostic_spu2_pio_word_cycles(std::uint32_t cycles) {
     if(!cycles || cycle_)throw DeviceRefusal("SPU2 PIO experiment requires positive word cycles before guest execution");
     diagnostic_spu2_pio_cycles_=cycles;
@@ -1460,7 +1588,10 @@ void Iop::tick_spu2_quiet() {
 }
 void Iop::reset_sio2_observed(ObservedWord word,std::uint64_t epoch) {
     if(word.unknown&1u)throw IopStop{"SIO2 control start bit is unknown"};
-    if(word.value&1u)throw IopStop{"SIO2 transfer is not modeled"};
+    if(word.value&1u) {
+        if(!epoch || epoch!=sio2_control_epoch_)throw IopStop{"SIO2 start does not preserve the current opaque control sample"};
+        start_sio2_infrared(sio2_diagnostic_control_.value_or(sio2_interrupt_enable_));return;
+    }
     if((word.unknown&0xCu) || (word.value&0xCu)!=0xCu)
         throw IopStop{"SIO2 symbolic write does not establish both reset bits"};
     if(!epoch || epoch!=sio2_control_epoch_)
@@ -1468,6 +1599,7 @@ void Iop::reset_sio2_observed(ObservedWord word,std::uint64_t epoch) {
     // The guest read this exact sample and only ORed the reset command.
     // Preserve its unresolved configuration; do not invent readback bits.
     ++sio2_control_epoch_;
+    sio2_input_.clear();sio2_output_.clear();sio2_complete_at_.reset();sio2_response_valid_=false;
     for(auto& [address,value]:latches_)if(address==0x1F808268u){value.reset();return;}
     throw IopStop{"SIO2 control sample has no matching configured register"};
 }
@@ -1559,6 +1691,8 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         return read_spu2_dma(core,physical-(core ? 0x1F801500u : 0x1F8010C0u),bytes);
     }
 
+    if(physical>=0x1F801540u && physical<0x1F801560u)
+        return read_sio2_dma((physical>>4u)&1u,physical&0xFu,bytes);
     if (physical>=0x1F801520u && physical<0x1F801530u) {
         if(bytes==2u && (physical==0x1F801524u || physical==0x1F801526u)) {
             const auto upper=(physical&2u)!=0u;
@@ -1662,9 +1796,35 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         }
         return **value;
     }
+    if(physical==0x1F808264u) {
+        if(bytes!=1u)throw IopStop{"SIO2 output FIFO requires byte reads"};
+        if(sio2_output_.empty())throw IopStop{"SIO2 output FIFO has no completed serial byte"};
+        const auto value=sio2_output_.front();sio2_output_.pop_front();return value;
+    }
+    if(physical==0x1F80826Cu) {
+        if(bytes!=4u)throw IopStop{"SIO2 response status requires a word read"};
+        if(sio2_complete_at_) {
+            // PS2SDK MX4SIO sio2regs.h: STAT.12 is clear while executing.
+            // No other status bit is inferred before serial completion.
+            undefined_load_="SIO2 response bits before serial completion are unknown";
+            undefined_known_=0x1000u;return 0;
+        }
+        if(!sio2_response_valid_)throw IopStop{"SIO2 response status is unknown before a completed transfer"};
+        // ps2tek: disconnected response, not a successful peripheral reply.
+        return 0x1D100u;
+    }
+    if(physical==0x1F808280u) {
+        if(bytes!=4u || !diagnostic_sio2_timeout_cycles_)
+            throw IopStop{"SIO2 interrupt status bit layout is unverified"};
+        return sio2_completion_flag_ ? 1u : 0u;
+    }
     if(physical==0x1F808268u) {
         if(bytes!=4u)throw IopStop{"SIO2 control requires a 32-bit read"};
         const bool configured=latch(physical)!=nullptr && sio2_control_epoch_!=0;
+        // Experimental readback only: self-clearing command bits and retained
+        // configuration. Default boot keeps the original unresolved sample.
+        if(diagnostic_sio2_timeout_cycles_ && sio2_diagnostic_control_)
+            return *sio2_diagnostic_control_;
         undefined_load_="SIO2 control reset/status readback is not verified";
         undefined_known_=configured ? 1u : 0u; // no accepted transfer can be busy
         undefined_sio2_epoch_=configured && std::string_view(what)=="LW" ? sio2_control_epoch_ : 0u;
@@ -1911,6 +2071,10 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         return;
     }
 
+    if(physical>=0x1F801540u && physical<0x1F801560u) {
+        if(!value)throw IopStop{"SIO2 DMA register write consumes unknown bits"};
+        write_sio2_dma((physical>>4u)&1u,physical&0xFu,bytes,*value);return;
+    }
     if (physical>=0x1F801520u && physical<0x1F801530u) {
         if(bytes==2u && (physical==0x1F801524u || physical==0x1F801526u) && value) {
             if(iop_sif0_[2]&kChcrStart)throw IopStop{"IOP SIF0 register write while busy"};
@@ -2016,6 +2180,18 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
             throw IopStop{"SPU2 master volume sweep is not modeled"};
         for(auto& [address,stored]:latches_)if(address==physical){stored=*value&0xFFFFu;return;}
         latches_.push_back({physical,*value&0xFFFFu});return;
+    }
+    if(physical==0x1F808260u) {
+        if(bytes!=1u || !value)throw IopStop{"SIO2 input FIFO requires a known byte"};
+        if(sio2_complete_at_)throw IopStop{"SIO2 input FIFO write while a command is active"};
+        if(sio2_input_.size()>=256u)throw IopStop{"SIO2 input exceeds the modeled descriptor capacity"};
+        sio2_input_.push_back(static_cast<std::uint8_t>(*value));return;
+    }
+    if(physical==0x1F808280u) {
+        if(bytes!=4u || !value || !diagnostic_sio2_timeout_cycles_ || (*value&~1u))
+            throw IopStop{"SIO2 interrupt acknowledge layout is unverified"};
+        if(*value&1u)sio2_completion_flag_=false;
+        return; // the IOP pending latch is acknowledged separately at I_STAT
     }
     if(physical==0x1F402008u) {
         if(bytes!=1u || !value) throw IopStop{name+": CDVD I_STAT requires a known byte"};
@@ -2158,11 +2334,24 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         }
         // SIO2 CTRL bit 0 starts a transfer (ps2tek SIO2). Idle setup was
         // already latched here; do not silently accept a command start.
-        if(physical==0x1F808268u && (!value || (*value&1u)))
-            throw IopStop{name+": SIO2 transfer is not modeled"};
-        if(physical==0x1F808268u && *value!=0u && *value!=0xCu && *value!=0x3BCu)
+        if(physical==0x1F808268u && (!value || (*value&1u))) {
+            if(!value || !diagnostic_sio2_timeout_cycles_)throw IopStop{name+": SIO2 transfer is not modeled"};
+            if((*value&~1u)!=0u && (*value&~1u)!=0xCu && (*value&~1u)!=0x3BCu && (*value&~1u)!=0xB0u && (*value&~1u)!=0x3B0u)
+                throw IopStop{"SIO2 transfer configuration is not verified: "+hex(*value)};
+            start_sio2_infrared(*value);return;
+        }
+        if(physical==0x1F808268u && *value!=0u && *value!=0xCu && *value!=0x3BCu &&
+           (!diagnostic_sio2_timeout_cycles_ || (*value&~0x3BCu)))
             throw IopStop{"SIO2 control configuration is not verified"};
-        if(physical==0x1F808268u)++sio2_control_epoch_;
+        if(physical==0x1F808268u) {
+            sio2_interrupt_enable_=*value&0x300u; // MX4SIO: CTRL.9 completion interrupt enable
+            ++sio2_control_epoch_;
+            if(diagnostic_sio2_timeout_cycles_)sio2_diagnostic_control_=*value&~0xDu;
+            if(!diagnostic_sio2_timeout_cycles_ || (*value&4u)) {
+                sio2_complete_at_.reset();sio2_response_valid_=false;
+            }
+            if(!diagnostic_sio2_timeout_cycles_ || (*value&8u)){sio2_input_.clear();sio2_output_.clear();}
+        }
         if (dma_channel_field(physical) == 2u && (!value || ((*value & kChcrStart) != 0u && physical!=0x1F8010B8u)))
             throw IopStop{name + " = " + (value ? hex(*value) : std::string("(unknown)")) +
                           ": DMA transfers are not modeled"};
