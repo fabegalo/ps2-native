@@ -75,6 +75,8 @@ public:
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles) { iop_.diagnostic_sio2_infrared_timeout(cycles); }
     void diagnostic_sio2_port_timing(unsigned bits) { iop_.diagnostic_sio2_port_timing(bits); }
     void diagnostic_sio2_dma_word_cycles(std::uint32_t cycles) { iop_.diagnostic_sio2_dma_word_cycles(cycles); }
+    void diagnostic_sio2_reset_clears_completion() { iop_.diagnostic_sio2_reset_clears_completion(); }
+    void diagnostic_sio2_unplugged_ports(unsigned mask,std::uint32_t cycles) { iop_.diagnostic_sio2_unplugged_ports(mask,cycles); }
     [[nodiscard]] const Iop& iop() const noexcept { return iop_; }
     void diagnostic_spu2_7ca_latch() { iop_.diagnostic_spu2_7ca_latch(); }
     void diagnostic_spu2_reserved_latches() { iop_.diagnostic_spu2_reserved_latches(); }

@@ -274,6 +274,8 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     video_ = {};
     gpr_known_ = {};
     latches_.clear();
+    sio2_irq_output_=false;diagnostic_sio2_reset_completion_=false;
+    sio2_pending_reply_.clear();diagnostic_sio2_unplugged_ports_=0;diagnostic_sio2_infrared_absent_=false;
     sio2_dma_={};diagnostic_sio2_dma_cycles_=0;sio2_dma_next_=0;sio2_dma_turn_=0;
     if(diagnostic_dmacinten)latches_.push_back({0x1F80157Cu,*diagnostic_dmacinten});
     // Reset values the reset code reads before writing (hypotheses):
@@ -900,11 +902,10 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
             if(diagnostic_sio2_dma_cycles_)pump_sio2_dma();
             if(sio2_complete_at_ && cycle_>=*sio2_complete_at_) {
                 sio2_complete_at_.reset();
-                sio2_output_.assign(sio2_reply_bytes_,0xFFu); // no device drives the serial data line
+                sio2_output_=std::move(sio2_pending_reply_); // clocked wire bytes plus opaque DMA padding
                 sio2_response_valid_=true;
-                if(!sio2_completion_flag_ && (sio2_interrupt_enable_&0x200u))istat_|=1u<<17u;
-                sio2_completion_flag_=true;
-                events_.push_back({cycle_,"DIAGNOSTIC SIO2 absent infrared timeout"});
+                sio2_completion_flag_=true;update_sio2_irq();
+                events_.push_back({cycle_,"DIAGNOSTIC SIO2 absent serial timeout"});
             }
             if(cdvd_complete_at_ && cycle_>=*cdvd_complete_at_) {
                 cdvd_complete_at_.reset(); cdvd_irq_|=2u;
@@ -1159,6 +1160,19 @@ void Iop::diagnostic_sio2_port_timing(unsigned bits) {
     if(bits>3u || cycle_)throw DeviceRefusal("SIO2 port timing bits require a two-bit sample before guest execution");
     diagnostic_sio2_port_timing_=bits;
 }
+void Iop::reset_sio2_completion() {
+    if(sio2_completion_flag_ && !diagnostic_sio2_reset_completion_)
+        throw IopStop{"SIO2 CTRL reset effect on pending completion is unverified; explicit reset-latch experiment required"};
+    if(diagnostic_sio2_reset_completion_) {sio2_completion_flag_=false;update_sio2_irq();}
+}
+void Iop::update_sio2_irq() {
+    // PS2SDK MX4SIO sio2regs.h: CTRL.9 masks the latched STAT.0
+    // completion source. Enabling a pending source raises a new output
+    // edge; acknowledging I_STAT alone cannot manufacture another one.
+    const bool output=sio2_completion_flag_ && (sio2_interrupt_enable_&0x200u);
+    if(output && !sio2_irq_output_)istat_|=1u<<17u;
+    sio2_irq_output_=output;
+}
 void Iop::diagnostic_sio2_dma_word_cycles(std::uint32_t cycles) {
     if(!cycles || cycle_)throw DeviceRefusal("SIO2 DMA experiment requires positive word cycles before guest execution");
     diagnostic_sio2_dma_cycles_=cycles;
@@ -1219,7 +1233,8 @@ void Iop::pump_sio2_dma() {
             throw IopStop{"SIO2 DMA input requires known source byte at "+hex(at+b)};
         for(unsigned b=0;b<4;++b)sio2_input_.push_back(ram_[at+b]);
     } else for(unsigned b=0;b<4;++b) {
-        ram_[at+b]=sio2_output_.front();sio2_output_.pop_front();ram_written_[at+b]=1;
+        const auto byte=sio2_output_.front();sio2_output_.pop_front();
+        ram_[at+b]=static_cast<std::uint8_t>(byte.value);ram_written_[at+b]=byte.unknown ? 0u : 1u;
     }
     ++dma.words;dma.registers[0]+=4u;
     if(!--dma.words_left) {
@@ -1241,38 +1256,63 @@ void Iop::pump_sio2_dma() {
 void Iop::diagnostic_sio2_infrared_timeout(std::uint32_t cycles) {
     if(!cycles || cycle_ || sio2_control_epoch_)
         throw DeviceRefusal("SIO2 infrared experiment requires positive timeout cycles before guest execution");
-    diagnostic_sio2_timeout_cycles_=cycles;
+    if(diagnostic_sio2_timeout_cycles_ && diagnostic_sio2_timeout_cycles_!=cycles)
+        throw DeviceRefusal("SIO2 absent devices must use the same explicitly assumed timeout");
+    diagnostic_sio2_timeout_cycles_=cycles;diagnostic_sio2_infrared_absent_=true;
+}
+void Iop::diagnostic_sio2_unplugged_ports(unsigned mask,std::uint32_t timeout_cycles) {
+    if(!mask || (mask&~0xFu) || !timeout_cycles || cycle_)
+        throw DeviceRefusal("SIO2 unplugged-port experiment requires a four-port mask and positive timeout before execution");
+    if(diagnostic_sio2_timeout_cycles_ && diagnostic_sio2_timeout_cycles_!=timeout_cycles)
+        throw DeviceRefusal("SIO2 unplugged ports must use the same explicitly assumed timeout");
+    diagnostic_sio2_timeout_cycles_=timeout_cycles;diagnostic_sio2_unplugged_ports_=mask;
 }
 void Iop::start_sio2_infrared(std::uint32_t interrupt_enable) {
     if(!diagnostic_sio2_timeout_cycles_)
         throw IopStop{"SIO2 transfer is not modeled (explicit infrared timeout experiment required)"};
     if(sio2_complete_at_ || !sio2_control_epoch_ || !sio2_output_.empty())
         throw IopStop{"SIO2 infrared start while busy, unconfigured, or with unread data"};
-    std::size_t consumed=0;
+    std::size_t consumed=0,clocked=0;std::deque<ObservedWord> reply;
     for(unsigned n=0;n<16;++n) {
         const auto descriptor=latch(0x1F808200u+4u*n);
         if(!descriptor || !*descriptor)throw IopStop{"SIO2 command descriptor is unknown"};
         const auto word=**descriptor;
         if(!word)break;
-        const auto tx=(word>>8u)&0x1FFu,rx=(word>>18u)&0x1FFu;
-        // Restrict this experiment to equal-length PIO probes. The public
-        // descriptions disagree about larger lengths and DMA padding.
-        if((word&0xF80200CCu)!=0x40u || ((word&0x30u)!=0u && (word&0x30u)!=0x30u) || (word&3u)>1u || !tx || tx>127u || tx!=rx)
+        const auto tx=(word>>8u)&0x1FFu,rx=(word>>18u)&0x1FFu,port=word&3u;
+        if((word&0xF80200CCu)!=0x40u || ((word&0x30u)!=0u && (word&0x30u)!=0x30u) || !tx || tx>127u || tx!=rx)
             throw IopStop{"SIO2 infrared descriptor length or port is unsupported"};
-        if(consumed+tx>sio2_input_.size())throw IopStop{"SIO2 infrared command input is incomplete"};
-        if(sio2_input_[consumed]!=0x61u)
+        const bool unplugged=(diagnostic_sio2_unplugged_ports_&(1u<<port))!=0u;
+        if(port>1u && !unplugged)throw IopStop{"SIO2 port is not established as disconnected"};
+        std::size_t input=tx,output=rx;
+        if(word&0x30u) {
+            // PS2SDK mcman uses one BCR slice per descriptor (0x90-byte
+            // slots for 4-byte probes). The unused output lanes have no
+            // measured value: transport their uncertainty, never zero-fill.
+            input=sio2_dma_[0].block_words*4u;output=sio2_dma_[1].block_words*4u;
+            if(input<tx || output<rx || input>256u || output>256u || n)
+                throw IopStop{"SIO2 DMA descriptor stride or multiple padded descriptors are not modeled"};
+            if((sio2_dma_[0].registers[2]&kChcrStart) || !(sio2_dma_[1].registers[2]&kChcrStart))
+                throw IopStop{"SIO2 DMA descriptor requires complete input and an armed output channel"};
+        }
+        if(consumed+input>sio2_input_.size())throw IopStop{"SIO2 infrared command input is incomplete"};
+        if(!unplugged && (!diagnostic_sio2_infrared_absent_ || sio2_input_[consumed]!=0x61u))
             throw IopStop{"SIO2 peripheral is not modeled by the absent infrared experiment"};
-        consumed+=tx;
+        for(unsigned b=0;b<rx;++b)reply.push_back({0xFFu,0}); // explicitly absent device cannot drive DAT
+        for(std::size_t b=rx;b<output;++b)reply.push_back({0,0xFFu});
+        consumed+=input;clocked+=rx;
     }
     if(!consumed || consumed!=sio2_input_.size())
         throw IopStop{"SIO2 infrared command input does not match its descriptors"};
+    if(reply.size()>256u)throw IopStop{"SIO2 reply exceeds the bounded RX FIFO"};
     sio2_interrupt_enable_=interrupt_enable&0x300u;
+    update_sio2_irq();
     sio2_diagnostic_control_=interrupt_enable&~0xDu;
-    sio2_reply_bytes_=static_cast<std::uint32_t>(consumed);
+    sio2_reply_bytes_=static_cast<std::uint32_t>(clocked);sio2_pending_reply_=std::move(reply);
     sio2_complete_at_=cycle_+diagnostic_sio2_timeout_cycles_;
     sio2_input_.clear();sio2_response_valid_=false;++sio2_control_epoch_;
-    events_.push_back({cycle_,"DIAGNOSTIC SIO2 absent infrared start: "+std::to_string(consumed)+" bytes"});
+    events_.push_back({cycle_,"DIAGNOSTIC SIO2 absent serial start: "+std::to_string(clocked)+" clocked bytes; DMA padding opaque"});
 }
+
 void Iop::diagnostic_spu2_pio_word_cycles(std::uint32_t cycles) {
     if(!cycles || cycle_)throw DeviceRefusal("SPU2 PIO experiment requires positive word cycles before guest execution");
     diagnostic_spu2_pio_cycles_=cycles;
@@ -1652,6 +1692,7 @@ void Iop::reset_sio2_observed(ObservedWord word,std::uint64_t epoch) {
         throw IopStop{"SIO2 symbolic reset does not preserve the current opaque control sample"};
     // The guest read this exact sample and only ORed the reset command.
     // Preserve its unresolved configuration; do not invent readback bits.
+    reset_sio2_completion();
     ++sio2_control_epoch_;
     sio2_input_.clear();sio2_output_.clear();sio2_complete_at_.reset();sio2_response_valid_=false;
     for(auto& [address,value]:latches_)if(address==0x1F808268u){value.reset();return;}
@@ -1857,7 +1898,12 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
     if(physical==0x1F808264u) {
         if(bytes!=1u)throw IopStop{"SIO2 output FIFO requires byte reads"};
         if(sio2_output_.empty())throw IopStop{"SIO2 output FIFO has no completed serial byte"};
-        const auto value=sio2_output_.front();sio2_output_.pop_front();return value;
+        const auto byte=sio2_output_.front();sio2_output_.pop_front();
+        if(byte.unknown) {
+            undefined_load_="SIO2 unclocked DMA padding has no measured value";
+            undefined_known_=0xFFFFFF00u|(~byte.unknown&0xFFu);
+        }
+        return byte.value;
     }
     if(physical==0x1F80826Cu) {
         if(bytes!=4u)throw IopStop{"SIO2 response status requires a word read"};
@@ -2266,7 +2312,7 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         if(bytes!=4u || !value || !diagnostic_sio2_timeout_cycles_ || (*value&~1u))
             throw IopStop{"SIO2 interrupt acknowledge layout is unverified"};
         if(*value&1u)sio2_completion_flag_=false;
-        return; // the IOP pending latch is acknowledged separately at I_STAT
+        update_sio2_irq();return; // the IOP pending latch is acknowledged separately at I_STAT
     }
     if(physical==0x1F402008u) {
         if(bytes!=1u || !value) throw IopStop{name+": CDVD I_STAT requires a known byte"};
@@ -2419,7 +2465,9 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
            (!diagnostic_sio2_timeout_cycles_ || (*value&~0x3BCu)))
             throw IopStop{"SIO2 control configuration is not verified"};
         if(physical==0x1F808268u) {
+            if(*value&4u)reset_sio2_completion();
             sio2_interrupt_enable_=*value&0x300u; // MX4SIO: CTRL.9 completion interrupt enable
+            update_sio2_irq();
             ++sio2_control_epoch_;
             if(diagnostic_sio2_timeout_cycles_)sio2_diagnostic_control_=*value&~0xDu;
             if(!diagnostic_sio2_timeout_cycles_ || (*value&4u)) {

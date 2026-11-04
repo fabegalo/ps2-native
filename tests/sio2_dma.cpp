@@ -34,10 +34,10 @@ void flow(bool dma_gate,bool channel_gate,bool irq_mask) {
     put(a,0xBF801574,irq_mask ? 3u<<20 : 0);put(a,0xBF8010F4,1u<<23);put(a,0xBF80157C,1);
     put(a,0xBF801070,0);put(a,0xBF808268,0x3BC);
     put(a,0xBF808200,(8u<<18)|(8u<<8)|0x70);put(a,0xBF808204,0);
-    put(a,0xBF801540,0x400);put(a,0xBF801544,0x00020001);put(a,0xBF801548,irq_mask ? 0x41000201 : 0x01000201);
+    put(a,0xBF801540,0x400);put(a,0xBF801544,0x00010002);put(a,0xBF801548,irq_mask ? 0x41000201 : 0x01000201);
     a.label("armed");
     a.la(8,0xBF801548);a.label("wait");a.lw(9,0,8);a.nop();a.lui(10,0x0100);a.r(9,10,9,0,0x24);a.bne(9,0,"wait");a.nop();
-    put(a,0xBF801550,0x500);put(a,0xBF801554,0x00020001);put(a,0xBF801558,irq_mask ? 0x41000200 : 0x01000200);
+    put(a,0xBF801550,0x500);put(a,0xBF801554,0x00010002);put(a,0xBF801558,irq_mask ? 0x41000200 : 0x01000200);
     put(a,0xBF808268,0xB1);a.label("started");
     for(unsigned n=0;n<100;++n)a.nop();
     a.la(10,0xA0000600);a.la(8,0xBF801540);a.lw(9,0,8);a.nop();a.sw(9,0,10);
@@ -57,14 +57,87 @@ void flow(bool dma_gate,bool channel_gate,bool irq_mask) {
     require(iop.sio2_dma_words(0)==2 && iop.sio2_dma_words(1)==2 && iop.ee_read(0x500,4)==~0u && iop.ee_read(0x504,4)==~0u,
             "known RAM input reaches the serial consumer and only real absent-wire bytes reach output RAM");
     require(iop.ee_read(0x4FF,1)==0xA5 && iop.ee_read(0x508,1)==0x5A,"DMA preserves both destination neighbors");
-    require(iop.ee_read(0x600,4)==0x408 && iop.ee_read(0x604,4)==1 && iop.ee_read(0x608,4)==(irq_mask ? 0x40000201u : 0x201u) &&
-            iop.ee_read(0x60C,4)==0x508 && iop.ee_read(0x610,4)==1 && iop.ee_read(0x614,4)==(irq_mask ? 0x40000200u : 0x200u),
+    require(iop.ee_read(0x600,4)==0x408 && iop.ee_read(0x604,4)==2 && iop.ee_read(0x608,4)==(irq_mask ? 0x40000201u : 0x201u) &&
+            iop.ee_read(0x60C,4)==0x508 && iop.ee_read(0x610,4)==2 && iop.ee_read(0x614,4)==(irq_mask ? 0x40000200u : 0x200u),
             "MADR, BCR block count and CHCR STR reflect actual words and completion on both channels");
     require((iop.ee_read(0x618,4)&0x30000000u)==(irq_mask ? 0x30000000u : 0u) && iop.ee_read(0x61C,4)==(irq_mask ? 8u : 0u),
             "DICR2 channel masks gate completion flags and actual INTC DMA delivery");
     iop.reset(rom,nullptr);iop.run_until(700);require(iop.stopped() && iop.stop_reason()->find("explicit word-cycle timing")!=std::string::npos,
             "reset removes unmeasured DMA and serial timing instead of silently enabling an experiment");
 }
+
+void unplugged_padded(bool enabled) {
+    m20::Assembler a(kEeResetVector);put(a,0xBF801570,0x880000);put(a,0xBF801578,1);
+    put(a,0xBF801070,0);put(a,0xBF808268,0x3BC);
+    put(a,0xBF808200,(4u<<18)|(4u<<8)|0x72);put(a,0xBF808204,0);
+    put(a,0xBF801540,0x400);put(a,0xBF801544,0x00010024);put(a,0xBF801548,0x01000201);
+    a.la(8,0xBF801548);a.label("drain");a.lw(9,0,8);a.nop();a.lui(10,0x100);a.r(9,10,9,0,0x24);
+    a.bne(9,0,"drain");a.nop();
+    put(a,0xBF801550,0x800);put(a,0xBF801554,0x00010024);put(a,0xBF801558,0x41000200);
+    put(a,0xBF808268,0x3B1);idle(a);
+    const auto rom=image(a);Iop iop;iop.reset(rom,nullptr);iop.diagnostic_sio2_dma_word_cycles(1);
+    iop.diagnostic_sio2_unplugged_ports(enabled ? 4u : 1u,32);
+    for(unsigned n=0;n<144;++n)iop.ee_write(0x400+n,1,n ? n==1 ? 0x11 : 0 : 0x81);
+    iop.ee_write(0x7FF,1,0xA5);iop.ee_write(0x890,1,0x5A);iop.run_until(700);
+    if(!enabled) {
+        require(iop.stopped() && iop.stop_reason()->find("port is not established")!=std::string::npos &&
+                !iop.sio2_dma_words(1),"a different unplugged-port mask cannot silently invent this Memory Card's absence");return;
+    }
+    require(!iop.stopped() && iop.sio2_dma_words(0)==36 && iop.sio2_dma_words(1)==36,
+            "both channels transfer the entire real 0x90-byte descriptor slice");
+    require(iop.ee_read(0x800,4)==~0u && iop.ee_read(0x7FF,1)==0xA5 && iop.ee_read(0x890,1)==0x5A,
+            "only clocked absent-wire bytes are known and both DMA destination bounds remain intact");
+    for(unsigned n=4;n<144;++n)rejects([&]{(void)iop.ee_read(0x800+n,1);},"has not been written");
+    iop.reset(rom,nullptr);iop.diagnostic_sio2_dma_word_cycles(1);iop.diagnostic_sio2_infrared_timeout(32);
+    for(unsigned n=0;n<144;++n)iop.ee_write(0x400+n,1,n ? 0 : 0x81);
+    iop.run_until(700);require(iop.stopped() && iop.stop_reason()->find("port is not established")!=std::string::npos,
+            "reset removes the Memory Card absence hypothesis even when a separate IR experiment is enabled");
+}
+
+
+void late_irq_enable() {
+    m20::Assembler a(kEeResetVector);put(a,0xBF801070,0);put(a,0xBF808268,0xB0);
+    put(a,0xBF808200,(1u<<18)|(1u<<8)|0x40);put(a,0xBF808204,0);
+    a.la(8,0xBF808260);a.la(9,0x61);a.sb(9,0,8);put(a,0xBF808268,0xB1);
+    for(unsigned n=0;n<20;++n)a.nop();
+    const auto capture=[&](unsigned offset) {
+        a.la(8,0xBF801070);a.lw(9,0,8);a.nop();a.la(11,1u<<17);a.r(9,11,9,0,0x24);
+        a.la(10,0xA0000100);a.sw(9,offset,10);
+    };
+    capture(0);put(a,0xBF808268,0x3B0);capture(4);
+    put(a,0xBF801070,~(1u<<17));put(a,0xBF808268,0x3B0);capture(8);
+    put(a,0xBF808268,0xB0);put(a,0xBF808268,0x3B0);capture(12);
+    put(a,0xBF808280,1);put(a,0xBF801070,~(1u<<17));put(a,0xBF808268,0x3B0);capture(16);
+    idle(a);Iop iop;iop.reset(image(a),nullptr);iop.diagnostic_sio2_infrared_timeout(8);iop.run_until(500);
+    require(!iop.stopped(),iop.stop_reason().value_or("running"));
+    require(iop.ee_read(0x100,4)==0 && iop.ee_read(0x104,4)==(1u<<17),
+            "enabling completion IRQ delivers an already pending SIO2 source to INTC");
+    require(iop.ee_read(0x108,4)==0 && iop.ee_read(0x10C,4)==(1u<<17) && iop.ee_read(0x110,4)==0,
+            "INTC acknowledgement alone creates no source edge; mask re-enable does, while SIO2 W1C removes the source");
+}
+
+
+void reset_completion(bool experiment) {
+    m20::Assembler a(kEeResetVector);put(a,0xBF801070,0);put(a,0xBF808268,0x3B0);
+    put(a,0xBF808200,(1u<<18)|(1u<<8)|0x40);put(a,0xBF808204,0);
+    a.la(8,0xBF808260);a.la(9,0x61);a.sb(9,0,8);put(a,0xBF808268,0x3B1);
+    for(unsigned n=0;n<20;++n)a.nop();put(a,0xBF808268,0xC);
+    a.la(10,0xA0000100);a.la(8,0xBF808280);a.lw(9,0,8);a.nop();a.sw(9,0,10);
+    const auto capture=[&](unsigned offset) {
+        a.la(8,0xBF801070);a.lw(9,0,8);a.nop();a.la(11,1u<<17);a.r(9,11,9,0,0x24);a.sw(9,offset,10);
+    };
+    capture(4);put(a,0xBF801070,~(1u<<17));put(a,0xBF808268,0x3B0);capture(8);idle(a);
+    Iop iop;iop.reset(image(a),nullptr);iop.diagnostic_sio2_infrared_timeout(8);
+    if(experiment)iop.diagnostic_sio2_reset_clears_completion();iop.run_until(500);
+    if(!experiment) {
+        require(iop.stopped() && iop.stop_reason()->find("reset effect on pending completion is unverified")!=std::string::npos,
+                "an unmeasured reset transition cannot silently retain or clear a pending device source");return;
+    }
+    require(!iop.stopped() && iop.ee_read(0x100,4)==0 && iop.ee_read(0x104,4)==(1u<<17) && !iop.ee_read(0x108,4),
+            "explicit reset-latch hypothesis clears only the device source, independently of already latched INTC status");
+    rejects([&]{iop.diagnostic_sio2_reset_clears_completion();},"before execution");
+}
+
 void bad_input(unsigned which) {
     m20::Assembler a(kEeResetVector);put(a,0xBF801570,0x80000);put(a,0xBF801578,1);
     put(a,0xBF801540,which==1 ? 0x1FFFFC : 0x400);put(a,0xBF801544,0x10002);
@@ -74,6 +147,6 @@ void bad_input(unsigned which) {
     require(iop.stopped() && iop.sio2_dma_words(0)==(which ? 0u : 1u),"unknown source/range/wrong direction never manufactures remaining bytes or completion");
 }
 }
-int main() try {input_fifo();for(bool mask:{false,true})flow(true,true,mask);flow(false,true,false);flow(true,false,false);
-    for(unsigned n=0;n<3;++n)bad_input(n);std::cout<<"SIO2 real FIFO DMA, gates, bounded transfers, backpressure and completion IRQs passed\n";
+int main() try {reset_completion(false);reset_completion(true);late_irq_enable();input_fifo();for(bool mask:{false,true})flow(true,true,mask);flow(false,true,false);flow(true,false,false);
+    unplugged_padded(true);unplugged_padded(false);for(unsigned n=0;n<3;++n)bad_input(n);std::cout<<"SIO2 real FIFO DMA, gates, bounded transfers, backpressure and completion IRQs passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

@@ -129,6 +129,11 @@ public:
     // these control/status details are not physical measurements. Reset
     // disables it. Other peripherals and SIO2 DMA remain unsupported.
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles);
+    void diagnostic_sio2_reset_clears_completion() {
+        if(cycle_)throw DeviceRefusal("SIO2 reset-latch experiment requires reset state before execution");
+        diagnostic_sio2_reset_completion_=true;
+    }
+    void diagnostic_sio2_unplugged_ports(unsigned mask,std::uint32_t timeout_cycles);
     // Unmeasured RECV2 bits 4/5 used by PADMAN to choose port timing.
     // Defines only these two bits; no connection status or serial reply.
     void diagnostic_sio2_port_timing(unsigned bits);
@@ -280,6 +285,10 @@ private:
     void write_sio2_dma(unsigned channel,unsigned field,std::size_t bytes,std::uint32_t value);
     [[nodiscard]] std::uint32_t read_sio2_dma(unsigned channel,unsigned field,std::size_t bytes) const;
     void pump_sio2_dma();
+    void update_sio2_irq();
+    void reset_sio2_completion();
+    bool diagnostic_sio2_reset_completion_{};
+    bool sio2_irq_output_{};
     struct Sio2Dma {
         std::array<std::uint32_t,3> registers{};
         std::uint32_t block_words{},words_left{};
@@ -329,7 +338,9 @@ private:
     std::uint64_t sio2_control_epoch_{},undefined_sio2_epoch_{};
     std::optional<unsigned> diagnostic_sio2_port_timing_;
     std::vector<std::uint8_t> sio2_input_;
-    std::deque<std::uint8_t> sio2_output_;
+    std::deque<ObservedWord> sio2_output_,sio2_pending_reply_;
+    unsigned diagnostic_sio2_unplugged_ports_{};
+    bool diagnostic_sio2_infrared_absent_{};
     std::optional<std::uint64_t> sio2_complete_at_;
     std::uint32_t diagnostic_sio2_timeout_cycles_{};
     std::uint32_t sio2_reply_bytes_{},sio2_interrupt_enable_{};
