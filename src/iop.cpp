@@ -992,6 +992,15 @@ void Iop::shift_right(unsigned destination, unsigned source, unsigned amount) {
     if (known == ~0u) return set_reg(destination, value);
     write_ = PendingLoad{destination, value, false, gpr_origin_[source], known};
 }
+void Iop::shift_left(unsigned destination, unsigned source, unsigned amount) {
+    if(!destination)return;
+    if(!amount)return copy_reg(destination,source);
+    if(gpr_defined_&(1u<<source))return set_reg(destination,gpr_[source]<<amount);
+    const auto known=(gpr_known_[source]<<amount)|((1u<<amount)-1u);
+    const auto value=(gpr_[source]<<amount)&known;
+    if(known==~0u)return set_reg(destination,value);
+    write_=PendingLoad{destination,value,false,gpr_origin_[source],known};
+}
 void Iop::copy_reg(unsigned destination, unsigned source) {
     if (!destination) return;
     if (gpr_defined_ & (1u << source)) return set_reg(destination, gpr_[source]);
@@ -2380,11 +2389,11 @@ void Iop::step() {
     switch (op) {
         case 0x00:
             switch (fn) {
-                case 0x00: set_reg(rd, reg(rt) << sa); break;                                   // SLL
+                case 0x00: shift_left(rd, rt, sa); break;                                      // SLL
                 case 0x02: shift_right(rd, rt, sa); break;                                   // SRL
                 case 0x03: set_reg(rd, static_cast<std::uint32_t>(static_cast<std::int32_t>(reg(rt)) >> sa)); break;
-                case 0x04: set_reg(rd, reg(rt) << (reg(rs) & 31u)); break;                      // SLLV
-                case 0x06: set_reg(rd, reg(rt) >> (reg(rs) & 31u)); break;                      // SRLV
+                case 0x04: shift_left(rd, rt, masked_reg(rs,31u)&31u); break;                  // SLLV
+                case 0x06: shift_right(rd, rt, masked_reg(rs,31u)&31u); break;                 // SRLV
                 case 0x07: set_reg(rd, static_cast<std::uint32_t>(static_cast<std::int32_t>(reg(rt)) >> (reg(rs) & 31u))); break;
                 case 0x08: branch = true; target = reg(rs); break;                              // JR
                 case 0x09: branch = true; target = reg(rs); set_reg(rd, pc + 8u); break;        // JALR
