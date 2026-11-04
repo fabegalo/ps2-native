@@ -102,6 +102,7 @@ BusRegion classify_physical(std::uint32_t p) noexcept {
     if (p >= 0x1C000000u && p < 0x1C800000u) return BusRegion::IopMemory;
     if (p >= 0x1E000000u && p < 0x1E400000u) return BusRegion::Rom1;
     if (p >= 0x1E400000u && p < 0x1E800000u) return BusRegion::Rom2;
+    if (p >= 0x1F402000u && p < 0x1F402020u) return BusRegion::IopRegisters; // shared CDVD on SBUS
     if (p >= 0x1F800000u && p < 0x1FA00000u) return BusRegion::IopRegisters;
     if (p >= Memory::kBiosRomPhysical && p - Memory::kBiosRomPhysical < Memory::kBiosRomBytes)
         return BusRegion::BiosRom;

@@ -246,6 +246,9 @@ std::uint32_t EeRegisters::read_timer(unsigned index, unsigned reg) {
 }
 
 std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
+    if(physical>=0x1F402000u && physical<0x1F402020u) {
+        sync_iop();return iop_.ee_cdvd_read(physical,bytes);
+    }
     if(physical==0x1F803800u) {
         if(bytes!=2u) throw DeviceRefusal("MPU board ID requires a 16-bit read");
         if(!hardware_ || !hardware_->mpu_board_id) throw DeviceRefusal("MPU board ID has not been measured for this profile");
@@ -369,6 +372,9 @@ void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint6
 }
 
 void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value) {
+    if(physical>=0x1F402000u && physical<0x1F402020u) {
+        sync_iop();iop_.ee_cdvd_write(physical,bytes,static_cast<std::uint32_t>(value));return;
+    }
     if(physical==0x1000F590u) {
         // EE User's Manual p.62: CPND is bit 16. Preserve board identification
         // bits; writes changing undocumented configuration still refuse.

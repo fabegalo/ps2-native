@@ -67,6 +67,10 @@ public:
     // when the IOP stopped before this time (its later state is unknown).
     [[nodiscard]] std::uint64_t ee_read(std::uint32_t offset, std::size_t bytes) const;
     void ee_write(std::uint32_t offset,std::size_t bytes,std::uint64_t value);
+    // The EE sees the same physical CDVD registers through the SBUS.
+    // Call after synchronizing the IOP; no second command/result queue.
+    [[nodiscard]] std::uint32_t ee_cdvd_read(std::uint32_t physical,std::size_t bytes);
+    void ee_cdvd_write(std::uint32_t physical,std::size_t bytes,std::uint32_t value);
     // SIF register `index` (0 MSCOM, 1 SMCOM, 2 MSFLG, 3 SMFLG, 4 CTRL, 6 BD6;
     // EE 0x1000F200 + index * 0x10) as the EE reads or writes it; the IOP must
     // have been run up to now. Throws DeviceRefusal for what is not modeled.

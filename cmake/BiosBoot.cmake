@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-cdvd-bus tests/cdvd_bus.cpp)
+    target_link_libraries(ps2n-cdvd-bus PRIVATE ps2n_core)
+    add_test(NAME native-cdvd-bus COMMAND ps2n-cdvd-bus)
+    set_tests_properties(native-cdvd-bus PROPERTIES TIMEOUT 30)
     add_executable(ps2n-sif1-boot tests/sif1_boot.cpp)
     target_link_libraries(ps2n-sif1-boot PRIVATE ps2n_core)
     add_test(NAME native-sif1-boot COMMAND ps2n-sif1-boot)

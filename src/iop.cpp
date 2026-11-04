@@ -679,6 +679,19 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
     }
 }
 
+std::uint32_t Iop::ee_cdvd_read(std::uint32_t physical,std::size_t bytes) {
+    if(stopped())throw DeviceRefusal("CDVD read after the IOP stopped: "+*stop_);
+    if(physical<0x1F402000u || physical>=0x1F402020u)throw DeviceRefusal("outside CDVD register window");
+    try { return io_read(physical,bytes,"EE CDVD read"); }
+    catch(const IopStop& error) { throw DeviceRefusal(error.reason); }
+}
+void Iop::ee_cdvd_write(std::uint32_t physical,std::size_t bytes,std::uint32_t value) {
+    if(stopped())throw DeviceRefusal("CDVD write after the IOP stopped: "+*stop_);
+    if(physical<0x1F402000u || physical>=0x1F402020u)throw DeviceRefusal("outside CDVD register window");
+    try { io_write(physical,bytes,value,"EE CDVD write"); }
+    catch(const IopStop& error) { throw DeviceRefusal(error.reason); }
+}
+
 std::uint64_t Iop::ee_read(std::uint32_t offset, std::size_t bytes) const {
     if (offset >= kIopRamBytes || bytes > kIopRamBytes - offset)
         throw DeviceRefusal("IOP RAM offset " + hex(offset) + " is beyond the 2 MiB of IOP RAM");
