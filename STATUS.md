@@ -23,7 +23,9 @@
   pares sintéticos: 3.953.261 aceitos, 46.739 recusados, zero divergências
   contra modelo externo separado. Sete testes focados e regressão BIOS
   original passaram. Rotina matemática isolada agora retorna; isso não
-  comprova avanço completo. Rodadas supervisionadas 105/106 acompanhadas;
+  comprova avanço completo. 105 confirmou VMULbc `0x1CD530` /
+  7.176.168.811, IOP ativo; 106 parou voluntariamente para ampliar SQRT
+  SRT, validada por um milhão de entradas e sete testes. 107 em execução;
   ainda sem menu ou navegação visível demonstrados. Detalhes no relatório
   [primeiro jogo](docs/FIRST-GAME-STATUS.md#certificação-adicional-do-multiplicador--continuação-do-menu).
 - **Super Bust-A-Move passou do aviso para a abertura real:** ensaio 104

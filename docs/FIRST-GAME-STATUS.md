@@ -378,9 +378,59 @@ por amostra, cinco amostras: medianas 7,882 ns/produto antes e 8,147 ns
 depois (3,4% mais lento observado). Carga host concorrente não isolada;
 nenhum ganho de desempenho declarado. Regressão BIOS original repetida:
 mesmos PCs/contagens e RAM canônica `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
-Rodada completa 106 iniciada com a correção, entrada/capturas isoladas e
-limites de 90 minutos/16 bilhões. Rodada 105 permanece acompanhada até
-registrar seu próximo bloqueio real; ainda sem menu comprovado.
+Rodada 105 terminou com **7.176.168.811** instruções: recusa real de
+VMULbc `0x4BC64218` em **`0x1CD530`** (PC de estado já avançado para
+`0x1CD534`). Operandos coincidem com o replay isolado. IOP `0xAE94` /
+901.073.188 ativo; 8.169 pacotes novos, 379.580.400 escritas de pixels.
+RAM `5a8d8bb59d84bfcdbc98203fe3b459b11f39b8af0bc583d3953b4e1b2b5cb47e`,
+um doubleword parcialmente desconhecido. 3.290,49 s, com compilação e
+outra execução concorrentes; sem comparação de desempenho. Créditos e
+Acclaim reais novamente capturados, nenhum menu. CI `692dd25`: núcleo
+e launcher aprovados nos seis alvos.
+
+Rodada 106, já com o limite refinado, encerrada voluntariamente para
+incorporar a cobertura SQRT seguinte: EE `0x81FC0` / 1.098.589.884,
+IOP `0xAE98` / 141.375.822 ativo, 670,33 s. Sem recusa, 213 novos pacotes,
+23.466.480 escritas; RAM `a9b112b76b9796610adfce22b0249df5ca3cb291ea5e2b5096c07bf61f8498b2`.
+Isso não comprovou ainda a passagem pelo VMULbc da rodada 105.
+
+### Raiz SRT e nova rodada supervisionada — ensaio 107
+
+Teste isolado com entrada sintética 0,01 da mesma rotina encontrou VSQRT
+não exata em `0x1CD558`; não se afirma esse PC como bloqueio de uma rodada
+completa. Implementação própria pela recorrência da eq.(2), seleção da
+Tabela III e datapath das Figs.1/5 de
+[Prabhu/Zyner, ARITH 1995](https://www.acsel-lab.com/arithmetic/arith12/papers/ARITH12_Prabhu.pdf).
+Resto redundante, 25 dígitos radix-2, divisor dependente da raiz parcial;
+sem correção IEEE ou sqrt do host. O dígito zero seleciona a partir das
+linhas anteriores, mas o compressor principal avança; tratá-lo como bypass
+altera o último bit. Atalho de raiz exatamente representável preservado.
+Entradas negativas continuam recusadas até modelar suas flags de exceção;
+denormais/zeros mantêm a convenção existente. Q conserva sete ciclos,
+STATUS/stickies/MAC, espera e atualização compartilhadas.
+
+Consulta prévia PS2Recomp FPU/macros `e5636981`: a rota de sqrt do host
+não foi adotada. Vetores numéricos físicos
+[EE SQRT](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/cpu/ee_fpu/sqrt.expected)
+e [timing VU/Q](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/vu/lower/fdivdelay.expected)
+conferidos; sem código de teste dessas referências incorporado. Oracle de
+circuito compilado como processo externo separado, sem objetos GPL no BSD.
+Um milhão de entradas sintéticas aleatórias: 501.602 aceitas, 498.398
+negativas recusadas, zero divergências nos resultados aceitos da função
+real do núcleo. Sete testes focados passaram, incluindo fronteiras do bit
+baixo e Q pendente, sem trocar a recusa por flags fabricadas.
+Microbenchmark de oito raízes já aceitas, quatro milhões de chamadas por
+amostra/cinco amostras: mediana 41,787 ns antes e 44,113 ns depois (5,6%
+mais lento observado). Entradas/repetições equivalentes, carga host não
+isolada; a mudança amplia correção/cobertura, sem alegar ganho ou FPS.
+
+A rotina isolada com 0,01 agora retorna em 41 instruções. Varredura local
+de 158 entradas sintéticas: 142 retornam, 16 ainda recusam produtos Booth
+ambíguos; não é gameplay nem prova de que esses valores ocorrem no jogo.
+BIOS original novamente conserva PCs/contagens/hash canônicos. Rodada
+completa 107 iniciada após build coerente: 90 minutos/16 bilhões, controles
+em `superbust-pad107.txt`, mesmo cenário de press/release do 105. Processo
+supervisionado; continuar até menu/navegação ou próximo bloqueio real.
 
 BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;
 ELF `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`.

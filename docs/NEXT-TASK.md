@@ -5,13 +5,17 @@ menu e comprovar resposta aos controles. SIO2 agora aceita press/release;
 Cross chegou aos buffers EE sem escrita host em RAM. O ensaio 104 passou
 ATE/AFAIL e mostrou créditos/logotipo Acclaim; parou em `0x1CD584` /
 7.176.168.746, C.LT.S. Comparações/branches COP1 passaram em testes.
-Rodada 105 ativa; replay matemático parcial revelou VMULbc `0x1CD530`.
+Rodada 105 confirmou VMULbc `0x1CD530` / 7.176.168.811 instruções.
 Limite conservador de perda de MUL refinado e validado: 4 milhões de pares,
 zero divergências entre os aceitos; sete testes focados e BIOS original
 passaram. Replay isolado retorna, sem alegação de execução completa.
-Rodada `out/game-first/superbust-menu106-run.cmd` ativa com a correção.
-Acompanhar 105 até a recusa e 106 até o menu, corrigindo novos bloqueios.
-Só pixels reais. Entrada de 106 em `superbust-pad106.txt`, isolada de 105.
+106 parada voluntariamente em `0x81FC0` / 1.098.589.884 para incorporar
+SQRT SRT não exata, antecipada por entrada sintética da rotina isolada.
+Um milhão de entradas/referência, zero divergências nos aceitos;
+sete testes e BIOS original passaram. Negativos continuam recusados.
+Rodada `out/game-first/superbust-menu107-run.cmd` ativa com as correções.
+Acompanhar até o menu, corrigindo novos bloqueios. Só pixels reais.
+Entrada de 107 em `superbust-pad107.txt`, isolada das rodadas anteriores.
 Entrada supervisionada em `out/game-first/superbust-pad.txt`, palavra
 hex ativa baixa; `FFFF` solto, `BFFF` Cross, `FFF7` Start, `DFFF` Circle;
 `10000` encerra voluntariamente no próximo VBLANK conhecido.

@@ -175,8 +175,8 @@ public:
         if(b.unknown || (!square_root && a.unknown))throw DeviceRefusal("VU Q consumes unknown operands");
         std::uint32_t value,flags=0;
         if(square_root) {
-            const auto root=ee_fpu_sqrt_exact(b.value);
-            if(!root)throw DeviceRefusal("VU SQRT non-exact/invalid input is not modeled");
+            const auto root=ee_fpu_sqrt(b.value);
+            if(!root)throw DeviceRefusal("VU SQRT negative input flags are not modeled");
             value=*root;
         } else {
             value=ee_fpu_divide(a.value,b.value,flags);

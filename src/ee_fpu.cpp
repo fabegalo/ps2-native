@@ -48,6 +48,36 @@ int digit(const Rows& remainder) {
     return high || ((remainder[0]|remainder[1])&(1u<<24u)) ? 1 : 0;
 }
 }
+std::optional<std::uint32_t> ee_fpu_sqrt(std::uint32_t value) {
+    // Preserve the cheaper exact-root path and its signed-zero convention.
+    if(const auto exact=ee_fpu_sqrt_exact(value))return exact;
+    if(value&0x80000000u)return std::nullopt;
+    const auto exponent=(value>>23u)&255u;
+    const auto mantissa=(value&0x7FFFFFu)|0x800000u;
+    // Prabhu/Zyner eq.(2), with x in [1/4,1) and root in [1/2,1).
+    // R uses 26 fractional bits; the partial root uses 25. For weight w,
+    // (Q+d*w)^2-Q^2=d*w*(2*Q+d*w), giving the effective divisor below.
+    Rows remainder{mantissa<<(1u+((exponent+1u)&1u)),0};
+    int root=0,selected=1;
+    for(unsigned stage=0;stage<25;++stage) {
+        const auto step=selected*(1<<(24u-stage));
+        const auto divisor=static_cast<std::uint32_t>(2*root+step);
+        const auto previous=remainder;
+        if(selected)
+            remainder=compress({remainder[0],remainder[1]|(selected>0 ? 1u : 0u),
+                                selected>0 ? ~divisor : divisor});
+        else remainder=compress({remainder[0],remainder[1],0});
+        // Fig.1/5's zero-divisor selection observes the old redundant rows;
+        // the main compressor still advances. Collapsing or bypassing those
+        // rows changes later digit decisions and the final low result bit.
+        auto selection=selected ? remainder : previous;
+        root+=step;
+        for(auto& row:remainder)row<<=1u;
+        for(auto& row:selection)row<<=1u;
+        selected=digit(selection);
+    }
+    return ((exponent+127u)/2u<<23u)|((static_cast<std::uint32_t>(root)>>1u)&0x7FFFFFu);
+}
 std::uint32_t ee_fpu_add(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31) {
     fcr31&=~0xC000u; // O/U causes are replaced; I/D and sticky flags survive.
     const auto ea=(a>>23u)&255u,eb=(b>>23u)&255u;

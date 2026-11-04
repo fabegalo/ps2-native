@@ -498,6 +498,17 @@ void vector_q() {
             ee_fpu_sqrt_exact(0x7F800000u)==0x5F800000u &&
             ee_fpu_sqrt_exact(0x80000001u)==0u,"physical exact SQRT vectors, extended exponent and denormal zero");
     require(!ee_fpu_sqrt_exact(0x40000000u) && !ee_fpu_sqrt_exact(0xBF800000u),"unproved SQRT refuses");
+    // Numeric physical observations, plus low-bit circuit boundary cases.
+    const std::uint32_t roots[][2]={
+        {0,0},{0x80000000,0},{0x80000001,0},{0x3F800000,0x3F800000},
+        {0x40000000,0x3FB504F3},{0x40400000,0x3FDDB3D7},
+        {0x3FFFFFFF,0x3FB504F3},{0x7FFFFFFF,0x5FB504F3},
+        {0x7F800000,0x5F800000},{0x41C80000,0x40A00000},
+        {0x6EB8B10D,0x5719C138},{0x57E03710,0x4BA968CC},
+        {0x4CBFAB1C,0x461CA1C5},{0x1201BC71,0x28B63E29}};
+    for(const auto& row:roots)require(ee_fpu_sqrt(row[0])==row[1],"SRT SQRT physical/circuit result vector");
+    require(!ee_fpu_sqrt(0xBF800000) && !ee_fpu_sqrt(0xFFFFFFFF),
+            "negative SQRT exception behavior remains explicitly refused");
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     EEState s;s.set_cp0(Cop0::Status,1u<<30u);s.pc=0x80001000u;
     memory.set_clock(&s.retired_instructions,&s.stall_cycles);
@@ -526,8 +537,15 @@ void vector_q() {
     s.set_cp0(Cop0::Count,0xFFFFFFFEu);s.count_anchor=s.cycles();s.set_cp0(Cop0::Compare,1);s.set_cp0(Cop0::Cause,0);s.stall(4);
     require(s.count()==2 && (s.cp0(Cop0::Cause)&kStatusIM7),"Compare latches across Count wrap during stall");
     memory.write_vu_vector(5,{{0x40000000u,0},{0,0}});
-    rejects([&]{ee::exec<MipsOpcode::Vsqrt>(s,memory,0,0x4A0503BDu);},"non-exact");
-    require(memory.vu_q_ready_cycle()==0 && memory.read_vu_control(22)==0x3F000000u,"failed SQRT leaves pipeline unchanged");
+    const auto before_root=s.cycles();
+    ee::exec<MipsOpcode::Vsqrt>(s,memory,0,0x4A0503BDu);
+    require(memory.vu_q_ready_cycle()==before_root+7 && memory.read_vu_control(22)==0x3F000000u,
+            "inexact SQRT preserves seven-cycle pending Q");
+    s.stall(7);
+    require(memory.read_vu_control(22)==0x3FB504F3u,"inexact SQRT publishes its SRT result");
+    memory.write_vu_vector(5,{{0xBF800000u,0},{0,0}});
+    rejects([&]{ee::exec<MipsOpcode::Vsqrt>(s,memory,0,0x4A0503BDu);},"negative input");
+    require(memory.vu_q_ready_cycle()==0 && memory.read_vu_control(22)==0x3FB504F3u,"failed SQRT leaves pipeline unchanged");
     require(!try_decode_r5900(0,0x4A2503BDu) && !try_decode_r5900(0,0x4A000BBFu),"reserved SQRT/WAITQ fields refuse");
     VuControl vu;
     vu.issue_q(0,0,0,3,0,false); // 1/0
