@@ -1,4 +1,5 @@
 #pragma once
+#include "ps2native/diagnostic_history.hpp"
 // Serial bus to the slim consoles' video encoder, as the EE firmware drives it.
 //
 // Evidence (firmware code, read from the user's ROM0 dumps; no other source
@@ -93,7 +94,10 @@ public:
     // Read transaction of `count` bytes from the register pointer.
     [[nodiscard]] std::vector<std::uint8_t> read(std::uint8_t address, std::size_t count);
     // One line per transaction, in order (for traces and tests).
-    [[nodiscard]] const std::vector<std::string>& transactions() const noexcept { return log_; }
+    [[nodiscard]] const std::vector<std::string>& transactions() const { return log_.items(); }
+    void diagnostic_events(std::size_t limit, DeviceEventSink sink) {
+        log_.configure(limit,sink ? std::function<void(const std::string&)>{[sink](const std::string& e){sink("video-encoder",0,e);}} : nullptr);
+    }
     // Value last written to `index` since reset (registers are write targets;
     // reading them back is not modeled).
     [[nodiscard]] std::optional<std::uint8_t> written(std::uint8_t index) const { return written_[index]; }
@@ -102,7 +106,7 @@ private:
     std::optional<std::uint8_t> pointer_;
     std::array<std::optional<std::uint8_t>, 256> written_{};
     std::array<std::optional<std::uint8_t>, 256> assumed_{};
-    std::vector<std::string> log_;
+    DiagnosticHistory<std::string> log_;
 };
 
 // 16-bit register master at EE 0x1A000000 (offsets, firmware roles):

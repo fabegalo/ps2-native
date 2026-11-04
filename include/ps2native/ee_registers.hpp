@@ -70,6 +70,10 @@ public:
     // 128-bit store (SQ): the GIF FIFO takes whole quadwords.
     void write128(std::uint32_t physical, std::uint64_t low, std::uint64_t high);
     [[nodiscard]] const Gif& gif() const noexcept { return gif_; }
+    void diagnostic_events(std::size_t limit, DeviceEventSink sink) {
+        iop_.diagnostic_events(limit,sink); gif_.diagnostic_events(limit,sink); video_encoder_.diagnostic_events(limit,std::move(sink));
+    }
+    [[nodiscard]] ObservedWord diagnostic_vif_status(bool unit1) const noexcept { return (unit1 ? vif1_ : vif0_).observe_status(); }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return gs_; }
     void diagnostic_gs_scanmask_reset(unsigned mask) { gs_.diagnostic_scanmask_reset(mask); }
     void diagnostic_gs_texture_cache_reset_invalid() { gs_.diagnostic_texture_cache_reset_invalid(); }

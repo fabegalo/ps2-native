@@ -34,3 +34,10 @@ CMakeUserPresets.json
 *.erom
 *.nvm
 boot-trace*.txt
+
+# Developer profiles, diagnostics and generated local translations
+*.ps2n
+*.ndjson
+*.ps2n-state
+/dev-local/
+ps2n-dev/

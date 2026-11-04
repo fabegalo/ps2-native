@@ -1,6 +1,7 @@
 #include "ps2native/boot.hpp"
 #include "ps2native/interpreter.hpp"
 #include "ps2native/sha256.hpp"
+#include "ps2native/diagnostics.hpp"
 
 #include <deque>
 #include <iomanip>
@@ -45,6 +46,7 @@ public:
         : options_(options), report_(report), state_(state), memory_(memory) {}
 
     void on_instruction(std::uint32_t pc, std::uint32_t word, ExecutionEngine engine) override {
+        if (options_.diagnostics) options_.diagnostics->instruction(state_, pc, word);
         if (options_.on_frame) present();
         const RetiredInstruction r{++sequence_, pc, word, engine};
         if (engine == ExecutionEngine::Aot) ++report_.aot_instructions;
@@ -52,16 +54,16 @@ public:
         if (!engine_ || *engine_ != engine) {
             if (engine_) ++report_.engine_switches;
             engine_ = engine;
-            report_.trace.push_back(std::string("E ") + (engine == ExecutionEngine::Aot
+            trace(std::string("E ") + (engine == ExecutionEngine::Aot
                 ? "aot (host-compiled block) at " : "interpreter (no AOT block) at ") + hex32(pc));
         }
         if (options_.trace == TraceLevel::Full) {
-            report_.trace.push_back(instruction_line(r));
+            trace(instruction_line(r));
             if((word>>26u)==0x11u) {
                 // Observe raw COP1 operands before execution. Reading these
                 // fields does not consume unknown data or alter FPU flags.
                 const auto fs=(word>>11u)&31u,ft=(word>>16u)&31u,fd=(word>>6u)&31u;
-                report_.trace.push_back("  F FS="+hex32(state_.fpr[fs])+"/?"+hex32(state_.unknown_fpr_bits[fs])+
+                trace("  F FS="+hex32(state_.fpr[fs])+"/?"+hex32(state_.unknown_fpr_bits[fs])+
                     " FT="+hex32(state_.fpr[ft])+"/?"+hex32(state_.unknown_fpr_bits[ft])+
                     " FD-before="+hex32(state_.fpr[fd])+"/?"+hex32(state_.unknown_fpr_bits[fd])+
                     " FCR31="+hex32(state_.fcr31));
@@ -73,16 +75,18 @@ public:
         }
     }
     void on_bus_access(const BusAccess& access) override {
+        if (options_.diagnostics) options_.diagnostics->bus(state_, access);
         if (options_.trace != TraceLevel::Full) return;
         std::ostringstream line;
         line << "  M " << (access.write ? 'W' : 'R') << static_cast<unsigned>(access.bytes) * 8u
              << " v=" << hex32(access.virtual_address) << " p=" << hex32(access.physical_address) << ' '
              << bus_region_name(access.region) << " = " << hex64(access.value, access.bytes * 2u);
         if (access.unknown_bits) line << " unknown-bits=" << hex64(access.unknown_bits, access.bytes * 2u);
-        report_.trace.push_back(line.str());
+        trace(line.str());
     }
     void on_system_event(std::string_view event) override {
-        report_.trace.push_back("  S " + std::string(event));
+        if (options_.diagnostics) options_.diagnostics->system(state_, event);
+        trace("  S " + std::string(event));
     }
     void finish() {
         // on_instruction observes an attempt. A fault after that callback has
@@ -97,6 +101,10 @@ public:
     }
 
 private:
+    void trace(std::string line) {
+        if (!options_.max_trace_events || report_.trace.size() < options_.max_trace_events)
+            report_.trace.push_back(std::move(line));
+    }
     void present() {
         const auto& gs = memory_.gs();
         const auto cycle = state_.cycles();
@@ -131,13 +139,23 @@ private:
 
 class ObserverScope {
 public:
-    ObserverScope(Memory& memory, BusObserver* observer) : memory_(memory) { memory_.set_observer(observer); }
-    ~ObserverScope() { memory_.set_observer(nullptr); }
+    ObserverScope(Memory& memory, BusObserver* observer, const BootOptions& options, const EEState& state) : memory_(memory) {
+        memory_.set_observer(observer);
+        if (options.diagnostics) {
+            device_events_ = true;
+            memory_.diagnostic_events(options.max_trace_events ? options.max_trace_events : 256,
+                [&options,&state](std::string_view component,std::uint64_t cycle,std::string_view text) {
+                    options.diagnostics->system(state,std::string(component)+" cycle="+std::to_string(cycle)+" "+std::string(text));
+                });
+        }
+    }
+    ~ObserverScope() { memory_.set_observer(nullptr); if (device_events_) memory_.diagnostic_events(0,{}); }
     ObserverScope(const ObserverScope&) = delete;
     ObserverScope& operator=(const ObserverScope&) = delete;
 
 private:
     Memory& memory_;
+    bool device_events_{};
 };
 } // namespace
 
@@ -204,8 +222,8 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
     // An unaligned stop address can never match an instruction PC.
     ExecutionContext ctx{state, memory, executed, options.max_instructions, 0xFFFFFFFFu, &tracer};
     const auto start_retired = state.retired_instructions;
+    ObserverScope scope(memory, &tracer, options, state);
     {
-        ObserverScope scope(memory, &tracer);
         try {
             while (true) {
                 if (options.stop_at && !state.delay_pending && state.pc == *options.stop_at) {

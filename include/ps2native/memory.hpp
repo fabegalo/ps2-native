@@ -164,6 +164,8 @@ public:
     [[nodiscard]] bool data_cache_enabled() const noexcept { return data_cache_model_; }
     [[nodiscard]] ObservedWord data_cache_operation(unsigned op, std::uint32_t address, ObservedWord tag);
     void set_observer(BusObserver* observer) noexcept { observer_ = observer; }
+    void diagnostic_events(std::size_t limit, DeviceEventSink sink) { registers_.diagnostic_events(limit,std::move(sink)); }
+    [[nodiscard]] ObservedWord diagnostic_vif_status(bool unit1) const noexcept { return registers_.diagnostic_vif_status(unit1); }
     // EE cycle counter used by the timed EE registers (boot mapping only).
     void set_clock(const std::uint64_t* ee_cycles,const std::uint64_t* stalls=nullptr) noexcept { registers_.set_clock(ee_cycles,stalls); cache_clock_=ee_cycles; }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return registers_.gs(); }

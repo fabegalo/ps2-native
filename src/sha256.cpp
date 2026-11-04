@@ -2,6 +2,9 @@
 
 #include <array>
 #include <cstddef>
+#include "ps2native/io.hpp"
+#include <algorithm>
+#include <stdexcept>
 
 namespace ps2native {
 namespace {
@@ -38,16 +41,27 @@ void compress(std::array<std::uint32_t, 8>& h, const std::uint8_t* block) {
 } // namespace
 
 std::string sha256_hex(std::span<const std::uint8_t> data) {
-    std::array<std::uint32_t, 8> h{0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
-                                   0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u};
-    std::size_t offset = 0;
-    for (; offset + 64 <= data.size(); offset += 64) compress(h, data.data() + offset);
+    Sha256 hash; hash.update(data); return hash.hex_digest();
+}
+void Sha256::update(std::span<const std::uint8_t> data) {
+    if (data.size() > UINT64_MAX / 8u - bytes_) throw std::runtime_error("SHA-256 input too large");
+    bytes_ += data.size();
+    while (!data.empty()) {
+        if (!used_ && data.size() >= 64) { compress(state_,data.data()); data = data.subspan(64); continue; }
+        const auto n = std::min(data.size(), pending_.size() - used_);
+        std::copy_n(data.begin(), n, pending_.begin() + used_);
+        used_ += n; data = data.subspan(n);
+        if (used_ == 64) { compress(state_,pending_.data()); used_ = 0; }
+    }
+}
+std::string Sha256::hex_digest() const {
+    auto h = state_;
     std::array<std::uint8_t, 128> tail{};
-    const auto rest = data.size() - offset;
-    for (std::size_t i = 0; i < rest; ++i) tail[i] = data[offset + i];
+    const auto rest = used_;
+    for (std::size_t i = 0; i < rest; ++i) tail[i] = pending_[i];
     tail[rest] = 0x80u;
     const std::size_t blocks = rest + 9 <= 64 ? 1 : 2;
-    const auto bits = static_cast<std::uint64_t>(data.size()) * 8u;
+    const auto bits = bytes_ * 8u;
     for (std::size_t i = 0; i < 8; ++i)
         tail[blocks * 64 - 1 - i] = static_cast<std::uint8_t>(bits >> (8 * i));
     for (std::size_t i = 0; i < blocks; ++i) compress(h, tail.data() + 64 * i);
@@ -57,5 +71,15 @@ std::string sha256_hex(std::span<const std::uint8_t> data) {
     for (const auto word : h)
         for (int shift = 28; shift >= 0; shift -= 4) out.push_back(kDigits[(word >> shift) & 15u]);
     return out;
+}
+std::string sha256_file(const std::filesystem::path& path) {
+    InputFile file(path); Sha256 hash;
+    std::vector<std::uint8_t> buffer(1024u * 1024u);
+    for (std::uint64_t offset = 0; offset < file.size();) {
+        const auto n = file.read_at(offset, buffer);
+        if (!n) throw std::runtime_error("short read while hashing input");
+        hash.update(std::span(buffer).first(n)); offset += n;
+    }
+    return hash.hex_digest();
 }
 } // namespace ps2native

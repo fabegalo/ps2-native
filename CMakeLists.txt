@@ -8,7 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(ps2n_core STATIC
     src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/memory_cache.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
-    src/interpreter.cpp src/boot.cpp src/ee_registers.cpp
+    src/interpreter.cpp src/boot.cpp src/diagnostics.cpp src/analysis.cpp src/ee_registers.cpp
     src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp src/nvm.cpp
     src/video_encoder.cpp src/gif.cpp src/gs_vram.cpp src/gs_renderer.cpp src/framebuffer.cpp src/vu_micro.cpp)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -422,6 +422,7 @@ endif()
 
 include(cmake/DirectElf.cmake)
 include(cmake/BiosBoot.cmake)
+include(cmake/DevTools.cmake)
 if(BUILD_TESTING)
     add_executable(ps2n-ipu-tables tests/ipu_tables.cpp)
     target_link_libraries(ps2n-ipu-tables PRIVATE ps2n_core)

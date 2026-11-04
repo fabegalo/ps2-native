@@ -11,6 +11,7 @@
 // requests wait for a current packet and consume real VU1 memory qwords.
 #include "ps2native/device_timing.hpp"
 #include "ps2native/gs_registers.hpp"
+#include "ps2native/diagnostic_history.hpp"
 
 #include <cstdint>
 #include <string>
@@ -42,7 +43,10 @@ public:
     void write_path1(std::uint64_t low,std::uint64_t high,GsRegisters& gs);
     void write_path1_observed(ObservedDoubleword low,ObservedDoubleword high,GsRegisters& gs);
     // One line per completed GIF packet (for traces and tests).
-    [[nodiscard]] const std::vector<std::string>& packets() const noexcept { return packets_; }
+    [[nodiscard]] const std::vector<std::string>& packets() const { return packets_.items(); }
+    void diagnostic_events(std::size_t limit, DeviceEventSink sink) {
+        packets_.configure(limit,sink ? std::function<void(const std::string&)>{[sink](const std::string& e){sink("GIF",0,e);}} : nullptr);
+    }
 
 private:
     void write_path(std::uint64_t low, std::uint64_t high, GsRegisters& gs, unsigned path,
@@ -64,6 +68,6 @@ private:
     std::uint32_t written_{}; // A+D writes in this packet
     unsigned format_{};
     std::uint32_t q_{0x3F800000u};
-    std::vector<std::string> packets_;
+    DiagnosticHistory<std::string> packets_;
 };
 } // namespace ps2native

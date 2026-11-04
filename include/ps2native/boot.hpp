@@ -12,6 +12,7 @@
 #include <vector>
 
 namespace ps2native {
+class DiagnosticRecorder;
 enum class TraceLevel : std::uint8_t {
     Events, // COP0/TLB/CACHE events, engine changes and the stop (plus the instruction tail)
     Full    // additionally every instruction and every data bus access
@@ -20,6 +21,11 @@ struct BootOptions {
     std::uint64_t max_instructions{1'000'000};
     TraceLevel trace{TraceLevel::Events};
     std::size_t tail_instructions{32};
+    // Optional bounded host diagnostics, shared by both execution engines.
+    DiagnosticRecorder* diagnostics{};
+    // Zero retains the original unlimited text trace. Diagnostic CLI runs use
+    // a bound; the recorder remains the source of the circular event history.
+    std::size_t max_trace_events{};
     // Optional address at which to stop (diagnostics/tests); the BIOS never "returns".
     std::optional<std::uint32_t> stop_at;
     // Optional headless presentation hook, called at modeled VBLANK starts.

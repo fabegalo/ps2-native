@@ -22,6 +22,7 @@
 #include "ps2native/disc.hpp"
 #include "ps2native/gif.hpp"
 #include "ps2native/vif.hpp"
+#include "ps2native/diagnostic_history.hpp"
 #include <memory>
 
 #include <array>
@@ -239,7 +240,19 @@ public:
     [[nodiscard]] std::uint32_t pc() const noexcept { return pc_; }
     [[nodiscard]] bool stopped() const noexcept { return stop_.has_value(); }
     [[nodiscard]] const std::optional<std::string>& stop_reason() const noexcept { return stop_; }
-    [[nodiscard]] const std::vector<Event>& events() const noexcept { return events_; }
+    [[nodiscard]] const std::vector<Event>& events() const { return events_.items(); }
+    void diagnostic_events(std::size_t limit, DeviceEventSink sink) {
+        events_.configure(limit,sink ? std::function<void(const Event&)>{[sink](const Event& e){sink("IOP",e.cycle,e.text);}} : nullptr);
+    }
+    [[nodiscard]] ObservedWord diagnostic_gpr(unsigned index) const noexcept {
+        index &= 31u; return {gpr_[index], (gpr_defined_ & (1u<<index)) ? 0u : ~gpr_known_[index]};
+    }
+    [[nodiscard]] const auto& diagnostic_cop0() const noexcept { return cop0_; }
+    [[nodiscard]] const auto& diagnostic_ee_dma() const noexcept { return ee_dma_setup_; }
+    [[nodiscard]] const auto& diagnostic_ee_dma_global() const noexcept { return ee_dma_global_; }
+    [[nodiscard]] std::uint32_t diagnostic_istat() const noexcept { return istat_; }
+    [[nodiscard]] std::size_t diagnostic_sif0_fifo_words() const noexcept { return sif0_fifo_.size(); }
+    [[nodiscard]] std::size_t diagnostic_sif1_fifo_words() const noexcept { return sif1_fifo_.size(); }
     [[nodiscard]] std::uint32_t gpr(unsigned index) const noexcept { return gpr_[index & 31u]; }
 
 private:
@@ -561,6 +574,6 @@ private:
     std::uint64_t cycle_{};
     std::optional<std::string> stop_;
     std::uint64_t stop_cycle_{};
-    std::vector<Event> events_;
+    DiagnosticHistory<Event> events_;
 };
 } // namespace ps2native
