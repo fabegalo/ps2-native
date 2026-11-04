@@ -139,3 +139,24 @@ No `Iop`, um registrador desconhecido carrega a máscara dos bits conhecidos (`A
 Regra de ordem: o IOP nunca roda à frente do EE, e `EeRegisters` chama `sync_iop()` antes de cada leitura de estado do IOP (RAM, SIF) e de cada escrita que o IOP observa (GS, SIF). Assim, o resultado depende só da sequência de acessos do EE, igual para interpretador e AOT. Um escalonador por eventos com IRQs do IOP para o EE (INTC do EE) fica para quando o firmware precisar deles.
 
 Os registradores do SIF são estado do `Iop`, acessados pelo EE por `ee_sif_read`/`ee_sif_write`. O DMA do SIF ainda não é modelado. Detalhes: [M2.7-STATUS.md](M2.7-STATUS.md).
+
+## Ferramentas de desenvolvimento e observabilidade
+
+`ps2n-dev` orquestra as CLIs existentes em um build CMake exclusivo, sem
+copiar conteúdo ou duplicar o runtime. Identidades de fontes/cabeçalhos
+participam dos comandos de compilação gerenciados, incluindo Visual Studio;
+análise/AOT são reutilizados por conteúdo, opções e identidade das ferramentas.
+Perfis de firmware não compartilham seus artefatos originais.
+
+`DiagnosticRecorder` é opcional em `BootOptions`. O `Tracer` comum observa
+as mesmas tentativas de instrução/barramento nos dois motores; os históricos
+IOP/GIF/vídeo podem ser limitados e observados sem mudar efeitos de hardware.
+O anel registra só sua janela; streaming explícito declara truncamento e
+o comparador exige sequências completas dentro da cobertura declarada.
+Inspeção de estado é passiva e limitada, sem API de restauração. Capturar
+RAM e registradores não satisfaz o contrato de checkpoint completo.
+
+`ps2n-analyze` reutiliza `analyze_control_flow`; símbolos e mapas externos
+não autorizam patches ou limites inferidos. IRX é identificado separadamente
+como metadado IOP, sem decodificação R5900. Contratos e limites em
+[DEV-TOOLS](DEV-TOOLS.md).

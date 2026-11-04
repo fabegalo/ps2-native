@@ -18,13 +18,23 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **110 superou as recusas VU do 108/109:** EE `0x1CE45C` /
+  7.284.393.384 instruções, IOP ativo `0xAE98` / 914.601.294.
+  Nova fronteira: precisão da interpolação UV de triângulos no GS.
+  Só aviso, créditos e Acclaim comprovados; scanout final preto.
+  **111 em execução**, com as novas ferramentas de análise/diagnóstico,
+  fontes verificadas e hipótese UV racional explicitamente selecionada.
+  A precisão física dessa hipótese não está demonstrada; a referência GS
+  continua recusando os casos fracionários. Seis testes focados e BIOS
+  original passaram. Menu, controles visuais e partida ainda pendentes.
+  [Evidência](docs/FIRST-GAME-STATUS.md#triângulos-uv-no-gs--ensaio-110-e-continuação-111).
 - **109 passou da SQRT do 108 e chegou a 7.210.587.806 instruções:**
   VMADDA `0x1CD1DC` recusou um produto com fração incerta; IOP ativo
   `0xC750` / 905.375.574. Ainda apenas aviso, copyright e Acclaim.
   O limite inferior do produto VU agora aproveita extremos sem perda nas
   colunas baixas, inclusive com multiplicador incerto, sem escolher bits.
   Replay da mesma matriz passa preservando incerteza; 13 testes focados
-  e regressão BIOS original passaram. **110 em execução real**, com
+  e regressão BIOS original passaram. **110 concluído abaixo**, com
   núcleo/AOT/harness compilados da mesma fonte fixa e logs reduzidos.
   Menu, navegação e gameplay continuam sem comprovação.
   [Evidência](docs/FIRST-GAME-STATUS.md#extremo-exato-do-produto-vu--ensaio-109-e-continuação-110).
@@ -270,3 +280,26 @@ Revisar a evidência original e os limites de cada etapa nos relatórios [docs](
   scanout ainda preto. PSMT8 208x128 é o próximo upload; transferência e
   swizzle de 8 bits implementados com seis testes focados aprovados.
   Modo original repetido após GS conserva PCs/contagens/hash canônicos.
+
+## Developer toolchain — 04/11/2026
+
+- `6a65581`: `ps2n-dev` executa perfis reproduzíveis de ELF/disco/ROM0,
+  análise e AOT em cache verificado, build incremental único de núcleo/AOT/
+  runner, replay com identidades conferidas e manifestos de configuração,
+  commit, hashes, flags e tempos. Artefatos e conteúdo original ficam locais.
+- `ps2n-debug` usa observadores compartilhados AOT/interpretador, histórico
+  circular limitado de instruções/barramento/dispositivos, estado inspecionado,
+  causa explícita, scanout real e comparação de eventos; streams truncados ou
+  coberturas incompatíveis são recusados. `ps2n-analyze` exporta CFG, cobertura
+  estática, símbolos, relocations, destinos e limites conhecidos; Ghidra é
+  opcional e seus mapas permanecem indicações validadas. IRX: só metadados
+  de contêiner/seções, sem linker ou decodificação R5900.
+- Três testes da toolchain e 17 regressões focadas aprovados localmente.
+  Mesma fixture: primeira rodada 61,64 s, replay 1,22 s; build de runtime
+  4,043→0,179 s, mesmo executável e eventos, análise/AOT reutilizados.
+  Log de um milhão de linhas resumido em 0,634 s; sem ganho contra busca
+  simples por `rg`. Firmware real testado só até o orçamento de 100 mil
+  instruções; fixture gráfica própria capturada com hash esperado.
+- Sem save-state completo ou checkpoint de RAM; sem nova interface visual.
+  O trabalho paralelo do jogo e as hipóteses originais permanecem separados.
+  Comandos, medições, referências e limites em [DEV-TOOLS](docs/DEV-TOOLS.md).

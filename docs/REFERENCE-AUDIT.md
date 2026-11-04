@@ -262,3 +262,19 @@ Evidência para implementações independentes:
 
 O frame próprio verifica VIF1 DIRECT→GIF PATH2→GS. Não verifica VU ou serviços de jogo.
 Resultados reproduzíveis e limites de aceitação: [M3.0](M3.0-STATUS.md).
+
+## Developer toolchain
+
+Consulta ao PS2Recomp em `e5636981a1c9de368f6b71e819c3dc188dfedbf4`:
+`ps2xAnalyzer/src/{analyzer_main,analysis_passes}.cpp`,
+`ps2xRecomp/tools/ghidra/ExportPS2Functions.java` e `ps2xStudio/src/main.cpp`.
+O Analyzer organiza descoberta/configuração; o exportador oferece CSV
+`Name,Start,End,Size` com fim exclusivo; Studio encaminha análise pelo
+estado da aplicação. Reutilizadas apenas ideias de fluxo/formato. Não
+foram incorporados código GPL, heurísticas de funções, bancos comerciais,
+stubs ou patches. O projeto mantém seu próprio CFG conservador e núcleo.
+
+Identificadores de contêiner IRX/seção de módulo conferidos no
+[ps2sdk](https://github.com/ps2dev/ps2sdk/blob/d41ea62946e53d9a0c8788bb9eb8c8faf488b559/tools/ps2-irxgen/src/elftypes.h)
+e `irxtypes.h` da mesma revisão. Não houve integração de código AFL/GPL.
+Referências completas e evidência local em [DEV-TOOLS](DEV-TOOLS.md).

@@ -1,18 +1,21 @@
 # Próxima execução — Super Bust-A-Move
 
 Pedido ativo: continuar do aviso de Memory Card até o menu principal e
-comprovar resposta visual aos controles e iniciar partida. **109 terminou**
-em VMADDA `0x1CD1DC` / 7.210.587.806, IOP ativo `0xC750`.
-Passou da SQRT do 108, mas só aviso, copyright e Acclaim foram observados.
-O extremo exato do produto VU resolve a mesma matriz em replay,
-preservando todas as frações incertas.
+comprovar resposta visual aos controles e iniciar partida. **110 terminou**
+em `0x1CE45C` / 7.284.393.384 por precisão DDA de UV triangular no GS.
+IOP ativo `0xAE98` / 914.601.294. Superou as recusas VU do 108/109,
+mas só aviso, créditos e Acclaim foram observados; scanout final preto.
 
-**110 em execução**, fonte fixa `0454091` mais correção do produto VU em
-`out/gs-iop-bounds-source` / `out/gs-iop-bounds-build`. Núcleo,
-cabeçalhos, AOT e auxiliares compilados juntos. Log
-`out/game-first/superbust-menu-110.log`; entrada `superbust-pad110.txt`,
-captura `superbust-capture110.txt`. Treze testes pertinentes e
-regressão BIOS original passaram. Continuar até menu/navegação, corrigindo
+**111 em execução**, novas ferramentas locais e núcleo em
+`out/dev-tools-build`. Núcleo, cabeçalhos, AOT e auxiliares recompilados
+juntos, com hashes registrados em `superbust-menu111-build-provenance.json`.
+Log `out/game-first/superbust-menu-111.log`; entrada `superbust-pad111.txt`,
+captura `superbust-capture111.txt`. `ps2n-debug` confirmou a recusa anterior,
+`ps2n-analyze` analisou o ELF, e o novo `DiagnosticRecorder` registra um
+anel de 512 eventos após 7,28 bilhões em `superbust-menu111-diagnostic`.
+Hipótese **explícita** UV triangular racional em 10.4; a precisão física
+não está comprovada e o modo de referência mantém a recusa. Seis testes
+focados e BIOS original passaram. Continuar até menu/navegação, corrigindo
 cada nova recusa e registrando o PC. Não afirmar sucesso com replay,
 limpeza de framebuffer ou hashes alternados do mesmo Acclaim. Manter as
 hipóteses experimentais do diagnóstico explícitas e o modo BIOS original.
@@ -40,3 +43,11 @@ focados e regressão BIOS original passaram. Manter hipóteses do harness
 explícitas; consultar PS2Recomp antes de implementar subsistemas.
 Logs `out/game-first/simpsons-trial-{2,3,4,5}.log`; relatório
 [primeiro jogo](FIRST-GAME-STATUS.md#reensaio-de-simpsons--04112026).
+
+## Ferramentas disponíveis para a investigação corrente
+
+Usar `ps2n-dev init/run/replay` para perfis locais novos, e `ps2n-debug log`
+para resumir os logs existentes sem repetir a execução. O build gerenciado
+é exclusivo por perfil; preservar os builds/processos ativos do jogo.
+Comandos e garantias em [DEV-TOOLS](DEV-TOOLS.md). Checkpoint completo
+continua indisponível; backing de RAM não é uma retomada válida.
