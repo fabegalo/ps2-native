@@ -28,9 +28,12 @@
   de BPC/PCCR exercitados por código convidado. Nenhuma resposta RPC fabricada.
 - Modo original repetido após ROM1/CDVD: mesmos PCs `0x80007D20`/`0x80005F00`,
   contagens e RAM SHA-256 `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
-- **Zero pacotes gráficos do jogo, zero pixels; ainda não roda o jogo.** O ensaio
-  usa injeção de ELF e hipóteses explícitas de hardware; não comprova boot original.
-  Modo BIOS original e respostas desconhecidas continuam preservados.
+- **Primeiros pacotes gráficos reais no ensaio 42:** 16 pacotes GIF PATH3,
+  1.048.576 escritas de pixels pela transferência IMAGE comandada pelo jogo.
+  É uma limpeza da VRAM, sem frame exibido/menu/gameplay. Novo bloqueio EE
+  `0x1CDF74`, leitura GS CSR, após 338.172.827 instruções. O ensaio usa injeção
+  de ELF e hipóteses explícitas, incluindo SPU2 inativo no reset; não comprova
+  boot original. O modo original mantém PCs/contagens/hash anteriores.
 - Sequência, hipóteses, testes e referências:
   [primeiro jogo](docs/FIRST-GAME-STATUS.md#continuação-experimental--subsistemas-exercitados-pelo-jogo).
 

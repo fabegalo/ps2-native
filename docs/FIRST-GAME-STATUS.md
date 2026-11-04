@@ -437,3 +437,69 @@ conforme o comportamento de referência examinado em
 a menção de ps2tek a ambos os bits é incerta. Sem medição física reivindicada.
 Sete testes focados IOP/SIF/CDVD/SIO2 passaram; após a consulta de versão,
 três testes diretamente afetados passaram. Reexecução do jogo em andamento.
+
+Ensaio 40: a consulta MECHACON avançou e o CDVD chegou ao LBA 15824,
+final de RSPU2DRV.IRX. SIF1 4.112 bytes, SIF0 2.352 bytes. Novo bloqueio:
+IRQ SPU2 desconhecido ao reabilitar interrupções, IOP `0x40B0`, 43.408.842
+instruções; EE `0x81FC4`, 320 milhões acumulados, 88,4422 s.
+RAM `68c8999aceb882f3498a567682de746f2e28e77625d2a21b462173bfe83e215b`;
+zero pacotes GIF/pixels. As amostras anteriores do loop idle ainda acompanhavam
+leituras CDVD reais; não eram por si só evidência de travamento.
+O modo original foi repetido após DMA3/NEXT/MECHACON: mesmas contagens/PCs e
+RAM `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
+
+### Primeiro pedido DMA GIF — investigação em andamento
+
+SPU2 foi consultado em [PS2Recomp libsd](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/ps2xIOP/src/modules/libsd.cpp)
+e no mapa IOP: o serviço HLE não foi usado. A opção separada
+`--assume-spu2-quiescent-reset` declara cores inativos/IRQ9 limpo, estado inicial
+não medido neste console; defaults continuam desconhecidos, e todos os acessos
+SPU2/DMA de som continuam recusados. Teste cobre opt-in, recusa e reset.
+
+Com essa hipótese adicional, ensaio 41 chegou ao primeiro pedido DMA GIF:
+EE `0x1CEC78`, 337.635.052 instruções; IOP ativo `0xAE94` / 46.256.466.
+SIF1 5.264 bytes / SIF0 2.592. CHCR do canal 2 recebe `0x101`; a RAM convidada
+contém BITBLTBUF/TRXPOS/TRXREG/TRXDIR para imagem de 256×256, seguida de tag IMAGE.
+Ainda zero pacotes/pixels no ensaio 41, pois o canal não estava implementado.
+
+O transporte normal do canal 2 foi ligado ao parser GIF/GS comum, com origem
+na RAM, MADR/QWC/STR, D_STAT, DMAE, prioridade e CPND. Dados desconhecidos e
+modos não implementados recusam; conclusão só após entrega ao GIF. A hipótese
+de throughput é um qword por BUSCLK, sem alegar timing de barramento físico.
+Consultados previamente [PS2Recomp DMA](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/ps2xRuntime/src/lib/Kernel/Stubs/DMA.cpp)
+e [árbitro GIF](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp).
+Implementação própria, sem reaproveitar código GPL. Teste próprio confere os
+quatro pixels enviados por uma transferência IMAGE, suspensão e dados indefinidos.
+
+Commit `6ca180f`: CI núcleo e launcher aprovadas nos seis alvos, runs
+[41783825838](https://github.com/fabegalo/ps2-native/actions/runs/41783825838) e
+[41783825839](https://github.com/fabegalo/ps2-native/actions/runs/41783825839).
+Isso ainda não cobre as alterações posteriores de DMA GIF/SPU2.
+
+### Pacotes gráficos reais — ensaio 42
+
+O jogo completou **16 pacotes GIF PATH3**, cada um com quatro escritas A+D e
+16.384 qwords IMAGE. O GS registrou **1.048.576 escritas de pixels**: uma
+limpeza real da VRAM, executada pelos comandos do jogo. O pacote anterior de
+44 escritas pertence ao firmware e foi excluído da contagem do jogo.
+Não é um frame exibido, tela de abertura, menu ou gameplay.
+
+EE `0x1CDF74`, 338.172.827 instruções (94,5503 s); IOP ativo `0xAE98` /
+46.323.687. Próximo bloqueio: LD do GS CSR, seguido de DSRL 16 / ANDI FF
+para obter a revisão do GS. RAM canônica
+`4b766ae1b4393f039a5348d88312632222a72c4fe1c2d456b492ad3964630137`.
+Extração diagnóstica dos primeiros 256×256 pixels da VRAM: preta,
+SHA-256 RGBA8 `b7997c60612a8f60f104b19583162aaac7dde1f1ab2e8ef7c9b935550e2b0aa8`;
+artefato local ignorado, não apresentado como framebuffer do jogo.
+
+Oito testes focados GIF/GS/SIF/SPU2 passaram. O modo original foi repetido
+após essas mudanças: 17.690.079 / 4.486.087 instruções, PCs
+`0x80007D20` / `0x80005F00`, mesmo SHA-256 da RAM `cead2f7c…def9c354`.
+
+A leitura parcial do CSR agora expõe REV/ID somente quando medidos no perfil.
+A base local PS2Ident (formato conferido em `ps2db.h`, revisão
+`4b84d1882b47fbcdcff7d34ef36e9e726512b2e2`) registra `1B/55` para
+SCPH-70004 GH-032-11/GH-032-32 e ROMVER 0200EC20040614.
+FIELD/NFIELD, FIFO e bits não comprovados permanecem simbolicamente desconhecidos.
+Não há fallback por região ou por nome semelhante. PS2Recomp memory/GS foi
+consultado antes da implementação; os valores vêm das medições PS2Ident.

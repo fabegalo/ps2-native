@@ -65,10 +65,11 @@ struct DiagnosticAssumptions {
     // modeled; absent means that a guest write is required before use.
     std::optional<std::uint32_t> iop_dmacinten;
     bool iop_sio2_irq_clear{}; // Unmeasured cold I_STAT.17; diagnostic only.
+    bool spu2_quiescent_reset{}; // Unmeasured inactive SPU2 cores and clear IRQ9.
     // Experimental PCRTC timing after power-on/CSR reset, never a console
     // default. Guest SYNCV writes replace it until the next reset.
     std::optional<std::uint64_t> gs_reset_syncv;
-    [[nodiscard]] bool empty() const noexcept { return video_encoder_registers.empty() && !gs_reset_syncv && !omit_f510_zero_write && !sbus_configuration_latches && !iop_dmacinten && !iop_sio2_irq_clear; }
+    [[nodiscard]] bool empty() const noexcept { return video_encoder_registers.empty() && !gs_reset_syncv && !omit_f510_zero_write && !sbus_configuration_latches && !iop_dmacinten && !iop_sio2_irq_clear && !spu2_quiescent_reset; }
 };
 
 // The slave and the transactions that reach it (shared by both masters).

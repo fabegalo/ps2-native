@@ -183,7 +183,8 @@ void dma_setup() {
         require(iop.ee_dma_read(base)==0 && iop.ee_dma_read(base+0x10)==0x12340 &&
                 iop.ee_dma_read(base+0x20)==0x2345, "inactive DMA channel retains programmed addresses/count");
         rejects([&] { iop.ee_dma_write(base, 0x100); },
-                base==0x1000C000u ? "destination chain mode" : "transfer engine is not modeled");
+                base==0x1000C000u ? "destination chain mode" :
+                base==0x1000A000u ? "normal RAM-to-GIF mode only" : "transfer engine is not modeled");
         require(iop.ee_dma_read(base)==0, "refused start does not create a running/completed transfer");
     }
     iop.ee_dma_write(0x10008080u, 0);
@@ -723,6 +724,20 @@ void knowledge() {
     rejects([&] { (void)state.reg64(9); }, "consumes unknown MMIO bits");
     state.set_reg64(9, 7);
     require(state.reg64(9) == 7 && state.unknown_gprs == 0, "known overwrite clears uncertainty");
+    const auto identity_bios=load_bios_rom0(fixture.rom);
+    auto measured=ConsoleHardware{"SYNTHETIC","GS-IDENT",identity_bios.version.romver};
+    measured.gs_revision_id=std::array<std::uint8_t,2>{0x37,0xA5};
+    prepare_ee_boot(load_bios_rom0(fixture.rom),nullptr,state,memory,&measured);
+    state.set_reg64(8,kGsCsr);
+    ee::exec<MipsOpcode::Ld>(state,memory,0,(0x37u<<26)|(8u<<21)|(9u<<16));
+    require((state.unknown_gpr_bits[9]&0xFFFF0000ull)==0 && (state.unknown_gpr_bits[9]&(1u<<13)),
+            "CSR exposes measured identity while FIELD stays unknown");
+    ee::exec<MipsOpcode::Dsrl>(state,memory,0,(9u<<16)|(9u<<11)|(16u<<6)|0x3Au);
+    ee::exec<MipsOpcode::Andi>(state,memory,0,(0xCu<<26)|(9u<<21)|(9u<<16)|0xFFu);
+    require(state.reg64(9)==0x37u,"guest LD/DSRL/ANDI obtains exactly the measured GS revision");
+    prepare_ee_boot(load_bios_rom0(fixture.rom),nullptr,state,memory);
+    require((memory.load64_observed(kGsCsr).unknown&0xFFFF0000ull)==0xFFFF0000ull,
+            "no profile means no invented GS identity or inherited prior profile");
 }
 } // namespace
 #endif

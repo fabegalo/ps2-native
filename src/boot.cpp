@@ -261,7 +261,15 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
     report.retired = state.retired_instructions - start_retired;
     report.sio_output = memory.sio_output();
     if (memory.mapping() != Memory::Mapping::ElfProgram) {
-        memory.sync_iop();
+        try {memory.sync_iop();}
+        catch(const DeviceRefusal& error) {
+            // A DMA parser failure may already be the instruction's block
+            // point. Reporting must not retry it or discard the original PC.
+            if(report.outcome!=BootOutcome::BlockPoint) {
+                report.outcome=BootOutcome::BlockPoint;report.category="unsupported";
+                report.reason=error.what();report.pc=state.pc;
+            }
+        }
         const auto& iop = memory.iop();
         report.iop_instructions = iop.cycle();
         report.iop_pc = iop.pc();

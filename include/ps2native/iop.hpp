@@ -19,6 +19,7 @@
 #include "ps2native/gs_registers.hpp"
 #include "ps2native/nvm.hpp"
 #include "ps2native/disc.hpp"
+#include "ps2native/gif.hpp"
 #include <memory>
 
 #include <array>
@@ -60,7 +61,8 @@ public:
     // must have been validated for `hardware` and outlive the IOP.
     void reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware, const NvmImage* nvm = nullptr,
                bool diagnostic_sbus_latches = false, std::optional<std::uint32_t> diagnostic_dmacinten = std::nullopt,
-               std::span<const std::uint8_t> rom1 = {}, bool diagnostic_sio2_irq_clear = false);
+               std::span<const std::uint8_t> rom1 = {}, bool diagnostic_sio2_irq_clear = false,
+               bool diagnostic_spu2_quiescent = false);
     // Runs until `cycle` IOP cycles since reset, or until the IOP stops.
     // `video` (nullptr: none) is the GS whose vertical clock raises VBLANK
     // start/end (I_STAT bits 0 and 11); its timing must not change while the
@@ -95,7 +97,8 @@ public:
     [[nodiscard]] static bool ee_dma_address(std::uint32_t address);
     [[nodiscard]] ObservedWord ee_dma_observe(std::uint32_t address) const;
     void ee_dma_write_observed(std::uint32_t address, ObservedWord word);
-    [[nodiscard]] bool reads_ee_ram() const noexcept { return (ee_sif1_chcr_ & 0x100u) != 0u; }
+    [[nodiscard]] bool reads_ee_ram() const noexcept { return (ee_sif1_chcr_ & 0x100u) != 0u || (ee_dma_setup_[2][0].value_or(0u)&0x100u)!=0u; }
+    void advance_gif_dma(std::uint64_t ee_cycle, Gif& gif, GsRegisters& gs);
     [[nodiscard]] bool writes_ee_ram() const noexcept { return (ee_dma_setup_[5][0].value_or(0u)&0x100u)!=0; }
     struct SifDmaMetrics {
         std::uint64_t bytes{}, source_full_cycles{}, destination_empty_cycles{};
@@ -261,6 +264,9 @@ private:
     std::shared_ptr<DiscImage> disc_;
     std::uint8_t cdvd_type_{}, cdvd_status_{}, cdvd_sticky_{};
     bool diagnostic_cav_nominal_timing_{};
+    bool diagnostic_spu2_quiescent_{};
+    std::uint64_t gif_dma_cycle_{};
+    std::optional<std::string> gif_dma_stop_;
     std::optional<std::uint8_t> cdvd_howto_;
     std::vector<std::uint8_t> cdvd_params_;
     std::uint32_t cdvd_lba_{}, cdvd_sectors_{}, cdvd_sector_cycles_{};

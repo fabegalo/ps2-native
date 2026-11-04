@@ -87,6 +87,9 @@ public:
     // NTSC from `now` (hypothesis, as before the GS was modeled).
     void reset(std::uint64_t now, std::optional<std::uint64_t> diagnostic_reset_syncv = {});
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes) const;
+    [[nodiscard]] ObservedDoubleword observe_csr() const noexcept {
+        return {events_,std::uint64_t{unknown_events_}|~std::uint64_t{0x1F}};
+    }
     void write(std::uint32_t physical, std::size_t bytes, std::uint64_t value, std::uint64_t now,
                const LineClockGuard& guard);
     // Throws DeviceRefusal when no HBLANK is generated or its timing is not modeled.

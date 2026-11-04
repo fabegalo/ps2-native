@@ -115,6 +115,7 @@ public:
     [[nodiscard]] bool intc_interrupt_pending();
     [[nodiscard]] bool dmac_interrupt_pending() { sync_iop(); return iop_.ee_dma_interrupt_pending(); }
     [[nodiscard]] ObservedWord observe_intc(std::uint32_t needed = 0x7FFFu);
+    [[nodiscard]] ObservedDoubleword observe_gs_csr();
     [[nodiscard]] ObservedWord observe_dma_word(std::uint32_t physical);
     void write_dma_word(std::uint32_t physical, ObservedWord word);
     // Runs the IOP up to the current EE time.

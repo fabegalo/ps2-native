@@ -61,6 +61,8 @@ struct ConsoleHardware {
     std::optional<std::uint8_t> dev9_revision{};
     // PS2Ident MPUBoardID: direct 16-bit board measurement at 0xBF803800.
     std::optional<std::uint16_t> mpu_board_id{};
+    // Measured GS CSR bytes: REV (bits 16..23), ID (bits 24..31).
+    std::optional<std::array<std::uint8_t,2>> gs_revision_id{};
 };
 
 [[nodiscard]] std::span<const ConsoleHardware> known_console_hardware() noexcept;

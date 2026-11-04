@@ -401,6 +401,9 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
                 const auto observed = registers_.observe_dma_word(target.physical);
                 value = observed.value;
                 *unknown = observed.unknown;
+            } else if(unknown!=nullptr && (size==4u || size==8u) && target.physical==kGsCsr) {
+                const auto observed=registers_.observe_gs_csr();
+                value=observed.value;*unknown=observed.unknown & (size==4u ? 0xFFFFFFFFull : ~0ull);
             } else if(unknown!=nullptr && size==4u && target.physical==IpuRegisters::kControl) {
                 const auto observed=registers_.observe_ipu_control();
                 value=observed.value;*unknown=observed.unknown;

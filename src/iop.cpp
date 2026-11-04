@@ -37,8 +37,8 @@ constexpr std::uint32_t kTimerIrqs = (1u << 4) | (1u << 5) | (1u << 6) | (1u << 
 constexpr std::uint32_t kVblankStartIrq = 1u << 0, kVblankEndIrq = 1u << 11;
 // IRQ 3 (DMA) follows the DICR master flag (ps2tek: bus error bit 15, or
 // master enable bit 23 with a channel flag in DICR 24-30 or DICR2 24-29).
-// Flags rise only when a transfer ends or hits a bus error, and no transfer
-// can start here (see CHCR below), so the source is known and never raised.
+// Flags are raised by the modeled SIF/CDVD transfers. Unsupported DMA starts
+// refuse before changing channel state; they cannot manufacture completion.
 constexpr std::uint32_t kDmaIrq = 1u << 3;
 constexpr const char* kIrqNames[] = {"VBLANK start", "GPU", "CDVD", "DMA", "timer 0", "timer 1", "timer 2", "SIO0",
                                      "SIO1", "SPU2", "PIO", "VBLANK end", "DVD", "PCMCIA", "timer 3", "timer 4",
@@ -62,9 +62,7 @@ std::optional<unsigned> timer_index(std::uint32_t physical) {
 // 15, channel masks 16-22, master enable 23, channel flags 24-30 (write 1 to
 // clear), master flag 31. DICR2: tag interrupt enables 0-12 (only 4, 9 and 10
 // settable), masks of channels 7-12 in 16-21, their flags in 24-29. A flag is
-// raised only by a channel transfer or a bus error; no channel can be started
-// here (CHCR is not modeled), so every flag reads 0 and only the written
-// enable/mode fields are kept.
+// raised by modeled channel transfers; unmodeled channel starts still fail.
 // CDVD N command status (ps2tek bits: 0 error, 2 DEV9 device connected, 4
 // test mode, 5 power-off ready, 6 drive ready, 7 busy; bit 3 is "unknown"
 // there and MECHA_INIT in PCSX2, which EECONF waits for before reading the
@@ -159,7 +157,8 @@ Iop::Iop() : ram_(kIopRamBytes), ram_written_(kIopRamBytes) {}
 
 void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware, const NvmImage* nvm,
                 bool diagnostic_sbus_latches, std::optional<std::uint32_t> diagnostic_dmacinten,
-                std::span<const std::uint8_t> rom1, bool diagnostic_sio2_irq_clear) {
+                std::span<const std::uint8_t> rom1, bool diagnostic_sio2_irq_clear,
+                bool diagnostic_spu2_quiescent) {
     if(diagnostic_dmacinten && (*diagnostic_dmacinten&~3u))
         throw DeviceRefusal("diagnostic IOP DMACINTEN supports only bits 0-1");
     rom_.assign(rom0.begin(), rom0.end());
@@ -193,6 +192,9 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     timers_running_ = false;
     istat_ = 0u;
     sio2_irq_acknowledged_=diagnostic_sio2_irq_clear;
+    diagnostic_spu2_quiescent_=diagnostic_spu2_quiescent;
+    gif_dma_cycle_=0;
+    gif_dma_stop_.reset();
     dma_irq_output_=false;
     // Cold drive: no command or host tray/power event has been submitted.
     // Only NOP/NOPsync completion is modeled; other commands fail before issue.
@@ -357,6 +359,8 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
         ee_dma_setup_[5][2].value_or(0u)==0u && sif0_fifo_.empty();
     if(channel==5u && (ee_dma_setup_[5][0].value_or(0u)&0x100u) && !suspended_stop && !waiting_receiver_stop)
         throw DeviceRefusal("EE SIF0 DMA register write while busy");
+    if(channel==2u && (ee_dma_setup_[2][0].value_or(0u)&0x100u) && !suspended_stop)
+        throw DeviceRefusal("EE GIF DMA register write while busy");
     if(channel==6u && (ee_sif1_chcr_ & 0x100u) && !suspended_stop) throw DeviceRefusal("EE SIF1 DMA register write while busy");
     if(!ee_dma_field_exists(channel,field)) {
         // SDK dma_channel_initialize also clears unused channel slots. Only
@@ -389,6 +393,16 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
         if(!ee_dma_setup_[5][2] || *ee_dma_setup_[5][2])
             throw DeviceRefusal("EE SIF0 start requires programmed zero QWC (resume not modeled)");
         ee_dma_setup_[5][0]=value; sif0_dest_end_=false; return;
+    }
+    if(channel==2u && field==0u && (value&0x100u)) {
+        if(value!=0x101u)throw DeviceRefusal("EE GIF DMA supports normal RAM-to-GIF mode only");
+        const auto madr=ee_dma_setup_[2][1],qwc=ee_dma_setup_[2][2];
+        if(!madr || !qwc)throw DeviceRefusal("EE GIF DMA requires programmed MADR and QWC");
+        if(*madr>ee_ram_.size() || std::uint64_t{*qwc}*16u>ee_ram_.size()-*madr)
+            throw DeviceRefusal("EE GIF DMA source outside main RAM (scratchpad unsupported)");
+        if(!ee_dma_priority(ee_dma_observe(0x1000E020u),2u).has_value())
+            throw DeviceRefusal("EE GIF DMA priority is unknown");
+        ee_dma_setup_[2][0]=value;return;
     }
     if(field==0u && (value&0x100u))
         throw DeviceRefusal("EE DMAC channel "+std::to_string(channel)+" transfer engine is not modeled");
@@ -436,6 +450,36 @@ void Iop::iop_sif1_write(std::uint32_t address, std::uint32_t value) {
     if (field == 2u && value != 0u && value != 0x01000600u && value != 0x41000300u)
         throw IopStop{"IOP SIF1: only destination chain mode without TTE supported"};
     iop_sif1_[field] = value;
+}
+
+void Iop::advance_gif_dma(std::uint64_t ee_cycle,Gif& gif,GsRegisters& gs) {
+    if(gif_dma_stop_)throw DeviceRefusal(*gif_dma_stop_);
+    auto& chcr=ee_dma_setup_[2][0];auto& madr=ee_dma_setup_[2][1];auto& qwc=ee_dma_setup_[2][2];
+    if(!(chcr.value_or(0u)&0x100u) || ee_dma_suspended_ || !(ee_dctrl_&1u)) {
+        gif_dma_cycle_=ee_cycle;return;
+    }
+    const auto priority=ee_dma_priority(ee_dma_observe(0x1000E020u),2u);
+    if(!priority)throw DeviceRefusal("EE GIF DMA priority is unknown");
+    if(!*priority){gif_dma_cycle_=ee_cycle;return;}
+    // Functional throughput hypothesis: one qword per BUSCLK. The existing
+    // GIF parser refuses unmodeled masking/arbitration instead of dropping data.
+    while(ee_cycle>=gif_dma_cycle_ && ee_cycle-gif_dma_cycle_>=kEeCyclesPerBusCycle) {
+        if(*qwc) {
+            if(ee_ram_unknown_)
+                for(unsigned w=0;w<4;++w)if(ee_ram_unknown_->contains(*madr+w*4u))
+                    throw DeviceRefusal("EE GIF DMA source consumes unknown RAM bits");
+            std::uint64_t low=0,high=0;
+            for(unsigned b=0;b<8;++b) {
+                low|=std::uint64_t{ee_ram_[*madr+b]}<<(8u*b);
+                high|=std::uint64_t{ee_ram_[*madr+8u+b]}<<(8u*b);
+            }
+            try {gif.write_fifo(low,high,gs);}
+            catch(const DeviceRefusal& error){gif_dma_stop_=error.what();throw;}
+            *madr+=16u;--*qwc;
+        }
+        gif_dma_cycle_+=kEeCyclesPerBusCycle;
+        if(!*qwc){*chcr&=~0x100u;ee_dstat_|=1u<<2u;gif_dma_cycle_=ee_cycle;return;}
+    }
 }
 
 void Iop::pump_sif1() {
@@ -1551,7 +1595,10 @@ std::uint32_t Iop::modeled_irqs() const noexcept {
     // Cold SIO2 has no in-flight command. Every path that could start one
     // (CTRL.0, FIFO, DMA) refuses before changing state, so IRQ17 cannot rise.
     // This proves the idle source only, not peripheral responses or timing.
+    // This opt-in experiment assumes inactive cores at reset. All SPU2 MMIO
+    // and DMA starts still refuse, so no unmodeled activity can raise IRQ9.
     return kTimerIrqs | kDmaIrq | (1u<<2u) | (sio2_irq_acknowledged_ ? (1u<<17u) : 0u) |
+           (diagnostic_spu2_quiescent_ ? (1u<<9u) : 0u) |
            (video_.state != GsRegisters::VerticalClock::State::Unknown ? kVblankStartIrq | kVblankEndIrq : 0u);
 }
 

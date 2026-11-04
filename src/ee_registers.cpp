@@ -52,7 +52,8 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
     hardware_ = hardware;
     iop_.reset(rom0, hardware, nvm, assumptions && assumptions->sbus_configuration_latches,
                assumptions ? assumptions->iop_dmacinten : std::nullopt, rom1,
-               assumptions && assumptions->iop_sio2_irq_clear);
+               assumptions && assumptions->iop_sio2_irq_clear,
+               assumptions && assumptions->spu2_quiescent_reset);
     // Hypothesis: counters, modes (disabled) and the latch are zero/unset after reset.
     timers_ = {};
     f500_.reset();
@@ -85,7 +86,10 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
 // changes state the IOP observes (the GS video timing). IOP events at or
 // before an EE access are therefore ordered before it, and both EE engines
 // see the same IOP.
-void EeRegisters::sync_iop() { iop_.run_until(now() / kEeCyclesPerIopCycle, &gs_); }
+void EeRegisters::sync_iop() {
+    iop_.run_until(now() / kEeCyclesPerIopCycle, &gs_);
+    iop_.advance_gif_dma(now(),gif_,gs_);
+}
 
 std::uint64_t EeRegisters::now() const {
     if (clock_ == nullptr) throw DeviceRefusal("no EE clock is attached to the EE registers");
@@ -185,6 +189,17 @@ ObservedWord EeRegisters::observe_dma_word(std::uint32_t physical) {
 void EeRegisters::write_dma_word(std::uint32_t physical, ObservedWord word) {
     sync_iop();
     iop_.ee_dma_write_observed(physical, word);
+}
+
+ObservedDoubleword EeRegisters::observe_gs_csr() {
+    advance_gs_interrupts();
+    auto result=gs_.observe_csr();
+    if(hardware_ && hardware_->gs_revision_id) {
+        const auto& identity=*hardware_->gs_revision_id;
+        result.value|=(std::uint64_t{identity[0]}<<16u)|(std::uint64_t{identity[1]}<<24u);
+        result.unknown&=~std::uint64_t{0xFFFF0000u};
+    }
+    return result;
 }
 
 void EeRegisters::write_timer(unsigned index, unsigned reg, std::uint32_t value) {

@@ -93,6 +93,8 @@ int boot_main(int argc, Character** argv) {
                 assumptions.sbus_configuration_latches=true;
             } else if (flag=="--assume-iop-sio2-irq-clear") {
                 assumptions.iop_sio2_irq_clear=true;
+            } else if (flag=="--assume-spu2-quiescent-reset") {
+                assumptions.spu2_quiescent_reset=true;
             } else if (flag.starts_with("--assume-iop-dmacinten=")) {
                 const auto value=number(flag.substr(sizeof("--assume-iop-dmacinten=")-1u),"--assume-iop-dmacinten");
                 if(value>3u)throw std::runtime_error("--assume-iop-dmacinten requires 0..3");
@@ -169,6 +171,8 @@ int boot_main(int argc, Character** argv) {
                 header<<"# DIAGNOSTIC IOP DMACINTEN reset = "<<*assumptions.iop_dmacinten<<" (unmeasured)\n";
             if(assumptions.iop_sio2_irq_clear)
                 header<<"# DIAGNOSTIC IOP I_STAT.17 initially clear (unmeasured)\n";
+            if(assumptions.spu2_quiescent_reset)
+                header<<"# DIAGNOSTIC SPU2 cores inactive and IRQ9 clear at reset (unmeasured)\n";
         }
         header << "# engine " << (module != nullptr ? "hybrid: AOT blocks " + std::to_string(module->block_count) +
                                                           " + interpreter fallback"
