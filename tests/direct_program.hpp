@@ -31,6 +31,7 @@ inline Program cpu() {
     a.la(t1,0x00018001u); a.mtc0(t1,Status);
     a.label("irq"); a.lw(t2,4,s0); a.beq(t2,zero,"irq"); a.nop();
     a.mtc0(zero,Status);
+    a.lq(t1,16,s0);a.raw(0x70000004u|(t1<<21u)|(t1<<11u));a.sq(t1,32,s0);
     const auto stop=a.here(); a.brk();
     while(a.here()<text+0x200) a.nop();
     a.addiu(v0,v0,3); a.jr(ra); a.nop();
@@ -38,7 +39,9 @@ inline Program cpu() {
     h.la(k0,data+4u); h.addiu(27,zero,1); h.sw(27,0,k0);
     h.mfc0(27,Cause); h.sw(27,4,k0); h.mfc0(27,14); h.sw(27,8,k0);
     h.la(27,0xFFFFFFFFu); h.mtc0(27,11); h.eret();
-    return {{{text,5,le_words(a.finish())},{data,6,std::vector<std::uint8_t>(16),64},
+    std::vector<std::uint8_t> bytes(48);
+    put(bytes,16,0x8000000000000001ull,8);put(bytes,24,0x0123456789ABCDEFull,8);
+    return {{{text,5,le_words(a.finish())},{data,6,std::move(bytes),64},
              {0x00000200u,5,le_words(h.finish())}},stop,{}, {}};
 }
 inline std::vector<std::uint8_t> iop_receiver(bool program_interrupt_masks=true) {

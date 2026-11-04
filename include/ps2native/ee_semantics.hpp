@@ -8,6 +8,7 @@
 #include "ps2native/mips.hpp"
 
 #include <cstdint>
+#include <bit>
 #include <tuple>
 
 namespace ps2native {
@@ -293,6 +294,17 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         const auto low = s.reg64(t_);
         const auto high = s.reg64(s_);
         s.set_reg128(d_, low, high);
+    } else if constexpr (Op == O::Plzcw) {
+        // EE Instruction Set v6 p.215: count the leading sign bits minus
+        // one independently in the low two words; preserve upper 64 bits.
+        const auto source=s.reg64(s_);
+        std::uint64_t result=0;
+        for(unsigned shift:{0u,32u}) {
+            const auto word=static_cast<std::uint32_t>(source>>shift);
+            const auto normalized=(word&0x80000000u) ? ~word : word;
+            result|=std::uint64_t(std::countl_zero(normalized)-1)<<shift;
+        }
+        s.set_reg64(d_,result);
     } else if constexpr (Op == O::Pcpyud) {
         const auto low=s.reg128(s_).high, high=s.reg128(t_).high;
         s.set_reg128(d_,low,high);

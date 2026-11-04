@@ -118,6 +118,29 @@ void packed_copy() {
     require(state.reg128(8).low==0xFF10213243546576ull && state.reg128(8).high==0x7EFD7DFEFEFFFEFDull,
             "PSUBB wraps each byte independently without cross-lane borrow");
 }
+void leading_sign_count() {
+    constexpr auto word=0x70000004u|(8u<<21)|(8u<<11);
+    require(decode_mips(0,word).opcode==MipsOpcode::Plzcw && decode_mips(0,word).written_gpr()==8,
+            "PLZCW decoder and destination metadata");
+    require(!try_decode_r5900(0,word|(1u<<16)) && !try_decode_r5900(0,word|0x40),"PLZCW reserved fields rejected");
+    Memory memory;EEState state;
+    for(unsigned bit=0;bit<31;++bit) {
+        const std::uint32_t lane=1u<<bit;
+        state.set_reg128(8,std::uint64_t{lane^0xFFFFFFFFu}<<32|lane,0x0123456789ABCDEFull);
+        ee::exec<MipsOpcode::Plzcw>(state,memory,0,word);
+        const auto count=30u-bit;
+        require(state.reg64(8)==(std::uint64_t{count}<<32|count) && state.reg128(8).high==0x0123456789ABCDEFull,
+                "PLZCW every leading-sign transition, opposite signs, alias and upper-half preservation");
+    }
+    state.set_reg128(8,0xFFFFFFFF00000000ull,0xFEDCBA9876543210ull);
+    ee::exec<MipsOpcode::Plzcw>(state,memory,0,word);
+    require(state.reg64(8)==0x0000001F0000001Full,"PLZCW uniform zero/one words count 31");
+    state.set_reg64(8,0x000FFF0FFF0FF00Full);
+    ee::exec<MipsOpcode::Plzcw>(state,memory,0,word);
+    require(state.reg64(8)==0x0000000B00000007ull,"PLZCW documented manual example");
+    ee::exec<MipsOpcode::Plzcw>(state,memory,0,word&~(31u<<11));
+    require(state.reg64(0)==0,"PLZCW cannot change zero register");
+}
 void register_context() {
     EEState state;Memory memory;
     memory.reset_for_boot(m20::build_firmware().rom);
@@ -266,6 +289,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();nested_exception();packed_copy();register_context();divider();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();nested_exception();packed_copy();leading_sign_count();register_context();divider();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

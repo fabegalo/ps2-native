@@ -23,7 +23,7 @@ namespace ps2native {
     X(J) X(Jal) X(Jr) X(Jalr) \
     X(Mult1) X(Multu1) X(Div1) X(Divu1) X(Mfhi1) X(Mflo1) X(Mthi1) X(Mtlo1) X(Mfsa) X(Mtsa) \
     X(Pmfhi) X(Pmflo) X(Pmthi) X(Pmtlo) X(Padduw) X(Pcpyh) X(Pcpyld) X(Pcpyud) \
-    X(Pextlw) X(Pextuw) X(Ppacw) X(Psubb) X(Pand) X(Pxor) X(Por) X(Pnor)
+    X(Pextlw) X(Pextuw) X(Ppacw) X(Psubb) X(Pand) X(Pxor) X(Por) X(Pnor) X(Plzcw)
 // System instructions executed only by the interpreter (boot path): COP0
 // moves, TLB maintenance, ERET, EI/DI, CACHE, PREF, the COP1 word loads and
 // stores LWC1/SWC1 (FPU arithmetic is not decoded) and the trap-style

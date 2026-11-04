@@ -77,7 +77,7 @@ std::optional<unsigned> MipsInstruction::written_gpr() const noexcept {
         case MipsOpcode::Mflo1: case MipsOpcode::Padduw: case MipsOpcode::Pand:
         case MipsOpcode::Pxor: case MipsOpcode::Por: case MipsOpcode::Pnor: case MipsOpcode::Pcpyh: case MipsOpcode::Pcpyld: case MipsOpcode::Pcpyud:
         case MipsOpcode::Pextlw: case MipsOpcode::Pextuw: case MipsOpcode::Ppacw:
-        case MipsOpcode::Psubb:
+        case MipsOpcode::Psubb: case MipsOpcode::Plzcw:
             target = rd;
             break;
         case MipsOpcode::Addiu: case MipsOpcode::Daddiu: case MipsOpcode::Slti:
@@ -208,6 +208,7 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
         // as their SPECIAL counterparts) and the MMI1/MMI2/MMI3 sub-tables
         // (sa field).
         switch (funct) {
+            case 0x04: if(rt==0 && sa==0)return make(MipsOpcode::Plzcw); break;
             case 0x10: if (rs == 0 && rt == 0 && sa == 0) return make(MipsOpcode::Mfhi1); break;
             case 0x11: if (rt == 0 && rd == 0 && sa == 0) return make(MipsOpcode::Mthi1); break;
             case 0x12: if (rs == 0 && rt == 0 && sa == 0) return make(MipsOpcode::Mflo1); break;

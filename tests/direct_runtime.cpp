@@ -120,6 +120,8 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
         if(mode=="cpu") {
             require(memory.read32(direct_test::data)==30000 && memory.read32(direct_test::data+4)==1,"function calls/memory/IRQ handler");
             require(memory.read32(direct_test::data+8)&0x8000,"handler captured timer pending");
+            require(memory.read64(direct_test::data+32)==30 && memory.read64(direct_test::data+40)==0x0123456789ABCDEFull,
+                    "PLZCW counts both source words and preserves destination upper 64 bits in both engines");
             require(report.interpreted_instructions>0,"system operations remain explicit interpreter boundaries");
         } else if(mode=="dma") {
             std::uint32_t sum=0;
