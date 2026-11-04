@@ -334,6 +334,10 @@ std::uint64_t GsRegisters::VerticalClock::next_edge(std::uint64_t from, bool end
 }
 
 void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
+    // GS manual v6 pp.52/119/123: all three STQ mantissas lose their
+    // low eight bits on input, through PACKED, REGLIST and A+D alike.
+    if(index==1u)value&=~(0xFFull<<32u);
+    if(index==2u)value&=~0x000000FF000000FFull;
     const auto shown = "GS general register " + hex(index, 2) + " = " + hex(value, 16);
     switch (index) {
         // State registers (ps2sdk gs_gp.h addresses): PRIM, RGBAQ, ST, UV, TEX0,

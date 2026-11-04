@@ -297,6 +297,31 @@ int main() try {
             "masked FTOI uses the true loaded coordinate, ignores unselected unknown operands, and preserves other destination fields");
         vu.reset();instruction(vu,unit,0,addiu(1,0,9),(8u<<21u)|(3u<<16u)|(1u<<11u)|0x17Du);vu.start_micro(unit,0,0);
         rejects([&]{vu.advance_micro(1);},"FTOI consumes unknown");require(integer(vu,unit,1).unknown,"unknown FTOI input refuses both halves without inventing a vertex");
+        vu.reset();seed_vector(vu,unit,1,{0x3F800001,0x3F800001,0xBF800001,0xBF800001});
+        seed_vector(vu,unit,2,{0x3F800003,0x3F800003,0x3F800003,0x3F800003});
+        instruction(vu,unit,0,nop,upper(0x2A,5,1,2));
+        instruction(vu,unit,1,nop,(15u<<21u)|(3u<<16u)|(5u<<11u)|0x17Du|0x40000000u);
+        instruction(vu,unit,2,nop);vu.start_micro(unit,0,0);vu.advance_micro(5);
+        const auto bounded=vector_lane(vu,unit,5,0);
+        require(bounded.unknown && !(bounded.unknown&0xFF800000u),"FMAC keeps an uncertain fraction and certified sign/exponent through the real S-stage writeback");
+        vu.advance_micro(12);
+        for(unsigned lane=0;lane<4;++lane)require(vector_lane(vu,unit,3,lane).value==(lane<2u ? 16u : 0u-16u) &&
+            !vector_lane(vu,unit,3,lane).unknown,"FTOI proves the same fixed-point coordinate for every bounded product candidate");
+        vu.reset();
+        // Both adjacent representable floats immediately below 2.0 truncate
+        // to the same 15-fractional-bit integer.
+        vu.write_memory(data,4,{0x3FFFFFFEu,1});
+        instruction(vu,unit,0,0x8101037Cu);
+        instruction(vu,unit,1,nop,(8u<<21u)|(3u<<16u)|(1u<<11u)|0x17Fu|0x40000000u);
+        instruction(vu,unit,2,nop);vu.start_micro(unit,0,0);vu.advance_micro(12);
+        require(vector_lane(vu,unit,3,0).value==65535u && !vector_lane(vu,unit,3,0).unknown,
+            "FTOI discards all unobservable mantissa bits at the final truncation boundary");
+        vu.reset();vu.write_memory(data,4,{0x3F800000u,0x100u});
+        instruction(vu,unit,0,0x8101037Cu);
+        instruction(vu,unit,1,nop,(8u<<21u)|(3u<<16u)|(1u<<11u)|0x17Fu|0x40000000u);
+        instruction(vu,unit,2,nop);vu.start_micro(unit,0,0);vu.advance_micro(12);
+        require(vector_lane(vu,unit,3,0).value==32768u && vector_lane(vu,unit,3,0).unknown==1u,
+            "FTOI preserves a genuinely observable integer difference instead of selecting a guessed vertex coordinate");
         vu.reset();seed_vector(vu,unit,1,{0x3F800000,0xBF800000,0,0x3F800000});seed_integer(vu,unit,1,{});
         instruction(vu,unit,0,nop,upper(0x1B,5,1,0));instruction(vu,unit,1,addiu(2,0,0x40));
         instruction(vu,unit,2,nop);instruction(vu,unit,3,nop);

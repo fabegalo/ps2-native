@@ -18,6 +18,29 @@ void setup(VuControl& vu) {
 }
 }
 int main() try {
+    for(unsigned bit=0;bit<8u;++bit) {
+        VuControl vu;Gif gif;GsRegisters gs;gs.reset(0);
+        pair(vu,0,0x800006FC);pair(vu,1,0x8000033C,0x400002FF);pair(vu,2,0x8000033C);
+        qword(vu,0,(2ull<<60)|0x8001u,0x12); // STQ then RGBA
+        vu.write_memory(0x1100C010u,8,{0x400000003F800000ull,(1ull<<bit)|(1ull<<(32u+bit))});
+        vu.write_memory(0x1100C018u,8,{0x3D088800u,0xFFFFFFFF00000000ull|(1ull<<bit)});
+        qword(vu,2,0x0000002200000011ull,0x0000004400000033ull);
+        vu.start_micro(1,0,0);vu.advance_micro(10,&gif,&gs);
+        require(!vu.path1_transfer_pending() && gif.packets().size()==1 &&
+            gs.general(2)==0x400000003F800000ull && gs.general(1)==0x3D08880044332211ull,
+            "real PATH1 preserves all retained STQ bits while the documented low mantissa bits and unused word disappear at GS input");
+    }
+    for(const unsigned bit:{8u,23u,31u}) {
+        Gif gif;GsRegisters gs;gif.reset();gs.reset(0);gif.request_path1();
+        gif.write_path1((2ull<<60)|0x8001u,0x12,gs);
+        rejects([&]{gif.write_path1_observed({0x400000003F800000ull,0},{0x3D088800u,1ull<<bit},gs);},"retained GIF/GS field");
+        require(!gs.general(2) && gif.path1_requested(),"retained Q mantissa/exponent/sign uncertainty refuses atomically before writing ST or finishing a packet");
+    }
+    {
+        GsRegisters gs;gs.reset(0);gs.general_write(1,0x3F8000FF44332211ull);gs.general_write(2,0xBF8000FF3F8000FFull);
+        require(gs.general(1)==0x3F80000044332211ull && gs.general(2)==0xBF8000003F800000ull,
+            "raw GS register writes apply the same documented STQ input precision as GIF PACKED");
+    }
     {
         VuControl vu;Gif gif;GsRegisters gs;gs.reset(0);setup(vu);vu.start_micro(1,0,0);
         vu.advance_micro(2,&gif,&gs);

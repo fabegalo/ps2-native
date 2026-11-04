@@ -40,6 +40,7 @@ public:
     [[nodiscard]] bool path1_ready() const noexcept {return !(ctrl_&8u) && (!in_packet_ || path_==1u);}
     [[nodiscard]] bool path1_packet_active() const noexcept {return in_packet_ && path_==1u;}
     void write_path1(std::uint64_t low,std::uint64_t high,GsRegisters& gs);
+    void write_path1_observed(ObservedDoubleword low,ObservedDoubleword high,GsRegisters& gs);
     // One line per completed GIF packet (for traces and tests).
     [[nodiscard]] const std::vector<std::string>& packets() const noexcept { return packets_; }
 

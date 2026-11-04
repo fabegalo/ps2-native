@@ -140,27 +140,36 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper(unsigned unit,std::uint32_t
         const auto bit=8u>>lane;if(!(mask&bit))continue;
         const auto a=vectors[fs][lane];
         if(fixed) {
-            if(a.unknown)throw DeviceRefusal("FTOI consumes unknown VF operand bits");
+            if(a.unknown&0xFF800000u)throw DeviceRefusal("FTOI consumes unknown VF sign/exponent bits");
             // VU manual 2.1-2.3: signed 32-bit fixed point, truncate toward
             // zero and clamp conversion overflow without changing flags.
             // Exponent zero is zero; exponent 255 remains a finite PS2 input.
             constexpr unsigned fractions[]{0,4,12,15};
-            const auto exponent=(a.value>>23u)&255u;
-            const int scaled=static_cast<int>(exponent)-127+static_cast<int>(fractions[extended&3u]);
-            std::uint32_t value=0;
-            if(exponent && scaled>=0) {
-                if(scaled>=31)value=(a.value&0x80000000u) ? 0x80000000u : 0x7FFFFFFFu;
-                else {
-                    const auto mantissa=0x800000u|(a.value&0x7FFFFFu);
-                    const auto magnitude=scaled>=23 ? mantissa<<static_cast<unsigned>(scaled-23) : mantissa>>static_cast<unsigned>(23-scaled);
-                    value=(a.value&0x80000000u) ? 0u-magnitude : magnitude;
+            const auto convert=[&](std::uint32_t input) {
+                const auto exponent=(input>>23u)&255u;
+                const int scaled=static_cast<int>(exponent)-127+static_cast<int>(fractions[extended&3u]);
+                std::uint32_t value=0;
+                if(exponent && scaled>=0) {
+                    if(scaled>=31)value=(input&0x80000000u) ? 0x80000000u : 0x7FFFFFFFu;
+                    else {
+                        const auto mantissa=0x800000u|(input&0x7FFFFFu);
+                        const auto magnitude=scaled>=23 ? mantissa<<static_cast<unsigned>(scaled-23) : mantissa>>static_cast<unsigned>(23-scaled);
+                        value=(input&0x80000000u) ? 0u-magnitude : magnitude;
+                    }
                 }
-            }
-            result.output.words[lane]={value,0};continue;
+                return value;
+            };
+            // With a fixed sign/exponent, conversion is monotone. Preserve
+            // every possible integer between the endpoints, including all
+            // lower carry bits. Subpixel fraction uncertainty often vanishes.
+            const auto low=convert(a.value&~a.unknown),high=convert(a.value|a.unknown);
+            const auto different=low^high;
+            const auto unknown=different ? ~0u>>(32u-std::bit_width(different)) : 0u;
+            result.output.words[lane]={low&~unknown,unknown};continue;
         }
         const auto b=broadcast==5u ? (unit ? vu1_controls_[6] : observe(22)) : vectors[ft][broadcast<4u ? broadcast : lane];
-        if(a.unknown || b.unknown)throw DeviceRefusal("FMAC consumes unknown VF operand bits");
         if(comparison) {
+            if(a.unknown || b.unknown)throw DeviceRefusal("MAX/MINI consumes unknown VF operand bits");
             const auto am=a.value&0x7FFFFFFFu,bm=b.value&0x7FFFFFFFu;
             if((am && !(am&0x7F800000u)) || (bm && !(bm&0x7F800000u)))
                 throw DeviceRefusal("MAX/MINI denormal input selection is not established");
@@ -174,13 +183,18 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper(unsigned unit,std::uint32_t
             result.output.words[lane]=(maximum ? greater : less) ? a : b;
             continue;
         }
-        std::uint32_t flags=0,value=0;
-        if(addition)value=ee_fpu_add(a.value,b.value^(subtract ? 0x80000000u : 0u),flags);
+        std::uint32_t flags=0;ObservedWord value;
+        if(addition) {
+            const auto sum=vu_float_add(a,{(b.value^(subtract ? 0x80000000u : 0u))&~b.unknown,b.unknown});
+            if(!sum)throw DeviceRefusal("FMAC addition consumes unknown VF operands with unproven fraction/flags");
+            value=sum->word;flags=sum->flags;
+        }
         else {
-            const auto product=ee_fpu_multiply(a.value,b.value,flags,diagnostic_power_two_carry_);
-            if(!product)throw DeviceRefusal("FMAC multiply has ambiguous low-column Booth rounding");
+            const auto product=vu_float_product(a,b,diagnostic_power_two_carry_);
+            if(!product)throw DeviceRefusal("FMAC multiply consumes unknown VF operand bits or unproven fraction/flags");
+            flags=product->flags;
             if(flags&0xC000u)throw DeviceRefusal("FMAC exceptional product/ACC metadata is not modeled");
-            value=*product;
+            value=product->word;
             if(accumulate) {
                 auto acc=(unit ? accumulator1_ : accumulator_)[lane];
                 // Consecutive MULA/MADDA/MADD share the accumulator bypass;
@@ -189,14 +203,17 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper(unsigned unit,std::uint32_t
                     const auto& previous=state.vectors[n-1u];
                     if(previous.index==32u && (previous.mask&bit)){acc=previous.words[lane];break;}
                 }
-                if(acc.unknown)throw DeviceRefusal("FMAC accumulation consumes unknown ACC bits");
-                value=ee_fpu_add(acc.value,value,flags);
+                const auto sum=vu_float_add(acc,value);
+                if(!sum)throw DeviceRefusal("FMAC accumulation consumes unknown ACC bits or unproven fraction/flags");
+                value=sum->word;flags=sum->flags;
                 if(flags&0xC000u)throw DeviceRefusal("FMAC exceptional accumulation/ACC metadata is not modeled");
             }
         }
-        result.output.words[lane]={value,0};
-        if(!(value&0x7FFFFFFFu)){result.mac|=bit;result.status|=1u;}
-        if(value&0x80000000u){result.mac|=bit<<4u;result.status|=2u;}
+        result.output.words[lane]=value;
+        // Shared bounds certify sign/exponent and exception classes. An
+        // uncertain normal fraction therefore cannot change Z/S/U/O flags.
+        if(!(value.value&0x7FFFFFFFu)){result.mac|=bit;result.status|=1u;}
+        if(value.value&0x80000000u){result.mac|=bit<<4u;result.status|=2u;}
         if(flags&0x4000u){result.mac|=bit<<8u;result.status|=4u;}
         if(flags&0x8000u){result.mac|=bit<<12u;result.status|=8u;}
     }
@@ -453,13 +470,14 @@ void VuControl::step_path1(Gif* gif,GsRegisters* gs) {
         if(!gif || !gs)throw DeviceRefusal("active PATH1 requires the shared GIF/GS devices");
         if(!gif->path1_requested())throw DeviceRefusal("GIF reset interrupted the active VU1 PATH1 transfer");
         if(!gif->path1_ready()){transfer.next+=kEeCyclesPerBusCycle;return;}
-        std::array<std::uint32_t,4> words{};
+        std::array<ObservedWord,4> words{};
         for(unsigned lane=0;lane<4u;++lane) {
-            const auto word=data1_[transfer.address*4u+lane];
-            if(word.unknown)throw DeviceRefusal("PATH1 consumes unknown VU1 packet bits");
-            words[lane]=word.value;
+            words[lane]=data1_[transfer.address*4u+lane];
         }
-        gif->write_path1(words[0]|(std::uint64_t{words[1]}<<32u),words[2]|(std::uint64_t{words[3]}<<32u),*gs);
+        gif->write_path1_observed({words[0].value|(std::uint64_t{words[1].value}<<32u),
+                                  words[0].unknown|(std::uint64_t{words[1].unknown}<<32u)},
+                                 {words[2].value|(std::uint64_t{words[3].value}<<32u),
+                                  words[2].unknown|(std::uint64_t{words[3].unknown}<<32u)},*gs);
         ++transfer.qwords;transfer.address=(transfer.address+1u)&1023u;transfer.next+=kEeCyclesPerBusCycle;
         if(!gif->path1_requested()) {
             if(queued_path1_) {

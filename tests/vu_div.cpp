@@ -26,6 +26,11 @@ std::uint32_t product_q(unsigned dest,unsigned fs) {return (8u<<21u)|(fs<<11u)|(
 std::uint32_t vx(const VuControl& vu,unsigned unit,unsigned index) {
     return unit ? vu.observe_data(0x4000u+index*16u).value : static_cast<std::uint32_t>(vu.observe_vector(index).low.value);
 }
+ObservedWord observed_vx(const VuControl& vu,unsigned unit,unsigned index) {
+    if(unit)return vu.observe_data(0x4000u+index*16u);
+    const auto word=vu.observe_vector(index).low;
+    return {static_cast<std::uint32_t>(word.value),static_cast<std::uint32_t>(word.unknown)};
+}
 }
 int main() try {
     for(const unsigned b : {0x3F800009u,0x3F800021u,0x3F800081u,0x3F800201u}) {
@@ -39,17 +44,18 @@ int main() try {
     for(unsigned unit=0;unit<2;++unit) {
         {
             VuControl strict;vector(strict,unit,1,0x3F800000);prime_q(strict,unit,0x3F800009);
-            pair(strict,unit,0,0x10010007,product_q(3,1));strict.start_micro(unit,0,0);
-            rejects([&]{strict.advance_micro(1);},"ambiguous low-column Booth");
-            require(strict.diagnostic_micro_instructions(unit)==0,"unmeasured early-digit carry remains a strict refusal without a paired lower side effect");
+            pair(strict,unit,0,0x10010007,product_q(3,1)|0x40000000u);pair(strict,unit,1,0x8000033C);strict.start_micro(unit,0,0);
+            strict.advance_micro(6);const auto bounded=observed_vx(strict,unit,3);
+            require(bounded.unknown && !((0x3F800008u^bounded.value)&~bounded.unknown) &&
+                !((0x3F800009u^bounded.value)&~bounded.unknown),"strict mode preserves both carry candidates instead of assuming either endpoint");
             strict.reset();strict.diagnostic_power_two_carry();vector(strict,unit,1,0x3F800000);prime_q(strict,unit,0x3F800009);
             pair(strict,unit,0,0x10010007,product_q(3,1)|0x40000000u);pair(strict,unit,1,0x8000033C);
             strict.start_micro(unit,0,0);strict.advance_micro(6);
             require(vx(strict,unit,3)==0x3F800008 && !strict.micro_running(unit),"explicit carry experiment calculates the externally observed class result through the real VU pipeline");
             rejects([&]{strict.diagnostic_power_two_carry();},"precede micro execution");
             strict.reset();vector(strict,unit,1,0x3F800000);prime_q(strict,unit,0x3F800009);
-            pair(strict,unit,0,0x8000033C,product_q(3,1));strict.start_micro(unit,0,0);
-            rejects([&]{strict.advance_micro(1);},"ambiguous low-column Booth");
+            pair(strict,unit,0,0x8000033C,product_q(3,1)|0x40000000u);pair(strict,unit,1,0x8000033C);strict.start_micro(unit,0,0);strict.advance_micro(6);
+            require(observed_vx(strict,unit,3).unknown,"cold reset restores strict uncertainty instead of retaining the carry experiment");
         }
         VuControl vu;vector(vu,unit,1,0x3F800000);vector(vu,unit,2,0,0x40000000);
         pair(vu,unit,0,divide_code(1,2,0,1),0x400002FF);pair(vu,unit,1,0x8000033C);

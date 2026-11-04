@@ -78,6 +78,22 @@ void Gif::write_path1(std::uint64_t low,std::uint64_t high,GsRegisters& gs) {
     write_path(low,high,gs,1u);
     if(!in_packet_)path1_requested_=false; // real EOP, including a zero-NLOOP terminal tag
 }
+void Gif::write_path1_observed(ObservedDoubleword low,ObservedDoubleword high,GsRegisters& gs) {
+    if(low.unknown || high.unknown) {
+        std::uint64_t discarded_low=0,discarded_high=0;
+        if(in_packet_ && loops_left_ && format_==0u &&
+           ((regs_>>(reg_index_*4u))&15u)==2u) {
+            // GS manual v6 3.4.4, RGBAQ/ST (pp.52,119,123): the low
+            // eight mantissa bits of S, T AND Q are discarded on input.
+            // PACKED STQ's fourth word is unused (EE manual 7.2.2).
+            discarded_low=0x000000FF000000FFull;
+            discarded_high=0xFFFFFFFF000000FFull;
+        }
+        if((low.unknown&~discarded_low) || (high.unknown&~discarded_high))
+            throw DeviceRefusal("PATH1 consumes unknown VU1 packet bits in a retained GIF/GS field");
+    }
+    write_path1(low.value&~low.unknown,high.value&~high.unknown,gs);
+}
 void Gif::write_path(std::uint64_t low, std::uint64_t high, GsRegisters& gs, unsigned path) {
     const auto shown = [&] { return "GIF FIFO quadword " + hex(high, 16) + "_" + hex(low, 16); };
     if ((ctrl_ & kCtrlStop) != 0u) throw DeviceRefusal(shown() + " while GIF_CTRL.PSE stops the GIF: not modeled");
@@ -157,7 +173,7 @@ void Gif::packed(unsigned d, std::uint64_t lo, std::uint64_t hi, GsRegisters& gs
                           ((hi & 255u) << 16) | (((hi >> 32) & 255u) << 24);
         gs.general_write(1u, rgba | (std::uint64_t{q_} << 32));
     } else if (d == 2u) {
-        gs.general_write(2u, lo); q_ = static_cast<std::uint32_t>(hi);
+        gs.general_write(2u, lo); q_ = static_cast<std::uint32_t>(hi)&0xFFFFFF00u;
     } else if (d == 3u) {
         gs.general_write(3u, (lo & 0x3FFFu) | (((lo >> 32) & 0x3FFFu) << 16));
     } else if (d == 4u || d == 5u || d == 0xCu || d == 0xDu) {
