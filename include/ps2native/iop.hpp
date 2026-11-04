@@ -95,6 +95,9 @@ public:
         return (ee_dstat_ & (ee_dstat_>>16u) & 0x63FFu)!=0u;
     }
 
+    void set_ee_dma_suspended(bool suspended) noexcept { ee_dma_suspended_=suspended; }
+    [[nodiscard]] bool ee_dma_suspended() const noexcept { return ee_dma_suspended_; }
+
     [[nodiscard]] std::uint64_t cycle() const noexcept { return cycle_; }
     [[nodiscard]] std::uint32_t pc() const noexcept { return pc_; }
     [[nodiscard]] bool stopped() const noexcept { return stop_.has_value(); }
@@ -224,6 +227,7 @@ private:
     std::array<Timer, 6> timers_{};
     bool timers_running_{};
     std::uint32_t istat_{}; // I_STAT bits of the modeled sources
+    bool ee_dma_suspended_{};
     // SIF registers shared with the EE (ps2tek "SIF Registers"): MSCOM is
     // written by the EE, SMCOM by the IOP (empty: never written); MSFLG bits
     // are set by the EE and cleared by the IOP, SMFLG the other way round.

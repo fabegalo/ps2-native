@@ -182,6 +182,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     timers_ = {};
     timers_running_ = false;
     istat_ = 0u;
+    ee_dma_suspended_=hardware && hardware->d_enabler && (*hardware->d_enabler&0x10000u);
     // SIF: the communication registers are unknown until written. The flags
     // are 0 (hypothesis: SIFMAN and the EE kernel each wait for the other side
     // to set a flag, which presumes it clear at power-on; PCSX2 also starts
@@ -213,9 +214,10 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     ee_ram_unknown_ = nullptr;
     ee_dctrl_ = ee_dstat_ = ee_sif1_chcr_ = ee_sif1_madr_ = ee_sif1_qwc_ = 0;
     ee_dma_setup_ = {}; ee_dma_global_ = {};
-    // Do not invent PCR reset fields: backing zeros are entirely symbolic.
+    // EE User's Manual v6 p.66: PCE resets to zero; CDE/CPC reset
+    // values are unspecified. Disabled priority makes unknown CDE inert.
     ee_dma_global_[0] = 0u;
-    ee_dma_global_unknown_ = {0x83FF03FFu, 0u, 0u, 0u};
+    ee_dma_global_unknown_ = {0x03FF03FFu, 0u, 0u, 0u};
     iop_sif1_ = {};
     sif1_fifo_.clear();
     sif1_have_tag_ = sif1_end_ = false;
@@ -320,9 +322,12 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
     const auto decoded=ee_dma_field(address);
     if(!decoded)throw DeviceRefusal("EE DMAC register not modeled");
     const auto [channel,field]=*decoded;
-    if(channel==5u && (ee_dma_setup_[5][0].value_or(0u)&0x100u))
+    // EE User's Manual p.62: suspend via CPND, then clear STR before
+    // reconfiguring an active channel. A stopped transfer is not completion.
+    const bool suspended_stop=ee_dma_suspended_ && field==0u && !(value&0x100u);
+    if(channel==5u && (ee_dma_setup_[5][0].value_or(0u)&0x100u) && !suspended_stop)
         throw DeviceRefusal("EE SIF0 DMA register write while busy");
-    if(channel==6u && (ee_sif1_chcr_ & 0x100u)) throw DeviceRefusal("EE SIF1 DMA register write while busy");
+    if(channel==6u && (ee_sif1_chcr_ & 0x100u) && !suspended_stop) throw DeviceRefusal("EE SIF1 DMA register write while busy");
     if(!ee_dma_field_exists(channel,field)) {
         // SDK dma_channel_initialize also clears unused channel slots. Only
         // inert zero stores are accepted; no value for an absent read is made up.
@@ -392,7 +397,7 @@ void Iop::iop_sif1_write(std::uint32_t address, std::uint32_t value) {
 void Iop::pump_sif1() {
     // Experimental throughput: one qword per IOP instruction, bounded at 32
     // words. It preserves backpressure/order, not physical bus latency.
-    bool source_enabled=(ee_dctrl_&1u) && (ee_sif1_chcr_&0x100u);
+    bool source_enabled=!ee_dma_suspended_ && (ee_dctrl_&1u) && (ee_sif1_chcr_&0x100u);
     if(source_enabled) {
         const auto priority=ee_dma_priority(ee_dma_observe(0x1000E020u),6u);
         if(!priority)throw IopStop{"EE SIF1 priority is unknown"};
@@ -563,7 +568,7 @@ void Iop::pump_sif0() {
         }
     }
     auto& chcr=ee_dma_setup_[5][0];auto& madr=ee_dma_setup_[5][1];auto& qwc=ee_dma_setup_[5][2];
-    if(!(ee_dctrl_&1u) || !(chcr.value_or(0u)&0x100u))return;
+    if(ee_dma_suspended_ || !(ee_dctrl_&1u) || !(chcr.value_or(0u)&0x100u))return;
     // An armed, empty receiver remains busy; no fabricated completion.
     if(sif0_fifo_.empty()){++sif0_metrics_.destination_empty_cycles;return;}
     const auto priority=ee_dma_priority(ee_dma_observe(0x1000E020u),5u);

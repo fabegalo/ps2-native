@@ -310,8 +310,7 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
             throw DeviceRefusal("D_ENABLER read: the value of " + std::string(hardware_->model) + ":" +
                                 std::string(hardware_->mainboard) + " has not been measured (" +
                                 std::string(hardware_->source) + ")");
-        // Constant: D_ENABLEW writes, which would change CPND, are refused.
-        return *hardware_->d_enabler;
+        return (*hardware_->d_enabler&~0x10000u)|(iop_.ee_dma_suspended() ? 0x10000u : 0u);
     }
     if (physical == kToolBoardIdPhysical) {
         if (bytes != 1u)
@@ -370,6 +369,16 @@ void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint6
 }
 
 void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value) {
+    if(physical==0x1000F590u) {
+        // EE User's Manual p.62: CPND is bit 16. Preserve board identification
+        // bits; writes changing undocumented configuration still refuse.
+        if(bytes!=4u || !hardware_ || !hardware_->d_enabler ||
+           (value&~0x10000ull)!=(*hardware_->d_enabler&~0x10000u))
+            throw DeviceRefusal("D_ENABLEW requires a 32-bit CPND-only change to the selected profile");
+        sync_iop();
+        iop_.set_ee_dma_suspended((value&0x10000u)!=0);
+        return;
+    }
     if(physical==0x1000F510u) {
         if(!diagnostic_omit_f510_) throw DeviceRefusal("no register model");
         if(bytes!=4u || value) throw DeviceRefusal("F510 diagnostic omission permits only 32-bit zero initialization");

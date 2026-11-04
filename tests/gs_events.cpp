@@ -171,7 +171,8 @@ void held_counter() {
 
 void dma_setup() {
     Iop iop; iop.reset({}, nullptr);
-    require(iop.ee_dma_observe(0x1000E020u).unknown==0x83FF03FFu, "PCR reset fields are symbolic");
+    require(iop.ee_dma_observe(0x1000E020u).unknown==0x03FF03FFu, "PCR resets PCE clear while CDE/CPC remain symbolic");
+    iop.ee_dma_write_observed(0x1000E020u,{0x80000000u,0x03FF03FFu});
     rejects([&] { iop.ee_dma_write(0x1000C400u,0x101); }, "priority depends on unknown");
     require(iop.ee_dma_read(0x1000C400u)==0, "unknown priority cannot start a transfer");
     for (const auto base : {0x10008000u,0x10009000u,0x1000A000u,0x1000B000u,0x1000B400u,
@@ -199,11 +200,11 @@ void dma_setup() {
     prepare_ee_boot(load_bios_rom0(fixture.rom),nullptr,state,memory);
     state.set_reg64(8,0xB000E020u);
     ee::exec<MipsOpcode::Lw>(state,memory,0,0x8D090000u);
-    require(state.unknown_gpr_bits[9]==0xFFFFFFFF83FF03FFull, "LW sign-extension preserves unknown sign bit");
+    require(state.unknown_gpr_bits[9]==0x03FF03FFull, "LW sign-extends the documented clear PCE bit");
     state.set_reg64(10,~0x3FFull);
     ee::exec<MipsOpcode::And>(state,memory,0,(9u<<21)|(10u<<16)|(9u<<11)|0x24u);
     ee::exec<MipsOpcode::Sw>(state,memory,0,0xAD090000u);
-    require(memory.load32_observed(0xB000E020u).unknown==0x83FF0000u,
+    require(memory.load32_observed(0xB000E020u).unknown==0x03FF0000u,
             "PCR RMW defines CPC bits and preserves unknown priority bits without guessing");
     device_refused([&] { (void)memory.read32(0xB000E020u); }, "unknown reset bits");
     memory.write32(0xB000E020u,0);
@@ -575,6 +576,48 @@ void iop_memory() {
     rejects([&] {stopped.ee_write(0,16,0);},"requires 1/2/4/8");
 }
 
+void dma_suspend() {
+    const std::vector<std::uint8_t> rom(4u*1024u*1024u);
+    std::vector<std::uint8_t> ram(0x200u);
+    Iop iop;iop.reset(rom,nullptr);iop.attach_ee_ram(ram);
+    iop.ee_dma_write(0x1000E020u,0);iop.ee_dma_write(0x1000E000u,1);
+    iop.ee_dma_write(0x1000C410u,0);iop.ee_dma_write(0x1000C420u,9);iop.ee_dma_write(0x1000C400u,0x101u);
+    iop.run_until(2);
+    require(iop.ee_dma_read(0x1000C410u)==32 && iop.ee_dma_read(0x1000C420u)==7,
+            "SIF1 transfers actual qwords before suspension: "+iop.stop_reason().value_or("running")+
+            " MADR="+std::to_string(iop.ee_dma_read(0x1000C410u))+" QWC="+std::to_string(iop.ee_dma_read(0x1000C420u)));
+    rejects([&] {iop.ee_dma_write(0x1000C400u,0);},"write while busy");
+    iop.set_ee_dma_suspended(true);iop.run_until(8);
+    require(iop.ee_dma_read(0x1000C410u)==32 && iop.ee_dma_read(0x1000C420u)==7 &&
+            (iop.ee_dma_read(0x1000C400u)&0x100u) && !(iop.ee_dma_read(0x1000E010u)&0x40u),
+            "CPND holds source progress and does not manufacture completion");
+    iop.set_ee_dma_suspended(false);iop.run_until(9);
+    require(iop.ee_dma_read(0x1000C410u)==48 && iop.ee_dma_read(0x1000C420u)==6,"resume continues at the next source qword");
+    iop.set_ee_dma_suspended(true);
+    rejects([&] {iop.ee_dma_write(0x1000C410u,0x100u);},"write while busy");
+    iop.ee_dma_write(0x1000C400u,0);
+    require(!(iop.ee_dma_read(0x1000C400u)&0x100u) && !(iop.ee_dma_read(0x1000E010u)&0x40u),
+            "documented suspended STR clear stops the transfer without a completion IRQ");
+    iop.ee_dma_write(0x1000C410u,0x100u);iop.ee_dma_write(0x1000C420u,1);iop.ee_dma_write(0x1000C400u,0x101u);
+    iop.run_until(10);require(iop.ee_dma_read(0x1000C410u)==0x100u,"rearmed DMA remains held until CPND clears");
+    iop.set_ee_dma_suspended(false);iop.run_until(11);
+    require(iop.ee_dma_read(0x1000C410u)==0x110u && (iop.ee_dma_read(0x1000E010u)&0x40u),"only the new transfer's real completion raises CIS");
+    Iop receiver;receiver.reset(rom,nullptr);receiver.attach_ee_ram(ram);
+    receiver.ee_dma_write(0x1000E020u,0);receiver.ee_dma_write(0x1000C020u,0);receiver.ee_dma_write(0x1000C000u,0x184u);
+    rejects([&] {receiver.ee_dma_write(0x1000C000u,0);},"write while busy");
+    receiver.set_ee_dma_suspended(true);receiver.ee_dma_write(0x1000C000u,0);
+    require(!(receiver.ee_dma_read(0x1000C000u)&0x100u) && !(receiver.ee_dma_read(0x1000E010u)&0x20u),
+            "suspended SIF0 receiver can stop without a fabricated receive completion");
+    EeRegisters registers;std::uint64_t clock=0;registers.set_clock(&clock);
+    const auto* profile=find_console_hardware("SCPH-70004:GH-032-11");registers.reset(profile);
+    const auto initial=registers.read(kDmacEnabler,4);
+    registers.write(0x1000F590u,4,initial|0x10000u);
+    require(registers.read(kDmacEnabler,4)==(initial|0x10000u),"D_ENABLER reflects CPND and preserves measured profile bits");
+    rejects([&] {registers.write(0x1000F590u,4,initial^1u);},"CPND-only");
+    require(registers.read(kDmacEnabler,4)==(initial|0x10000u),"refused control changes preserve the suspension state");
+    registers.write(0x1000F590u,4,initial);require(registers.read(kDmacEnabler,4)==initial,"CPND can be restored through the actual bus register");
+}
+
 void diagnostic_boundary() {
     DiagnosticAssumptions assumptions;
     require(assumptions.empty(),"unselected experiments do not affect original boot classification");
@@ -698,6 +741,7 @@ int main(int argc, char** argv) {
         else if (mode == "ipu-control") ipu_control();
         else if (mode == "diagnostic-boundary") diagnostic_boundary();
         else if (mode == "iop-memory") iop_memory();
+        else if (mode == "dma-suspend") dma_suspend();
         else if (mode == "held-counter") held_counter();
         else if (mode == "dma-setup") dma_setup();
         else if (mode == "guest") guest(argv[2]); else throw std::runtime_error("unknown GS events test");
