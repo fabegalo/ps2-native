@@ -173,7 +173,7 @@ void check_interpreter_stops(const std::vector<std::uint8_t>& rom) {
                 (state.cp0(Cop0::Cause) & 0x7Cu) == (word == 0xCu ? 8u : 9u) * 4u &&
                 (state.cp0(Cop0::Status) & kStatusEXL), "synchronous exception enters bootstrap vector");
     }
-    expect(0x46000000u, "unsupported", "(COP1/FPU) not implemented by the interpreter");
+    expect(0x46000004u, "unsupported", "(COP1/FPU) not implemented by the interpreter"); // SQRT.S
     expect(0x70000000u, "unsupported", "(MMI) not implemented");
     expect(0xC0080000u, "unsupported", "(other)"); // LL is absent on the R5900.
     expect(0x42000006u, "not modeled", "TLBWR");
