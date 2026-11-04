@@ -253,7 +253,8 @@ int main() try {
         if(active){sh(0xBF900000u,0u);sh(0xBF900002u,0u);sh(0xBF9001A0u,1u);}
         for(unsigned core=0;core<2u;++core)for(unsigned bank=0;bank<2u;++bank) {
             sh(0xBF900340u+core*0x400u+bank*2u,0xFFFFu);
-            a.lhu(9,0,8);a.nop();a.andi(9,9,bank ? 0xFFu : 0xFFFFu);
+            a.lhu(9,0,8);a.nop();a.sh(9,0,8); // clear ignores unknown reserved source bits
+            a.andi(9,9,bank ? 0xFFu : 0xFFFFu);
             a.sw(9,core*8u+bank*4u,10);
         }
         for(unsigned n=0;n<800u;++n)a.nop();

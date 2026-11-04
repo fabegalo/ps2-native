@@ -1349,6 +1349,12 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
         if(observed->unknown&mask)throw IopStop{"SPU2 voice start address consumes unknown address bits"};
         io_write(a.physical,bytes,observed->value&mask,what);return;
     }
+    if((a.physical==0x1F900340u || a.physical==0x1F900342u ||
+        a.physical==0x1F900740u || a.physical==0x1F900742u) && bytes==2u && observed) {
+        // ENDX is clear-on-write, not write-one-to-clear. Its payload bits
+        // are not consumed, including reserved bits copied from readback.
+        io_write(a.physical,bytes,0u,what);return;
+    }
     if(a.physical>=0x1F900000u && a.physical<0x1F900800u &&
        (a.physical&0x3FFu)>=0x1A0u && (a.physical&0x3FFu)<=0x1A6u && bytes==2u && observed) {
         const auto mask=(a.physical&2u) ? 0xFFu : 0xFFFFu;

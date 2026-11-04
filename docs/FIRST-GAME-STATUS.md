@@ -909,3 +909,12 @@ limpeza independente do dado e recusa de ENDX posterior de voz desconhecida.
 Ensaio 63 iniciado. Uma sobreposição do commit paralelo ADMA `9150a3c`
 retirou do índice a implementação KON publicada em `04d26de`, sem mudar o
 workspace testado; a integração seguinte a restaura junto com ENDX.
+
+Ensaio 63: IOP `0x66DA0` / 46.555.418, três instruções após a limpeza,
+recusou a cópia SH do readback ENDX por conter bits reservados desconhecidos.
+EE `0x81FCC` / 360.000.000, 106,22 s; mesmo hash/pacotes/pixels e sem PMODE.
+Corrigido o consumo de incerteza: ENDX limpa no ato da escrita e não usa o
+payload, portanto a cópia não precisa inventar bits reservados. Regressão
+própria copia LHU→SH nos dois bancos/cores. Três testes SPU2 focados passaram;
+ensaio 64 iniciado. Modo BIOS original repetido após KON/ENDX: PCs, contagens,
+zero pacotes/pixels e hash canônico `cead2f7c...def9c354` preservados.
