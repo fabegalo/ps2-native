@@ -163,5 +163,5 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+3"; onActivated: window.navigate(2) }
     Shortcut { sequence: "Ctrl+4"; onActivated: window.navigate(3) }
     Shortcut { sequence: "Ctrl+5"; onActivated: window.navigate(4) }
-    Shortcut { sequence: StandardKey.Open; onActivated: discDialog.open() }
+    Shortcut { sequences: [StandardKey.Open]; onActivated: discDialog.open() }
 }

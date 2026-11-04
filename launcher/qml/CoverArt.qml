@@ -15,7 +15,7 @@ Item {
     property real radius: Theme.radius
 
     readonly property bool hasImage: cover.length > 0 && image.status === Image.Ready
-    readonly property var palette: [
+    readonly property var coverPalette: [
         ["#1d47c9", "#081a52"], ["#0f6cb8", "#062448"], ["#3b33c4", "#120d4a"],
         ["#127a9e", "#06283a"], ["#2552b8", "#0a1840"], ["#5130b0", "#170b3f"]
     ]
@@ -24,7 +24,7 @@ Item {
         for (let i = 0; i < text.length; ++i) h = (h * 31 + text.charCodeAt(i)) | 0
         return Math.abs(h)
     }
-    readonly property var colors: palette[hash(serial + title) % palette.length]
+    readonly property var colors: coverPalette[hash(serial + title) % coverPalette.length]
 
     Rectangle {
         id: generated

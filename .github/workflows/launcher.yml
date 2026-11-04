@@ -97,7 +97,11 @@ jobs:
               $url = "$repo/$package/$name"
               $file = Join-Path $env:RUNNER_TEMP "$module-$suffix.7z"
               Invoke-WebRequest -Uri $url -OutFile $file
-              $expected = ((Invoke-WebRequest -Uri "$url.sha1").Content -as [string]).Trim().Split(" ")[0]
+              # The server returns binary Content; read the checksum as text.
+              $checksumFile = "$file.sha1"
+              Invoke-WebRequest -Uri "$url.sha1" -OutFile $checksumFile
+              $expected = (Get-Content -LiteralPath $checksumFile -Raw).Trim().Split(" ")[0]
+              if ($expected -notmatch '^[0-9a-fA-F]{40}$') { throw "Invalid SHA-1 file for $name" }
               $actual = (Get-FileHash -Algorithm SHA1 $file).Hash
               if ($actual -ne $expected.ToUpperInvariant()) { throw "SHA-1 mismatch for $name" }
               New-Item -ItemType Directory -Force $root | Out-Null
