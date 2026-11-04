@@ -990,6 +990,9 @@ std::uint32_t Iop::ee_cdvd_read(std::uint32_t physical,std::size_t bytes) {
     if(physical<0x1F402000u || physical>=0x1F402020u)throw DeviceRefusal("outside CDVD register window");
     if(physical==0x1F40200Au || physical==0x1F40200Bu)
         throw DeviceRefusal("EE CDVD drive status: bits 6-7 are not established");
+    // This numeric host/EE interface cannot transport the symbolic IOP byte.
+    if(physical==kCdvdSResult && s_results_.empty())
+        throw DeviceRefusal("MECHACON no result byte is pending: empty FIFO data is unmeasured");
     try { return io_read(physical,bytes,"EE CDVD read"); }
     catch(const IopStop& error) { throw DeviceRefusal(error.reason); }
 }
@@ -2352,7 +2355,15 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
             if (!s_command_) throw IopStop{name + " before any S command (reset value unknown)"};
             return *s_command_;
         }
-        if (s_results_.empty()) throw IopStop{name + ": no result byte is pending"};
+        if (s_results_.empty()) {
+            // Polling drivers may drain once before testing SSTATUS. There is
+            // no response to consume: transport an opaque byte, never a
+            // fabricated status or a guessed last-byte latch. SSTATUS remains
+            // empty and any numeric use of this byte still refuses.
+            undefined_load_="MECHACON no result byte is pending: empty FIFO data is unmeasured";
+            undefined_known_=std::string_view(what)=="LBU" ? 0xFFFFFF00u : 0u;
+            return 0u; // backing bits only; all eight data bits are unknown
+        }
         const auto result = s_results_.front();
         s_results_.pop_front();
         if(result.known!=0xFFu) {
@@ -2663,10 +2674,11 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         if(bytes!=1u || !value)throw IopStop{name+": CDVD command requires a known byte"};
         if(cdvd_complete_at_ || cdvd_sectors_)throw IopStop{name+": CDVD command issued while busy"};
         if(*value==6u && disc_) {
-            if(cdvd_type_!=0x12u || cdvd_howto_!=0x80u || cdvd_params_.size()!=11u ||
-               cdvd_params_[10]!=0u || (cdvd_params_[9]&0x7Fu)>5u) {
+            const bool dvd=cdvd_type_==0x14u;
+            if((cdvd_type_!=0x12u && !dvd) || cdvd_howto_!=0x80u || cdvd_params_.size()!=11u ||
+               cdvd_params_[10]!=0u || (cdvd_params_[9]&0x7Fu)>(dvd?3u:5u)) {
                 std::string params;for(const auto byte:cdvd_params_)params+=" "+hex(byte,2);
-                throw IopStop{name+": ReadCd requires CD media, HOWTO 0x80, 11 parameters and 2048-byte sectors; params"+params};
+                throw IopStop{name+": ReadCd requires data media, HOWTO 0x80, 11 parameters, supported spindle speed and 2048-byte sectors; params"+params};
             }
             const bool cav=(cdvd_params_[9]&0x80u)!=0;
             if(cav && !diagnostic_cav_nominal_timing_)
@@ -2680,11 +2692,17 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
             // Functional timing hypothesis from ps2tek: CD 1/2/4/12/24x,
             // 30/100 ms seeks. No IRQ until real sectors reach guest memory.
             constexpr unsigned speed[]={24,1,2,4,12,24};
-            cdvd_sector_cycles_=491520u/speed[cdvd_params_[9]&0x7Fu];
+            // NCMD 06 selects the 2048-byte transfer format even on DVD;
+            // NCMD 08's 2064-byte envelope is a separate, unsupported format.
+            // Physical medium selects bandwidth/seek geometry (ps2tek).
+            constexpr unsigned dvd_speed[]={4,1,2,4};
+            const auto spindle=cdvd_params_[9]&0x7Fu;
+            cdvd_sector_cycles_=dvd ? static_cast<std::uint32_t>(
+                (36864000ull*2048u)/(1382400u*dvd_speed[spindle])) : 491520u/speed[spindle];
             if(cav)events_.push_back({cycle_,"DIAGNOSTIC CAV uses nominal CLV sector time; radial speed unverified"});
             const auto delta=lba>cdvd_lba_ ? lba-cdvd_lba_ : cdvd_lba_-lba;
-            const std::uint64_t seek=delta<8u ? std::uint64_t{delta}*cdvd_sector_cycles_ :
-                                      delta<4371u ? 1105920u : 3686400u;
+            const std::uint64_t seek=delta<(dvd?16u:8u) ? std::uint64_t{delta}*cdvd_sector_cycles_ :
+                                      delta<(dvd?14764u:4371u) ? 1105920u : 3686400u;
             cdvd_sector_at_=cycle_+seek+cdvd_sector_cycles_;cdvd_sector_offset_=2048;
             cdvd_lba_=lba;cdvd_sectors_=count;cdvd_status_=delta ? 0x12u : 6u;cdvd_sticky_|=cdvd_status_;
             cdvd_ncommand_=std::uint8_t{6};cdvd_params_.clear();

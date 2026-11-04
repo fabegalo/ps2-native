@@ -18,6 +18,14 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **Simpsons avançou para 93.117.072 instruções:** MUL.S da classe potência
+  de dois/dígito Booth inicial negativo, leitura NCMD 06 de dados em DVD
+  e descarte simbólico da FIFO MECHACON vazia passaram. IOP `0x25E34` /
+  15.691.717 bloqueia agora no SCMD 08 ReadRTC; EE `0x80005F00`.
+  Setores reais transferidos, SIF1/SIF0 576/448 bytes; ainda zero gráficos.
+  Quatro testes focados passaram e modo BIOS original conservou PCs,
+  contagens e hash canônicos. Evidência, referências e limites no
+  [relatório](docs/FIRST-GAME-STATUS.md#continuação-do-simpsons--fpu-dvd-e-fifo-mechacon).
 - **Reensaio de The Simpsons: Hit & Run (SLUS-20624):** com o núcleo que
   produziu as capturas do Super Bust-A-Move, híbrido e interpretador puro
   chegaram às mesmas 849.776 instruções e RAM, parando em `0x001681B0`:

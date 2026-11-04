@@ -16,8 +16,8 @@ std::vector<std::uint8_t> program(unsigned blocks,bool enabled=true) {
     auto rom=m20::build_firmware().rom;const auto code=m20::le_words(a.finish());
     std::copy(code.begin(),code.end(),rom.begin());return rom;
 }
-void command(Iop& iop,unsigned sectors,bool cav=false) {
-    for(unsigned j=0;j<11;++j)iop.ee_cdvd_write(0x1F402005u,1,j==4?sectors:j==9?(cav?0x85u:5u):0u);
+void command(Iop& iop,unsigned sectors,bool cav=false,unsigned speed=5) {
+    for(unsigned j=0;j<11;++j)iop.ee_cdvd_write(0x1F402005u,1,j==4?sectors:j==9?(speed|(cav?0x80u:0u)):0u);
     iop.ee_cdvd_write(0x1F402004u,1,6);
 }
 }
@@ -47,6 +47,14 @@ int main(int argc,char** argv) try {
             require(iop.ee_cdvd_read(0x1F402008u,1)==0,"command reason is W1C");
         }
     }
+    Iop dvd;dvd.reset(program(32),nullptr);dvd.mount_disc(disc,Iop::DiscMedium::Ps2Dvd,true);
+    dvd.run_until(100);command(dvd,2,true,3);
+    dvd.run_until(13000);
+    rejects([&]{(void)dvd.ee_read(0x10000,4);},"not been written");
+    dvd.run_until(40000);require(!dvd.stopped(),dvd.stop_reason().value_or(""));
+    for(unsigned j=0;j<4096;++j)require(dvd.ee_read(0x10000+j,1)==bytes[j],
+        "CD-style command on DVD transfers 2048 data bytes per sector without a raw envelope");
+    require(dvd.ee_cdvd_read(0x1F402008u,1)==2,"DVD completion follows actual DMA delivery");
     Iop disabled;disabled.reset(program(16,false),nullptr);disabled.mount_disc(disc,Iop::DiscMedium::Ps2Cd);
     disabled.run_until(100);command(disabled,1);disabled.run_until(50000);
     require(!disabled.stopped(),disabled.stop_reason().value_or(""));

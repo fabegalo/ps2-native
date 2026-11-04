@@ -408,6 +408,15 @@ void divider() {
         {0x7FFFFFFF,0x3F800000,0x7FFFFFFF},{0x7F800001,0x3F800000,0x7F800001}};
     for(const auto& row:products)require(ee_fpu_multiply(row[0],row[1],fcr)==row[2],"Booth multiplier physical result vector");
     const auto flags=fcr;
+    require(ee_fpu_multiply(0x3F800000,0x48B33333,fcr)==0x48B33332 &&
+            ee_fpu_multiply(0x48B33333,0x3F800000,fcr)==0x48B33333 &&
+            ee_fpu_multiply(0xBF800000,0x48B33333,fcr)==0xC8B33332 &&
+            ee_fpu_multiply(0x40800000,0x3F800003,fcr)==0x40800002 &&
+            ee_fpu_multiply(0x3F800000,0x491EB852,fcr)==0x491EB851,
+            "power multiplicand low negative Booth digit loses one retained ULP");
+    require(!ee_fpu_multiply(0x3F800000,0x3F808801,fcr) &&
+            !ee_fpu_multiply(0x3F800001,0x3F800003,fcr),
+            "other negative digits and non-power multiplicands remain unproven");
     require(!ee_fpu_multiply(0x3F800001,0x3F800001,fcr) && fcr==flags,
             "general asymmetric Booth case cannot substitute host multiplication or change flags");
     // Published physical VU observation: 1 * 129.5 loses one output ULP.

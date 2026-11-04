@@ -182,6 +182,47 @@ Logs locais `out/game-first/simpsons-trial-1.log` e
 build `out/gs-iop-build/simpsons-trial.exe`. Artefatos proprietários
 permanecem ignorados; capturas do Super Bust-A-Move preservadas.
 
+### Continuação do Simpsons — FPU, DVD e FIFO MECHACON
+
+As execuções 2–5 passaram por três fronteiras compartilhadas:
+
+- MUL.S com multiplicando potência de dois e primeiro dígito radix-4
+  negativo (`mantissa_b & 2`). O produto inteiro exato está numa fronteira
+  de mantissa; perda positiva menor que um ULP seleciona o valor anterior.
+  Verificação externa exaustiva das 4.194.304 mantissas dessa classe:
+  zero diferenças. Comparação executada em processo independente, sem
+  vincular ou copiar GPL para o núcleo BSD. É evidência do modelo derivado
+  de hardware, não nova medição física. Classes mais amplas foram rejeitadas
+  por contraexemplos e continuam recusadas. O ensaio 2 chegou a `0x16820C`
+  / 873.443 instruções; o 3 passou ambos MUL.S e chegou a 22.422.127.
+- NCMD 06 com formato de dados de 2048 bytes também aceita DVD PS2.
+  Banda e geometria de busca seguem o meio físico; NCMD 08 de 2064 bytes
+  continua recusado. Timing funcional, CAV nominal ainda explicitamente
+  experimental. Teste próprio verifica bytes reais, espera antes do setor
+  e IRQ somente após entrega DMA. O jogo leu setores reais da ISO,
+  incluindo 403–420, e chegou a 93.116.950 instruções.
+- Leitura de descarte da FIFO S vazia transporta byte desconhecido no IOP.
+  Não inventa resposta nem latch. SSTATUS continua vazio; branch sobre o
+  byte opaco recusa. Interface numérica EE mantém recusa explícita.
+  Testes próprios cobrem transporte por RAM, estado vazio e consumo proibido.
+
+Último ensaio 5: EE `0x80005F00` / **93.117.072 instruções**, IOP
+`0x25E34` / **15.691.717**, bloqueado no **SCMD 08 ReadRTC**, ainda não
+modelado. SIF1 576 bytes, SIF0 448; zero pacotes GIF/pixels/frames.
+RAM `e375f45a1fd49b0752effcf2ef435ff3b57b328d408c36d2072ce6e8b6ea26d8`.
+Logs locais `simpsons-trial-{2,3,4,5}.log`. Nenhum processo do jogo ficou ativo.
+
+Consulta prévia: PS2Recomp revisão `e5636981`, `fpu_translator.cpp` e
+`ps2xIOP/src/emulator/imports/iop_cdvd.cpp`; serviços HLE não adotados.
+Fundamentos/comparação: [pesquisa FPU](https://github.com/libretro/ps2#float-accuracy-the-ps2float-work),
+[CDVD](https://psi-rockin.github.io/ps2tek/index.html#cdvdncommands) e
+[definições SDK](https://github.com/ps2dev/ps2sdk/blob/master/common/include/libcdvd-common.h).
+Nenhum código dessas referências foi integrado. Quatro testes focados
+`native-ee-context`, `native-iop-knowledge`, `native-cdvd-dma` e
+`native-cdvd-bus` passaram. Regressão original após as três mudanças:
+17.690.079 / `0x80007D20`, 4.486.087 / `0x80005F00`, IOP 2.210.789 /
+`0x40B0`, RAM canônica `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
+
 ## 04/11/2026 — Super Bust-A-Move (SLUS-20115)
 
 BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;

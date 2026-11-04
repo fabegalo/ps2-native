@@ -1,13 +1,14 @@
 # Próxima execução — jogos reais
 
-Último pedido concluído: experimentar The Simpsons: Hit & Run (SLUS-20624).
-Híbrido e interpretador puro reproduziram EE `0x001681B0` / 849.776
-instruções, `MUL.S` com arredondamento Booth ambíguo; IOP ativo `0x2F28`.
-Zero pacotes GIF/pixels/frames. Nenhuma alteração do núcleo. Se solicitada
-a continuação do Simpsons, investigar o multiplicador R5900 a partir dos
-operandos `0x3F800000` e `0x48B33333`, consultando PS2Recomp e evidência
-independente antes de implementar, sem substituir pelo float do host.
-Logs `out/game-first/simpsons-trial-{1,interpreter}.log`; relatório
+Continuação de The Simpsons: Hit & Run (SLUS-20624), ensaio 5: EE
+`0x80005F00` / 93.117.072, IOP `0x25E34` / 15.691.717, SCMD 08 ReadRTC
+não modelado. Investigar fonte/estado do RTC, formato BCD e transporte
+da resposta antes de implementar; não inventar relógio ou sucesso.
+MUL.S inicial, leitura de dados em DVD e descarte de FIFO vazia passaram.
+576/448 bytes SIF1/SIF0, zero pacotes GIF/pixels/frames. Quatro testes
+focados e regressão BIOS original passaram. Manter hipóteses do harness
+explícitas; consultar PS2Recomp antes de implementar subsistemas.
+Logs `out/game-first/simpsons-trial-{2,3,4,5}.log`; relatório
 [primeiro jogo](FIRST-GAME-STATUS.md#reensaio-de-simpsons--04112026).
 
 ## Checkpoint preservado — Super Bust-A-Move (SLUS-20115)

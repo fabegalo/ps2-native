@@ -18,6 +18,16 @@ void input(m20::Assembler& a) {
 }
 }
 int main() try {
+    for(const bool consume:{false,true}) {
+        m20::Assembler a(kEeResetVector);a.la(8,0xBF402018u);
+        a.lbu(9,0,8);a.nop();a.la(10,0xA0000100u);a.sb(9,0,10);
+        a.la(8,0xBF402017u);a.lbu(11,0,8);a.nop();a.sw(11,4,10);
+        if(consume){a.beq(9,0,"idle");a.nop();}
+        const auto iop=run(a);
+        require(iop.stopped()==consume,"empty MECHACON byte transports uncertainty but cannot select a branch");
+        require(iop.diagnostic_ram32(0x104u)==0x40u,"empty-data read leaves SSTATUS empty");
+        if(!consume)rejects([&]{(void)iop.ee_read(0x100u,1);},"undefined");
+    }
     for(unsigned timing=0;timing<4u;++timing)for(const auto mask:{0x10u,0x20u,0x30u,0x40u}) {
         m20::Assembler a(kEeResetVector);a.la(8,0xBF808270u);a.lw(9,0,8);a.nop();
         a.andi(10,9,mask);a.addiu(11,10,1);a.la(8,0xA0000100u);a.sw(11,0,8);

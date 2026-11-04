@@ -107,7 +107,17 @@ std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std
     const auto significand_a=(a&0x7FFFFFu)|0x800000u;
     auto product=static_cast<std::uint64_t>(significand_a)*((b&0x7FFFFFu)|0x800000u);
     const auto negative_digit=0x10000u-(b&0xFFFFu);
-    if(std::has_single_bit(negative_digit) && negative_digit<=0x8000u &&
+    if(significand_a==0x800000u && (b&2u)!=0) {
+        // Power-of-two multiplicand, lowest radix-4 digit negative. The separate
+        // complement/correction loses a low-column carry. The exact product
+        // is on a retained-mantissa boundary and the existing maximum-loss
+        // bound is smaller than one output ULP: any positive loss chops to
+        // the preceding value. All 2^22 multiplier mantissas in this class
+        // were checked against the external hardware-derived model; see
+        // FIRST-GAME-STATUS.md. Do not commute operands or extend this to
+        // other negative Booth digits (counterexamples exist).
+        product-=std::uint64_t{1}<<15u;
+    } else if(std::has_single_bit(negative_digit) && negative_digit<=0x8000u &&
        ((static_cast<std::uint64_t>(significand_a)*negative_digit)&0x7FFFu)==0) {
         // If the low 16 multiplier bits are -2^k, their Booth expansion
         // contains one negative digit; every later digit starts at >=16.
