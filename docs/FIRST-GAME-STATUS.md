@@ -897,3 +897,15 @@ unmute após KOFF e IRQ do outro core. Ensaio 62 preparado.
 CI de `be450b1`, `fbb2140`, `d63cdba`, `387aabe` e `8e3a16f` concluída com
 sucesso no núcleo e launcher, seis alvos por workflow. Para `8e3a16f`, runs
 41802889808 / 41802889728. Isso valida builds/testes, não execução do jogo.
+
+Ensaio 62: KON, espera e KOFF passaram. EE `0x81FCC` / 360.000.000;
+IOP `0x66D94` / 46.555.415, limpeza de ENDX em 0x1F900342. 97,8691 s,
+22 stalls, mesmo hash RAM e apenas 16 pacotes/limpeza da VRAM; sem PMODE.
+ENDX agora aceita limpeza do banco por escrita halfword. Só permanece
+comprovadamente zero enquanto nenhum decoder desconhecido puder alterá-lo;
+a próxima borda invalida os bits das vozes simbólicas. Não fabrica fim de
+reprodução. Sete testes focados passaram, incluindo os dois cores/bancos,
+limpeza independente do dado e recusa de ENDX posterior de voz desconhecida.
+Ensaio 63 iniciado. Uma sobreposição do commit paralelo ADMA `9150a3c`
+retirou do índice a implementação KON publicada em `04d26de`, sem mudar o
+workspace testado; a integração seguinte a restaura junto com ENDX.

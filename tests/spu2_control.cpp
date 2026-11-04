@@ -246,5 +246,29 @@ int main() try {
             "zero gains prove the mixer output while key commands clear at the sample clock; envelopes stay unknown");
         else require(iop.stopped(),"symbolic voices refuse audible gain, release guesses, IRQ enable, unknown core IRQ and invented ENVX/ENDX");
     }
+    for(const bool active:{false,true}) {
+        m20::Assembler a(kEeResetVector);a.la(10,0xA0000100u);
+        const auto sh=[&](std::uint32_t address,std::uint32_t value){a.la(8,address);a.la(9,value);a.sh(9,0,8);};
+        for(unsigned core=0;core<2u;++core)sh(0xBF90019Au+core*0x400u,0x8000u);
+        if(active){sh(0xBF900000u,0u);sh(0xBF900002u,0u);sh(0xBF9001A0u,1u);}
+        for(unsigned core=0;core<2u;++core)for(unsigned bank=0;bank<2u;++bank) {
+            sh(0xBF900340u+core*0x400u+bank*2u,0xFFFFu);
+            a.lhu(9,0,8);a.nop();a.andi(9,9,bank ? 0xFFu : 0xFFFFu);
+            a.sw(9,core*8u+bank*4u,10);
+        }
+        for(unsigned n=0;n<800u;++n)a.nop();
+        a.la(8,0xBF900340u);a.lhu(9,0,8);a.nop();a.sw(9,16,10);
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,true);
+        iop.run_until(1600u);
+        if(active)require(iop.stopped() && iop.stop_reason()->find("ENDX depends")!=std::string::npos,
+                          "ENDX clear cannot invent later decoder flags for a symbolic voice");
+        else {
+            require(!iop.stopped(),"ENDX clear stays known without an active decoder");
+            for(unsigned offset=0;offset<=16u;offset+=4u)require(iop.ee_read(0x100u+offset,4)==0u,
+                "writes of any data clear the selected ENDX bank on either core");
+        }
+    }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
