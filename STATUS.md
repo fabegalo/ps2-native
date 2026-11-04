@@ -54,7 +54,7 @@
   focados passaram, incluindo coerência observável pelo DMA/GIF. Ainda
   16 pacotes de limpeza. No ensaio 90 o DMA VIF passou e o jogo escreveu PMODE/
   circuito 2; EE `0x1024C0` / 358.037.955 para em escrita de profundidade
-  PSMZ16S; scanout recusa entrelaçamento. Ainda sem frame. Sete testes
+  PSMZ16S. Profundidade e scanout INT+FFMD implementados: ensaio 91 no mesmo PC, agora SCANMSK não escrito; scanout 640x224 preto da limpeza real, sem menu/gameplay. Bits SCANMSK/FBA desconhecidos passam a propagar incerteza, sem valor de reset inventado. Seis testes GS/VIF/frames AOT focados passaram; CI d033f16 e 0570023 aprovada nos seis alvos de núcleo/launcher. Sete testes
   focados DMA/cache/GS/AOT passaram. CI dos controles `938ed35` e
   `833004c` aprovada nos seis alvos de núcleo e launcher.
 - Sequência, hipóteses, testes e referências:

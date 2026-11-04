@@ -35,6 +35,35 @@ void check_vram() {
     rejects([&] { (void)GsVram::address(0,0,0,0,0); }, "buffer width");
     rejects([&] { (void)GsVram::address(0,64,2,0,0); }, "pixel format 2");
     vram.invalidate(); rejects([&] { (void)vram.read(0,128,0,0,0); }, "unwritten bits");
+    constexpr std::array<std::array<unsigned,3>,10> depth_vectors{{
+        {0,0,6144},{8,0,6146},{16,0,6656},{32,0,2048},{0,8,6400},
+        {0,16,4096},{0,32,7168},{63,63,2046},{64,0,14336},{0,64,22528}
+    }};
+    for (const auto& v : depth_vectors)
+        require(GsVram::depth_address(0,128,10,v[0],v[1])==v[2],"PSMZ16S diagram address");
+    for (unsigned psm : {0u,1u,2u,10u}) {
+        vram.invalidate(); addresses.clear();
+        for (unsigned y=0;y<(psm<2u?32u:64u);++y) for(unsigned x=0;x<64;++x) {
+            require(addresses.insert(GsVram::depth_address(0,64,psm,x,y)).second,"depth page bijection");
+            vram.write_depth(0,64,psm,x,y,y*64+x);
+        }
+        for (unsigned y=0;y<(psm<2u?32u:64u);++y) for(unsigned x=0;x<64;++x)
+            require(vram.read_depth(0,64,psm,x,y)==y*64+x,"depth packing preserves adjacent pixels");
+    }
+    vram.invalidate(); vram.write_depth(0,64,10,0,0,0x1234);
+    rejects([&]{(void)vram.read_depth(0,64,10,8,0);},"unwritten bits");
+    vram.write_depth(0,64,10,8,0,0xABCD);
+    require(vram.word_at(6144)==0xABCD1234u,"depth halfword packing");
+    vram.write(0,64,0,0,0,0x12345678);
+    vram.write(0,64,0,0,0,0x12345678,0,0,true);
+    require(vram.read(0,64,0,0,0)==0x12345678,"conditional equal write keeps knowledge");
+    vram.write(0,64,0,0,0,0x12345678,0,0x80000000u);
+    require(vram.read(0,64,1,0,0)==0x345678,"unknown alpha does not contaminate RGB");
+    rejects([&]{(void)vram.read(0,64,0,0,0);},"unwritten bits");
+    vram.write(0,64,0,0,0,0x12345679,0,0,true);
+    rejects([&]{(void)vram.read(0,64,1,0,0);},"unwritten bits");
+    vram.write(0,64,0,0,0,0x12345678);
+    require(vram.read(0,64,0,0,0)==0x12345678,"unconditional write resolves uncertainty");
 }
 void setup_transfer(GsRegisters& gs, unsigned psm, unsigned w, unsigned h, unsigned x=0, unsigned y=0) {
     gs.general_write(0x50, (1ull<<48) | (std::uint64_t{psm}<<56));
@@ -100,14 +129,47 @@ void check_transfer_gif() {
     gif.write_fifo(tag(0,1)|(1ull<<46),0xBu,gs);
     require(gif.read_stat()==0u,"empty tag ignores descriptor");
 }
-void configure_draw(GsRegisters& gs) {
+void configure_draw(GsRegisters& gs, bool raster_state = true) {
     gs.general_write(0,6); gs.general_write(0x1A,1); gs.general_write(0x18,0);
     gs.general_write(0x4C,1u<<16); gs.general_write(0x40,(63ull<<16)|(63ull<<48));
     gs.general_write(0x47,3u<<16); gs.general_write(0x4E,1ull<<32);
-    gs.general_write(0x45,0); gs.general_write(0x49,0); gs.general_write(0x22,0);
-    gs.general_write(0x46,1); gs.general_write(0x4A,0); gs.general_write(1,0x80402010);
+    gs.general_write(0x45,0); gs.general_write(0x49,0);
+    if (raster_state) { gs.general_write(0x22,0); gs.general_write(0x4A,0); }
+    gs.general_write(0x46,1); gs.general_write(1,0x80402010);
 }
 void check_drawing_scanout() {
+    {
+        GsRegisters symbolic; symbolic.reset(0); configure_draw(symbolic,false);
+        setup_transfer(symbolic,0,2,1); symbolic.image_write(0,0);
+        symbolic.general_write(0,0); symbolic.general_write(1,0); symbolic.general_write(5,0);
+        require(symbolic.vram().read(0,64,1,0,0)==0,"unknown scan mask preserves equal black RGB");
+        symbolic.general_write(1,0xFFFFFF); symbolic.general_write(5,0);
+        rejects([&]{(void)symbolic.vram().read(0,64,1,0,0);},"unwritten bits");
+        symbolic.general_write(0x22,0); symbolic.general_write(5,0);
+        require(symbolic.vram().read(0,64,1,0,0)==0xFFFFFF,"guest scan mask write proves RGB");
+        rejects([&]{(void)symbolic.vram().read(0,64,0,0,0);},"unwritten bits");
+        symbolic.general_write(0x4A,1); symbolic.general_write(5,0);
+        require(symbolic.vram().read(0,64,0,0,0)==0x80FFFFFF,"guest FBA write proves alpha");
+    }
+    {
+        GsRegisters depth; depth.reset(0); configure_draw(depth);
+        depth.general_write(0x4E,1u|(10u<<24));
+        depth.general_write(5,99ull<<32); depth.general_write(5,32u|(32ull<<16)|(7ull<<32));
+        require(depth.vram().read_depth(8192,64,10,0,0)==7,"sprite uses last vertex depth");
+        depth.general_write(0,0); depth.general_write(0x47,5u<<16); depth.general_write(1,0x11223344);
+        depth.general_write(5,6ull<<32);
+        require(depth.vram().read(0,64,0,0,0)==0x80402010,"GEQUAL rejects less depth");
+        depth.general_write(5,7ull<<32);
+        require(depth.vram().read(0,64,0,0,0)==0x11223344,"GEQUAL accepts equal depth");
+        depth.general_write(0x47,7u<<16); depth.general_write(1,0x55667788);
+        depth.general_write(5,7ull<<32);
+        require(depth.vram().read(0,64,0,0,0)==0x11223344,"GREATER rejects equal depth");
+        depth.general_write(0x4E,1u|(10u<<24)|(1ull<<32)); depth.general_write(5,8ull<<32);
+        require(depth.vram().read_depth(8192,64,10,0,0)==7 && depth.vram().read(0,64,0,0,0)==0x55667788,
+                "ZMSK preserves depth while color passes");
+        depth.general_write(0x22,2); depth.general_write(1,0); depth.general_write(5,8ull<<32);
+        require(depth.vram().read(0,64,0,0,0)==0x55667788,"even scanline mask");
+    }
     GsRegisters gs; gs.reset(0); configure_draw(gs);
     gs.general_write(5,0); gs.general_write(5,64u*16u | (64ull*16u<<16));
     require(gs.vram().read(0,64,0,63,63)==0x80402010u,"sprite excludes lower/right endpoint");
@@ -142,6 +204,11 @@ void check_drawing_scanout() {
             "scanout dimensions, magnification, unknown timing explicit");
     require(frame.rgba[0]==0x80 && frame.rgba[1]==0x80 && frame.rgba[3]==255,"scanout source offset, host alpha");
     gs.write(kGsSmode2,8,1,0,{}); rejects([&]{(void)gs.scanout(0);},"interlaced");
+    gs.write(kGsSmode2,8,3,0,{});
+    const auto field=gs.scanout(124);
+    require(field.width==4 && field.height==2 && field.rgba.size()==32 &&
+            std::equal(field.rgba.begin(),field.rgba.end(),frame.rgba.begin()),
+            "INT+FFMD extracts consecutive native field rows without invented pixels");
     gs.write(kGsSmode2,8,0,0,{}); gs.write(kGsPmode,8,0xFF27,0,{});
     rejects([&]{(void)gs.scanout(0);},"dual-circuit");
     gs.write(kGsImr,8,0x6000,0,{}); require(gs.latched(kGsImr)==0x6000,"IMR write");

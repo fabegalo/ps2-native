@@ -94,17 +94,33 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     const auto scissor = required(static_cast<std::uint8_t>(0x40u + context));
     const auto test = required(static_cast<std::uint8_t>(0x47u + context));
     const auto zbuf = required(static_cast<std::uint8_t>(0x4Eu + context));
-    if ((test & 1u) || (test & (1u << 14)) ||
-        ((test & (1u << 16)) && ((test >> 17) & 3u) != 1u) || !(zbuf & (1ull << 32)))
-        throw DeviceRefusal("GS alpha/depth tests or depth writes are not modeled");
-    if (required(0x45) != 0u || required(0x49) != 0u || required(0x22) != 0u || required(0x46) != 1u)
-        throw DeviceRefusal("GS dithering, PABE, scan mask or unclamped colors are not modeled");
+    if ((test & 1u) || (test & (1u << 14)))
+        throw DeviceRefusal("GS alpha/depth pipeline: alpha tests are not modeled");
+    // Without blending or texture arithmetic, byte colors cannot overflow;
+    // PABE/COLCLAMP and 16-bit dithering cannot affect a CT32/24 write.
+    const bool conditional = !general_[0x22];
+    const auto scanmask = general_[0x22].value_or(0u) & 3u;
+    if (scanmask == 1u) throw DeviceRefusal("GS reserved scan mask");
     auto color = static_cast<std::uint32_t>(required(0x01));
-    if (required(static_cast<std::uint8_t>(0x4Au + context)) & 1u) color |= 0x80000000u;
+    const auto fba = general_[0x4Au + context];
+    const auto color_unknown = !fba && !(color & 0x80000000u) ? 0x80000000u : 0u;
+    if (fba && (*fba & 1u)) color |= 0x80000000u;
     const auto base = static_cast<unsigned>(frame & 511u) * 8192u;
     const auto bw = static_cast<unsigned>((frame >> 16) & 63u) * 64u;
     const auto psm = static_cast<unsigned>((frame >> 24) & 63u);
     (void)GsVram::address(base, bw, psm, 0u, 0u);
+    const auto zbase = static_cast<unsigned>(zbuf & 511u) * 8192u;
+    const auto zpsm = static_cast<unsigned>((zbuf >> 24) & 15u);
+    const bool ztest = (test & (1u << 16)) != 0u;
+    const auto zfunc = static_cast<unsigned>((test >> 17) & 3u);
+    const bool zwrite = ztest && !(zbuf & (1ull << 32));
+    const auto z = static_cast<std::uint32_t>(value >> 32) & (index == 4u ? 0xFFFFFFu : 0xFFFFFFFFu);
+    if (zwrite || (ztest && zfunc >= 2u)) {
+        (void)GsVram::depth_address(zbase, bw, zpsm, 0u, 0u);
+        if (zpsm == 2u) throw DeviceRefusal("GS PSMZ16 cannot share a drawing layout with PSMCT32/24");
+        const auto zmax = zpsm == 0u ? 0xFFFFFFFFu : zpsm == 1u ? 0xFFFFFFu : 0xFFFFu;
+        if (z > zmax) throw DeviceRefusal("GS out-of-range vertex depth is not modeled");
+    }
     const auto ceil16 = [](int n) { return n >= 0 ? (n + 15) / 16 : n / 16; };
     const auto floor16 = [](int n) { return n >= 0 ? n / 16 : (n - 15) / 16; };
     int left, top, right, bottom;
@@ -118,10 +134,19 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     right = std::min(right, static_cast<int>((scissor >> 16) & 2047u) + 1);
     top = std::max(top, static_cast<int>((scissor >> 32) & 2047u));
     bottom = std::min(bottom, static_cast<int>((scissor >> 48) & 2047u) + 1);
-    for (int y = top; y < bottom; ++y)
-        for (int x = left; x < right; ++x)
+    for (int y = top; y < bottom; ++y) {
+        if ((scanmask == 2u && !(y & 1)) || (scanmask == 3u && (y & 1))) continue;
+        for (int x = left; x < right; ++x) {
+            if (ztest && zfunc == 0u) continue;
+            if (ztest && zfunc >= 2u) {
+                const auto old = vram_.read_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y));
+                if (z < old || (zfunc == 3u && z == old)) continue;
+            }
             vram_.write(base, bw, psm, static_cast<unsigned>(x), static_cast<unsigned>(y), color,
-                         static_cast<std::uint32_t>(frame >> 32));
+                         static_cast<std::uint32_t>(frame >> 32), color_unknown, conditional);
+            if (zwrite) vram_.write_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y), z, conditional);
+        }
+    }
     first_vertex_.reset();
 }
 Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
@@ -133,7 +158,9 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     if (((pmode >> 2) & 7u) != 1u || (en == 1u && (!(pmode & 32u) || ((pmode >> 8) & 255u) != 255u)))
         throw DeviceRefusal("GS scanout: CRTMD or alpha merge mode is not modeled");
     if (!mode_[1]) throw DeviceRefusal("GS scanout: SMODE2 not written");
-    if (*mode_[1] & 1u) throw DeviceRefusal("GS scanout: interlaced fields are not modeled");
+    const bool interlaced = (*mode_[1] & 1u) != 0u;
+    if (interlaced && !(*mode_[1] & 2u))
+        throw DeviceRefusal("GS scanout: interlaced alternating-line fields are not modeled");
     if (*mode_[1] & 12u) throw DeviceRefusal("GS scanout: DPMS suspends output");
     const unsigned circuit = en == 1u ? 7u : 9u;
     if (!display_[circuit] || !display_[circuit + 1u])
@@ -143,9 +170,13 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     const auto magv = static_cast<unsigned>((display >> 27) & 3u) + 1u;
     const auto dw = static_cast<unsigned>((display >> 32) & 4095u) + 1u;
     const auto dh = static_cast<unsigned>((display >> 44) & 2047u) + 1u;
-    if (dw % magh || dh % magv) throw DeviceRefusal("GS scanout: fractional display magnification is not modeled");
+    // INT+FFMD reads consecutive source rows for one field. DISPLAY height
+    // counts the two interlaced rasters; expose native field pixels without
+    // fabricating the other field, doubling rows or applying a deinterlacer.
+    const auto vertical_divisor = magv * (interlaced ? 2u : 1u);
+    if (dw % magh || dh % vertical_divisor) throw DeviceRefusal("GS scanout: fractional display magnification is not modeled");
     Framebuffer f;
-    f.width = dw / magh; f.height = dh / magv; f.stride = f.width * 4u;
+    f.width = dw / magh; f.height = dh / vertical_divisor; f.stride = f.width * 4u;
     f.ee_cycle = cycle; f.revision = vram_.revision();
     const auto clock = vertical_clock();
     if (clock.state == VerticalClock::State::Running)

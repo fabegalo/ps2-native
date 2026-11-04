@@ -1292,3 +1292,32 @@ recusa entrelaçamento; ainda 16 pacotes e 1.048.576 pixels de limpeza.
 O dump adicional da RAM foi interrompido pela recusa GS persistente ao
 sincronizar DMA; não há novo hash de RAM para este ensaio. Não houve frame.
 Modo original repetido depois do DMA VIF conserva PCs/contagens/hash canônicos.
+
+Continuação GS (ensaio 91): consultados PS2Recomp `gs_frontend.cpp` e
+`ps2_gs_memory.cpp` no ref e5636981a1c9de368f6b71e819c3dc188dfedbf4,
+GS User's Manual 6.0 (diagramas de páginas/blocos/colunas, TEST/ZBUF,
+SCANMSK e PCRTC) e PS2SDK graph_mode. Referência de comportamento apenas;
+implementação BSD independente por permutações de bits e fixtures próprios.
+Profundidade Z32/Z24/Z16/Z16S na VRAM, comparação NEVER/ALWAYS/GEQUAL/GREATER
+em pontos/sprites e ZMSK. O renderer CT32/24 recusa Z16 incompatível e
+profundidades fora da faixa; alpha test, textura e blend continuam pendentes.
+INT+FFMD expõe os pixels nativos consecutivos de um campo, sem duplicar
+linhas nem inventar o campo vizinho. FFMD=0 permanece recusado.
+Ensaio 91: EE `0x1024C0` / 358.037.955, IOP `0x4AAC` / 48.806.831;
+109,607 s, sem comparação de desempenho com estados finais diferentes.
+Próxima recusa: SCANMSK ainda não escrito. Scanout válido 640x224,
+zero pixels não pretos, RGBA SHA-256
+`6cf79e2ea48074d85c3879b2e34cd92246b816be78aa13de39d9743ab0f880e9`.
+É a limpeza preta do jogo; não é menu ou evidência de gameplay.
+Seis testes GS/VRAM/GIF/VIF e frames sintéticos AOT/interpretador passaram.
+CI d033f16: núcleo e launcher aprovados nos seis alvos; 0570023 launcher
+aprovado nos seis, núcleo ainda em execução na última consulta.
+SCANMSK/FBA sem escrita não recebem zero: o renderer propaga a incerteza.
+Para SCANMSK desconhecido, combina conservadoramente desenhar/não desenhar;
+só bits conhecidos e iguais nos dois resultados permanecem conhecidos.
+FBA desconhecido afeta somente alpha bit 31 quando ele não era já 1.
+Scanout RGB continua recusando pixels com qualquer bit RGB indeterminado;
+escritas condicionais não incrementam o contador de pixels comprovados.
+Uma escrita posterior do convidado resolve a incerteza. Nenhuma hipótese de
+reset adicional, pacote host ou comando externo foi inserido no jogo.
+CI 0570023: os seis jobs do núcleo também terminaram com sucesso.

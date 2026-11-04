@@ -16,11 +16,21 @@ public:
     [[nodiscard]] std::uint32_t read(std::uint32_t base, unsigned width, unsigned psm,
                                      unsigned x, unsigned y) const;
     void write(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y,
-               std::uint32_t value, std::uint32_t preserve = 0u);
+               std::uint32_t value, std::uint32_t preserve = 0u,
+               std::uint32_t unknown = 0u, bool conditional = false);
     [[nodiscard]] std::uint32_t word_at(std::uint32_t byte_address) const;
+    // ZBUF PSM nibble: 0/1/2/A. Depth uses a different block permutation.
+    [[nodiscard]] static std::uint32_t depth_address(std::uint32_t base, unsigned width,
+                                                    unsigned psm, unsigned x, unsigned y);
+    [[nodiscard]] std::uint32_t read_depth(std::uint32_t base, unsigned width, unsigned psm,
+                                          unsigned x, unsigned y) const;
+    void write_depth(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y,
+                     std::uint32_t value, bool conditional = false);
     [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
     [[nodiscard]] std::uint64_t pixel_writes() const noexcept { return pixel_writes_; }
 private:
+    void write_word(unsigned at, std::uint32_t value, std::uint32_t mask,
+                    std::uint32_t unknown, bool conditional);
     std::vector<std::uint32_t> words_, known_;
     std::uint64_t revision_{};
     std::uint64_t pixel_writes_{};
