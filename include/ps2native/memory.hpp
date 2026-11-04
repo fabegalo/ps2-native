@@ -196,6 +196,7 @@ public:
     }
     void vu_integer_store(unsigned source,unsigned base,unsigned mask) {registers_.vu_integer_store(source,base,mask);}
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return registers_.observe_vu_data(address);}
+    void diagnostic_vu_power_two_carry() {registers_.diagnostic_vu_power_two_carry();}
     // Host diagnostic snapshot at the current device time, without a CPU bus
     // access or clock advance. Unknown micro/data bits remain explicit.
     [[nodiscard]] ObservedDoubleword diagnostic_vu_memory(std::uint32_t physical,std::size_t bytes) const {

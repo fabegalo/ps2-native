@@ -138,14 +138,14 @@ std::uint32_t ee_fpu_divide(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31
     if(exponent>255)return sign|0x7FFFFFFFu;
     return sign|(static_cast<std::uint32_t>(exponent)<<23u)|(static_cast<std::uint32_t>(quotient)&0x7FFFFFu);
 }
-std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31) {
+std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31,bool diagnostic_early_digit_carry) {
     const auto ea=(a>>23u)&255u,eb=(b>>23u)&255u;
     const auto sign=(a^b)&0x80000000u;
     if(!ea || !eb){fcr31&=~0xC000u;return sign;}
     const auto significand_a=(a&0x7FFFFFu)|0x800000u;
     auto product=static_cast<std::uint64_t>(significand_a)*((b&0x7FFFFFu)|0x800000u);
     const auto negative_digit=0x10000u-(b&0xFFFFu);
-    if(significand_a==0x800000u && (b&2u)!=0) {
+    if(significand_a==0x800000u && ((b&2u)!=0 || (diagnostic_early_digit_carry && (b&0x2A8u)!=0))) {
         // Power-of-two multiplicand, lowest radix-4 digit negative. The separate
         // complement/correction loses a low-column carry. The exact product
         // is on a retained-mantissa boundary and the existing maximum-loss
@@ -153,7 +153,12 @@ std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std
         // the preceding value. All 2^22 multiplier mantissas in this class
         // were checked against the external hardware-derived model; see
         // FIRST-GAME-STATUS.md. Do not commute operands or extend this to
-        // other negative Booth digits (counterexamples exist).
+        // other negative Booth digits (counterexamples exist). The optional
+        // experiment extends only the first five radix-4 digits. The lowest
+        // set odd bit of B identifies its first negative digit. All 8,126,464
+        // mantissas with B&0x2AA match the external hardware-derived reference.
+        // That is NOT a physical measurement or a proven carry
+        // tree; normal operation still refuses unresolved products there.
         product-=std::uint64_t{1}<<15u;
     } else if(std::has_single_bit(negative_digit) && negative_digit<=0x8000u &&
        ((static_cast<std::uint64_t>(significand_a)*negative_digit)&0x7FFFu)==0) {

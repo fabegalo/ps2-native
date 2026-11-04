@@ -15,6 +15,7 @@ class VuControl {
 public:
     VuControl() { reset(); }
     void reset() {
+        diagnostic_power_two_carry_=false;
         micro_={};
         path1_.reset();
         queued_path1_.reset();
@@ -106,6 +107,11 @@ public:
         start_micro(unit,previous.pc/8u,ee_cycle,itop,top);
     }
     [[nodiscard]] bool micro_running(unsigned unit) const {return micro_.at(unit).running;}
+    void diagnostic_power_two_carry() {
+        for(const auto& unit:micro_)if(unit.running || unit.instructions)throw DeviceRefusal("VU carry experiment must precede micro execution");
+        if(pending_q_ || pending_q1_ || path1_)throw DeviceRefusal("VU carry experiment requires idle hardware");
+        diagnostic_power_two_carry_=true;
+    }
     [[nodiscard]] bool path1_transfer_pending() const noexcept {return path1_.has_value();}
     [[nodiscard]] bool path1_end_on_kick() const noexcept {return (path1_ && path1_->end_on_kick) || (queued_path1_ && queued_path1_->end_on_kick);}
     [[nodiscard]] std::optional<std::uint64_t> next_micro_cycle() const noexcept {
@@ -218,7 +224,7 @@ public:
             const auto b=broadcast==5u ? observe(22) : vectors_.at(right)[outer ? (lane+2u)%3u : broadcast<4 ? broadcast : lane];
             if(a.unknown || b.unknown)throw DeviceRefusal("VU multiply consumes unknown operands");
             std::uint32_t flags=0;
-            const auto multiplied=ee_fpu_multiply(a.value,b.value,flags);
+            const auto multiplied=ee_fpu_multiply(a.value,b.value,flags,diagnostic_power_two_carry_);
             if(!multiplied)throw DeviceRefusal("VU multiply ambiguous low-column Booth rounding");
             // ACC has extra exception state on real VU hardware. Until that
             // state is modeled, refuse any exceptional product/sum atomically.
@@ -365,6 +371,7 @@ private:
         }
     }
     std::array<std::optional<std::uint32_t>,32> registers_{};
+    bool diagnostic_power_two_carry_{};
     std::array<std::uint32_t,32> unknown_{};
     std::array<ObservedWord,16> vu1_integers_{};
     std::array<ObservedWord,16> vu1_controls_{};

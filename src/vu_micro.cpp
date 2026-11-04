@@ -177,7 +177,7 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper(unsigned unit,std::uint32_t
         std::uint32_t flags=0,value=0;
         if(addition)value=ee_fpu_add(a.value,b.value^(subtract ? 0x80000000u : 0u),flags);
         else {
-            const auto product=ee_fpu_multiply(a.value,b.value,flags);
+            const auto product=ee_fpu_multiply(a.value,b.value,flags,diagnostic_power_two_carry_);
             if(!product)throw DeviceRefusal("FMAC multiply has ambiguous low-column Booth rounding");
             if(flags&0xC000u)throw DeviceRefusal("FMAC exceptional product/ACC metadata is not modeled");
             value=*product;

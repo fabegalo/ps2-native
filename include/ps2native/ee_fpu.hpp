@@ -17,5 +17,7 @@ std::optional<std::uint32_t> ee_fpu_sqrt_exact(std::uint32_t value);
 std::optional<std::uint32_t> ee_fpu_sqrt(std::uint32_t value);
 // Exact sparse or truncation-interval-certified product. Ambiguous low-column
 // Booth cases return nullopt without modifying flags.
-std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31);
+// Optional early-digit carry experiment: reference-model evidence only,
+// never enabled by normal EE/VU execution or firmware/profile selection.
+std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31,bool diagnostic_early_digit_carry=false);
 }

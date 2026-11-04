@@ -123,6 +123,7 @@ public:
     }
     void vu_integer_store(unsigned source,unsigned base,unsigned mask) {vu_control_.integer_store(source,base,mask);}
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return vu_control_.observe_data(address);}
+    void diagnostic_vu_power_two_carry() {vu_control_.diagnostic_power_two_carry();}
     [[nodiscard]] ObservedQuadword observe_vu_vector(unsigned index) const {return vu_control_.observe_vector(index);}
     void write_vu_vector(unsigned index,ObservedQuadword word) {vu_control_.write_vector(index,word);}
     void vu_subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {
