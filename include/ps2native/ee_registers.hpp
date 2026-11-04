@@ -151,6 +151,7 @@ private:
     Iop iop_;
     // 0x1000F500: unidentified register written by the BIOS reset code.
     std::optional<std::uint32_t> f500_;
+    bool diagnostic_omit_f510_{};
     // DEV9 0x1F801470/0x1F801472: write latches, same rule as 0x1000F500.
     std::array<std::optional<std::uint16_t>, 2> dev9_147x_{};
     // EE SIO line setup (LCR, FCR, BGR) as last written; transmission is

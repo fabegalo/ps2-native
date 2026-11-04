@@ -35,7 +35,8 @@ int boot_main(int argc, Character** argv) {
                      "                 [--console=MODEL[:MAINBOARD]] [--nvm=FILE] [--expect-nvm-sha256=HEX]\n"
                      "                 [--trace=events|full] [--trace-out=FILE] [--tail=N] [--stop-at=0xADDRESS]\n"
                      "                 [--frame-out=FILE.bmp] (GS VRAM snapshot at stop, when supported)\n"
-                     "                 [--assume-video-encoder=0xREG:0xVALUE]... (diagnostic experiments only)\n";
+                     "                 [--assume-video-encoder=0xREG:0xVALUE]... (diagnostic experiments only)\n"
+                     "                 [--diagnostic-omit-f510-zero-write] (unverified write omitted)\n";
         return 2;
     }
     try {
@@ -80,6 +81,8 @@ int boot_main(int argc, Character** argv) {
                 if (index > 0xFFu || value > 0xFFu) throw std::runtime_error("Invalid --assume-video-encoder (bytes)");
                 assumptions.video_encoder_registers.emplace_back(static_cast<std::uint8_t>(index),
                                                                  static_cast<std::uint8_t>(value));
+            } else if(flag=="--diagnostic-omit-f510-zero-write") {
+                assumptions.omit_f510_zero_write=true;
             } else if (flag.starts_with("--max-instructions=")) {
                 options.max_instructions = number(flag.substr(19), "--max-instructions");
             } else if (flag == "--trace=events") {
@@ -133,6 +136,8 @@ int boot_main(int argc, Character** argv) {
                 for (const bool ok : nvm->config_checksum_ok[area]) header << (ok ? '+' : '-');
             }
             header << "\n";
+            if(assumptions.omit_f510_zero_write)
+                header<<"# DIAGNOSTIC F510 zero write OMITTED; hardware effect unverified\n";
         } else {
             header << "# nvm none\n";
         }

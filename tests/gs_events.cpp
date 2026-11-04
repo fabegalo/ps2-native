@@ -545,6 +545,39 @@ void ipu_control() {
     require(memory.read32(0xB0002020u)==0,"new BCLR explicitly initializes bit position zero");
 }
 
+void diagnostic_boundary() {
+    DiagnosticAssumptions assumptions;
+    require(assumptions.empty(),"unselected experiments do not affect original boot classification");
+    EeRegisters registers;
+    registers.reset();
+    rejects([&] {(void)registers.read(0x1F803800u,2);},"not been measured");
+    for(const auto board : {"SCPH-70004:GH-032-11","SCPH-70004:GH-032-32"}) {
+        const auto* profile=find_console_hardware(board);
+        require(profile && profile->mpu_board_id==0xFFFFu,"matching PS2Ident records supply each SCPH-70004 MPU board ID");
+        registers.reset(profile);
+        require(registers.read(0x1F803800u,2)==0xFFFFu,"MPU register returns the selected board's measured 16-bit value");
+        rejects([&] {(void)registers.read(0x1F803800u,4);},"16-bit read");
+        m20::Assembler program(0xBFC00000u);
+        program.lui(8,0xBF80u);program.lhu(9,0x3800,8);program.nop();
+        program.la(10,0xA0000100u);program.sw(9,0,10);
+        const auto words=program.finish();const auto bytes=m20::le_words(words);
+        std::vector<std::uint8_t> rom(4u*1024u*1024u);
+        std::copy(bytes.begin(),bytes.end(),rom.begin());
+        Iop iop;iop.reset(rom,profile);iop.run_until(words.size());
+        require(!iop.stopped() && iop.ee_read(0x100u,4)==0xFFFFu,
+                "R3000A reads the same measured MPU ID and transfers its actual bytes to IOP RAM");
+    }
+    rejects([&] {registers.write(0x1000F510u,4,0);},"no register model");
+    assumptions.omit_f510_zero_write=true;
+    require(!assumptions.empty(),"omitting unknown F510 semantics always marks a diagnostic run");
+    registers.reset(nullptr,{},nullptr,&assumptions);
+    registers.write(0x1000F510u,4,0);
+    rejects([&] {registers.write(0x1000F510u,4,1);},"zero initialization");
+    rejects([&] {(void)registers.read(0x1000F510u,4);},"not verified");
+    registers.reset();
+    rejects([&] {registers.write(0x1000F510u,4,0);},"no register model");
+}
+
 void guest(const std::filesystem::path& rom_path) {
     const auto fixture = gs_events_test::program();
     const auto bios = load_bios_rom0(read_file(rom_path));
@@ -633,6 +666,7 @@ int main(int argc, char** argv) {
         else if (mode == "vu-control") vu_control();
         else if (mode == "vif-control") vif_control();
         else if (mode == "ipu-control") ipu_control();
+        else if (mode == "diagnostic-boundary") diagnostic_boundary();
         else if (mode == "held-counter") held_counter();
         else if (mode == "dma-setup") dma_setup();
         else if (mode == "guest") guest(argv[2]); else throw std::runtime_error("unknown GS events test");

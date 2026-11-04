@@ -59,6 +59,8 @@ struct ConsoleHardware {
     // DEV9_REG(DEV9_R_REV)); high nibble 0x2 CXD9566 (PCMCIA), 0x3 CXD9611
     // (expansion bay). Empty: unknown, so the IOP stops at its read.
     std::optional<std::uint8_t> dev9_revision{};
+    // PS2Ident MPUBoardID: direct 16-bit board measurement at 0xBF803800.
+    std::optional<std::uint16_t> mpu_board_id{};
 };
 
 [[nodiscard]] std::span<const ConsoleHardware> known_console_hardware() noexcept;

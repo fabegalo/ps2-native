@@ -54,6 +54,7 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
     // Hypothesis: counters, modes (disabled) and the latch are zero/unset after reset.
     timers_ = {};
     f500_.reset();
+    diagnostic_omit_f510_=assumptions && assumptions->omit_f510_zero_write;
     dev9_147x_ = {};
     sio_setup_ = {};
     sio_output_.clear();
@@ -245,6 +246,12 @@ std::uint32_t EeRegisters::read_timer(unsigned index, unsigned reg) {
 }
 
 std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
+    if(physical==0x1F803800u) {
+        if(bytes!=2u) throw DeviceRefusal("MPU board ID requires a 16-bit read");
+        if(!hardware_ || !hardware_->mpu_board_id) throw DeviceRefusal("MPU board ID has not been measured for this profile");
+        return *hardware_->mpu_board_id;
+    }
+    if(physical==0x1000F510u) throw DeviceRefusal("F510 readback is not verified");
     if(physical==IpuRegisters::kPosition) {
         if(bytes!=4u) throw DeviceRefusal("IPU_BP requires a 32-bit access");
         return ipu_.read_position();
@@ -349,6 +356,10 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
 }
 
 void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint64_t high) {
+    if(physical==0x10007010u) {
+        if(ipu_.write_fifo(low,high)) intc_stat_|=1u<<8;
+        return;
+    }
     if (physical==0x10004000u || physical==0x10005000u) {
         auto& vif=(physical&0x1000u) ? vif1_ : vif0_;
         vif.write_fifo(low, high, gif_, gs_);
@@ -359,15 +370,20 @@ void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint6
 }
 
 void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value) {
+    if(physical==0x1000F510u) {
+        if(!diagnostic_omit_f510_) throw DeviceRefusal("no register model");
+        if(bytes!=4u || value) throw DeviceRefusal("F510 diagnostic omission permits only 32-bit zero initialization");
+        return; // Explicitly omit an unknown write effect; never a console default.
+    }
     if(physical==IpuRegisters::kCommand) {
         if(bytes!=4u && bytes!=8u) throw DeviceRefusal("IPU_CMD requires a 32/64-bit access");
-        ipu_.write_command(static_cast<std::uint32_t>(value));
-        intc_stat_|=1u<<8; // Completed BCLR, EE manual 8.1.2 INT_IPU.
+        if(ipu_.write_command(static_cast<std::uint32_t>(value))) intc_stat_|=1u<<8;
         return;
     }
     if(physical==IpuRegisters::kControl) {
         if(bytes!=4u) throw DeviceRefusal("IPU_CTRL requires a 32-bit access");
-        ipu_.write_control(static_cast<std::uint32_t>(value));return;
+        if(ipu_.write_control(static_cast<std::uint32_t>(value))) intc_stat_|=1u<<8;
+        return;
     }
     if((physical>=0x10003800u && physical<0x10003A00u) || (physical>=0x10003C00u && physical<0x10003E00u)) {
         if(bytes!=4u || (physical&15u)) throw DeviceRefusal("VIF registers require aligned 32-bit accesses");

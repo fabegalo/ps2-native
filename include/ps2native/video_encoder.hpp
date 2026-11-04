@@ -55,7 +55,9 @@ inline constexpr std::uint32_t kVideoEncoderMasterBytes = 0x20u;
 struct DiagnosticAssumptions {
     // Read values of video encoder registers (register, value).
     std::vector<std::pair<std::uint8_t, std::uint8_t>> video_encoder_registers;
-    [[nodiscard]] bool empty() const noexcept { return video_encoder_registers.empty(); }
+    // Omit an unknown hardware effect only in an explicitly selected experiment.
+    bool omit_f510_zero_write{};
+    [[nodiscard]] bool empty() const noexcept { return video_encoder_registers.empty() && !omit_f510_zero_write; }
 };
 
 // The slave and the transactions that reach it (shared by both masters).

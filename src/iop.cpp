@@ -769,6 +769,11 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         return iop_sif1_read(physical);
     }
     const auto name = std::string("load ") + what + " of IOP register " + hex(physical);
+    if(physical==0x1F803800u) {
+        if(bytes!=2u) throw IopStop{name+": MPU board ID requires a 16-bit read"};
+        if(!hardware_ || !hardware_->mpu_board_id) throw IopStop{name+": MPU board ID has not been measured for this profile"};
+        return *hardware_->mpu_board_id;
+    }
     if (physical == kToolBoardIdPhysical) {
         if (bytes != 1u) throw IopStop{name + ": only 8-bit reads are modeled"};
         return kRetailToolBoardId;

@@ -10,6 +10,9 @@ namespace {
 // value read on EE 4.3 consoles. MECHACON version, ModelID and ConModelID
 // and the SSBUS (DEV9) revision from the database entry of the same model,
 // mainboard and ROMVER.
+// MPUBoardID 0xFFFF on both SCPH-70004/GH-032 profiles is measured in
+// PS2Ident.db, revision 4b84d1882b47fbcdcff7d34ef36e9e726512b2e2.
+// The matching records also report ROMVER 0200EC20040614, GS REV 0x1B/ID 0x55.
 constexpr std::array kProfiles{
     ConsoleHardware{"SCPH-70012", "GH-032-22", "0200AC20040614", 0x00003101u, ProfileEvidence::SameChipRevision,
                     "EE 3.1 / GS 1.11 board; 0x3101 read on SCPH-50001 (EE 3.1, GS 1.09) and "
@@ -25,11 +28,11 @@ constexpr std::array kProfiles{
     ConsoleHardware{"SCPH-70004", "GH-032-11", "0200EC20040614", 0x00003101u, ProfileEvidence::SameChipRevision,
                     "EE 3.1 / GS 1.11 board; 0x3101 read on SCPH-50001 (EE 3.1, GS 1.09) and "
                     "SCPH-55000 (EE 3.1, GS 1.11)", 0x24u, "PS2Ident database entry of this model and ROMVER",
-                    MechaconInfo{{0x02u, 6u, 2u, 0u}, {0x27u, 0xD4u, 0x20u}, {0x26u, 0xD4u}, NvmLayout::Dragon}, std::uint8_t{0x32}},
+                    MechaconInfo{{0x02u, 6u, 2u, 0u}, {0x27u, 0xD4u, 0x20u}, {0x26u, 0xD4u}, NvmLayout::Dragon}, std::uint8_t{0x32}, std::uint16_t{0xFFFF}},
     ConsoleHardware{"SCPH-70004", "GH-032-32", "0200EC20040614", 0x00003101u, ProfileEvidence::SameChipRevision,
                     "EE 3.1 / GS 1.11 board; 0x3101 read on SCPH-50001 (EE 3.1, GS 1.09) and "
                     "SCPH-55000 (EE 3.1, GS 1.11)", 0x24u, "PS2Ident database entry of this model and ROMVER",
-                    MechaconInfo{{0x02u, 6u, 4u, 0u}, {0x27u, 0xD4u, 0x20u}, {0x26u, 0xD4u}, NvmLayout::Dragon}, std::uint8_t{0x32}},
+                    MechaconInfo{{0x02u, 6u, 4u, 0u}, {0x27u, 0xD4u, 0x20u}, {0x26u, 0xD4u}, NvmLayout::Dragon}, std::uint8_t{0x32}, std::uint16_t{0xFFFF}},
     ConsoleHardware{"SCPH-77008", "GH-051", "0220EC20060210", 0x00004111u, ProfileEvidence::Measured,
                     "PS2Ident log of an SCPH-77008 (EE 4.2, GS 1.12), MechaResearch/MechaPwn issue 80", 0x30u, "PS2Ident database entry of this model and ROMVER",
                     MechaconInfo{{0x05u, 6u, 10u, 0u}, {0x5Bu, 0xD4u, 0x20u}, {0x5Au, 0xD4u}, NvmLayout::Dragon}, std::uint8_t{0x31}},

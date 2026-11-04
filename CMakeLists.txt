@@ -422,6 +422,11 @@ endif()
 
 include(cmake/DirectElf.cmake)
 include(cmake/BiosBoot.cmake)
+if(BUILD_TESTING)
+    add_executable(ps2n-ipu-tables tests/ipu_tables.cpp)
+    target_link_libraries(ps2n-ipu-tables PRIVATE ps2n_core)
+    add_test(NAME native-ipu-tables COMMAND ps2n-ipu-tables)
+endif()
 
 # Desktop launcher (Qt 6 Quick). Optional: AUTO builds it only when Qt is found,
 # so headless and core-only builds never depend on a GUI toolkit.

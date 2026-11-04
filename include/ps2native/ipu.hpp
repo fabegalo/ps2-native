@@ -1,10 +1,14 @@
 #pragma once
 #include "ps2native/device_timing.hpp"
 #include <optional>
+#include <array>
+#include <deque>
 
 namespace ps2native {
 // EE User's Manual 6.0, sections 8.1.2 and 8.3. Only idle reset and
-// configuration/BCLR are implemented; all decode commands and FIFO I/O refuse.
+// configuration, BCLR and aligned table loads are implemented. MPEG decoding
+// and conversion remain explicit refusals. Table execution is synchronous once
+// all input bytes exist; this is a functional model, not IPU pipeline timing.
 class IpuRegisters {
 public:
     static constexpr std::uint32_t kControl=0x10002010u;
@@ -16,14 +20,25 @@ public:
         // deliberately unknown, rather than inheriting another emulator's 0.
         control_={0,kSettings|0x4000FF00u};
         bit_position_.reset();
+        input_.clear(); pending_.reset(); iq_={}; vq_.reset(); thresholds_.reset();
     }
     IpuRegisters() {reset();}
-    [[nodiscard]] ObservedWord observe_control() const noexcept {return control_;}
-    [[nodiscard]] std::uint32_t read_control() const {
-        if(control_.unknown) throw DeviceRefusal("IPU_CTRL read consumes unverified status/reset bits");
-        return control_.value;
+    [[nodiscard]] ObservedWord observe_control() const noexcept {
+        auto result=control_;
+        result.value=(result.value&~0x8000000Fu)|static_cast<std::uint32_t>(input_.size()/16u)|
+                     (pending_ ? 0x80000000u : 0u);
+        // The functional queue retains real bytes, but does not model when
+        // the IPU prefetches qwords into its internal buffer. Do not present
+        // its queue length as a measured hardware IFC value.
+        if(!input_.empty()) {result.value&=~15u;result.unknown|=15u;}
+        return result;
     }
-    void write_control(std::uint32_t value) {
+    [[nodiscard]] std::uint32_t read_control() const {
+        const auto result=observe_control();
+        if(result.unknown) throw DeviceRefusal("IPU_CTRL read consumes unverified status/reset bits");
+        return result.value;
+    }
+    bool write_control(std::uint32_t value) {
         if(value&~(kSettings|0xC000FFFFu)) throw DeviceRefusal("IPU_CTRL reserved bits set");
         control_.value=(control_.value&~kSettings)|(value&kSettings);
         control_.unknown&=~kSettings;
@@ -34,24 +49,75 @@ public:
             control_.value&=~0x800000FFu;
             control_.unknown&=~0x800000FFu;
             bit_position_.reset();
+            const bool interrupted=pending_.has_value();
+            input_.clear(); pending_.reset();
+            // Reset retention of tables is not established in this subset.
+            iq_={}; vq_.reset(); thresholds_.reset();
+            return interrupted;
         }
+        return false;
     }
-    void write_command(std::uint32_t value) {
-        if(value>>28u) throw DeviceRefusal("IPU decode command is not modeled");
+    bool write_command(std::uint32_t value) {
+        if(pending_) throw DeviceRefusal("IPU command issued while BUSY");
+        const auto command=value>>28u;
+        if(command==5u || command==6u || command==9u) {
+            const auto allowed=command==5u ? 0x5800003Fu : command==6u ? 0x60000000u : 0x91FF01FFu;
+            if(value&~allowed) throw DeviceRefusal("IPU table command reserved bits set");
+            if(command!=9u && (!bit_position_ || *bit_position_ || (command==5u && (value&63u))))
+                throw DeviceRefusal("IPU table load requires established qword alignment and zero FB");
+            control_.value&=~0xC000u; control_.unknown&=~0xC000u;
+            if(command==9u) {thresholds_=value&0x01FF01FFu;return true;}
+            pending_=value;
+            return load_table();
+        }
+        if(command) throw DeviceRefusal("IPU decode command is not modeled");
         if(value&~0x7Fu) throw DeviceRefusal("IPU BCLR reserved option bits set");
         // EE manual pp.175/188: command issue clears ECD/SCD; BCLR
         // discards the input bitstream and establishes its next bit position.
-        // No FIFO input/decode engine can have queued data in this subset.
         bit_position_=value&0x7Fu;
         control_.value&=~0x8000C0FFu;
         control_.unknown&=~0x8000C0FFu;
+        input_.clear();
+        return true;
+    }
+    bool write_fifo(std::uint64_t low,std::uint64_t high) {
+        if(input_.size()+16u>128u) throw DeviceRefusal("IPU input FIFO full: CPU backpressure not modeled");
+        for(unsigned i=0;i<16u;++i)
+            input_.push_back(static_cast<std::uint8_t>((i<8u ? low : high)>>((i&7u)*8u)));
+        return load_table();
     }
     [[nodiscard]] std::uint32_t read_position() const {
         if(!bit_position_) throw DeviceRefusal("IPU_BP requires BCLR to establish its bit position");
-        return *bit_position_;
+        if(!input_.empty()) throw DeviceRefusal("IPU_BP FIFO/internal prefetch distribution is not modeled");
+        return *bit_position_|static_cast<std::uint32_t>(input_.size()/16u)<<8u;
     }
+    [[nodiscard]] std::size_t buffered_bytes() const noexcept {return input_.size();}
+    [[nodiscard]] const auto& quantization_table(unsigned index) const {return iq_.at(index);}
+    [[nodiscard]] const auto& vector_table() const noexcept {return vq_;}
+    [[nodiscard]] const auto& thresholds() const noexcept {return thresholds_;}
 private:
+    bool load_table() {
+        if(!pending_) return false;
+        const bool iq=(*pending_>>28u)==5u;
+        const auto count=iq ? 64u : 32u;
+        if(input_.size()<count) return false;
+        if(iq) {
+            std::array<std::uint8_t,64> bytes{};
+            for(auto& byte:bytes){byte=input_.front();input_.pop_front();}
+            iq_[(*pending_>>27u)&1u]=bytes;
+        } else {
+            std::array<std::uint8_t,32> bytes{};
+            for(auto& byte:bytes){byte=input_.front();input_.pop_front();}
+            vq_=bytes;
+        }
+        pending_.reset();
+        return true;
+    }
     ObservedWord control_;
     std::optional<std::uint32_t> bit_position_;
+    std::deque<std::uint8_t> input_;
+    std::optional<std::uint32_t> pending_,thresholds_;
+    std::array<std::optional<std::array<std::uint8_t,64>>,2> iq_;
+    std::optional<std::array<std::uint8_t,32>> vq_;
 };
 } // namespace ps2native
