@@ -18,6 +18,16 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **109 passou da SQRT do 108 e chegou a 7.210.587.806 instruções:**
+  VMADDA `0x1CD1DC` recusou um produto com fração incerta; IOP ativo
+  `0xC750` / 905.375.574. Ainda apenas aviso, copyright e Acclaim.
+  O limite inferior do produto VU agora aproveita extremos sem perda nas
+  colunas baixas, inclusive com multiplicador incerto, sem escolher bits.
+  Replay da mesma matriz passa preservando incerteza; 13 testes focados
+  e regressão BIOS original passaram. **110 em execução real**, com
+  núcleo/AOT/harness compilados da mesma fonte fixa e logs reduzidos.
+  Menu, navegação e gameplay continuam sem comprovação.
+  [Evidência](docs/FIRST-GAME-STATUS.md#extremo-exato-do-produto-vu--ensaio-109-e-continuação-110).
 - **108 confirmou SQRT `0x1CD558` / 7.181.062.182**, IOP ativo
   `0xB464`. VF07.w tinha vinte bits de fração incertos. Limites numéricos
   agora são preservados por VF/ACC/Q; replay da mesma entrada passa e

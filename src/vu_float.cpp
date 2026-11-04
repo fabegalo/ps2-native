@@ -79,7 +79,12 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,bool
     // Exact products are monotone in positive significands. The Booth circuit
     // need not be: bound its loss over ALL input values instead of assuming
     // monotonic rounded products. At most eight low rows, each <=2^15 weight.
-    constexpr auto maximum_loss=8ull*(1ull<<15u);
+    // B is the Booth-recoded multiplier. If its minimum has sixteen clear
+    // low bits, that endpoint has no rows/corrections in discarded columns.
+    // Every larger B increases the exact product by at least 2^23, exceeding
+    // the entire possible loss (2^18). Thus even an uncertain B cannot make
+    // the product smaller than that exact endpoint. This is directional.
+    const auto maximum_loss=(bmin&0xFFFFu) ? 8ull*(1ull<<15u) : 0ull;
     const auto low=packed(std::uint64_t{mantissa(amin)}*mantissa(bmin)-maximum_loss,
                           static_cast<int>(ea)+static_cast<int>(eb)-127,sign);
     const auto high=packed(std::uint64_t{mantissa(amax)}*mantissa(bmax),

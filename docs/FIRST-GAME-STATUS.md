@@ -553,8 +553,51 @@ A versão inicial custava cerca de 17%; evitar cópias de lanes não escritas
 reduziu esse custo. Máquina compartilhada, sem isolamento da carga host.
 Testes focados cobrem contenção de SQRT, domínios incompatíveis/excessivos,
 invalidação de prova em substituição bruta/micro, rotação, ACC e Q.
-Rodada 109 ainda em preparação; conservar BIOS original e hipóteses
+Rodada 109 concluída abaixo; conservar BIOS original e hipóteses
 experimentais explícitas. Continuar até observar menu e navegação reais.
+
+### Extremo exato do produto VU — ensaio 109 e continuação 110
+
+109 terminou em **7.210.587.806** instruções, VMADDA `0x4BE830BE`
+em **`0x1CD1DC`** (estado já em `0x1CD1E0`). Superou a SQRT do 108.
+IOP ativo `0xC750` / 905.375.574, sem recusa; 8.228 pacotes novos,
+380.592.128 escritas GS, 3.160,11 s em host compartilhado. Backing de RAM
+`9f4f63b626875709d8ae69486be947b06e704b517a6a911c9866c8e0b5618060`,
+com máscaras registradas separadamente. As capturas ainda mostram aviso,
+copyright e Acclaim; nenhuma imagem demonstra menu ou navegação.
+
+VF08.z/w continham `AB800000/007FFFFF`, multiplicados pela componente
+unitária de VF06. A margem uniforme de perda Booth fazia o extremo
+inferior atravessar artificialmente o expoente. O helper compartilhado
+agora usa perda zero no limite inferior quando o menor multiplicador
+certificado tem dezesseis bits baixos zerados. Esse extremo é exato;
+qualquer multiplicador maior aumenta o produto inteiro em pelo menos
+`2^23`, mais que a perda total limitada por `2^18`. A prova é direcional,
+não presume monotonicidade do circuito nem escolhe a fração real.
+Sinais, expoentes e flags continuam exigindo prova.
+
+Replay isolado das mesmas quatro instruções, com cabeçalhos e núcleo
+compatíveis: o helper anterior reproduz a recusa; o corrigido retorna em
+`0x1CD1E4`. VF09.x/y conhecidos `C49F87FA/C42B169F`; z/w mantêm
+`AB800000/007FFFFF`. Esse replay não restaura periféricos, cache ou IRQ e
+não é prova de um frame. Treze testes focados passaram, incluindo
+domínios de multiplicador incerto nos extremos de expoente, VU/VIF,
+GS, SIO2 e AOT/interpretador. BIOS original mantém PCs/contagens e RAM
+SHA-256 `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
+Consultados [PS2Recomp VU](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/ps2xRecomp/src/lib/vu_translator.cpp)
+e [manual VU](https://docs.alexrp.com/mips/ee_vu.pdf), sem incorporar código GPL.
+
+**110 iniciada**, fonte fixa de `0454091` mais a correção acima em
+`out/gs-iop-bounds-source`; núcleo, cabeçalhos, AOT e harness recompilados
+juntos. Binário SHA-256
+`18ebfc018df39974dd4f28854fee0eb1e44d9648a2d94adfb039e39eda32df5c`.
+Manifesto local `superbust-menu110-build-provenance.json`; log
+`superbust-menu-110.log`, entrada `superbust-pad110.txt`, captura
+`superbust-capture110.txt`. Cauda por instrução desativada antes de sete
+bilhões e lista final repetitiva de GIF substituída por contagem; nenhum
+efeito convidado ou ciclo é omitido. Sem ganho de desempenho afirmado.
+Limites supervisionados de 90 minutos/16 bilhões; mesmas identidades e
+hipóteses experimentais do 109. Continuar até menu, controles e partida.
 
 BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;
 ELF `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`.

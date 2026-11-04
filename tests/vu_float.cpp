@@ -12,10 +12,42 @@ void ranges() {
     require(!ee_fpu_multiply(0x3F800001,0x3F800003,flags) && flags==0xC000,
             "strict scalar multiply keeps its explicit refusal");
     const auto product=vu_float_product({0x3F800001,0},{0x3F800003,0});
-    require(!vu_float_product({0x3F800000,1},{0x3F800000,0}),
-            "a conservative lower product bound crossing the normalization boundary cannot certify one exponent");
-    require(!vu_float_product({0x00800000,1},{0x3F800000,0}),
-            "a lower bound crossing the minimum normal boundary cannot certify one underflow class");
+    for(const auto base:{0x00800000u,0x3F800000u,0xAB800000u,0x7F800000u}) {
+        const ObservedWord symbolic{base,0x7FFFFFu};
+        for(const auto factor:{0x3F800000u,0xBF800000u}) {
+            const auto identity=vu_float_product(symbolic,{factor,0});
+            require(identity && identity->word.value==(base^(factor&0x80000000u)) &&
+                identity->word.unknown==symbolic.unknown && !identity->flags,
+                "right-hand unit multiplication preserves every uncertain fraction even at exponent boundaries");
+        }
+    }
+    for(const auto base:{0x20012340u,0xA0012340u,0x3F923450u})
+        for(const auto factor:{0x3FC00000u,0x40010000u,0xBF900000u}) {
+            const ObservedWord a{base,15},b{factor,0x10000u};
+            const auto range=vu_float_product(a,b);
+            require(range && range->bounded,"symbolic high multiplier bits with clear low columns permit an exact product bound");
+            for(unsigned x=0;x<16;++x)for(const auto y:{0u,0x10000u}) {
+                unsigned f=0;const auto concrete=ee_fpu_multiply(base|x,(factor&~0x10000u)|y,f);
+                require(concrete && contains(range->word,*concrete) && *concrete>=range->bounds[0] &&
+                    *concrete<=range->bounds[1] && f==range->flags,
+                    "all represented products of the exact-column fixture stay within both result domains");
+            }
+        }
+    const auto uncertain_multiplier=vu_float_product({0x3F800000u,0},{0xAB800000u,0x7FFFFFu});
+    require(uncertain_multiplier && uncertain_multiplier->word.value==0xAB800000u &&
+        uncertain_multiplier->word.unknown==0x7FFFFFu && !uncertain_multiplier->flags,
+        "a clear-column minimum bounds all larger uncertain multipliers without an artificial exponent crossing");
+    for(const auto base:{0x00800000u,0x3F800000u,0xAB800000u,0x7F800000u}) {
+        const auto domain=vu_float_product({0x3F800000u,0},{base,0x1FFFFu});
+        require(domain && domain->bounded && domain->bounds[0]==base && !domain->flags,
+            "the exact minimum bounds a multiplier domain containing discarded-column digits");
+        for(unsigned offset=0;offset<=0x1FFFFu;++offset) {
+            unsigned f=0;const auto concrete=ee_fpu_multiply(0x3F800000u,base+offset,f);
+            if(concrete)require(contains(domain->word,*concrete) && *concrete>=domain->bounds[0] &&
+                *concrete<=domain->bounds[1] && f==domain->flags,
+                "every certifiable multiplier remains above the clear-column endpoint with identical flags");
+        }
+    }
     require(product && product->word.unknown && !product->flags &&
             contains(product->word,0x3F800003) && contains(product->word,0x3F800004),
             "ambiguous product retains both possible chopped results");

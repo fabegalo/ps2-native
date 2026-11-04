@@ -1,14 +1,18 @@
 # Próxima execução — Super Bust-A-Move
 
 Pedido ativo: continuar do aviso de Memory Card até o menu principal e
-comprovar resposta visual aos controles. **108 terminou** em VSQRT
-`0x1CD558` / 7.181.062.182, IOP ativo `0xB464`. Só aviso, copyright e
-Acclaim observados. Preservação de intervalos certificados VF/ACC/Q
-resolve a mesma entrada em replay isolado; saída correta verificada em
-VF04.x/y, corrigindo o teste anterior que olhava VF05 zerado.
+comprovar resposta visual aos controles e iniciar partida. **109 terminou**
+em VMADDA `0x1CD1DC` / 7.210.587.806, IOP ativo `0xC750`.
+Passou da SQRT do 108, mas só aviso, copyright e Acclaim foram observados.
+O extremo exato do produto VU resolve a mesma matriz em replay,
+preservando todas as frações incertas.
 
-Preparar e executar **109**, com núcleo, cabeçalhos, AOT e auxiliares
-compilados da mesma fonte fixa. Continuar até menu/navegação, corrigindo
+**110 em execução**, fonte fixa `0454091` mais correção do produto VU em
+`out/gs-iop-bounds-source` / `out/gs-iop-bounds-build`. Núcleo,
+cabeçalhos, AOT e auxiliares compilados juntos. Log
+`out/game-first/superbust-menu-110.log`; entrada `superbust-pad110.txt`,
+captura `superbust-capture110.txt`. Treze testes pertinentes e
+regressão BIOS original passaram. Continuar até menu/navegação, corrigindo
 cada nova recusa e registrando o PC. Não afirmar sucesso com replay,
 limpeza de framebuffer ou hashes alternados do mesmo Acclaim. Manter as
 hipóteses experimentais do diagnóstico explícitas e o modo BIOS original.
