@@ -196,6 +196,7 @@ private:
     // AND of two registers, either possibly partly unknown: a bit is known
     // when known in both, or known 0 in one of them.
     void and_regs(unsigned rd, unsigned rs, unsigned rt);
+    void and_immediate(unsigned destination, unsigned source, std::uint32_t mask);
     void or_value(unsigned rd,unsigned rs,std::uint32_t value,std::uint32_t known,const std::string& origin);
     // rs == rt, decided when the known bits already differ even if some
     // bits are unknown; otherwise both must be known.
@@ -212,6 +213,7 @@ private:
     void store(std::uint32_t address, std::size_t bytes, std::optional<std::uint32_t> value, const char* what,
                const ObservedWord* observed=nullptr,std::uint64_t sio2_epoch=0);
     void reset_sio2_observed(ObservedWord word,std::uint64_t epoch);
+    void write_spu2_control(std::uint32_t physical,ObservedWord word);
     [[nodiscard]] std::uint32_t io_read(std::uint32_t physical, std::size_t bytes, const char* what);
     void io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what);
     void mechacon_command(std::uint8_t command, const char* what);
@@ -266,6 +268,7 @@ private:
     std::uint8_t cdvd_type_{}, cdvd_status_{}, cdvd_sticky_{};
     bool diagnostic_cav_nominal_timing_{};
     bool diagnostic_spu2_quiescent_{};
+    std::array<std::optional<ObservedWord>,2> spu2_control_;
     std::uint64_t gif_dma_cycle_{};
     std::optional<std::string> gif_dma_stop_;
     std::optional<std::uint8_t> cdvd_howto_;

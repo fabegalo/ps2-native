@@ -502,12 +502,12 @@ void check_sif_ready_experiment() {
     require(iop.ee_read(0x10C,4)==0x12340020,"BCR halfword write preserves block count");
     require(iop.sif1_metrics().bytes==0,"arming SDK destination never fabricates data");
     iop.reset(rom,&kProfile); iop.run_until(index_of(a,"end"));
-    require_stop(iop,"unverified SIF_CTRL bits");
+    require_stop(iop,"unverified control operation outside SIF ready-bit experiment");
 }
 
 void check_dma_reset_experiment() {
     Assembler a(0xBFC00000u);
-    a.la(t0,0xBF80157Cu);a.lw(t1,0,t0);a.nop();a.addu(v0,t1,zero);a.addu(a0,v0,zero);a.andi(a0,a0,3);
+    a.la(t0,0xBF80157Cu);a.lw(t1,0,t0);a.nop();a.addu(v0,t1,zero);a.addu(a0,v0,zero);a.andi(a0,a0,3);a.addiu(a0,a0,1);
     a.label("idle");a.beq(zero,zero,"idle");a.nop();
     const auto rom=rom_of(a);Iop iop;
     iop.reset(rom,&kProfile);iop.run_until(20);

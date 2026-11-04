@@ -81,5 +81,21 @@ int main() try {
         a.r(0,9,9,3,0x02u);a.sw(9,0x100,8);const auto iop=run(a);
         require(!iop.stopped() && iop.ee_read(0x100,4)==0x10u,"SRL honors the old operand in the load delay slot and overrides its pending load");
     }
+    for(const auto mask : {0u,1u,0x10u,0xFFCFu,0xFFFFu}) for(const unsigned destination : {9u,11u}) {
+        m20::Assembler a(kEeResetVector);input(a);a.ori(9,9,0x10u);a.andi(destination,9,mask);
+        a.andi(10,destination,0x10u);a.sw(10,0x100,8);a.r(0,destination,10,16,0x02u);a.sw(10,0x104,8);
+        const auto iop=run(a);require(!iop.stopped() && iop.ee_read(0x100,4)==(mask&0x10u) && iop.ee_read(0x104,4)==0,
+                                    "ANDI preserves known ones, cleared bits, zero extension and operand aliases");
+        m20::Assembler b(kEeResetVector);input(b);b.ori(9,9,0x10u);b.andi(destination,9,mask);b.addiu(10,destination,1);
+        const auto consumed=run(b);
+        if(mask==0u || mask==0x10u)require(!consumed.stopped() && consumed.gpr(10)==mask+1u,"ANDI can prove an entire zero or known-bit result");
+        else require(consumed.stopped() && consumed.stop_reason()->find("used while its value is unknown")!=std::string::npos,
+                     "remaining ANDI result bits are not invented when consumed later");
+    }
+    {
+        m20::Assembler a(kEeResetVector);a.lui(8,0xA000u);a.la(9,7);a.lw(9,0x300,8);
+        a.andi(9,9,3);a.sw(9,0x100,8);const auto iop=run(a);
+        require(!iop.stopped() && iop.ee_read(0x100,4)==3u,"ANDI preserves the aliased R3000A load-delay write ordering");
+    }
     std::cout<<"R3000A OR/ORI preserve known bits, aliases, unknown consumption and load delay\n";
 } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

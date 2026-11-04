@@ -95,8 +95,8 @@ void check_devices() {
     a.addiu(t7, zero, 0xFFFFu);
     a.sw(t7, 0x20, t3);           // INTR0 acknowledge
     a.label("checkpoint");
-    a.andi(v0, t5, 3u);           // bit 1 is unknown
-    a.nop();
+    a.andi(v0, t5, 3u);           // bit 1 remains unknown
+    a.addiu(v0, v0, 1);           // consume it, rather than merely transport it
     const auto rom = rom_of(a);
     Iop iop;
     iop.reset(rom, &kProfile);

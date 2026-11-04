@@ -144,7 +144,7 @@ std::optional<unsigned> dma_channel_field(std::uint32_t address) {
     return std::nullopt;
 }
 bool is_spu2_boot_config(std::uint32_t address) {
-    if(address==0x1F90019Au || address==0x1F90059Au)return true;
+    if(address==0x1F9001B0u || address==0x1F9005B0u)return true;
     if(address==0x1F9007C6u || address==0x1F9007C8u)return true;
     // PS2SDK spu2_mmio_hwport.h: two banks, 0x28 apart, containing
     // master, effect, external-input and sound-input L/R levels.
@@ -201,6 +201,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     istat_ = 0u;
     sio2_irq_acknowledged_=diagnostic_sio2_irq_clear;
     diagnostic_spu2_quiescent_=diagnostic_spu2_quiescent;
+    spu2_control_={};
     gif_dma_cycle_=0;
     gif_dma_stop_.reset();
     dma_irq_output_=false;
@@ -914,6 +915,13 @@ std::uint32_t Iop::masked_reg(unsigned index, std::uint32_t mask) const {
     if ((gpr_defined_ & (1u << index)) == 0u && (gpr_known_[index] & mask) != mask) return reg(index);
     return gpr_[index];
 }
+void Iop::and_immediate(unsigned destination, unsigned source, std::uint32_t mask) {
+    if(gpr_defined_&(1u<<source))return set_reg(destination,gpr_[source]&mask);
+    const auto known=gpr_known_[source]|~mask; // AND with zero establishes a known zero.
+    const auto value=gpr_[source]&mask&known;
+    if(known==~0u)return set_reg(destination,value);
+    if(destination)write_=PendingLoad{destination,value,false,gpr_origin_[source],known};
+}
 void Iop::and_regs(unsigned rd, unsigned rs, unsigned rt) {
     const auto known = [&](unsigned r) { return (gpr_defined_ & (1u << r)) != 0u ? ~0u : gpr_known_[r]; };
     const auto a = gpr_[rs], b = gpr_[rt], ka = known(rs), kb = known(rt);
@@ -1046,6 +1054,14 @@ std::uint32_t Iop::load(std::uint32_t address, std::size_t bytes, const char* wh
     return io_read(a.physical, bytes, what);
 }
 
+void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
+    word.unknown&=0xFFFFu;word.value&=0xFFFFu&~word.unknown;
+    // Disabled synthesis and transfer mode are sufficient to retain the
+    // remaining configuration symbolically. No data processing is started.
+    if(word.unknown&0x8030u)throw IopStop{"SPU2 control write does not establish disabled synthesis and transfer"};
+    if(word.value&0x8030u)throw IopStop{"SPU2 core processing/control configuration is not modeled"};
+    spu2_control_[(physical-0x1F90019Au)/0x400u]=word;
+}
 void Iop::reset_sio2_observed(ObservedWord word,std::uint64_t epoch) {
     if(word.unknown&1u)throw IopStop{"SIO2 control start bit is unknown"};
     if(word.value&1u)throw IopStop{"SIO2 transfer is not modeled"};
@@ -1083,6 +1099,9 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
         throw IopStop{std::string("store ")+what+" to read-only ROM1 at "+hex(address)};
     if (a.physical >= kRomPhysical && a.physical - kRomPhysical < kRomBytes)
         throw IopStop{std::string("store ") + what + " to ROM0 at " + hex(address)};
+    if((a.physical==0x1F90019Au || a.physical==0x1F90059Au) && bytes==2u && observed) {
+        write_spu2_control(a.physical,*observed);return;
+    }
     if(a.physical==0x1F808268u && bytes==4u && observed) {
         reset_sio2_observed(*observed,sio2_epoch);return;
     }
@@ -1105,6 +1124,19 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         return iop_sif1_read(physical);
     }
     const auto name = std::string("load ") + what + " of IOP register " + hex(physical);
+    if(physical==0x1F9001B0u || physical==0x1F9005B0u)
+        throw IopStop{"SPU2 AutoDMA readback/busy timing is not modeled"};
+    if(physical==0x1F90019Au || physical==0x1F90059Au) {
+        if(bytes!=2u)throw IopStop{"SPU2 control requires halfword reads"};
+        auto word=spu2_control_[(physical-0x1F90019Au)/0x400u];
+        if(!word && diagnostic_spu2_quiescent_)word=ObservedWord{0u,0x7FFFu};
+        if(!word)throw IopStop{name+": SPU2 control before a known halfword write"};
+        if(word->unknown) {
+            undefined_load_="SPU2 control: other control fields are unknown";
+            undefined_known_=~word->unknown;
+        }
+        return word->value;
+    }
     if(is_spu2_boot_config(physical)) {
         // PS2SDK spu2regs.h: digital-output and constant level configuration.
         // This does not establish core state, IRQ status or audio samples.
@@ -1287,12 +1319,16 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         return;
     }
     const auto name = std::string("store ") + what + " of IOP register " + hex(physical);
+    if(physical==0x1F90019Au || physical==0x1F90059Au) {
+        if(bytes!=2u || !value)throw IopStop{"SPU2 control requires a known or observed halfword write"};
+        write_spu2_control(physical,ObservedWord{*value,0u});return;
+    }
     if(is_spu2_boot_config(physical)) {
         if(bytes!=2u || !value)throw IopStop{"SPU2 output configuration requires a known halfword write"};
-        // ATTR=0 explicitly disables the core, its IRQ enable and transfer
-        // mode. Enabling synthesis/DMA still needs the actual sound engine.
-        if((physical==0x1F90019Au || physical==0x1F90059Au) && *value)
-            throw IopStop{"SPU2 core processing/control configuration is not modeled"};
+        // ADMAS zero explicitly disables streaming. Do not manufacture a
+        // busy readback, data movement or a DMA completion interrupt.
+        if((physical==0x1F9001B0u || physical==0x1F9005B0u) && *value)
+            throw IopStop{"SPU2 AutoDMA transfers are not modeled"};
         if(physical>=0x1F900760u && physical<0x1F9007B0u &&
            (physical-0x1F900760u)%0x28u<4u && (*value&0x8000u))
             throw IopStop{"SPU2 master volume sweep is not modeled"};
@@ -1634,8 +1670,8 @@ std::uint32_t Iop::modeled_irqs() const noexcept {
     // Cold SIO2 has no in-flight command. Every path that could start one
     // (CTRL.0, FIFO, DMA) refuses before changing state, so IRQ17 cannot rise.
     // This proves the idle source only, not peripheral responses or timing.
-    // This opt-in experiment assumes inactive cores at reset. All SPU2 MMIO
-    // and DMA starts still refuse, so no unmodeled activity can raise IRQ9.
+    // This opt-in experiment assumes inactive cores at reset. Synthesis,
+    // streaming and DMA starts still refuse; inactive setup creates no IRQ9.
     return kTimerIrqs | kDmaIrq | (1u<<2u) | (sio2_irq_acknowledged_ ? (1u<<17u) : 0u) |
            (diagnostic_spu2_quiescent_ ? (1u<<9u) : 0u) |
            (video_.state != GsRegisters::VerticalClock::State::Unknown ? kVblankStartIrq | kVblankEndIrq : 0u);
@@ -1952,7 +1988,7 @@ void Iop::step() {
         case 0x09: set_reg(rt, reg(rs) + imm); break;
         case 0x0A: set_reg(rt, static_cast<std::int32_t>(reg(rs)) < static_cast<std::int32_t>(imm) ? 1u : 0u); break;
         case 0x0B: set_reg(rt, reg(rs) < imm ? 1u : 0u); break;
-        case 0x0C: set_reg(rt, masked_reg(rs, uimm) & uimm); break;
+        case 0x0C: and_immediate(rt, rs, uimm); break;
         case 0x0D: or_value(rt,rs,uimm,~0u,{}); break;
         case 0x0E: set_reg(rt, reg(rs) ^ uimm); break;
         case 0x0F: set_reg(rt, uimm << 16); break;
@@ -1989,7 +2025,15 @@ void Iop::step() {
             break;
         }
         case 0x28: { const auto v = stored_reg(rt); store(reg(rs) + imm, 1u, v ? std::optional<std::uint32_t>(*v & 0xFFu) : v, "SB"); break; }
-        case 0x29: { const auto v = stored_reg(rt); store(reg(rs) + imm, 2u, v ? std::optional<std::uint32_t>(*v & 0xFFFFu) : v, "SH"); break; }
+        case 0x29: {
+            const auto value=stored_reg(rt);
+            if(value)store(reg(rs)+imm,2u,*value&0xFFFFu,"SH");
+            else {
+                const ObservedWord observed{gpr_[rt]&0xFFFFu,(~gpr_known_[rt])&0xFFFFu};
+                store(reg(rs)+imm,2u,value,"SH",&observed);
+            }
+            break;
+        }
         case 0x2B: {
             const auto value=stored_reg(rt);
             if(value)store(reg(rs)+imm,4u,value,"SW");

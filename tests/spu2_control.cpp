@@ -43,5 +43,52 @@ int main() try {
         else require(!iop.stopped() && iop.ee_read(0x100,4)==0 && iop.ee_read(0x104,4)==0,
                      "both cores accept explicit disable and retain their disabled control word");
     }
+    {
+        m20::Assembler a(kEeResetVector);a.la(8,0xBF90019Au);a.la(10,0xA0000100u);
+        a.raw((0x25u<<26)|(8u<<21)|(9u<<16));a.nop();a.andi(11,9,0x8000u);a.sw(11,0,10);
+        a.label("consume");a.addiu(11,9,1);a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> reset_rom(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),reset_rom.begin());
+        iop.reset(reset_rom,nullptr,nullptr,false,std::nullopt,{},false,true);
+        const auto boundary=(a.at("consume")-kEeResetVector)/4u;iop.run_until(boundary);
+        require(!iop.stopped() && iop.ee_read(0x100,4)==0,"quiescent experiment establishes only an inactive synthesis core");
+        iop.run_until(boundary+1u);
+        require(iop.stopped() && iop.stop_reason()->find("other control fields are unknown")!=std::string::npos,
+                "the experiment does not invent the remaining ATTR bits");
+    }
+    for(unsigned mode=0;mode<4;++mode) {
+        m20::Assembler a(kEeResetVector);a.la(8,0xA0000300u);a.lw(9,0,8);a.nop();
+        if(mode!=1)a.andi(9,9,0x7FCFu); // prove inactive core and transfer mode without inventing other fields
+        if(mode==2)a.ori(9,9,0x10u);
+        if(mode==3)a.ori(9,9,0x8000u);
+        a.la(8,0xBF90019Au);a.sh(9,0,8);
+        a.raw((0x25u<<26)|(8u<<21)|(9u<<16));a.nop();a.andi(11,9,0x8030u);
+        a.la(10,0xA0000100u);a.sw(11,0,10);a.label("consume");a.addiu(11,9,1);
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr);
+        const auto boundary=(a.at("consume")-kEeResetVector)/4u;iop.run_until(boundary);
+        if(!mode) {
+            require(!iop.stopped() && iop.ee_read(0x100,4)==0,"a partial SH retains unknown inactive configuration through an actual device register");
+            iop.run_until(boundary+1u);require(iop.stopped() && iop.stop_reason()->find("other control fields are unknown")!=std::string::npos,
+                                              "device readback preserves the remaining unknown configuration bits");
+        } else require(iop.stopped() && iop.stop_reason()->find("SPU2")!=std::string::npos,
+                       "unproved, DMA-active and synthesis-active partial control writes cannot start unmodeled work");
+    }
+    for(unsigned mode=0;mode<5;++mode) {
+        m20::Assembler a(kEeResetVector);
+        a.la(8,0xBF9001B0u);a.sh(0,0,8);a.la(8,0xBF9005B0u);a.sh(0,0,8);
+        a.la(8,0xBF801070u);a.lw(9,0,8);a.nop();a.andi(9,9,8);
+        a.la(10,0xA0000100u);a.sw(9,0,10);a.la(8,0xBF9005B0u);
+        if(mode==1){a.la(9,2);a.sh(9,0,8);}
+        else if(mode==2)a.raw((0x25u<<26)|(8u<<21)|(9u<<16));
+        else if(mode==3)a.sw(0,0,8);
+        else if(mode==4){a.la(9,4);a.sh(9,0,8);}
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr);iop.run_until(80);
+        if(!mode)require(!iop.stopped() && iop.ee_read(0x100,4)==0,"both AutoDMA disables generate neither data nor a DMA interrupt");
+        else require(iop.stopped(),"streaming, readback timing and unsupported AutoDMA widths remain explicit");
+    }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
