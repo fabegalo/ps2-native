@@ -1,23 +1,13 @@
-# Próximo trabalho — The Simpsons: Hit & Run (SLUS-20624)
+# Próxima execução — Super Bust-A-Move (SLUS-20115)
 
-Meta: inicialização normal → primeiro frame real → menu original → controles → gameplay.
-Só a execução inicial do ELF foi demonstrada; zero pixels reais. Hashes e limites no
-[FIRST-GAME-STATUS](FIRST-GAME-STATUS.md).
+ELF já executado; zero frames/menu/gameplay. Diagnóstico após BIOS parcial chega a
+4.486.087 instruções (4.483.572 AOT), PC `0x80005F00`, leitura SMFLG.
+O IOP parou em `0x40B0`: VBLANK depende do timing GS ainda não inicializado.
+`SetGsCrt` Sony foi executado e também chegou ao encoder desconhecido; não inventar
+IDs nem reiniciar o IOP para apagar seu histórico. Não confundir diagnóstico com ExecPS2.
 
-1. Completar o multiplicador Booth geral do EE, bloqueio diagnóstico em `0x002DEAF4`.
-   Estudar primeiro PS2Recomp e confrontar com especificações/resultados independentes;
-   a multiplicação do host na referência não prova o arredondamento R5900.
-   O subconjunto esparso atual deve continuar exato; casos restantes falham explicitamente.
-2. Repetir o ELF com o kernel Sony original. A injeção local após BIOS parcial chegou a
-   627.894 instruções, com RAM idêntica em interpretador/híbrido; isso não certifica ExecPS2.
-   O boot original continua dependente dos IDs físicos indisponíveis do encoder GH-032.
-   O mantenedor já informou que não possui medição: não repetir a solicitação nem inventar IDs.
-3. Seguir os acessos reais de IOP/SIF/DMA, usando os onze módulos/IOPRP254 do próprio disco,
-   sem HLE substituto, mistura de firmware ou respostas de sucesso simuladas.
-4. Manter AOT apenas para código identificado e fallback explícito para regiões dinâmicas.
-   Os 214.944 passos AOT atuais são majoritariamente limpeza de RAM, não cobertura do jogo.
-   Avançar VIF/VU/GS, input e SPU2 conforme exigidos; promover etapas somente com evidência.
-
-Regressões focadas, equivalência AOT/interpretador e CI dos seis alvos. Preservar o launcher,
-READMEs, contratos, ISO, firmware, NVM e saves. Traces, extrações, snapshots e traduções
-proprietárias permanecem somente em `out/` ignorado.
+SIF0/IRQ IP3 e equivalência AOT/interpretador têm regressões próprias. Investigar a
+inicialização consistente do GS/IOP antes de avançar os seis módulos IOP do próprio disco.
+No Simpsons, MUL.S `0x002DEAF4` passou; caso ambíguo seguinte em `0x001681B0`.
+Estudar PS2Recomp antes de cada correção; sem copiar GPL, HLE substituto ou hacks por jogo.
+Hashes/logs/evidência: [FIRST-GAME-STATUS](FIRST-GAME-STATUS.md). Preservar launcher e dados locais.

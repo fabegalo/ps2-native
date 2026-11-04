@@ -1,6 +1,7 @@
 // Three independent, original bare-metal programs; no firmware/game content.
 #pragma once
 #include "bios_program.hpp"
+#include "ps2native/ee.hpp"
 #include <span>
 
 namespace direct_test {
@@ -79,6 +80,35 @@ inline Program dma() {
     put(payload,0,0x80004000u); put(payload,4,64); // IOP destination tag, words
     for(unsigned i=0;i<64;++i) put(payload,16+i*4,0x01020300u+i);
     return {{{text,5,le_words(a.finish())},{data,6,std::move(payload)}},stop,iop_receiver(),{}};
+}
+inline std::vector<std::uint8_t> iop_sender(unsigned words=64,unsigned destination=data,bool undefined=false) {
+    Assembler a(0x1000u);
+    store(a,0xBF801570u,0x800u);store(a,0xBF801578u,1);store(a,0xBF80157Cu,1);
+    store(a,0xBF8010F4u,1u<<23u);store(a,0xBF801574u,1u<<18u);
+    store(a,0x4000u,0x80005000u);store(a,0x4004u,words);
+    store(a,0x4008u,0x70000000u|(words/4u));store(a,0x400Cu,destination);
+    if(!undefined)for(unsigned w=0;w<words;++w)store(a,0x5000u+w*4u,0xCA000000u+w);
+    store(a,0xBF80152Cu,0x4000u);store(a,0xBF801528u,0x01000701u);
+    a.label("idle");a.beq(zero,zero,"idle");a.nop();
+    return le_words(a.finish());
+}
+inline Program sif0() {
+    Assembler a(text);
+    store(a,0xB000E020u,0);store(a,0xB000E000u,1);store(a,0xB000E010u,1u<<21u);
+    store(a,0xB000C020u,0);store(a,0xB000C000u,0x184);
+    a.la(t0,ps2native::kStatusIE|ps2native::kStatusEIE|ps2native::kStatusIM3);a.mtc0(t0,Status);
+    a.la(s0,data+256u);
+    a.label("wait");a.lw(t0,0,s0);a.beq(t0,zero,"wait");a.nop();
+    a.la(t0,data);a.addiu(t2,zero,64);a.addiu(v0,zero,0);
+    a.label("sum");a.lw(t1,0,t0);a.addu(v0,v0,t1);a.addiu(t0,t0,4);
+    a.addiu(t2,t2,0xFFFF);a.bne(t2,zero,"sum");a.nop();
+    const auto stop=a.here();a.brk();
+    Assembler h(0x80000200u);
+    h.la(k0,data+256u);h.addiu(27,zero,1);h.sw(27,0,k0);
+    h.mfc0(27,Cause);h.sw(27,4,k0);
+    h.la(k0,0xB000E010u);h.addiu(27,zero,0x20);h.sw(27,0,k0);h.eret();
+    return {{{text,5,le_words(a.finish())},{data,6,std::vector<std::uint8_t>(264)},
+             {0x200u,5,le_words(h.finish())}},stop,iop_sender(),{}};
 }
 inline Program frame() {
     Assembler a(text);
@@ -197,6 +227,7 @@ inline Program unaligned() {
 inline Program build(const std::string& mode) {
     if(mode=="cpu") return cpu();
     if(mode=="dma") return dma();
+    if(mode=="sif0") return sif0();
     if(mode=="frame") return frame();
     if(mode=="exceptions") return exceptions();
     if(mode=="timer") return timer();

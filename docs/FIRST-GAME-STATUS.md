@@ -154,3 +154,25 @@ Fontes independentes: [EE Core](https://docs.alexrp.com/mips/ee.pdf),
 [Prabhu/Zyner, ARITH 1995, tabelas e circuito SRT](https://www.acsel-lab.com/arithmetic/arith12/papers/ARITH12_Prabhu.pdf),
 [resultados medidos de FPU](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/cpu/ee_fpu/muldiv.expected).
 Nenhum código GPL, firmware, módulo ou código traduzido comercial foi integrado.
+
+## 04/11/2026 — Super Bust-A-Move (SLUS-20115)
+
+BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;
+ELF `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`.
+Seis arquivos IOP/IOPRP202, com hashes locais em `out/game-first/superbust-irx-manifest.json`.
+Diagnóstico com kernel Sony parcial: **4.486.087** instruções, **4.483.572 AOT / 2.515 fallback**,
+PC `0x80005F00`, leitura SMFLG recusada porque o IOP parou em `0x40B0` sem timing GS conhecido.
+Zero pixels/frames; nenhum menu/controle/gameplay. `SetGsCrt` original também bloqueou no encoder.
+Logs locais `superbust-final-{interpreter,hybrid}.log`; não é boot/ExecPS2 concluído.
+
+MUL.S passou `0x002DEAF4` do Simpsons, alcançando **843.734** instruções/PC `0x001681B0`.
+O caminho novo certifica intervalos de truncamento de 13 linhas Booth + 13 correções e no máximo
+24 compressores, sem supor sua ordem: perda conservadora `<76*2^15`. Se os extremos retêm
+mantissas diferentes, recusa sem alterar flags. Oráculo PS2Float executado **separadamente**, sem
+ligação com o produto: 830.000 aceitos/1.050.001 pares, nenhuma diferença; árvore geral ainda pendente.
+Referência comportamental: [pesquisa do multiplicador](https://github.com/libretro/ps2/blob/master/README.md).
+
+SIF0 agora move payload IOP→FIFO limitada→EE, preserva backpressure/bytes, limpa incerteza somente
+nas palavras sobrescritas e entrega IRQ IP3 real; não sintetiza RPC. PS2Recomp `Stubs/SIF.cpp`
+foi confrontado com [DMAC/SIF](https://israpps.github.io/ps2tek/) e EE User v6 p.74.
+Regressão própria AOT/interpretador: 3.540 instruções, 3.527 AOT, RAM/trace/eventos idênticos.

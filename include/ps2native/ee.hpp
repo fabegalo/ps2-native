@@ -22,6 +22,7 @@ inline constexpr std::uint32_t kStatusERL = 1u << 2;
 inline constexpr std::uint32_t kStatusKSU = 3u << 3;
 inline constexpr std::uint32_t kStatusIM7 = 1u << 15;
 inline constexpr std::uint32_t kStatusIM2 = 1u << 10; // INTC INT0
+inline constexpr std::uint32_t kStatusIM3 = 1u << 11; // DMAC INT1
 inline constexpr std::uint32_t kStatusEIE = 1u << 16;
 inline constexpr std::uint32_t kStatusEDI = 1u << 17;
 inline constexpr std::uint32_t kStatusBEV = 1u << 22;

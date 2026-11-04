@@ -221,6 +221,8 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     sif1_have_tag_ = sif1_end_ = false;
     sif1_words_ = 0;
     sif1_metrics_ = {};
+    iop_sif0_ = {}; iop_sif0_written_=0; sif0_fifo_.clear(); sif0_source_words_=0;
+    sif0_source_tag_=sif0_source_end_=sif0_dest_end_=false; sif0_metrics_={};
     if (rom_.size() != kRomBytes) stop_ = "no ROM0 mapped for the IOP";
 }
 
@@ -230,7 +232,7 @@ void Iop::load_program(std::span<const std::uint8_t> bytes, std::uint32_t addres
         static_cast<std::uint64_t>(entry) + 4u > address + bytes.size())
         throw std::runtime_error("invalid IOP bare-metal image range or entry");
     const auto ee_ram = ee_ram_;
-    const auto* ee_ram_unknown = ee_ram_unknown_;
+    auto* ee_ram_unknown = ee_ram_unknown_;
     reset({}, nullptr);
     ee_ram_ = ee_ram;
     ee_ram_unknown_ = ee_ram_unknown;
@@ -318,6 +320,8 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
     const auto decoded=ee_dma_field(address);
     if(!decoded)throw DeviceRefusal("EE DMAC register not modeled");
     const auto [channel,field]=*decoded;
+    if(channel==5u && (ee_dma_setup_[5][0].value_or(0u)&0x100u))
+        throw DeviceRefusal("EE SIF0 DMA register write while busy");
     if(channel==6u && (ee_sif1_chcr_ & 0x100u)) throw DeviceRefusal("EE SIF1 DMA register write while busy");
     if(!ee_dma_field_exists(channel,field)) {
         // SDK dma_channel_initialize also clears unused channel slots. Only
@@ -340,6 +344,13 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
         ee_sif1_madr_ = value; return;
     }
     if (address == 0x1000C420u) { ee_sif1_qwc_ = value & 0xFFFFu; return; }
+    if(channel==5u && field==0u && (value&0x100u)) {
+        if((value&~0xFFFF0184u) || (value&0xCu)!=4u)
+            throw DeviceRefusal("EE SIF0 requires destination chain mode (no scratchpad/stall)");
+        if(!ee_dma_setup_[5][2] || *ee_dma_setup_[5][2])
+            throw DeviceRefusal("EE SIF0 start requires programmed zero QWC (resume not modeled)");
+        ee_dma_setup_[5][0]=value; sif0_dest_end_=false; return;
+    }
     if(field==0u && (value&0x100u))
         throw DeviceRefusal("EE DMAC channel "+std::to_string(channel)+" transfer engine is not modeled");
     constexpr std::uint32_t masks[]{0xFFFF01FDu,0xFFFFFFF0u,0xFFFFu,0xFFFFFFF0u,
@@ -350,6 +361,13 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
 }
 ObservedWord Iop::ee_dma_observe(std::uint32_t address) const {
     if(address==0x1000E020u) return {*ee_dma_global_[0], ee_dma_global_unknown_[0]};
+    if(const auto f=ee_dma_field(address); f && f->second==0u && f->first!=6u &&
+       !ee_dma_setup_[f->first][0]) {
+        // EE User's Manual v6, p.74: STR starts clear. The other writable
+        // fields are not given reset values here; preserve them as symbolic.
+        // Observing idle must not invent a mode, tag, or programmed address.
+        return {0u,0xFFFF00FDu};
+    }
     return {ee_dma_read(address), 0u};
 }
 void Iop::ee_dma_write_observed(std::uint32_t address, ObservedWord word) {
@@ -459,6 +477,124 @@ void Iop::pump_sif1() {
     }
 }
 
+std::uint32_t Iop::iop_sif0_read(std::uint32_t address) const {
+    const auto field=(address-0x1F801520u)/4u;
+    if(!(iop_sif0_written_&(1u<<field)))throw IopStop{"IOP SIF0 register read before write"};
+    return iop_sif0_.at(field);
+}
+void Iop::iop_sif0_write(std::uint32_t address,std::uint32_t value) {
+    const auto field=(address-0x1F801520u)/4u;
+    if(iop_sif0_[2]&kChcrStart)throw IopStop{"IOP SIF0 register write while busy"};
+    if(field==2u && value!=0 && value!=0x01000701u)
+        throw IopStop{"IOP SIF0 supports source chain with tag transfer only"};
+    if(field==2u && (value&kChcrStart) && !(iop_sif0_written_&8u))
+        throw IopStop{"IOP SIF0 TADR not programmed"};
+    if((field==0u || field==3u) && ((value&3u) || value>=ram_.size()))
+        throw IopStop{"IOP SIF0 source/tag address outside aligned RAM"};
+    iop_sif0_[field]=value;
+    iop_sif0_written_|=static_cast<std::uint8_t>(1u<<field);
+    if(field==2u) {sif0_source_tag_=false;sif0_source_words_=0;}
+}
+void Iop::finish_iop_sif0() {
+    // Channel 9: completion mask 18, flag 26, master control as for SIF1.
+    const auto* dicr=latch(kDicr);const auto* dicr2=latch(kDicr2);
+    if(!dicr || !*dicr || !dicr2 || !*dicr2)
+        throw IopStop{"SIF0 source completion: interrupt masks not programmed"};
+    const auto masks=**dicr2;
+    const auto* control=latch(0x1F80157Cu);
+    const bool irq=(masks&(1u<<18u)) && (**dicr&(1u<<23u));
+    if(irq && (!control || !*control))throw IopStop{"SIF0 completion: DMACINTEN not programmed"};
+    for(auto& [address,value]:latches_)
+        if(address==kDicr2 && value && (masks&(1u<<18u))) *value|=1u<<26u;
+    if(irq && ((**control&3u)==1u))istat_|=kDmaIrq;
+    iop_sif0_[2]&=~kChcrStart;
+    events_.push_back({cycle_,"SIF0 IOP source complete (FIFO may still contain data)"});
+}
+void Iop::pump_sif0() {
+    // Same bounded, instruction-clocked throughput hypothesis as SIF1.
+    // This moves guest data only. No command decoding, RPC reply, or HLE.
+    const auto enabled=[&](std::uint32_t address,std::uint32_t mask) {
+        const auto* value=latch(address);
+        return value && *value && ((**value&mask)==mask);
+    };
+    const auto source_word=[&](std::uint32_t address) {
+        if(address>ram_.size() || 4u>ram_.size()-address)
+            throw IopStop{"SIF0 source exceeds IOP RAM"};
+        std::uint32_t value=0;
+        for(unsigned b=0;b<4;++b) {
+            if(!ram_written_[address+b])throw IopStop{"SIF0 source consumes undefined IOP RAM"};
+            value|=std::uint32_t{ram_[address+b]}<<(b*8u);
+        }
+        return value;
+    };
+    if((iop_sif0_[2]&kChcrStart) && enabled(0x1F801578u,1u) && enabled(0x1F801570u,0x800u)) {
+        if(!sif0_source_tag_) {
+            if(sif0_fifo_.size()>28u)++sif0_metrics_.source_full_cycles;
+            else {
+                const auto at=iop_sif0_[3];
+                const auto tag=source_word(at),words=source_word(at+4u);
+                const auto low=source_word(at+8u),high=source_word(at+12u);
+                const auto source=tag&0xFFFFFFu;
+                if((tag&0x7F000003u) || (words&0xFF000003u))
+                    throw IopStop{"SIF0 source tag: IRQ/reserved bits or non-qword word count not modeled"};
+                if(source>ram_.size() || std::uint64_t{words}*4u>ram_.size()-source)
+                    throw IopStop{"SIF0 source tag payload outside IOP RAM"};
+                sif0_fifo_.push_back(low);sif0_fifo_.push_back(high);
+                // Upper half of an EE destination tag is unused: occupancy
+                // padding only, never returned to the guest or copied to RAM.
+                sif0_fifo_.push_back(0);sif0_fifo_.push_back(0);
+                iop_sif0_[0]=source;iop_sif0_[3]+=16u;iop_sif0_written_|=1u;
+                sif0_source_words_=words;sif0_source_end_=(tag&0x80000000u)!=0;
+                sif0_source_tag_=true;
+            }
+        } else if(sif0_source_words_) {
+            if(sif0_fifo_.size()>28u)++sif0_metrics_.source_full_cycles;
+            else {
+                std::array<std::uint32_t,4> qword{};
+                for(unsigned w=0;w<4;++w)qword[w]=source_word(iop_sif0_[0]+w*4u);
+                for(const auto word:qword)sif0_fifo_.push_back(word);
+                iop_sif0_[0]+=16u;sif0_source_words_-=4u;
+            }
+        }
+        sif0_metrics_.peak_fifo_words=std::max(sif0_metrics_.peak_fifo_words,sif0_fifo_.size());
+        if(sif0_source_tag_ && !sif0_source_words_) {
+            if(sif0_source_end_)finish_iop_sif0();
+            sif0_source_tag_=false;
+        }
+    }
+    auto& chcr=ee_dma_setup_[5][0];auto& madr=ee_dma_setup_[5][1];auto& qwc=ee_dma_setup_[5][2];
+    if(!(ee_dctrl_&1u) || !(chcr.value_or(0u)&0x100u))return;
+    // An armed, empty receiver remains busy; no fabricated completion.
+    if(sif0_fifo_.empty()){++sif0_metrics_.destination_empty_cycles;return;}
+    const auto priority=ee_dma_priority(ee_dma_observe(0x1000E020u),5u);
+    if(!priority)throw IopStop{"EE SIF0 priority depends on unknown D_PCR bits"};
+    if(!*priority)return;
+    if(!qwc.value_or(0u)) {
+        if(sif0_fifo_.size()<4u){++sif0_metrics_.destination_empty_cycles;return;}
+        const auto tag=sif0_fifo_[0],dest=sif0_fifo_[1];const auto id=(tag>>28u)&7u;
+        if((tag&0x0FFF0000u) || (id!=0u && id!=1u && id!=7u) || (dest&0x8000000Fu))
+            throw IopStop{"SIF0 destination tag: unsupported fields, ID or scratchpad/alignment"};
+        const auto count=tag&0xFFFFu;
+        if(dest>ee_ram_.size() || std::uint64_t{count}*16u>ee_ram_.size()-dest)
+            throw IopStop{"SIF0 destination exceeds EE RAM"};
+        for(unsigned w=0;w<4;++w)sif0_fifo_.pop_front();
+        *chcr=(*chcr&0xFFFFu)|(tag&0xFFFF0000u);madr=dest;qwc=count;
+        sif0_dest_end_=id==7u || ((tag&0x80000000u) && (*chcr&0x80u));
+    } else {
+        if(sif0_fifo_.size()<4u){++sif0_metrics_.destination_empty_cycles;return;}
+        for(unsigned w=0;w<4;++w) {
+            const auto word=sif0_fifo_.front();sif0_fifo_.pop_front();
+            for(unsigned b=0;b<4;++b)ee_ram_[*madr+w*4u+b]=static_cast<std::uint8_t>(word>>(b*8u));
+            if(ee_ram_unknown_)ee_ram_unknown_->erase(*madr+w*4u);
+        }
+        *madr+=16u;--*qwc;sif0_metrics_.bytes+=16u;
+    }
+    if(!*qwc && sif0_dest_end_) {
+        *chcr&=~0x100u;ee_dstat_|=0x20u;
+        events_.push_back({cycle_,"SIF0 EE destination complete"});
+    }
+}
+
 void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
     if (video == nullptr && video_generation_) {
         // Detached: the VBLANK sources are unknown again.
@@ -471,6 +607,7 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
         const bool saved_slot = in_delay_slot_;
         try {
             pump_sif1();
+            pump_sif0();
             step();
             ++cycle_;
             if (timers_running_) tick_timers();
@@ -623,6 +760,10 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
 }
 
 std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char* what) {
+    if (physical>=0x1F801520u && physical<0x1F801530u) {
+        if(bytes!=4u)throw IopStop{"SIF0 DMA requires 32-bit accesses"};
+        return iop_sif0_read(physical);
+    }
     if (physical >= 0x1F801530u && physical < 0x1F801540u) {
         if (bytes != 4u) throw IopStop{"SIF1 DMA requires 32-bit accesses"};
         return iop_sif1_read(physical);
@@ -730,6 +871,10 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
 }
 
 void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what) {
+    if (physical>=0x1F801520u && physical<0x1F801530u) {
+        if(bytes!=4u || !value)throw IopStop{"SIF0 DMA requires known 32-bit accesses"};
+        iop_sif0_write(physical,*value); return;
+    }
     if (physical >= 0x1F801530u && physical < 0x1F801540u) {
         if (bytes != 4u || !value) throw IopStop{"SIF1 DMA requires known 32-bit accesses"};
         iop_sif1_write(physical, *value);

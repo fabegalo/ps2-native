@@ -165,6 +165,7 @@ public:
     // Runs the IOP up to the current EE time (boot mapping, clock attached).
     void sync_iop() { registers_.sync_iop(); }
     [[nodiscard]] bool intc_interrupt_pending() const;
+    [[nodiscard]] bool dmac_interrupt_pending() const { return registers_.dmac_interrupt_pending(); }
     [[nodiscard]] const std::string& sio_output() const noexcept { return registers_.sio_output(); }
 
 private:

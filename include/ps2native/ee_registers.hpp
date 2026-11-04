@@ -106,14 +106,16 @@ public:
     // Samples implemented interrupt sources at the shared EE clock. Unknown
     // timing is refused only when it can affect the requested source bits.
     [[nodiscard]] bool intc_interrupt_pending();
+    [[nodiscard]] bool dmac_interrupt_pending() { sync_iop(); return iop_.ee_dma_interrupt_pending(); }
     [[nodiscard]] ObservedWord observe_intc(std::uint32_t needed = 0x7FFFu);
     [[nodiscard]] ObservedWord observe_dma_word(std::uint32_t physical);
     void write_dma_word(std::uint32_t physical, ObservedWord word);
     // Runs the IOP up to the current EE time.
     void sync_iop();
     [[nodiscard]] bool dma_reads_ram() const noexcept { return iop_.reads_ee_ram(); }
+    [[nodiscard]] bool dma_writes_ram() const noexcept { return iop_.writes_ee_ram(); }
     void attach_ee_ram(std::span<std::uint8_t> ram,
-                       const std::unordered_map<std::uint32_t,std::uint32_t>* unknown = nullptr) {
+                       std::unordered_map<std::uint32_t,std::uint32_t>* unknown = nullptr) {
         iop_.attach_ee_ram(ram, unknown);
     }
     void load_iop_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry) {

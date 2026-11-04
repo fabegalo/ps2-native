@@ -181,7 +181,8 @@ void dma_setup() {
         iop.ee_dma_write(base+0x20, 0x12345);
         require(iop.ee_dma_read(base)==0 && iop.ee_dma_read(base+0x10)==0x12340 &&
                 iop.ee_dma_read(base+0x20)==0x2345, "inactive DMA channel retains programmed addresses/count");
-        rejects([&] { iop.ee_dma_write(base, 0x100); }, "transfer engine is not modeled");
+        rejects([&] { iop.ee_dma_write(base, 0x100); },
+                base==0x1000C000u ? "destination chain mode" : "transfer engine is not modeled");
         require(iop.ee_dma_read(base)==0, "refused start does not create a running/completed transfer");
     }
     iop.ee_dma_write(0x10008080u, 0);

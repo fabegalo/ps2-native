@@ -74,7 +74,7 @@ public:
     // Bare-metal development image, not IRX relocation/import linking.
     void load_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry);
     void attach_ee_ram(std::span<std::uint8_t> ram,
-                       const std::unordered_map<std::uint32_t,std::uint32_t>* unknown = nullptr) {
+                       std::unordered_map<std::uint32_t,std::uint32_t>* unknown = nullptr) {
         ee_ram_ = ram; ee_ram_unknown_ = unknown;
     }
     [[nodiscard]] std::uint32_t ee_dma_read(std::uint32_t address) const;
@@ -83,11 +83,16 @@ public:
     [[nodiscard]] ObservedWord ee_dma_observe(std::uint32_t address) const;
     void ee_dma_write_observed(std::uint32_t address, ObservedWord word);
     [[nodiscard]] bool reads_ee_ram() const noexcept { return (ee_sif1_chcr_ & 0x100u) != 0u; }
+    [[nodiscard]] bool writes_ee_ram() const noexcept { return (ee_dma_setup_[5][0].value_or(0u)&0x100u)!=0; }
     struct SifDmaMetrics {
         std::uint64_t bytes{}, source_full_cycles{}, destination_empty_cycles{};
         std::size_t peak_fifo_words{};
     };
     [[nodiscard]] const SifDmaMetrics& sif1_metrics() const noexcept { return sif1_metrics_; }
+    [[nodiscard]] const SifDmaMetrics& sif0_metrics() const noexcept { return sif0_metrics_; }
+    [[nodiscard]] bool ee_dma_interrupt_pending() const noexcept {
+        return (ee_dstat_ & (ee_dstat_>>16u) & 0x63FFu)!=0u;
+    }
 
     [[nodiscard]] std::uint64_t cycle() const noexcept { return cycle_; }
     [[nodiscard]] std::uint32_t pc() const noexcept { return pc_; }
@@ -100,10 +105,14 @@ private:
     // SIF1: EE channel 6 normal source -> bounded FIFO -> IOP channel 10
     // destination chain. No RPC/HLE or direct RAM mirroring.
     void pump_sif1();
+    void pump_sif0();
+    void finish_iop_sif0();
+    std::uint32_t iop_sif0_read(std::uint32_t address) const;
+    void iop_sif0_write(std::uint32_t address, std::uint32_t value);
     std::uint32_t iop_sif1_read(std::uint32_t address) const;
     void iop_sif1_write(std::uint32_t address, std::uint32_t value);
     std::span<std::uint8_t> ee_ram_;
-    const std::unordered_map<std::uint32_t,std::uint32_t>* ee_ram_unknown_{};
+    std::unordered_map<std::uint32_t,std::uint32_t>* ee_ram_unknown_{};
     std::uint32_t ee_dctrl_{}, ee_dstat_{}, ee_sif1_chcr_{}, ee_sif1_madr_{}, ee_sif1_qwc_{};
     std::array<std::array<std::optional<std::uint32_t>, 9>, 10> ee_dma_setup_{};
     std::array<std::optional<std::uint32_t>, 4> ee_dma_global_{};
@@ -113,6 +122,12 @@ private:
     bool sif1_have_tag_{}, sif1_end_{};
     std::uint32_t sif1_words_{};
     SifDmaMetrics sif1_metrics_;
+    std::array<std::uint32_t,4> iop_sif0_{};
+    std::uint8_t iop_sif0_written_{};
+    std::deque<std::uint32_t> sif0_fifo_;
+    std::uint32_t sif0_source_words_{};
+    bool sif0_source_tag_{},sif0_source_end_{},sif0_dest_end_{};
+    SifDmaMetrics sif0_metrics_;
     struct PendingLoad {
         unsigned reg;
         std::uint32_t value;

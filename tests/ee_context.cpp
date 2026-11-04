@@ -197,6 +197,23 @@ void divider() {
     const auto flags=fcr;
     require(!ee_fpu_multiply(0x3F800000,0x3FFFFFFF,fcr) && fcr==flags,
             "general asymmetric Booth case cannot substitute host multiplication or change flags");
+    // Exact integer mantissa product is 0x68DB8B5DCC64. Even the conservative
+    // maximum low-column loss cannot cross the retained 24-bit boundary.
+    require(ee_fpu_multiply(0x3C23D70A,0x3C23D70A,fcr)==0x38D1B716,
+            "nonsparse multiply certified independently of low-column reduction order");
+    require(ee_fpu_multiply(0xBC23D70A,0x3C23D70A,fcr)==0xB8D1B716,
+            "certified multiply preserves sign xor");
+}
+void dma_idle_knowledge() {
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    EEState s;s.pc=0x80001000;s.set_reg32(8,0xB000C000u);
+    memory.set_clock(&s.retired_instructions);
+    ee::exec<MipsOpcode::Lw>(s,memory,0,0x8D090000u);
+    require(s.unknown_gpr_bits[9]!=0,"idle CHCR does not invent reset mode/tag fields");
+    ee::exec<MipsOpcode::Andi>(s,memory,0,0x31290100u);
+    require(s.reg32(9)==0 && s.unknown_gpr_bits[9]==0,"STR reset proves no transfer is running");
+    memory.write32(0xB000C000u,0x84u);
+    require(memory.read32(0xB000C000u)==0x84u,"programmed idle CHCR becomes fully known");
 }
 void conversions_and_partial_loads() {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
@@ -249,6 +266,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();nested_exception();packed_copy();register_context();divider();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();nested_exception();packed_copy();register_context();divider();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

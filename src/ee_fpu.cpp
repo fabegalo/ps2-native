@@ -61,12 +61,26 @@ std::uint32_t ee_fpu_divide(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31
 std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31) {
     const auto ea=(a>>23u)&255u,eb=(b>>23u)&255u;
     const auto sign=(a^b)&0x80000000u;
-    // The exact sparse-right-operand region is independent of the unknown
-    // low-column carry tree. The general Booth tree is deliberately refused.
-    if(ea && eb && (b&0x3FFFFu))return std::nullopt;
-    fcr31&=~0xC000u;
-    if(!ea || !eb)return sign;
+    if(!ea || !eb){fcr31&=~0xC000u;return sign;}
     const auto product=static_cast<std::uint64_t>((a&0x7FFFFFu)|0x800000u)*((b&0x7FFFFFu)|0x800000u);
+    if(b&0x3FFFFu) {
+        // Certify a result without guessing the R5900's low-column tree.
+        // A 24-bit radix-4 Booth array has 13 partial rows and at most 13
+        // separate sign corrections. Reducing 26 rows to two needs at most
+        // 24 three-to-two compressors. Dropping columns 0..14 on every input,
+        // both outputs of every compressor, and both final rows loses less
+        // than (26 + 2*24 + 2)*2^15. This deliberately includes redundant cuts.
+        // Every cut subtracts a nonnegative residue; no host rounding is used.
+        // See FIRST-GAME-STATUS.md for the hardware observations/limitations.
+        constexpr std::uint64_t maximum_loss=76ull*(1ull<<15u);
+        const auto lower=product-maximum_loss;
+        // Compare BEFORE normalization, including bit 47. If all possible
+        // retained products give the same chopped 24-bit result, the tree
+        // cannot affect this instruction. Boundary cases remain explicit.
+        const auto precision=(product&(1ull<<47u)) ? 24u : 23u;
+        if((lower>>precision)!=(product>>precision))return std::nullopt;
+    }
+    fcr31&=~0xC000u;
     int exponent=static_cast<int>(ea)+static_cast<int>(eb)-127;
     const auto shift=(product&(1ull<<47u)) ? 24u : 23u;
     if(shift==24)++exponent;

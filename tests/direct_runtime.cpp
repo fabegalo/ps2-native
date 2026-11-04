@@ -138,6 +138,16 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
                     "SIF1 byte count and bounded FIFO backpressure");
             require((memory.read32(0xB000C400u)&0x100u)==0 && memory.read32(0xB000C420u)==0 &&
                     (memory.read32(0xB000E010u)&0x40u),"EE source completion and QWC");
+        } else if(mode=="sif0") {
+            std::uint32_t sum=0;
+            for(unsigned i=0;i<64;++i) {
+                const auto expected=0xCA000000u+i;sum+=expected;
+                require(memory.read32(direct_test::data+i*4u)==expected,"SIF0 actual IOP payload reaches EE RAM");
+            }
+            require(state.reg32(2)==sum && memory.read32(direct_test::data+256)==1,"EE computes checksum after real DMA IRQ");
+            require(memory.read32(direct_test::data+260)&kStatusIM3,"guest handler captures DMAC IP3");
+            require(!report.iop_stop && memory.iop().sif0_metrics().bytes==256 &&
+                    contains(events[run],"SIF0 EE destination complete"),"SIF0 completion preserves original producer execution");
         } else if(mode=="unaligned") {
             require(memory.read64(direct_test::data+960)==0x98A8B8C8D8E8F808ull &&
                     memory.read64(direct_test::data+968)==0x9E7B583512EFCCA9ull,"PSUBB executes in shared AOT/interpreter path");

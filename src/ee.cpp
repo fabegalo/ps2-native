@@ -29,10 +29,14 @@ bool poll_interrupts(EEState& state, Memory* memory) {
         cause &= ~kStatusIM2;
         if (memory->intc_interrupt_pending()) cause |= kStatusIM2;
     }
+    if(memory != nullptr && (status&kStatusIM3)) {
+        cause&=~kStatusIM3;
+        if(memory->dmac_interrupt_pending())cause|=kStatusIM3;
+    }
     if (state.compare_written && state.count() == state.cp0(Cop0::Compare)) cause |= kStatusIM7;
     state.set_cp0(Cop0::Cause, cause);
     if ((status & (kStatusEXL | kStatusERL)) || !(status & kStatusIE) || !(status & kStatusEIE) ||
-        !(status & cause & (kStatusIM7|kStatusIM2))) return false;
+        !(status & cause & (kStatusIM7|kStatusIM2|kStatusIM3))) return false;
     state.set_cp0(Cop0::Epc, state.delay_pending ? state.pc - 4u : state.pc);
     state.set_cp0(Cop0::Cause, (cause & ~0x8000007Cu) | (state.delay_pending ? 0x80000000u : 0u));
     state.set_cp0(Cop0::Status, status | kStatusEXL);

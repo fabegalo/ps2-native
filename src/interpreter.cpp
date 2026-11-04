@@ -359,7 +359,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"MUL.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
             const auto value=ee_fpu_multiply(state.fpr[ee::rd(word)],state.fpr[ee::rt(word)],state.fcr31);
-            if(!value)cpu.stop(StopKind::NotModeled,"MUL.S general Booth partial-product rounding not modeled");
+            if(!value)cpu.stop(StopKind::NotModeled,"MUL.S ambiguous low-column Booth rounding not modeled");
             state.fpr[ee::sa(word)]=*value;break;
         }
         case MipsOpcode::MaddS: cpu.madd(word);break;
