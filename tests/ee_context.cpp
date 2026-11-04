@@ -503,6 +503,25 @@ void vector_setup() {
     memory.write_vu_vector(8,{{0xBE800001u,0},{0,0}});
     memory.vu_add(7,7,8,8);
     require(memory.observe_vu_vector(7).low.value==0x3F400000u,"VU addition shares the one-guard-bit circuit");
+    memory.write_vu_vector(5,{{0x40A0000040800000ull,0},{0x40E0000040C00000ull,0}});
+    memory.write_vu_vector(6,{{0,0},{0xDEADBEEF00000000ull,0}});
+    constexpr auto outer=0x4BC522FEu,finish=0x4BC429AEu;
+    require(try_decode_r5900(0,outer)->opcode==MipsOpcode::Vopmula &&
+            try_decode_r5900(0,finish)->opcode==MipsOpcode::Vopmsub &&
+            !try_decode_r5900(0,outer|(1u<<21)),"outer product requires fixed xyz mask");
+    ee::exec<MipsOpcode::Vopmula>(s,memory,0,outer);
+    ee::exec<MipsOpcode::Vopmsub>(s,memory,0,finish);
+    require(memory.observe_vu_vector(6).low.value==0x40C00000C0400000ull &&
+            memory.observe_vu_vector(6).high.value==0xDEADBEEFC0400000ull &&
+            memory.read_vu_control(17)==0xA0u,"cross product cyclic lanes, reversed second operands and preserved w");
+    constexpr auto add_y=0x4B852101u;
+    require(try_decode_r5900(0,add_y)->opcode==MipsOpcode::VaddBc,"broadcast add opcode");
+    ee::exec<MipsOpcode::VaddBc>(s,memory,0,add_y);
+    require(memory.observe_vu_vector(4).low.value==0x40E0000040C00000ull &&
+            memory.observe_vu_vector(4).high.value==0x4080000040400000ull,"broadcast source remains fixed across aliased destination lanes");
+    memory.vu_subtract(4,4,5,15);
+    require(memory.observe_vu_vector(4).low.value==0x4000000040000000ull &&
+            memory.observe_vu_vector(4).high.value==0xC0400000C0400000ull,"general vector subtraction uses actual per-lane operands");
 }
 void dma_idle_knowledge() {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);

@@ -357,7 +357,9 @@ void vu_control() {
     ee::exec<MipsOpcode::Qmfc2>(state,memory,0,qmfc2|(1u<<11));
     require(state.reg128(9).low==0 && state.reg128(9).high==0 && memory.read_vu_control(17)==15 &&
             memory.read_vu_control(16)==0x41u,"exact cancellation defines destination and zero/sticky flags");
-    rejects([&] { memory.vu_subtract(1,0,1,15); },"outside proven exact-cancellation");
+    memory.vu_subtract(2,0,1,15);
+    require(memory.observe_vu_vector(2).high.value==0x3F80000000000000ull,
+            "VU subtraction now handles non-cancelling operands with the shared adder");
     memory.write_vu_control(2,0x400u);
     constexpr auto vsqi=0x4BE20B7Du; // VSQI.xyzw VF01,(VI02++)
     ee::exec<MipsOpcode::Vsqi>(state,memory,0,vsqi);
@@ -378,8 +380,10 @@ void vu_control() {
     memory.write_vu_control(1,0xFFFFu);memory.write_vu_control(2,2);
     constexpr auto viadd=0x4A000030u|(2u<<16)|(1u<<11)|(1u<<6);
     require(decode_mips(0,viadd).opcode==MipsOpcode::Viadd,"VIADD decodes the integer register fields");
+    const auto mac_before_integer=memory.read_vu_control(17),status_before_integer=memory.read_vu_control(16);
     ee::exec<MipsOpcode::Viadd>(state,memory,0,viadd);
-    require(memory.read_vu_control(1)==1 && memory.read_vu_control(17)==15 && memory.read_vu_control(16)==0x41u,
+    require(memory.read_vu_control(1)==1 && memory.read_vu_control(17)==mac_before_integer &&
+            memory.read_vu_control(16)==status_before_integer,
             "VIADD wraps to 16 bits, supports source/destination alias and preserves flags");
     ee::exec<MipsOpcode::Viadd>(state,memory,0,viadd&~(31u<<6));
     require(memory.read_vu_control(0)==0,"VIADD cannot change constant VI00");

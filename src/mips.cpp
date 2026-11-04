@@ -271,6 +271,10 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
         if (rs==16u && funct==0x30u && rt<16u && rd<16u && sa<16u) return make(MipsOpcode::Viadd);
         if (rs>=16u && funct==0x2Cu) return make(MipsOpcode::Vsub);
         if (rs>=16u && funct==0x28u) return make(MipsOpcode::Vadd);
+        if (rs>=16u && (funct&0x3Cu)==0u) return make(MipsOpcode::VaddBc);
+        if (rs>=16u && (funct&0x3Cu)==4u) return make(MipsOpcode::VsubBc);
+        if (rs==30u && (word&0x7FFu)==0x2FEu) return make(MipsOpcode::Vopmula);
+        if (rs==30u && funct==0x2Eu) return make(MipsOpcode::Vopmsub);
         if (rs>=16u && funct==0x2Au) return make(MipsOpcode::Vmul);
         if (rs>=16u && funct==0x29u) return make(MipsOpcode::Vmadd);
         if (rs>=16u && (funct&0x3Cu)==0x18u) return make(MipsOpcode::VmulBc);

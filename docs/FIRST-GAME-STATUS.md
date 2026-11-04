@@ -733,3 +733,20 @@ vetoriais e broadcast de MUL/MULA/MADD/MADDA validam todos os componentes
 antes de modificar destino, ACC ou flags. MADD não modifica ACC. Produtos e
 somas excepcionais ainda recusam, pois o estado extra de overflow do ACC e
 as regras combinadas de exceção não estão implementados. Sem float/FMA host.
+
+Ensaio 53: concluiu a multiplicação de matrizes; EE `0x1CD240` /
+339.417.051 instruções, IOP `0xAE94` / 46.479.215. Recusa em VOPMULA
+`4BC522FE`; 98,8241 s. RAM SHA-256
+`9921efa669f7d010ac7902e81488c1929edb81a4e45b0a065809d12856bb21dd`.
+Mesmos pacotes/pixels de limpeza, sem PMODE. Modo original repetido após ACC:
+mesmos PCs, contagens, zero pixels e hash canônico. CI de `b176844` aprovada
+nos seis alvos do núcleo (41794461017) e launcher (41794461153).
+
+Próxima extensão: VOPMULA/VOPMSUB com permutação cíclica xyz e operandos na
+ordem da instrução, preservando w. Referência prévia PS2Recomp VU upper e
+manual VU pp.116–117/305–306. Reutiliza o produto e acumulador com recusas
+numéricas existentes. VADD/VSUB broadcast e VSUB geral usam o somador comum
+com um guard bit; os testes verificam produto vetorial não trivial, máscara
+fixa xyz, alias, preservação de w, broadcast e subtrações não cancelantes.
+O tempo dos ensaios é observação local, não benchmark controlado: builds e
+trabalho concorrente impedem atribuir diferenças de duração a ganho de desempenho.

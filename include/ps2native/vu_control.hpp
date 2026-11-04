@@ -123,16 +123,16 @@ public:
                      static_cast<std::uint32_t>(half.unknown>>shift)};
         }
     }
-    void add(unsigned destination,unsigned left,unsigned right,unsigned mask) {
+    void add(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast=4,bool subtract=false) {
         auto result=vectors_.at(destination);
         std::uint32_t mac=0,status=0;
         for(unsigned lane=0;lane<4;++lane) {
             const auto bit=8u>>lane;
             if(!(mask&bit))continue;
-            const auto a=vectors_.at(left)[lane],b=vectors_.at(right)[lane];
+            const auto a=vectors_.at(left)[lane],b=vectors_.at(right)[broadcast<4 ? broadcast : lane];
             if(a.unknown || b.unknown)throw DeviceRefusal("VU ADD consumes unknown operands");
             std::uint32_t flags=0;
-            const auto value=ee_fpu_add(a.value,b.value,flags);
+            const auto value=ee_fpu_add(a.value,b.value^(subtract ? 0x80000000u : 0u),flags);
             result[lane]={value,0};
             if(!(value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
             if(value&0x80000000u){mac|=bit<<4u;status|=2u;}
@@ -146,13 +146,14 @@ public:
         unknown_[16]&=~(0xFu|(status<<6u));
     }
     void product(unsigned destination,unsigned left,unsigned right,unsigned mask,
-                 unsigned broadcast,bool accumulate,bool to_accumulator) {
+                 unsigned broadcast,bool accumulate,bool to_accumulator,bool outer=false) {
         auto result=to_accumulator ? accumulator_ : vectors_.at(destination);
         std::uint32_t mac=0,status=0;
         for(unsigned lane=0;lane<4;++lane) {
             const auto bit=8u>>lane;
             if(!(mask&bit))continue;
-            const auto a=vectors_.at(left)[lane],b=vectors_.at(right)[broadcast<4 ? broadcast : lane];
+            const auto a=vectors_.at(left)[outer ? (lane+1u)%3u : lane];
+            const auto b=vectors_.at(right)[outer ? (lane+2u)%3u : broadcast<4 ? broadcast : lane];
             if(a.unknown || b.unknown)throw DeviceRefusal("VU multiply consumes unknown operands");
             std::uint32_t flags=0;
             const auto multiplied=ee_fpu_multiply(a.value,b.value,flags);
@@ -163,7 +164,7 @@ public:
             auto value=*multiplied;
             if(accumulate) {
                 if(accumulator_[lane].unknown)throw DeviceRefusal("VU multiply-add consumes unknown ACC");
-                value=ee_fpu_add(accumulator_[lane].value,value,flags);
+                value=ee_fpu_add(accumulator_[lane].value,value^(outer ? 0x80000000u : 0u),flags);
                 if(flags&0xC000u)throw DeviceRefusal("VU accumulation exception/ACC state is not modeled");
             }
             result[lane]={value,0};
@@ -182,23 +183,7 @@ public:
             if(mask&(8u>>lane))vectors_.at(destination)[lane]=input[(lane+1u)&3u];
     }
     void subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {
-        // Exact cancellation needs neither an alignment/rounding hypothesis nor
-        // a host float. Other arithmetic remains refused until independently
-        // validated (VU manual 2.2 and 4.2 SUB; MAC/status flags section 3.3).
-        for(unsigned lane=0;lane<4;++lane) {
-            if (!(mask&(8u>>lane))) continue;
-            const auto a=vectors_.at(left)[lane],b=vectors_.at(right)[lane];
-            const auto exponent=(a.value>>23u)&255u;
-            if(a.unknown || b.unknown || a.value!=b.value ||
-               (a.value && (!exponent || exponent==255u)))
-                throw DeviceRefusal("VU SUB outside proven exact-cancellation operands");
-        }
-        if(destination)
-            for(unsigned lane=0;lane<4;++lane)
-                if(mask&(8u>>lane)) vectors_.at(destination)[lane]={};
-        registers_[17]=mask; // Selected zero flags, all inactive ALU flags clear.
-        registers_[16]=(*registers_[16]&~0xFu)|(mask ? 0x41u : 0u); // Z + sticky ZS
-        unknown_[16]&=~(mask ? 0x4Fu : 0xFu);
+        add(destination,left,right,mask,4,true);
     }
     void vector_store_increment(unsigned source,unsigned base,unsigned mask) {
         if(base>=16u) throw DeviceRefusal("VSQI base must be VI00..VI15");
