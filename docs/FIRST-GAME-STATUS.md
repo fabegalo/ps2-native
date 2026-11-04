@@ -962,3 +962,11 @@ O patch SLL inicialmente não entrou em `2a6445a` por uma quebra de linha na
 seleção parcial; `5965b89` publicou imediatamente o código validado, sem
 reescrever histórico. CI da cópia ENDX `91d0197`: ambos workflows aprovados
 nos seis alvos. As execuções locais sempre usaram o código efetivamente testado.
+
+Ensaio 67: SUBU passou; IOP `0x6672C` / 46.630.522, SH do alto de ESA
+0x1F9002E0 com os quatro bits de endereço conhecidos, reservados desconhecidos.
+EE `0x81FD0` / 360.000.000, 106,489 s; RAM/GIF/PMODE iguais ao 66.
+Escritas ESA/EEA agora consomem somente seus campos: alto de quatro bits,
+baixo ESA de 16 bits. Não convertem reservados desconhecidos em números.
+Fixture própria percorre EEA→endereço em bytes→SUBU→ESA nos dois cores,
+sem hipóteses iniciais, usando EEA explicitamente escrito pelo convidado.

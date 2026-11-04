@@ -299,5 +299,24 @@ int main() try {
         try{iop.diagnostic_spu2_effect_end_reset({0x10,0});}catch(const DeviceRefusal&){rejected=true;}
         require(rejected,"EEA experiment rejects values outside the address field");
     }
+    {
+        m20::Assembler a(kEeResetVector);a.la(10,0xA0000100u);
+        for(unsigned core=0;core<2u;++core) {
+            const auto base=0xBF900000u+core*0x400u;
+            a.la(8,base+0x19Au);a.sh(0,0,8);
+            a.la(8,base+0x33Cu);a.la(9,14u+core);a.sh(9,0,8);a.lhu(9,0,8);a.nop();
+            a.r(0,9,9,17,0x00u);a.la(11,0x1FFFFu);a.r(9,11,9,0,0x25u);
+            a.la(11,14u);a.r(9,11,9,0,0x23u);
+            a.la(8,base+0x2E0u);a.r(0,9,11,17,0x02u);a.sh(11,0,8);
+            a.r(0,9,11,1,0x02u);a.sh(11,2,8);
+            a.lhu(9,0,8);a.nop();a.andi(9,9,0xFu);a.sw(9,core*8u,10);
+            a.lhu(9,2,8);a.nop();a.sw(9,core*8u+4u,10);
+        }
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr);iop.run_until(200);
+        for(unsigned core=0;core<2u;++core)require(!iop.stopped() && iop.ee_read(0x100u+core*8u,4)==14u+core &&
+            iop.ee_read(0x104u+core*8u,4)==0xFFF8u,"EEA byte-address arithmetic and ESA writes consume only proven address bits");
+    }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

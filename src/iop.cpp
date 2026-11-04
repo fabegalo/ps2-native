@@ -1373,9 +1373,9 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
     if((a.physical==0x1F90019Au || a.physical==0x1F90059Au) && bytes==2u && observed) {
         write_spu2_control(a.physical,*observed);return;
     }
-    if(is_spu2_voice_start(a.physical) && bytes==2u && observed) {
-        const auto mask=(a.physical&2u) ? 0xFFF8u : 0xFu;
-        if(observed->unknown&mask)throw IopStop{"SPU2 voice start address consumes unknown address bits"};
+    if((is_spu2_voice_start(a.physical) || is_spu2_effect_address(a.physical)) && bytes==2u && observed) {
+        const auto mask=(a.physical&2u) ? (is_spu2_voice_start(a.physical) ? 0xFFF8u : 0xFFFFu) : 0xFu;
+        if(observed->unknown&mask)throw IopStop{"SPU2 address configuration consumes unknown address bits"};
         io_write(a.physical,bytes,observed->value&mask,what);return;
     }
     if((a.physical==0x1F900340u || a.physical==0x1F900342u ||
