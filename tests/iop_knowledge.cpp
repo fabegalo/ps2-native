@@ -97,5 +97,28 @@ int main() try {
         a.andi(9,9,3);a.sw(9,0x100,8);const auto iop=run(a);
         require(!iop.stopped() && iop.ee_read(0x100,4)==3u,"ANDI preserves the aliased R3000A load-delay write ordering");
     }
-    std::cout<<"R3000A OR/ORI preserve known bits, aliases, unknown consumption and load delay\n";
+    for(unsigned amount=0;amount<32u;++amount)for(const unsigned destination:{9u,11u}) {
+        m20::Assembler a(kEeResetVector);input(a);a.ori(9,9,0xFFFFu);
+        a.r(0,9,destination,amount,0x00u);
+        const auto known=(0xFFFFu<<amount)|((1u<<amount)-1u);
+        a.la(10,known);a.r(destination,10,10,0,0x24u);a.sw(10,0x100,8);
+        const auto iop=run(a);require(!iop.stopped() && iop.ee_read(0x100,4)==(0xFFFFu<<amount),
+            "SLL preserves known bits, inserts low zeros and drops only shifted-out uncertainty for every amount/alias");
+        m20::Assembler b(kEeResetVector);input(b);b.r(0,9,destination,amount,0x00u);b.beq(destination,0,"idle");b.nop();
+        const auto unknown=run(b);require(unknown.stopped(),"SLL retains unknown result bits for later control-flow consumers");
+    }
+    for(const unsigned function:{4u,6u}) {
+        m20::Assembler a(kEeResetVector);input(a);a.ori(9,9,0xFFFFu);
+        a.la(11,0xFFFFFFF0u);a.r(9,11,10,0,0x24u); // count = 16; upper bits remain unknown
+        a.r(10,9,9,0,function);a.la(11,function==4u ? 0xFFFFFFFFu : 0xFFFF0000u);
+        a.r(9,11,11,0,0x24u);a.sw(11,0x100,8);const auto iop=run(a);
+        require(!iop.stopped() && iop.ee_read(0x100,4)==(function==4u ? 0xFFFF0000u : 0u),
+            "variable shifts share bit propagation and consume only the shift count low five bits");
+    }
+    {
+        m20::Assembler a(kEeResetVector);a.lui(8,0xA000u);a.la(9,0x80);a.lw(9,0x300,8);
+        a.r(0,9,9,3,0x00u);a.sw(9,0x100,8);const auto iop=run(a);
+        require(!iop.stopped() && iop.ee_read(0x100,4)==0x400u,"SLL preserves the old load-delay source and overrides the pending aliased load");
+    }
+    std::cout<<"R3000A bit knowledge preserves aliases, unknown consumption and load delay\n";
 } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

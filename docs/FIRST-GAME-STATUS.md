@@ -933,3 +933,20 @@ valores de quatro bits por core; não aceita mudança após começar. Nenhum
 valor padrão foi adicionado: reset remove a hipótese, escrita convidada a
 supera, e outros registradores/reservados posteriores continuam desconhecidos.
 Não se trata de prova de efeitos, reset físico ou boot original concluído.
+
+Ensaio 65: hipótese inicial EEA permitiu avançar 70.794 instruções IOP;
+novo PC `0x603B0` / 46.630.497, SLL de um readback EEA já escrito pelo guest,
+com reservados desconhecidos. EE `0x81FD0` / 360.000.000, 109,055 s, 22 stalls;
+mesmos pacotes/pixels, sem PMODE. A hipótese inicial não foi aplicada de novo
+após a escrita. Modo original repetido conserva PCs/contagens e hash canônico.
+
+Correção genérica seguinte: SLL propaga conhecimento bit a bit, insere zeros
+baixos e só descarta a incerteza deslocada para fora dos 32 bits. SLLV/SRLV
+compartilham a semântica, consumindo somente os cinco bits baixos da contagem.
+PS2Recomp `ps2xIOP/src/emulator/core/iop_cpu.cpp` consultado; código BSD próprio,
+sem incorporar a implementação GPL. Fixtures exercitam todos os deslocamentos,
+aliases, variável com bits altos desconhecidos, consumo posterior e load delay.
+CI `04d26de` e `1556c86` concluída com sucesso no núcleo/launcher, seis alvos.
+A regressão da sobreposição `9150a3c` falhou no núcleo e foi reparada em `1556c86`.
+
+RAM EE do ensaio 65: `774ccf4ff6dac8da93b7367fc8a5738804bb36e5d7d3c03a6554ea2b24bc61c0`.
