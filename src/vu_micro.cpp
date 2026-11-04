@@ -62,7 +62,15 @@ void VuControl::retire_micro_integers(unsigned unit) {
         auto& vector=write.index==32u ? (unit ? accumulator1_ : accumulator_) :
             (unit ? vu1_vectors_[write.index] : vectors_[write.index]);
         if(write.index)for(unsigned lane=0;lane<4u;++lane)
-            if(write.mask&(8u>>lane))vector[lane]=write.words[lane];
+            if(write.mask&(8u>>lane)){
+                vector[lane]=write.words[lane];
+                // Micro results currently carry bit masks only. Invalidate any
+                // macro certificate even when the replacement has the same hull.
+                if(!unit){
+                    if(write.index==32u)accumulator_bounds_[lane].reset();
+                    else vector_bounds_[write.index][lane].reset();
+                }
+            }
     }
     state.vector_writes=kept;
     kept=0;

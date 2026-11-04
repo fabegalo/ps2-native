@@ -1,52 +1,28 @@
-# Próxima execução — jogos reais
+# Próxima execução — Super Bust-A-Move
 
-Pedido atual: continuar Super Bust-A-Move do aviso de Memory Card até o
-menu e comprovar resposta aos controles. SIO2 agora aceita press/release;
-**Execução atual: 108 ativa**, fonte fixa da main `6524aa8`, build
-`out/gs-iop-frozen-build`, log `superbust-menu-108.log`, entrada
-`superbust-pad108.txt` e captura configurável `superbust-capture108.txt`.
-Evitar misturar cabeçalhos da main em movimento com essa biblioteca.
-107 confirmou a próxima VMADDA em `0x1CD1DC` / 7.176.168.943;
-replay matricial isolado passou com X/Y conhecidos e Z/W incertos.
-108 inclui propagação simbólica VU/ACC/Q e os metadados COP1 da revisão
-fixa; 14 testes pertinentes e BIOS original passaram. CI `2eb9955`
-aprovada nos seis alvos de núcleo e launcher. Continuar a rodada até menu
-e navegação real, sem promover replay parcial a frame.
+Pedido ativo: continuar do aviso de Memory Card até o menu principal e
+comprovar resposta visual aos controles. **108 terminou** em VSQRT
+`0x1CD558` / 7.181.062.182, IOP ativo `0xB464`. Só aviso, copyright e
+Acclaim observados. Preservação de intervalos certificados VF/ACC/Q
+resolve a mesma entrada em replay isolado; saída correta verificada em
+VF04.x/y, corrigindo o teste anterior que olhava VF05 zerado.
 
-Histórico dos preparativos anteriores:
-Cross chegou aos buffers EE sem escrita host em RAM. O ensaio 104 passou
-ATE/AFAIL e mostrou créditos/logotipo Acclaim; parou em `0x1CD584` /
-7.176.168.746, C.LT.S. Comparações/branches COP1 passaram em testes.
-Rodada 105 confirmou VMULbc `0x1CD530` / 7.176.168.811 instruções.
-Limite conservador de perda de MUL refinado e validado: 4 milhões de pares,
-zero divergências entre os aceitos; sete testes focados e BIOS original
-passaram. Replay isolado retorna, sem alegação de execução completa.
-106 parada voluntariamente em `0x81FC0` / 1.098.589.884 para incorporar
-SQRT SRT não exata, antecipada por entrada sintética da rotina isolada.
-Um milhão de entradas/referência, zero divergências nos aceitos;
-sete testes e BIOS original passaram. Negativos continuam recusados.
-Rodada `out/game-first/superbust-menu107-run.cmd` ativa com as correções.
-Acompanhar até o menu, corrigindo novos bloqueios. Só pixels reais.
-Entrada de 107 em `superbust-pad107.txt`, isolada das rodadas anteriores.
-107 já reproduziu aviso, créditos e Acclaim. Propagação simbólica de
-frações VU/ACC/Q preparada para eventual próxima recusa: oito testes e
-seis regressões passaram; 158 entradas da rotina isolada retornam com
-VF05.x conhecido, sem prova de jogo completo. `superbust-menu108-*`
-preparado, ainda não executado. Arquivo `superbust-capture108.txt` permite
-capturar cada VBLANK distinto (1) ou a cadência econômica (0), sem efeito
-convidado. Não declarar menu antes de observar e testar seus controles.
-Entrada supervisionada em `out/game-first/superbust-pad.txt`, palavra
-hex ativa baixa; `FFFF` solto, `BFFF` Cross, `FFF7` Start, `DFFF` Circle;
-`10000` encerra voluntariamente no próximo VBLANK conhecido.
-O harness 105 usa `10003` no arquivo para um novo cenário: Cross mantido
-60 campos após primeira imagem não preta, solto 30; depois Start mantido
-30 campos/solto 90. `FFFF` cancela o script. Limite 90 minutos/16 bilhões,
-processo sempre acompanhado. Não é replay; não afirmar paridade de RAM
-com o cenário antigo quando entradas diferirem.
-Usa AOT local do laço do mesmo kernel, bytes/ROM0 conferidos; em 2,54
-bilhões o 103 reproduziu PCs/RAM do 102 em 29,2% menos tempo. Nenhum
-save-state completo disponível. Hipóteses do diagnóstico permanecem
-explícitas. Evidência em FIRST-GAME-STATUS, sem menu ainda demonstrado.
+Preparar e executar **109**, com núcleo, cabeçalhos, AOT e auxiliares
+compilados da mesma fonte fixa. Continuar até menu/navegação, corrigindo
+cada nova recusa e registrando o PC. Não afirmar sucesso com replay,
+limpeza de framebuffer ou hashes alternados do mesmo Acclaim. Manter as
+hipóteses experimentais do diagnóstico explícitas e o modo BIOS original.
+Evidências e identidades em [FIRST-GAME-STATUS](FIRST-GAME-STATUS.md).
+
+Entrada local ativa baixa: `FFFF` solto, `BFFF` Cross, `FFF7` Start,
+`FFBF` Down, `FFEF` Up. `10003` reproduz Cross 60 campos, solto 30,
+depois Start 30 ligado/90 solto. Cancelar com `FFFF` após a abertura e
+aplicar entradas manuais no menu. `10000` para no próximo VBLANK conhecido
+em idle verificado. Capturas locais, nenhuma escrita host em RAM convidada.
+Diagnóstico limitado a 90 minutos/16 bilhões e sempre supervisionado.
+Captura econômica por padrão; habilitar todos os campos perto da fronteira
+7,18 bilhões. Não consumir as 256 capturas com Acclaim alternado.
+Sem save-state completo: backing de RAM não restaura cache/dispositivos.
 
 ## Checkpoint preservado — Simpsons
 
@@ -60,42 +36,3 @@ focados e regressão BIOS original passaram. Manter hipóteses do harness
 explícitas; consultar PS2Recomp antes de implementar subsistemas.
 Logs `out/game-first/simpsons-trial-{2,3,4,5}.log`; relatório
 [primeiro jogo](FIRST-GAME-STATUS.md#reensaio-de-simpsons--04112026).
-
-## Checkpoint preservado — Super Bust-A-Move (SLUS-20115)
-
-O objetivo de capturar pixels reais do jogo foi atingido no ensaio 101:
-três capturas no VBLANK, campos nativos 640x224, mostram a tela original
-de Memory Card ausente. Não há prova de menu principal ou gameplay.
-
-Próximo trabalho, se solicitado: continuar a partir desse diagnóstico até
-menu e gameplay, exercitando entrada real do controle e investigando os
-próximos bloqueios. Não substituir a tela do jogo por interface host nem
-fabricar sucesso de Memory Card/RPC. Preservar os saves reais do usuário.
-
-Último estado: EE `0x81FDC` / 1.300.000.000 instruções; IOP `0xAE94` /
-166.552.087 ativo, sem recusa. O harness parou voluntariamente após três
-capturas, não por bloqueio desse PC. 326 pacotes GIF novos; RAM SHA-256
-`0390138ea61f0f91fd5bb337f5ee2da6b432dbd894217d4a9da02ede736ca032`.
-
-Harness local: `out/game-first/gs-iop-experiment-probe.cpp`; build isolado
-`out/gs-iop-build`; log `out/game-first/gs-iop-experiment-101.log`.
-Capturas `out/game-first/superbust-vblank-{1,2,3}.bmp` e `.png`.
-O limite atual é recusa, 4 bilhões de instruções, 20 minutos ou três
-scanouts consecutivamente distintos não pretos. Para continuar além da
-tela já capturada, ajustar apenas esse critério de parada do diagnóstico.
-
-Execução experimental por injeção de ELF, com hipóteses explícitas de
-encoder/SYNCV/FIELD, fase GS, SCANMSK=0, F510/SBUS, IRQ/DMACINTEN,
-timing/cache/SPU2/SIO2/CAV. Pads digitais 0/1 com botões soltos; slots
-de Memory Card 2/3 explicitamente vazios, timeout 8192. Nenhum save
-montado. ROM1 vinculada aos hashes/perfil; ROM2/EROM não fornecidas.
-Não transformar hipóteses em defaults nem misturar firmware.
-
-O modo original preserva ROM0 `0x80007D20` / 17.690.079, ELF injetado
-`0x80005F00` / 4.486.087 e IOP `0x40B0` / 2.210.789; RAM canônica
-`cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
-
-Consultar PS2Recomp antes de implementar subsistemas, sem copiar/derivar
-código GPL. Oito testes gráficos focados passaram; `d7588b0` e `767fc94`
-aprovados nos seis alvos de núcleo e launcher. Evidência e limites em
-[FIRST-GAME-STATUS](FIRST-GAME-STATUS.md#primeiras-capturas-reais--ensaio-101).

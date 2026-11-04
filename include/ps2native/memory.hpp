@@ -212,6 +212,7 @@ public:
         if(bytes!=1u && bytes!=2u && bytes!=4u && bytes!=8u)throw DeviceRefusal("VU snapshot width must be 1, 2, 4 or 8 bytes");
         return registers_.read_vu_memory(physical,bytes);
     }
+    [[nodiscard]] std::optional<FloatBounds> observe_vu_vector_bounds(unsigned index,unsigned lane) const {return registers_.observe_vu_vector_bounds(index,lane);}
     [[nodiscard]] ObservedQuadword observe_vu_vector(unsigned index) const {return registers_.observe_vu_vector(index);}
     void write_vu_vector(unsigned index,ObservedQuadword word) {registers_.write_vu_vector(index,word);}
     void vu_subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {

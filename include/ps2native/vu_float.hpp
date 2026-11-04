@@ -17,7 +17,7 @@ std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
 // callers retain a proven single exponent for their separate MAC flag model.
 std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,bool diagnostic_early_digit_carry=false,
     std::optional<FloatBounds> a_bounds={},std::optional<FloatBounds> b_bounds={},bool allow_exponent_bounds=false);
-// Enumerate at most eight uncertain fraction bits; larger/invalid domains
-// remain refused. Never assume monotonic rounding of the SRT circuit.
-std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a);
+// Enumerate at most eight opaque fraction bits, or at most 65536 encodings
+// in an independently certified numeric interval. Never assume SRT monotonicity.
+std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a,std::optional<FloatBounds> bounds={});
 }

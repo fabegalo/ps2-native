@@ -72,6 +72,20 @@ void ranges() {
         require(contains(roots->word,*ee_fpu_sqrt(0x3F800000|value)),"root enumeration contains every represented input");
     require(!vu_float_sqrt({0x3F800000,0x1FF}) && !vu_float_sqrt({0x3F800000,0x80000000}),
             "wide or sign-unknown root domains remain refused with bounded work");
+    const ObservedWord coarse{0x3AE00000u,0xFFFFFu};
+    const FloatBounds tight{0x3AE7FFF0u,0x3AE80010u};
+    const auto bounded_roots=vu_float_sqrt(coarse,tight);
+    require(bounded_roots && bounded_roots->bounded,"a certified narrow interval avoids enumeration of its coarse twenty-bit hull");
+    for(auto raw=tight[0];raw<=tight[1];++raw) {
+        const auto exact=ee_fpu_sqrt(raw);
+        require(exact && contains(bounded_roots->word,*exact) && *exact>=bounded_roots->bounds[0] &&
+            *exact<=bounded_roots->bounds[1],"every SRT output belongs to both certified result domains");
+    }
+    require(!vu_float_sqrt(coarse) && !vu_float_sqrt(coarse,FloatBounds{0x3AF00000u,0x3AF00001u}) &&
+            !vu_float_sqrt(coarse,FloatBounds{0x3AE80010u,0x3AE7FFF0u}) &&
+            !vu_float_sqrt(coarse,FloatBounds{0x3AE00000u,0x3AE10000u}),
+            "opaque, incompatible, reversed and excessive domains remain refused");
+
 }
 void pipeline() {
     VuControl vu;
@@ -85,6 +99,15 @@ void pipeline() {
             "unknown later lane cannot commit earlier uncertain results or flags");
     vu.product(3,1,2,8,4,false,false);
     const auto uncertain=vu.observe_vector(3);
+    const auto certificate=vu.observe_vector_bounds(3,0);
+    require(certificate.has_value(),"uncertain arithmetic retains its certified interval");
+    vu.rotate(3,3,1);
+    require(vu.observe_vector_bounds(3,3)==certificate,"alias-safe rotation carries the certificate with its lane");
+    vu.write_vector(8,uncertain);
+    require(!vu.observe_vector_bounds(8,0),"raw replacement cannot inherit an unrelated certificate with the same bit hull");
+    vu.write_vector(3,uncertain);
+    require(!vu.observe_vector_bounds(3,0),"raw overwrite invalidates even an identical old hull");
+    vu.product(3,1,2,8,4,false,false);
     require(uncertain.low.unknown && (uncertain.low.value>>32u)==0x12345678 &&
             !vu.read(16) && !vu.read(17),
             "masked VMUL preserves unknown fraction, normal flags and untouched lanes");
@@ -113,6 +136,22 @@ void pipeline() {
             "MADD can prove uncertain ACC insignificant without overwriting ACC");
     vu.product(7,0,6,8,4,true,false);
     require(vu.observe_vector(7).low.unknown,"zero product exposes the still-uncertain persistent ACC");
+    require(vu.observe_vector_bounds(7,0).has_value(),"the ACC certificate survives an independent destination write");
+    vu.reset();
+    require(!vu.observe_vector_bounds(3,0),"hardware reset discards all certificates");
+    vu.write_vector(1,{{0x3F800001u,0},{0,0}});
+    vu.write_vector(2,{{0x3F800003u,0},{0,0}});
+    vu.product(3,1,2,8,4,false,false);
+    require(vu.observe_vector_bounds(3,0).has_value(),"macro result begins with a live certificate");
+    constexpr auto lower_nop=0x8000033Cu,upper_nop=0x2FFu;
+    const auto micro_product=(8u<<21u)|(2u<<16u)|(1u<<11u)|(3u<<6u)|0x2Au;
+    vu.write_memory(0x11000000u,8,{lower_nop|(std::uint64_t{micro_product}<<32u),0});
+    vu.write_memory(0x11000008u,8,{lower_nop|(std::uint64_t{upper_nop|0x40000000u}<<32u),0});
+    vu.write_memory(0x11000010u,8,{lower_nop|(std::uint64_t{upper_nop}<<32u),0});
+    vu.start_micro(0,0,0);vu.advance_micro(20);
+    require(!vu.micro_running(0) && !vu.observe_vector_bounds(3,0),
+        "retired micro writes discard a macro certificate even for the same arithmetic bit hull");
+
 }
 }
 int main()try {ranges();pipeline();std::puts("VU floating uncertainty remains explicit and sound");return 0;}

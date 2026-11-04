@@ -18,20 +18,20 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
-- **108 em execução com fonte fixa:** 107 confirmou nova VMADDA
-  `0x1CD1DC` / 7.176.168.943, IOP ativo. Replay matricial passou sem
-  inventar Z/W incertos. Núcleo/cabeçalhos/AOT compilados da revisão
-  `6524aa8`, evitando ABI divergente por edições paralelas; 14 testes e
-  BIOS original passaram. CI `2eb9955` aprovada nos seis alvos de núcleo
-  e launcher. Ainda sem menu ou navegação comprovados; processo 108
-  supervisionado. [Evidência](docs/FIRST-GAME-STATUS.md#nova-fronteira-matricial-e-build-fixo--ensaios-107-e-108).
+- **108 confirmou SQRT `0x1CD558` / 7.181.062.182**, IOP ativo
+  `0xB464`. VF07.w tinha vinte bits de fração incertos. Limites numéricos
+  agora são preservados por VF/ACC/Q; replay da mesma entrada passa e
+  retorna VF04.x/y conhecidos. A revisão anterior reproduz a recusa.
+  Corrigida a validação antiga de VF05, que verificava um temporário
+  zerado. Só aviso, copyright e Acclaim observados, sem menu/controle.
+  Preparar 109 com fonte fixa e continuar a execução real.
+  [Evidência](docs/FIRST-GAME-STATUS.md#limites-numéricos-certificados-na-vu--ensaio-108-e-preparação-do-109).
 - **VU preserva incertezas de fração:** intervalos conservadores de MUL,
   ADD e SQRT limitada propagam máscaras conhecidas/desconhecidas por VF,
   ACC e Q; só eliminam incerteza quando provam irrelevância. Sem escolher
   bits arbitrários. Oito testes focados, seis regressões VU/VIF/PATH1 e BIOS
-  original passaram. Replay isolado retorna nas 158 entradas sintéticas,
-  VF05.x conhecido; isso não comprova menu. Ensaio 107 em Acclaim, ainda
-  supervisionado; 108 preparado com a nova cobertura. Evidências no
+  original passaram. Replay de 158 entradas retornou; a checagem de VF05.x era de um
+  temporário, corrigida acima. Não comprova saída trigonométrica ou menu. Evidências no
   [relatório](docs/FIRST-GAME-STATUS.md#aritmética-vu-com-incerteza-preservada).
 - **Continuação do menu em execução:** limite conservador do multiplicador
   refinado por conservação de peso das colunas baixas. Quatro milhões de

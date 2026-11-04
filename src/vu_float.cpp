@@ -87,8 +87,21 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,bool
     if(low.flags!=high.flags)return std::nullopt;
     return hull(low.word.value,high.word.value,low.flags,allow_exponent);
 }
-std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a) {
-    if(!fraction_only(a) || std::popcount(a.unknown)>8)return std::nullopt;
+std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a,std::optional<FloatBounds> bounds) {
+    if(!fraction_only(a))return std::nullopt;
+    if(bounds) {
+        const auto domain=input_bounds(a,bounds);
+        if(!domain || (*domain)[1]-(*domain)[0]>=65536u)return std::nullopt;
+        std::uint32_t low=~0u,high=0;
+        for(auto value=(*domain)[0];; ++value) {
+            const auto root=ee_fpu_sqrt(value);
+            if(!root)return std::nullopt;
+            low=std::min(low,*root);high=std::max(high,*root);
+            if(value==(*domain)[1])break;
+        }
+        return hull(low,high,0);
+    }
+    if(std::popcount(a.unknown)>8)return std::nullopt;
     std::uint32_t low=~0u,high=0;
     auto subset=a.unknown;
     for(;;) {

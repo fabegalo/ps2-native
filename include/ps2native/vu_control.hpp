@@ -24,6 +24,7 @@ public:
         pending_q1_.reset();
         registers_ = {};
         unknown_ = {};
+        vector_bounds_={};accumulator_bounds_={};q_bounds_.reset();
         registers_[0] = 0;
         for (unsigned index=1;index<16;++index) {registers_[index]=0;unknown_[index]=0xFFFFu;}
         for (const auto index : {16u,17u,18u,28u,29u}) registers_[index] = 0;
@@ -75,6 +76,7 @@ public:
             // CMSAR0 stores a 16-bit start address and does not start execution.
             const auto mask=index==20u ? 0x7FFFFFu : index==27u ? 0xFFFFu : ~0u;
             registers_[index]=value&mask;unknown_[index]=word.unknown&mask;
+            if(index==22u)q_bounds_.reset();
             return;
         }
         if (word.unknown) throw DeviceRefusal("VU control write consumes unknown bits");
@@ -157,9 +159,13 @@ public:
                 {std::uint64_t{v[2].value}|(std::uint64_t{v[3].value}<<32),
                  std::uint64_t{v[2].unknown}|(std::uint64_t{v[3].unknown}<<32)}};
     }
+    [[nodiscard]] std::optional<FloatBounds> observe_vector_bounds(unsigned index,unsigned lane) const {
+        return vector_bounds_.at(index).at(lane);
+    }
     void write_vector(unsigned index, ObservedQuadword word) {
         if(index==0) return; // VF00 = (0,0,0,1).
         auto& v=vectors_.at(index);
+        for(auto& bounds:vector_bounds_.at(index))bounds.reset();
         for(unsigned lane=0;lane<4;++lane) {
             const auto half=lane<2 ? word.low : word.high;
             const auto shift=(lane&1u)*32u;
@@ -170,7 +176,7 @@ public:
     [[nodiscard]] std::uint64_t q_ready_cycle() const noexcept { return pending_q_ ? pending_q_->ready : 0; }
     void advance_q(std::uint64_t cycle) {
         if(!pending_q_ || cycle<pending_q_->ready)return;
-        registers_[22]=pending_q_->value;unknown_[22]=pending_q_->unknown;
+        registers_[22]=pending_q_->value;unknown_[22]=pending_q_->unknown;q_bounds_=pending_q_->bounds;
         const auto flags=pending_q_->flags;
         registers_[16]=(*registers_[16]&~0x30u)|flags|(flags<<6u);
         unknown_[16]&=~(0x30u|(flags<<6u));
@@ -181,11 +187,13 @@ public:
         const auto a=vectors_.at(left)[left_lane],b=vectors_.at(right)[right_lane];
         if(!square_root && (b.unknown || a.unknown))throw DeviceRefusal("VU Q consumes unknown operands");
         std::uint32_t value,flags=0,unknown=0;
+        std::optional<FloatBounds> bounds;
         if(square_root) {
             if(b.unknown) {
-                const auto root=vu_float_sqrt(b);
+                const auto root=vu_float_sqrt(b,vector_bounds_.at(right)[right_lane]);
                 if(!root)throw DeviceRefusal("VU Q consumes unknown operands with unproven SQRT fraction/flags");
                 value=root->word.value;unknown=root->word.unknown;
+                if(root->bounded)bounds=root->bounds;
             } else {
                 const auto root=ee_fpu_sqrt(b.value);
                 if(!root)throw DeviceRefusal("VU SQRT negative input flags are not modeled");
@@ -195,10 +203,11 @@ public:
             value=ee_fpu_divide(a.value,b.value,flags);
             flags=((flags>>13u)&0x10u)|((flags>>11u)&0x20u);
         }
-        pending_q_=PendingQ{cycle+7u,value,flags,unknown};
+        pending_q_=PendingQ{cycle+7u,value,flags,unknown,bounds};
     }
     void add(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast=4,bool subtract=false) {
         auto result=vectors_.at(destination);
+        std::array<std::optional<FloatBounds>,4> bounds{};
         std::uint32_t mac=0,status=0;
         for(unsigned lane=0;lane<4;++lane) {
             const auto bit=8u>>lane;
@@ -208,9 +217,12 @@ public:
             std::uint32_t flags=0;
             ObservedWord value;
             if(a.unknown || b.unknown) {
-                const auto sum=vu_float_add(a,{b.value^(subtract ? 0x80000000u : 0u),b.unknown});
+                const auto sum=vu_float_add(a,{b.value^(subtract ? 0x80000000u : 0u),b.unknown},
+                    vector_bounds_.at(left)[lane],signed_bounds(broadcast==5u ? q_bounds_ :
+                        vector_bounds_.at(right)[broadcast<4 ? broadcast : lane],subtract));
                 if(!sum)throw DeviceRefusal("VU ADD consumes unknown operands with unproven fraction/flags");
                 value=sum->word;flags=sum->flags;
+                if(sum->bounded)bounds[lane]=sum->bounds;
             } else value={ee_fpu_add(a.value,b.value^(subtract ? 0x80000000u : 0u),flags),0};
             result[lane]=value;
             if(!(value.value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
@@ -219,7 +231,10 @@ public:
             if(flags&0x8000u){mac|=bit<<12u;status|=8u;}
         }
         // Commit only after all selected operands have been validated.
-        if(destination)vectors_.at(destination)=result;
+        if(destination){
+            vectors_.at(destination)=result;
+            for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane))vector_bounds_.at(destination)[lane]=bounds[lane];
+        }
         registers_[17]=mac;unknown_[17]=0;
         registers_[16]=(*registers_[16]&~0xFu)|status|(status<<6u);
         unknown_[16]&=~(0xFu|(status<<6u));
@@ -227,6 +242,7 @@ public:
     void product(unsigned destination,unsigned left,unsigned right,unsigned mask,
                  unsigned broadcast,bool accumulate,bool to_accumulator,bool outer=false) {
         auto result=to_accumulator ? accumulator_ : vectors_.at(destination);
+        std::array<std::optional<FloatBounds>,4> bounds{};
         std::uint32_t mac=0,status=0;
         for(unsigned lane=0;lane<4;++lane) {
             const auto bit=8u>>lane;
@@ -239,9 +255,12 @@ public:
             ObservedWord value;
             if(multiplied)value={*multiplied,0};
             else {
-                const auto range=vu_float_product(a,b,diagnostic_power_two_carry_);
+                const auto range=vu_float_product(a,b,diagnostic_power_two_carry_,
+                    vector_bounds_.at(left)[outer ? (lane+1u)%3u : lane],
+                    broadcast==5u ? q_bounds_ : vector_bounds_.at(right)[outer ? (lane+2u)%3u : broadcast<4 ? broadcast : lane]);
                 if(!range)throw DeviceRefusal("VU multiply consumes unknown operands or ambiguous fraction/flags");
                 value=range->word;flags=range->flags;
+                if(range->bounded)bounds[lane]=range->bounds;
             }
             // ACC has extra exception state on real VU hardware. Until that
             // state is modeled, refuse any exceptional product/sum atomically.
@@ -249,26 +268,37 @@ public:
             if(accumulate) {
                 const auto acc=accumulator_[lane];
                 if(acc.unknown || value.unknown) {
-                    const auto sum=vu_float_add(acc,{value.value^(outer ? 0x80000000u : 0u),value.unknown});
+                    const auto sum=vu_float_add(acc,{value.value^(outer ? 0x80000000u : 0u),value.unknown},
+                        accumulator_bounds_[lane],signed_bounds(bounds[lane],outer));
                     if(!sum)throw DeviceRefusal("VU multiply-add consumes unknown ACC or unproven fraction/flags");
                     value=sum->word;flags=sum->flags;
-                } else value={ee_fpu_add(acc.value,value.value^(outer ? 0x80000000u : 0u),flags),0};
+                    bounds[lane]=sum->bounded ? std::optional<FloatBounds>{sum->bounds} : std::nullopt;
+                } else {value={ee_fpu_add(acc.value,value.value^(outer ? 0x80000000u : 0u),flags),0};bounds[lane].reset();}
                 if(flags&0xC000u)throw DeviceRefusal("VU accumulation exception/ACC state is not modeled");
             }
             result[lane]=value;
             if(!(value.value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
             if(value.value&0x80000000u){mac|=bit<<4u;status|=2u;}
         }
-        if(to_accumulator)accumulator_=result;
-        else if(destination)vectors_.at(destination)=result;
+        if(to_accumulator){
+            accumulator_=result;
+            for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane))accumulator_bounds_[lane]=bounds[lane];
+        } else if(destination){
+            vectors_.at(destination)=result;
+            for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane))vector_bounds_.at(destination)[lane]=bounds[lane];
+        }
         registers_[17]=mac;unknown_[17]=0;
         registers_[16]=(*registers_[16]&~0xFu)|status|(status<<6u);
         unknown_[16]&=~(0xFu|(status<<6u));
     }
     void rotate(unsigned destination,unsigned source,unsigned mask) {
         const auto input=vectors_.at(source); // alias-safe, including unknown bits
+        const auto bounds=vector_bounds_.at(source);
         if(destination)for(unsigned lane=0;lane<4;++lane)
-            if(mask&(8u>>lane))vectors_.at(destination)[lane]=input[(lane+1u)&3u];
+            if(mask&(8u>>lane)){
+                vectors_.at(destination)[lane]=input[(lane+1u)&3u];
+                vector_bounds_.at(destination)[lane]=bounds[(lane+1u)&3u];
+            }
     }
     void subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {
         add(destination,left,right,mask,4,true);
@@ -355,7 +385,7 @@ private:
     };
     std::optional<Path1> path1_;
     std::optional<Path1> queued_path1_;
-    struct PendingQ { std::uint64_t ready; std::uint32_t value,flags; std::uint32_t unknown{}; };
+    struct PendingQ { std::uint64_t ready; std::uint32_t value,flags; std::uint32_t unknown{}; std::optional<FloatBounds> bounds; };
     std::optional<PendingQ> pending_q_;
     std::optional<PendingQ> pending_q1_;
     ObservedWord& memory_word(std::uint32_t address) {
@@ -397,6 +427,14 @@ private:
     std::array<ObservedWord,16> vu1_controls_{};
     std::vector<ObservedWord> data_;
     std::array<std::array<ObservedWord,4>,32> vectors_{};
+    // Certificates belong to the current value, never to a matching bit hull.
+    static std::optional<FloatBounds> signed_bounds(std::optional<FloatBounds> bounds,bool negate) {
+        if(bounds && negate)for(auto& endpoint:*bounds)endpoint^=0x80000000u;
+        return bounds;
+    }
+    std::array<std::array<std::optional<FloatBounds>,4>,32> vector_bounds_{};
+    std::array<std::optional<FloatBounds>,4> accumulator_bounds_{};
+    std::optional<FloatBounds> q_bounds_;
     std::array<ObservedWord,4> accumulator_{};
     std::array<ObservedWord,4> accumulator1_{};
     std::array<std::array<ObservedWord,4>,32> vu1_vectors_{};

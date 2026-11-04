@@ -462,8 +462,10 @@ somas aceitas, zero divergências de contenção/flags. Amostras não são prova
 exhaustiva dos conjuntos; os limites têm fundamento algébrico descrito acima.
 Oito testes focados e seis regressões VU/VIF/PATH1/frame passaram. BIOS
 original preservou PCs, contagens e RAM canônicos. Replay da rotina com
-158 entradas sintéticas agora retorna em todas, com VF05.x conhecido em
-todas; isso não comprova execução completa, pixels ou controle do jogo.
+158 entradas sintéticas retornaram em todas. Correção da evidência: o
+auxiliar verificava VF05.x, um registrador temporário zerado; a saída
+relevante é VF04.x/y. A checagem de VF05 não certificava o resultado
+trigonométrico. Não comprova execução completa, pixels ou controle.
 
 Microbenchmark de VMUL de quatro lanes já conhecido, mesmas 100 mil
 entradas/10 repetições/cinco amostras, incluiu gravação das fontes e leitura
@@ -510,6 +512,49 @@ cadência econômica. Isso altera apenas a captura host. Dumps finais também
 registram máscaras de RAM e FPR, sem alegar save-state restaurável.
 Processo acompanhado; continuar até menu e resposta visível aos controles.
 CI `2eb9955`: núcleo e launcher aprovados nos seis alvos.
+
+### Limites numéricos certificados na VU — ensaio 108 e preparação do 109
+
+108 terminou em **7.181.062.182** instruções: VSQRT `0x4B8703BD`,
+**`0x1CD558`**, estado já em `0x1CD55C`. IOP `0xB464` /
+901.684.861 ativo, sem recusa. 8.177 pacotes novos e 379.723.760 escritas
+GS; 3.360,07 s com carga host concorrente. Backing RAM
+`01920ee46f83175ddf0b4d9fb8ace361bc7922a3b8c5df6819be8e9bcd06871a`.
+VF07.w tinha máscara de vinte bits (`3AE00000/000FFFFF`), excedendo o
+limite opaco da SQRT. Só aviso, copyright e Acclaim foram observados.
+As duas variantes entrelaçadas do Acclaim não são telas distintas do menu.
+
+A VU agora conserva os intervalos numéricos produzidos pelos helpers
+aritméticos, além da máscara de bits. VMUL/VADD/VSUB/ACC e broadcasts Q
+consomem esses limites certificados; rotação mantém a associação à lane.
+Commit continua atômico. QMTC2/LQC2/escritas brutas e resultados micro sem
+certificado invalidam a prova anterior, mesmo com valor/máscara idênticos.
+O intervalo de Q só aparece na conclusão real dos sete ciclos. Nenhum
+bit desconhecido é escolhido. SQRT pode enumerar até 65.536 encodings de
+um intervalo certificado; entradas opacas mantêm o teto de oito bits.
+Não se presume monotonicidade do circuito SRT. Trabalho excessivo e
+sinais/expoentes/flags sem prova continuam recusados.
+
+Replay isolado desde `0x1CD508`, reconstruindo QMTC2 a partir do FPR12
+capturado `3FC3B35F` e executando os coeficientes/instruções originais:
+a revisão fixa do 108 reproduz a recusa em `0x1CD558`; com limites
+preservados a rotina retorna em `0x1CD5C4`, 27 instruções. Saída real
+**VF04.x/y `BD2B82CC/3F7FC686`, máscaras zero**. O resultado da raiz
+já é conhecido antes de precisar do novo teto de enumeração, pois os
+limites impedem a inflação anterior. Isso é prova local da rotina,
+sem periféricos/IRQ, e ainda não comprova menu ou resposta aos controles.
+PS2Recomp FPU/macros consultado como referência comportamental; nenhum
+código GPL copiado, derivado ou vinculado.
+
+Microbenchmark do caminho conhecido, 100 mil pares, dez repetições e cinco
+amostras: mediana 154,056 ns anterior e 167,321 ns com certificados,
+checksums iguais; custo observado de 8,6%, sem ganho de desempenho.
+A versão inicial custava cerca de 17%; evitar cópias de lanes não escritas
+reduziu esse custo. Máquina compartilhada, sem isolamento da carga host.
+Testes focados cobrem contenção de SQRT, domínios incompatíveis/excessivos,
+invalidação de prova em substituição bruta/micro, rotação, ACC e Q.
+Rodada 109 ainda em preparação; conservar BIOS original e hipóteses
+experimentais explícitas. Continuar até observar menu e navegação reais.
 
 BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;
 ELF `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`.
