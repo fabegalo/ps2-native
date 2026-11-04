@@ -28,6 +28,7 @@ public:
     [[nodiscard]] std::uint32_t read_stat() const;
     void write_ctrl(std::uint32_t value);
     void write_mode(std::uint32_t value);
+    void set_vif_path3_mask(bool masked) noexcept { vif_path3_mask_ = masked; }
     // One quadword written to the GIF FIFO (PATH3).
     void write_fifo(std::uint64_t low, std::uint64_t high, GsRegisters& gs);
     void write_path2(std::uint64_t low, std::uint64_t high, GsRegisters& gs);
@@ -40,6 +41,7 @@ private:
     void consume();
     void packed(unsigned descriptor, std::uint64_t low, std::uint64_t high, GsRegisters& gs);
     std::uint32_t ctrl_{}, mode_{};
+    bool vif_path3_mask_{};
     // Current PATH3 packet: a GIFtag was taken and loops remain.
     bool in_packet_{};
     bool end_of_packet_{};

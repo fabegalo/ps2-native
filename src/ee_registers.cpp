@@ -243,6 +243,10 @@ std::uint32_t EeRegisters::read_timer(unsigned index, unsigned reg) {
 }
 
 std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
+    if(physical>=0x10003C00u && physical<0x10003E00u) {
+        if(bytes!=4u || (physical&15u)) throw DeviceRefusal("VIF1 registers require aligned 32-bit accesses");
+        return vif1_.read_register(physical-0x10003C00u);
+    }
     if (Iop::ee_dma_address(physical)) {
         if (bytes != 4u) throw DeviceRefusal("SIF1/DMAC requires 32-bit accesses");
         sync_iop();
@@ -343,6 +347,10 @@ void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint6
 }
 
 void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value) {
+    if(physical>=0x10003C00u && physical<0x10003E00u) {
+        if(bytes!=4u || (physical&15u)) throw DeviceRefusal("VIF1 registers require aligned 32-bit accesses");
+        vif1_.write_register(physical-0x10003C00u,static_cast<std::uint32_t>(value),gif_);return;
+    }
     if (Iop::ee_dma_address(physical)) {
         if (bytes != 4u) throw DeviceRefusal("SIF1/DMAC requires 32-bit accesses");
         sync_iop();

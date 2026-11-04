@@ -24,6 +24,7 @@ constexpr unsigned kStatApathShift = 10u;
 void Gif::reset() {
     ctrl_ = 0u;
     mode_ = 0u;
+    vif_path3_mask_ = false;
     in_packet_ = false;
     end_of_packet_ = false;
     loops_left_ = 0u;
@@ -34,6 +35,7 @@ void Gif::reset() {
 std::uint32_t Gif::read_stat() const {
     std::uint32_t stat = 0u;
     if ((mode_ & kModeMaskPath3) != 0u) stat |= kStatM3r;
+    if (vif_path3_mask_) stat |= 2u; // M3P, independent of GIF_MODE.M3R.
     if ((mode_ & kModeIntermittent) != 0u) stat |= kStatImt;
     if ((ctrl_ & kCtrlStop) != 0u) stat |= kStatPse;
     // Hypothesis: while a PATH3 packet still expects quadwords, PATH3 is the
@@ -71,7 +73,8 @@ void Gif::write_path2(std::uint64_t low, std::uint64_t high, GsRegisters& gs) {
 void Gif::write_path(std::uint64_t low, std::uint64_t high, GsRegisters& gs, unsigned path) {
     const auto shown = [&] { return "GIF FIFO quadword " + hex(high, 16) + "_" + hex(low, 16); };
     if ((ctrl_ & kCtrlStop) != 0u) throw DeviceRefusal(shown() + " while GIF_CTRL.PSE stops the GIF: not modeled");
-    if (path == 3u && (mode_ & kModeMaskPath3) != 0u) throw DeviceRefusal(shown() + " with PATH3 masked (GIF_MODE.M3R): not modeled");
+    if (path == 3u && ((mode_ & kModeMaskPath3) != 0u || vif_path3_mask_) && !(in_packet_ && path_==3u))
+        throw DeviceRefusal(shown() + " with PATH3 masked (GIF_MODE.M3R or VIF.MSKPATH3): FIFO backpressure not modeled");
     if (in_packet_ && path_ != path) throw DeviceRefusal("GIF concurrent paths: arbitration not modeled");
     path_ = path;
     if (!in_packet_ || loops_left_ == 0u) {

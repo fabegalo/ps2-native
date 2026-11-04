@@ -43,6 +43,12 @@ inline Program program() {
     put64(0x3000u, (1ull << 60) | (1ull << 15) | 2u); put64(0x3008u, 0xEu);
     put64(0x3010u, 0xFFFFFFFF12345678ull); put64(0x3018u, 0x60u);
     put64(0x3020u, 0u); put64(0x3028u, 0x61u);
+    put64(0x3040u,0x2000000001000101ull); put64(0x3048u,0x30000000FFFFFFFFull);
+    put64(0x3050u,0x5566778811223344ull); put64(0x3058u,0xDDEEFF0099AABBCCull);
+    a.la(t0,0xB0003C10u); a.ori(t1,zero,1); a.sw(t1,0,t0);
+    a.la(t0,kResetVector+0x3040u); a.la(t1,0xB0005000u);
+    for(int offset : {0,16}) {a.lq(t2,offset,t0);a.sq(t2,0,t1);}
+    a.la(t0,0xB0003D30u);a.lw(t1,0,t0);a.la(t0,0x80001010u);a.sw(t1,0,t0);
     a.la(t0, kResetVector + 0x3000u); a.la(t1, 0xB0006000u);
     for (int offset : {0, 16, 32}) { a.lq(t2, offset, t0); a.sq(t2, 0, t1); }
     a.la(t0, 0xB2001010u); a.ori(t1, zero, 0x7C00u); a.sd(t1, 0, t0); // unmask both

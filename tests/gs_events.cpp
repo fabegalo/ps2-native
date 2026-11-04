@@ -370,6 +370,68 @@ void vu_control() {
     device_refused([&] {memory.write32(0x11001000u,0);},"unimplemented VU memory aperture");
 }
 
+void vif_control() {
+    const auto fixture=gs_events_test::program();
+    EEState state; Memory memory;
+    prepare_ee_boot(load_bios_rom0(fixture.rom),nullptr,state,memory);
+    memory.write128(0xB0005000u,0x50000003u,0);
+    require(memory.read32(0xB0003C00u)==1 && memory.read32(0xB0003C80u)==0x50000003u &&
+            memory.read32(0xB0003C60u)==3,
+            "VIF DIRECT waits for actual payload and records its command");
+    device_refused([&] {memory.write32(0xB0003C10u,2);},"FIFO stall/backpressure");
+    require(memory.read32(0xB0003C00u)==1,"refused force break leaves pending DIRECT intact");
+    memory.write32(0xB0003C10u,1);
+    require(memory.read32(0xB0003C00u)==0,"VIF reset discards pending DIRECT payload");
+    memory.write128(0xB0005000u,0,0);
+    require(memory.read32(0xB0003C00u)==0,"post-reset NOP is parsed as VIFcode rather than GIF payload");
+    device_refused([&] {(void)memory.read32(0xB0003C10u);},"write-only");
+    device_refused([&] {memory.write16(0xB0003C10u,1);},"32-bit");
+    memory.write32(0xB0003C20u,5);
+    require(memory.read32(0xB0003C20u)==5,"VIF error mask retains explicit settings");
+    memory.write32(0xB0003C30u,0x12345678u);
+    require(memory.read32(0xB0003C30u)==0x5678u,"VIF MARK CPU write retains low16 bits");
+    memory.write128(0xB0006000u,(1ull<<60)|(1ull<<15)|1u,0xEu);
+    memory.write128(0xB0006000u,0xFFFFFFFF12345678ull,0x60u);
+    memory.write32(0xB0003C10u,1);
+    require(memory.gs().read(kGsSiglblid,4)==0x12345678u,"VIF reset preserves independently received GS SIGNAL");
+    const auto words=[&](std::uint32_t a,std::uint32_t b,std::uint32_t c,std::uint32_t d) {
+        memory.write128(0xB0005000u,std::uint64_t{a}|(std::uint64_t{b}<<32),std::uint64_t{c}|(std::uint64_t{d}<<32));
+    };
+    words(0x01000304u,0x030003FFu,0x02000155u,0x0400FFFFu);
+    require(memory.read32(0xB0003C40u)==0x304u && memory.read32(0xB0003CA0u)==0x3FFu &&
+            memory.read32(0xB0003CB0u)==0x155u && memory.read32(0xB0003CC0u)==0x3FFu &&
+            memory.read32(0xB0003C90u)==0x3FFu,"VIF configuration comes from actual command bytes with field widths");
+    device_refused([&] {(void)memory.read32(0xB0003CD0u);},"before write/command");
+    words(0x30000000u,0x01020304u,0xFFFFFFFFu,0x80000000u);
+    require(memory.read32(0xB0003C00u)==1,"partial STROW waits across FIFO qwords");
+    words(0x12345678u,0x31000000u,0x11111111u,0x22222222u);
+    words(0x33333333u,0x44444444u,0x20000000u,0xFFFF0000u);
+    require(memory.read32(0xB0003D00u)==0x01020304u && memory.read32(0xB0003D10u)==0xFFFFFFFFu &&
+            memory.read32(0xB0003D20u)==0x80000000u && memory.read32(0xB0003D30u)==0x12345678u &&
+            memory.read32(0xB0003D40u)==0x11111111u && memory.read32(0xB0003D70u)==0x44444444u &&
+            memory.read32(0xB0003C70u)==0xFFFF0000u && memory.read32(0xB0003C00u)==0,
+            "row/column/mask payload crosses qwords without being decoded as commands");
+    words(0x0700ABCDu,0,0,0);
+    require(memory.read32(0xB0003C30u)==0xABCDu && memory.read32(0xB0003C00u)==0x40u &&
+            memory.read32(0xB0003C80u)==0,"MARK flag persists while CODE records subsequent real NOP");
+    memory.write32(0xB0003C30u,7);
+    require(memory.read32(0xB0003C00u)==0,"CPU MARK store acknowledges only MRK");
+    memory.write32(0xB0003010u,1);
+    words(0x06008000u,0,0,0);
+    require((memory.read32(0xB0003020u)&3u)==3u,"VIF and GIF own independent PATH3 masks");
+    words(0x06000000u,0,0,0);
+    require((memory.read32(0xB0003020u)&3u)==1u,"VIF unmask preserves GIF_MODE mask");
+    memory.write32(0xB0003010u,0);
+    memory.write128(0xB0006000u,(1ull<<60)|(1ull<<15)|1u,0xEu);
+    words(0x06008000u,0,0,0);
+    memory.write128(0xB0006000u,0xFFFFFFFF11223344ull,0x62u);
+    require(memory.gs().read(kGsSiglblid+4,4)==0x11223344u,"new mask lets the already active PATH3 block finish");
+    device_refused([&] {memory.write128(0xB0006000u,1ull<<15,0);},"PATH3 masked");
+    memory.write32(0xB0003C10u,1);
+    require((memory.read32(0xB0003020u)&2u)==0,"VIF reset cancels its PATH3 mask");
+    memory.write128(0xB0006000u,1ull<<15,0);
+}
+
 void guest(const std::filesystem::path& rom_path) {
     const auto fixture = gs_events_test::program();
     const auto bios = load_bios_rom0(read_file(rom_path));
@@ -390,6 +452,8 @@ void guest(const std::filesystem::path& rom_path) {
         require(state.unknown_gpr_bits[5]==~0ull && state.unknown_gpr_high_bits[5]==~0ull &&
                 !memory.observe_vu_data(0x4020u).unknown && memory.observe_vu_data(0x4020u).value==0 &&
                 memory.read_vu_control(17)==15,"guest vector spill, exact subtraction and VSQI agree in both engines");
+        require(memory.read32(0x80001010u)==0xDDEEFF00u && memory.read32(0xB0003C40u)==0x101u &&
+                memory.read32(0xB0003C70u)==0xFFFFFFFFu,"guest VIF configuration transfers actual payload in both engines");
         require(state.cp0(Cop0::Epc) != 0 && !(state.cp0(Cop0::Status) & kStatusEXL), "IRQ delivered and ERET restored state");
         if (run) require(report.aot_instructions > 0 && report.retired == retired, "AOT executed with identical instruction count");
         else retired = report.retired;
@@ -442,6 +506,7 @@ int main(int argc, char** argv) {
         else if (mode == "knowledge") knowledge();
         else if (mode == "ram-knowledge") ram_knowledge();
         else if (mode == "vu-control") vu_control();
+        else if (mode == "vif-control") vif_control();
         else if (mode == "held-counter") held_counter();
         else if (mode == "dma-setup") dma_setup();
         else if (mode == "guest") guest(argv[2]); else throw std::runtime_error("unknown GS events test");
