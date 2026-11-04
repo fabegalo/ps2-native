@@ -165,7 +165,6 @@ bool is_spu2_voice_start(std::uint32_t address) {
 bool is_spu2_boot_config(std::uint32_t address) {
     if(is_spu2_voice_parameter(address) || is_spu2_voice_start(address))return true;
     if(is_spu2_voice_routing(address) || is_spu2_effect_address(address))return true;
-    if(address==0x1F9001B0u || address==0x1F9005B0u)return true;
     if(address==0x1F9007C0u || address==0x1F9007C6u || address==0x1F9007C8u)return true;
     // PS2SDK spu2_mmio_hwport.h: two banks, 0x28 apart, containing
     // master, effect, external-input and sound-input L/R levels.
@@ -224,9 +223,11 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     diagnostic_spu2_quiescent_=diagnostic_spu2_quiescent;
     diagnostic_spu2_7ca_latch_=false;
     diagnostic_spu2_reserved_latches_=false;
-    spu2_control_={};spu2_symbolic_voices_={};spu2_keys_={};
+    spu2_control_={};
     spu2_next_sample_={};spu2_last_sample_={};spu2_sample_count_={};spu2_clock_active_=false;
     spu2_transfer_={};spu2_ram_.clear();spu2_ram_written_.clear();diagnostic_spu2_pio_cycles_=0;
+    spu2_adma_={};diagnostic_spu2_adma_cycles_=0;
+    spu2_adma_bus_available_=0;spu2_adma_last_grant_=1u;
     gif_dma_cycle_=0;
     gif_dma_stop_.reset();
     dma_irq_output_=false;
@@ -1086,19 +1087,12 @@ void Iop::diagnostic_spu2_pio_word_cycles(std::uint32_t cycles) {
 }
 std::optional<std::uint16_t> Iop::spu2_ram_halfword(std::uint32_t word_address) const {
     if(word_address>=0x100000u)throw DeviceRefusal("SPU2 RAM word address outside 2 MiB");
-    // Voices 1 and 3 capture their pre-volume output into 512-word rings.
-    // Zero mixer gain does not prove these samples. Conservatively keep
-    // each whole ring unknown while the decoder/envelope is symbolic.
-    for(unsigned core=0;core<2u;++core)for(const unsigned voice:{1u,3u}) {
-        const auto base=0x400u+core*0x800u+(voice==3u ? 0x200u : 0u);
-        if((spu2_symbolic_voices_[core]&(1u<<voice)) && word_address>=base && word_address<base+0x200u)
-            return std::nullopt;
-    }
     if(spu2_ram_written_.empty() || !spu2_ram_written_[word_address])return std::nullopt;
     return spu2_ram_[word_address];
 }
 void Iop::validate_spu2_pio(unsigned core,const ObservedWord& control) const {
     if(!diagnostic_spu2_pio_cycles_)throw IopStop{"SPU2 PIO transfer timing requires an explicit word-cycle experiment"};
+    if(spu2_adma_[0].enabled || spu2_adma_[1].enabled)throw IopStop{"SPU2 PIO and ADMA cannot share the sound RAM path"};
     if(!diagnostic_spu2_quiescent_ || (control.unknown&0x80F0u) || (control.value&0x80F0u)!=0x8010u)
         throw IopStop{"SPU2 PIO requires an enabled core with effects and IRQ disabled"};
     for(unsigned c=0;c<2;++c) {
@@ -1109,13 +1103,137 @@ void Iop::validate_spu2_pio(unsigned core,const ObservedWord& control) const {
     if(!spu2_transfer_[core].address)throw IopStop{"SPU2 PIO transfer address is incomplete"};
     if(spu2_transfer_[core^1u].next)throw IopStop{"SPU2 simultaneous PIO arbitration is not modeled"};
 }
+void Iop::diagnostic_spu2_adma_word_cycles(std::uint32_t cycles) {
+    if(!cycles || cycle_)throw DeviceRefusal("SPU2 ADMA experiment requires positive word cycles before guest execution");
+    diagnostic_spu2_adma_cycles_=cycles;
+}
+bool Iop::spu2_input_quiet(unsigned core,std::uint32_t mixer) const {
+    for(unsigned channel=0;channel<2;++channel)if(mixer&(0x80u>>channel)) {
+        const auto gain=latch(0x1F90076Cu+core*0x28u+channel*2u);
+        // A closed route or an explicitly zero constant gain proves a zero
+        // contribution at the next sample edge, without guessing a mute bit.
+        if(!gain || !*gain || **gain!=0u)return false;
+    }
+    return true;
+}
+void Iop::validate_spu2_adma(unsigned core) const {
+    if(!diagnostic_spu2_adma_cycles_ || !diagnostic_spu2_quiescent_)
+        throw IopStop{"SPU2 AutoDMA transfers require an explicit bus throughput and quiet reset experiment"};
+    for(unsigned c=0;c<2;++c) {
+        const auto word=spu2_control_[c];
+        if(!word || ((word->value|word->unknown)&0x40u))
+            throw IopStop{"SPU2 ADMA requires both shared-RAM IRQ comparators explicitly disabled"};
+    }
+    const auto control=spu2_control_[core];
+    if((control->unknown&0x80F0u) || (control->value&0x80F0u)!=0x8000u)
+        throw IopStop{"SPU2 ADMA requires an enabled core, stopped normal transfer and disabled effects/IRQ"};
+    const auto mix=latch(0x1F900198u+core*0x400u);
+    if(!mix || !*mix || !spu2_input_quiet(core,**mix))
+        throw IopStop{"SPU2 ADMA audible input mixing is not modeled (closed routes or known zero input gains required)"};
+    if(spu2_transfer_[0].next || spu2_transfer_[1].next || !spu2_transfer_[core].fifo.empty())
+        throw IopStop{"SPU2 normal transfer and ADMA cannot share the sound RAM path"};
+}
+std::uint32_t Iop::read_spu2_dma(unsigned core,std::uint32_t field,std::size_t bytes) const {
+    const auto& state=spu2_adma_[core];
+    if(bytes==2u && (field==4u || field==6u)) {
+        if(!(state.written&(field==4u ? 2u : 4u)))throw IopStop{"SPU2 DMA BCR halfword is unknown before write"};
+        return (state.dma[1]>>((field&2u)*8u))&0xFFFFu;
+    }
+    if(bytes!=4u || (field!=0u && field!=4u && field!=8u))throw IopStop{"SPU2 DMA requires words or BCR halfwords"};
+    const auto need=field==0u ? 1u : field==4u ? 6u : 8u;
+    if((state.written&need)!=need)throw IopStop{"SPU2 DMA register is unknown before write"};
+    return state.dma[field/4u];
+}
+void Iop::write_spu2_dma(unsigned core,std::uint32_t field,std::size_t bytes,std::uint32_t value) {
+    auto& state=spu2_adma_[core];
+    if(state.next)throw IopStop{"SPU2 DMA register change while real data is pending is not modeled"};
+    if(bytes==2u && (field==4u || field==6u)) {
+        const auto shift=(field&2u)*8u;
+        state.dma[1]=(state.dma[1]&~(0xFFFFu<<shift))|((value&0xFFFFu)<<shift);
+        state.written|=field==4u ? 2u : 4u;return;
+    }
+    if(bytes!=4u || (field!=0u && field!=4u && field!=8u))throw IopStop{"SPU2 DMA requires known words or BCR halfwords"};
+    if(field==8u && (value&kChcrStart)) {
+        if(value!=0x01000201u)throw IopStop{"SPU2 DMA supports incrementing RAM-to-device request mode only"};
+        if(!state.enabled)throw IopStop{"SPU2 normal DMA transfer is not modeled (ADMA must be configured)"};
+        validate_spu2_adma(core);
+        if((state.written&7u)!=7u)throw IopStop{"SPU2 DMA needs programmed address and both BCR halves"};
+        const auto blocks=state.dma[1]>>16u,block_words=state.dma[1]&0xFFFFu;
+        const auto words=std::uint64_t{blocks}*block_words;
+        if(!blocks || !block_words || words%256u || words>ram_.size()/4u || (state.dma[0]&3u) ||
+           state.dma[0]>ram_.size() || words*4u>ram_.size()-state.dma[0])
+            throw IopStop{"SPU2 ADMA needs whole 1024-byte stereo blocks in aligned IOP RAM"};
+        const auto enable=latch(0x1F801578u),priority=latch(core ? 0x1F801570u : 0x1F8010F0u);
+        if(!enable || !*enable || !priority || !*priority)throw IopStop{"SPU2 DMA global enable/priority is unknown"};
+        const auto irq=latch(core ? kDicr2 : kDicr);
+        if(!irq || !*irq)throw IopStop{"SPU2 DMA interrupt control is unknown"};
+        state.remaining=static_cast<std::uint32_t>(words);state.block_remaining=block_words;
+        state.next=cycle_+diagnostic_spu2_adma_cycles_;
+    }
+    state.dma[field/4u]=value;state.written|=field==0u ? 1u : field==4u ? 6u : 8u;
+}
+void Iop::consume_spu2_input(unsigned core,std::uint64_t sample_cycle) {
+    auto& state=spu2_adma_[core];
+    if(!state.enabled || !state.primed || !state.ready[state.read_bank])return;
+    const auto left=0x2000u+core*0x400u+state.read_bank*0x100u+state.read_position;
+    const auto right=left+0x200u;
+    if(spu2_ram_written_.empty() || !spu2_ram_written_[left] || !spu2_ram_written_[right])
+        throw IopStop{"SPU2 ADMA input consumes unknown sound RAM"};
+    const auto signed_sample=[](std::uint16_t raw)->std::int16_t {
+        return static_cast<std::int16_t>(raw<=0x7FFFu ? std::int32_t{raw} : std::int32_t{raw}-0x10000);
+    };
+    state.last_input=Spu2Sample{sample_cycle,signed_sample(spu2_ram_[left]),signed_sample(spu2_ram_[right])};
+    ++state.frames;
+    if(++state.read_position==256u) {
+        state.ready[state.read_bank]=false;state.read_bank^=1u;state.read_position=0;
+    }
+}
+bool Iop::tick_spu2_adma(unsigned core) {
+    auto& state=spu2_adma_[core];if(!state.next || cycle_<*state.next)return false;
+    const auto enabled=latch(0x1F801578u),priority=latch(core ? 0x1F801570u : 0x1F8010F0u);
+    const auto priority_bit=core ? 8u : 0x80000u;
+    if(!enabled || !*enabled || !priority || !*priority)throw IopStop{"SPU2 DMA enable became unknown during transfer"};
+    if(!(**enabled&1u) || !(**priority&priority_bit) || state.ready[state.fill_bank]) {
+        state.next=cycle_+diagnostic_spu2_adma_cycles_;return false; // true backpressure; no catch-up burst
+    }
+    const auto source=state.dma[0];
+    for(unsigned b=0;b<4;++b)if(!ram_written_[source+b])throw IopStop{"SPU2 DMA consumes unknown IOP RAM bytes"};
+    const auto target=0x2000u+core*0x400u+state.fill_bank*0x100u+
+        (state.fill_word>=128u ? 0x200u : 0u)+(state.fill_word%128u)*2u;
+    if(spu2_ram_.empty()){spu2_ram_.resize(0x100000u);spu2_ram_written_.resize(0x100000u);}
+    for(unsigned n=0;n<2;++n) {
+        spu2_ram_[target+n]=static_cast<std::uint16_t>(ram_[source+2u*n]|(std::uint16_t{ram_[source+2u*n+1u]}<<8u));
+        spu2_ram_written_[target+n]=1;
+    }
+    state.dma[0]+=4u;++state.words;
+    if(!(--state.block_remaining)) {
+        state.dma[1]-=0x10000u;state.block_remaining=state.dma[1]&0xFFFFu;
+    }
+    if(++state.fill_word==256u) {
+        state.ready[state.fill_bank]=true;
+        // Explicit timing experiment: input starts at the next 48 kHz edge
+        // after a full initial stereo bank, and waits if a bank is not ready.
+        if(!state.primed){state.primed=true;state.read_bank=state.fill_bank;state.read_position=0;}
+        state.fill_bank^=1u;state.fill_word=0;
+    }
+    if(--state.remaining)state.next=cycle_+diagnostic_spu2_adma_cycles_;
+    else {
+        state.next.reset();state.dma[2]&=~kChcrStart;
+        const auto reg=core ? kDicr2 : kDicr,mask=core ? 0x10000u : 0x100000u,flag=core ? 0x1000000u : 0x10000000u;
+        for(auto& [address,value]:latches_)if(address==reg && value && (*value&mask))*value|=flag;
+        update_dma_irq();events_.push_back({cycle_,"DIAGNOSTIC SPU2 core "+std::to_string(core)+" ADMA real payload complete"});
+    }
+    return true;
+}
 void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
     word.unknown&=0xFFFFu;word.value&=0xFFFFu&~word.unknown;
     if(word.unknown&0x8030u)throw IopStop{"SPU2 control write leaves core enable or transfer mode unknown"};
     const auto core=(physical-0x1F90019Au)/0x400u;
     const auto mode=word.value&0x30u;
-    if((spu2_symbolic_voices_[0] || spu2_symbolic_voices_[1]) && ((word.value|word.unknown)&0x40u))
-        throw IopStop{"SPU2 unknown voice RAM reads cannot enable either shared-RAM IRQ comparator"};
+    if(spu2_adma_[core].enabled && (mode || !(word.value&0x8000u) || ((word.value|word.unknown)&0xC0u)))
+        throw IopStop{"SPU2 active ADMA requires its core enabled and normal transfer/effects/IRQ disabled"};
+    if((spu2_adma_[0].enabled || spu2_adma_[1].enabled) && ((word.value|word.unknown)&0x40u))
+        throw IopStop{"SPU2 IRQ changes while ADMA uses shared RAM are not modeled"};
     if(mode==0x20u || mode==0x30u)throw IopStop{"SPU2 DMA processing/control configuration is not modeled"};
     auto& transfer=spu2_transfer_[core];
     if(transfer.next && (mode!=0x10u || !(word.value&0x8000u)))
@@ -1142,9 +1260,7 @@ void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
 void Iop::tick_spu2_quiet() {
     for(unsigned core=0;core<2;++core) {
         if(spu2_next_sample_[core] && cycle_>=*spu2_next_sample_[core]) {
-            // Pending key commands are consumed at a synthesis boundary.
-            // Their observable readback is not an active-voice bitmap.
-            for(auto& key:spu2_keys_[core])if(key)key=0;
+            consume_spu2_input(core,*spu2_next_sample_[core]);
             spu2_last_sample_[core]=Spu2Sample{*spu2_next_sample_[core],0,0};
             ++spu2_sample_count_[core];*spu2_next_sample_[core]+=768u;
         }
@@ -1161,6 +1277,15 @@ void Iop::tick_spu2_quiet() {
                 transfer.next.reset();
                 events_.push_back({cycle_,"DIAGNOSTIC SPU2 core "+std::to_string(core)+" real PIO FIFO drained"});
             } else *transfer.next+=diagnostic_spu2_pio_cycles_;
+        }
+    }
+    // One shared, bounded bus slot per configured word interval. Channel
+    // priority/DMACEN gates still apply. Cross-controller grant order is an
+    // explicit round-robin experiment, not a measured IOP arbitration rule.
+    if(cycle_>=spu2_adma_bus_available_)for(unsigned n=0;n<2;++n) {
+        const auto core=(spu2_adma_last_grant_+1u+n)&1u;
+        if(tick_spu2_adma(core)) {
+            spu2_adma_last_grant_=core;spu2_adma_bus_available_=cycle_+diagnostic_spu2_adma_cycles_;break;
         }
     }
 }
@@ -1209,12 +1334,6 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
         if(observed->unknown&mask)throw IopStop{"SPU2 voice start address consumes unknown address bits"};
         io_write(a.physical,bytes,observed->value&mask,what);return;
     }
-    if(a.physical>=0x1F900000u && a.physical<0x1F900800u &&
-       (a.physical&0x3FFu)>=0x1A0u && (a.physical&0x3FFu)<=0x1A6u && bytes==2u && observed) {
-        const auto mask=(a.physical&2u) ? 0xFFu : 0xFFFFu;
-        if(observed->unknown&mask)throw IopStop{"SPU2 key command consumes an unknown voice mask"};
-        io_write(a.physical,bytes,observed->value&mask,what);return;
-    }
     if(a.physical==0x1F808268u && bytes==4u && observed) {
         reset_sio2_observed(*observed,sio2_epoch);return;
     }
@@ -1222,17 +1341,11 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
 }
 
 std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char* what) {
-    if(physical>=0x1F900000u && physical<0x1F900800u &&
-       (physical&0x3FFu)>=0x1A0u && (physical&0x3FFu)<=0x1A6u) {
-        if(bytes!=2u || (physical&1u))throw IopStop{"SPU2 key command readback requires a halfword"};
-        const auto& key=spu2_keys_[(physical>>10u)&1u][((physical&0x3FFu)-0x1A0u)/2u];
-        if(!key)throw IopStop{"SPU2 key command readback before a known write"};
-        if(physical&2u) {
-            undefined_load_="SPU2 key command: reserved upper voice bits are unknown";
-            undefined_known_=0xFFu|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
-        }
-        return *key;
+    if((physical>=0x1F8010C0u && physical<0x1F8010CCu) || (physical>=0x1F801500u && physical<0x1F80150Cu)) {
+        const auto core=physical>=0x1F801500u ? 1u : 0u;
+        return read_spu2_dma(core,physical-(core ? 0x1F801500u : 0x1F8010C0u),bytes);
     }
+
     if (physical>=0x1F801520u && physical<0x1F801530u) {
         if(bytes==2u && (physical==0x1F801524u || physical==0x1F801526u)) {
             const auto upper=(physical&2u)!=0u;
@@ -1273,8 +1386,20 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         undefined_known_=known|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
         return spu2_transfer_[core].next ? 0x400u : 0u;
     }
-    if(physical==0x1F9001B0u || physical==0x1F9005B0u)
-        throw IopStop{"SPU2 AutoDMA readback/busy timing is not modeled"};
+    if(physical==0x1F9001B0u || physical==0x1F9005B0u) {
+        if(bytes!=2u)throw IopStop{"SPU2 AutoDMA status requires a halfword read"};
+        const auto core=(physical-0x1F9001B0u)/0x400u;
+        if(!diagnostic_spu2_adma_cycles_ || !spu2_adma_[core].next)
+            throw IopStop{"SPU2 AutoDMA inactive/readback flags are not verified"};
+        // ps2tek ADMA_CTRL: own bit 0/1 indicates an ongoing ADMA write.
+        // A real queued transfer proves busy, without inventing reset,
+        // completion or unrelated readback flags. Full unknown consumption
+        // still fails; BNE can prove nonzero from this one active bit.
+        const auto busy=1u<<core;
+        undefined_load_="SPU2 AutoDMA flags outside the ongoing transfer bit are unknown";
+        undefined_known_=busy|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
+        return busy;
+    }
     if(physical==0x1F90019Au || physical==0x1F90059Au) {
         if(bytes!=2u)throw IopStop{"SPU2 control requires halfword reads"};
         auto word=spu2_control_[(physical-0x1F90019Au)/0x400u];
@@ -1465,6 +1590,26 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
 }
 
 void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what) {
+    if((physical>=0x1F8010C0u && physical<0x1F8010CCu) || (physical>=0x1F801500u && physical<0x1F80150Cu)) {
+        if(!value)throw IopStop{"SPU2 DMA register write consumes unknown bits"};
+        const auto core=physical>=0x1F801500u ? 1u : 0u;
+        write_spu2_dma(core,physical-(core ? 0x1F801500u : 0x1F8010C0u),bytes,*value);return;
+    }
+    if(physical==0x1F9001B0u || physical==0x1F9005B0u) {
+        if(bytes!=2u || !value)throw IopStop{"SPU2 AutoDMA control requires a known halfword write"};
+        const auto core=(physical-0x1F9001B0u)/0x400u;auto& state=spu2_adma_[core];
+        if(*value) {
+            if(*value!=(1u<<core))throw IopStop{"SPU2 AutoDMA read mode and other control fields are not modeled"};
+            validate_spu2_adma(core);
+            if(!state.enabled){state.ready={};state.primed=false;state.fill_bank=state.fill_word=state.read_bank=state.read_position=0;}
+            state.enabled=true;
+        } else {
+            if(state.next)throw IopStop{"SPU2 AutoDMA disable with real DMA data pending is not modeled"};
+            state.enabled=false; // preserve the actual RAM bytes, never clear a buffer synthetically
+        }
+        return;
+    }
+
     if(physical==0x1F9001A8u || physical==0x1F9001AAu || physical==0x1F9005A8u || physical==0x1F9005AAu) {
         if(bytes!=2u || !value)throw IopStop{"SPU2 transfer address requires a known halfword write"};
         auto& transfer=spu2_transfer_[(physical-0x1F9001A8u)/0x400u];
@@ -1481,6 +1626,7 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         if(bytes!=2u || !value)throw IopStop{"SPU2 PIO FIFO requires a known halfword write"};
         const auto core=(physical-0x1F9001ACu)/0x400u;
         auto& transfer=spu2_transfer_[core];const auto control=spu2_control_[core];
+        if(spu2_adma_[core].enabled)throw IopStop{"SPU2 normal FIFO and ADMA cannot run together"};
         if(!diagnostic_spu2_pio_cycles_)throw IopStop{"SPU2 PIO FIFO timing requires an explicit word-cycle experiment"};
         if(!control || (control->unknown&0x30u) || (control->value&0x20u))
             throw IopStop{"SPU2 FIFO requires a known stopped or PIO transfer mode"};
@@ -1491,32 +1637,17 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         return;
     }
 
-    if(physical>=0x1F900000u && physical<0x1F900800u &&
-       (physical&0x3FFu)>=0x1A0u && (physical&0x3FFu)<=0x1A6u) {
+    if(physical==0x1F9001A4u || physical==0x1F9001A6u ||
+       physical==0x1F9005A4u || physical==0x1F9005A6u) {
+        // KOFF selects 24 envelopes per core (16 low + 8 high). In the
+        // explicit cold-state experiment all are already inactive, and no
+        // accepted operation can key one on. Releasing them cannot create
+        // sound, an ENDX event, RAM traffic or an interrupt. This does not
+        // implement release of an active envelope or KOFF readback.
+        // Upper-bank bits 8..15 do not select a voice. Homebrew libsd
+        // ResetAll writes 0xFFFF to both halves as well as the 24-bit masks.
         if(bytes!=2u || !value || !diagnostic_spu2_quiescent_)
-            throw IopStop{"SPU2 KON/KOFF requires established voice state and a known halfword mask"};
-        const auto core=(physical>>10u)&1u,index=((physical&0x3FFu)-0x1A0u)/2u;
-        const auto half=*value&((index&1u) ? 0xFFu : 0xFFFFu);
-        const auto mask=half<<((index&1u)*16u);
-        if(index<2u && mask) {
-            // Reads by an unknown decoder cannot raise IRQ when both
-            // comparators are explicitly disabled. Check the other core too.
-            for(const auto& control:spu2_control_)
-                if(!control || ((control->value|control->unknown)&0x40u))
-                    throw IopStop{"SPU2 KON requires both RAM IRQ comparators explicitly disabled"};
-            if(!spu2_next_sample_[core])throw IopStop{"SPU2 KON requires an enabled synthesis clock"};
-            for(unsigned voice=0;voice<24u;++voice)if(mask&(1u<<voice)) {
-                for(unsigned channel=0;channel<2u;++channel) {
-                    const auto gain=latch(0x1F900000u+core*0x400u+voice*16u+channel*2u);
-                    if(!gain || !*gain || **gain!=0u)
-                        throw IopStop{"SPU2 KON requires known constant zero left and right voice gain; audible synthesis is not modeled"};
-                }
-            }
-            // Do not fabricate ENVX, ENDX, NAX, LSAX or decoded samples.
-            // Even after KOFF the voice stays symbolic, and cannot unmute.
-            spu2_symbolic_voices_[core]|=mask;
-        }
-        spu2_keys_[core][index]=static_cast<std::uint16_t>(half);
+            throw IopStop{"SPU2 KOFF requires known inactive voices and a 24-voice halfword mask"};
         return;
     }
 
@@ -1568,9 +1699,6 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         if(bytes!=2u || !value)throw IopStop{"SPU2 output configuration requires a known halfword write"};
         if(is_spu2_voice_parameter(physical) || is_spu2_voice_start(physical)) {
             if(!diagnostic_spu2_quiescent_)throw IopStop{"SPU2 voice configuration requires established inactive voices"};
-            if(is_spu2_voice_parameter(physical) && (physical&15u)<4u && *value &&
-               (spu2_symbolic_voices_[(physical>>10u)&1u]&(1u<<((physical&0x3FFu)/16u))))
-                throw IopStop{"SPU2 voice gain cannot expose an unknown decoder/envelope, including after KOFF"};
             if(is_spu2_voice_parameter(physical) && (physical&15u)<4u && (*value&0x8000u))
                 throw IopStop{"SPU2 voice volume sweep is not modeled"};
             if(is_spu2_voice_start(physical))*value&=(physical&2u) ? 0xFFF8u : 0xFu;
@@ -1583,6 +1711,16 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
             // Address setup alone does not clear or fabricate sound RAM.
             // Active reverb still refuses at ATTR before reading the area.
         }
+        if((physical==0x1F900198u || physical==0x1F900598u) &&
+           spu2_adma_[(physical-0x1F900198u)/0x400u].enabled && !spu2_input_quiet((physical-0x1F900198u)/0x400u,*value))
+            throw IopStop{"SPU2 audible ADMA input mixing is not modeled"};
+        if(physical>=0x1F900760u && physical<0x1F9007B0u &&
+           ((physical-0x1F900760u)%0x28u==0xCu || (physical-0x1F900760u)%0x28u==0xEu)) {
+            const auto core=(physical-0x1F900760u)/0x28u,channel=((physical-0x1F900760u)%0x28u-0xCu)/2u;
+            const auto mixer=latch(0x1F900198u+core*0x400u);
+            if(spu2_adma_[core].enabled && (!mixer || !*mixer || ((**mixer&(0x80u>>channel)) && *value)))
+                throw IopStop{"SPU2 nonzero ADMA input gain on an open direct route is not modeled"};
+        }
         // These masks route/modulate voices; MMIX routes mixer inputs.
         // In the opt-in inactive-source state they cannot create samples.
         // Key-on, streaming and effects starts still refuse separately.
@@ -1593,10 +1731,6 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         // path; retaining a setting must never pretend to execute that path.
         if(physical==0x1F9007C0u && (*value&0x104u))
             throw IopStop{"SPU2 SPDIF bypass and direct streaming are not modeled"};
-        // ADMAS zero explicitly disables streaming. Do not manufacture a
-        // busy readback, data movement or a DMA completion interrupt.
-        if((physical==0x1F9001B0u || physical==0x1F9005B0u) && *value)
-            throw IopStop{"SPU2 AutoDMA transfers are not modeled"};
         if(physical>=0x1F900760u && physical<0x1F9007B0u &&
            (physical-0x1F900760u)%0x28u<4u && (*value&0x8000u))
             throw IopStop{"SPU2 master volume sweep is not modeled"};

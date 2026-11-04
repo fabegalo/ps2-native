@@ -134,9 +134,14 @@ public:
     void diagnostic_spu2_pio_word_cycles(std::uint32_t cycles);
     [[nodiscard]] std::optional<std::uint16_t> spu2_ram_halfword(std::uint32_t word_address) const;
     [[nodiscard]] std::uint64_t spu2_pio_words(unsigned core) const { return spu2_transfer_.at(core).words; }
+    // Functional ADMA double buffering; explicit throughput/priming model.
+    void diagnostic_spu2_adma_word_cycles(std::uint32_t cycles);
+    [[nodiscard]] std::uint64_t spu2_adma_words(unsigned core) const { return spu2_adma_.at(core).words; }
+    [[nodiscard]] std::uint64_t spu2_input_frames(unsigned core) const { return spu2_adma_.at(core).frames; }
     struct Spu2Sample { std::uint64_t cycle; std::int16_t left,right; };
     [[nodiscard]] const std::optional<Spu2Sample>& spu2_last_sample(unsigned core) const { return spu2_last_sample_.at(core); }
     [[nodiscard]] std::uint64_t spu2_sample_count(unsigned core) const { return spu2_sample_count_.at(core); }
+    [[nodiscard]] const std::optional<Spu2Sample>& spu2_last_input(unsigned core) const { return spu2_adma_.at(core).last_input; }
     [[nodiscard]] std::uint64_t cycle() const noexcept { return cycle_; }
     [[nodiscard]] std::uint32_t pc() const noexcept { return pc_; }
     [[nodiscard]] bool stopped() const noexcept { return stop_.has_value(); }
@@ -241,6 +246,12 @@ private:
     void write_spu2_control(std::uint32_t physical,ObservedWord word);
     void tick_spu2_quiet();
     void validate_spu2_pio(unsigned core,const ObservedWord& control) const;
+    void validate_spu2_adma(unsigned core) const;
+    [[nodiscard]] bool spu2_input_quiet(unsigned core,std::uint32_t mixer) const;
+    [[nodiscard]] bool tick_spu2_adma(unsigned core);
+    void consume_spu2_input(unsigned core,std::uint64_t sample_cycle);
+    void write_spu2_dma(unsigned core,std::uint32_t field,std::size_t bytes,std::uint32_t value);
+    [[nodiscard]] std::uint32_t read_spu2_dma(unsigned core,std::uint32_t field,std::size_t bytes) const;
     [[nodiscard]] std::uint32_t io_read(std::uint32_t physical, std::size_t bytes, const char* what);
     void io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what);
     void mechacon_command(std::uint8_t command, const char* what);
@@ -298,11 +309,6 @@ private:
     bool diagnostic_spu2_7ca_latch_{};
     bool diagnostic_spu2_reserved_latches_{};
     std::array<std::optional<ObservedWord>,2> spu2_control_;
-    // Abstract voice state: KON makes decoder/envelope state unknown. A
-    // constant zero gain on both channels still proves its mixer output.
-    // KOFF does not prove that an unknown release envelope has finished.
-    std::array<std::uint32_t,2> spu2_symbolic_voices_{};
-    std::array<std::array<std::optional<std::uint16_t>,4>,2> spu2_keys_;
     // Quiet clocks are available only under the explicit cold-state
     // experiment: no active voices, inputs, effects or transfers.
     std::array<std::optional<std::uint64_t>,2> spu2_next_sample_;
@@ -320,6 +326,21 @@ private:
     std::vector<std::uint16_t> spu2_ram_;
     std::vector<std::uint8_t> spu2_ram_written_;
     std::uint32_t diagnostic_spu2_pio_cycles_{};
+    struct Spu2Adma {
+        bool enabled{},primed{};
+        std::array<bool,2> ready{};
+        unsigned fill_bank{},fill_word{},read_bank{},read_position{};
+        std::array<std::uint32_t,3> dma{}; // MADR, BCR, CHCR
+        std::uint8_t written{}; // address, low/high BCR, CHCR
+        std::uint32_t remaining{},block_remaining{};
+        std::optional<std::uint64_t> next;
+        std::uint64_t words{},frames{};
+        std::optional<Spu2Sample> last_input;
+    };
+    std::array<Spu2Adma,2> spu2_adma_;
+    std::uint32_t diagnostic_spu2_adma_cycles_{};
+    std::uint64_t spu2_adma_bus_available_{};
+    unsigned spu2_adma_last_grant_{1u};
     std::uint64_t gif_dma_cycle_{};
     std::optional<std::string> gif_dma_stop_;
     std::optional<std::uint8_t> cdvd_howto_;
