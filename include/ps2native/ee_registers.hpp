@@ -74,6 +74,8 @@ public:
     [[nodiscard]] const MchRegisters& mch() const noexcept { return mch_; }
     void diagnostic_dev9_power_reset(std::uint16_t value) { iop_.diagnostic_dev9_power_reset(value); }
     void diagnostic_dev9_irq_reset_clear() { iop_.diagnostic_dev9_irq_reset_clear(); }
+    void diagnostic_dev9_irq_disconnected() { iop_.diagnostic_dev9_irq_disconnected(); }
+    void diagnostic_spu2_dma_wrap_to_zero() { iop_.diagnostic_spu2_dma_wrap_to_zero(); }
     void attach_speed_eeprom_words(std::span<const std::uint16_t> words,std::string_view hash) { iop_.attach_speed_eeprom_words(words,hash); }
     void diagnostic_speed_eeprom_presence(bool present) { iop_.diagnostic_speed_eeprom_presence(present); }
     void diagnostic_dev9_control_latches() { iop_.diagnostic_dev9_control_latches(); }

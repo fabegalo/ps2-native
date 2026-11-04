@@ -137,6 +137,9 @@ public:
     void diagnostic_dev9_power_reset(std::uint16_t value);
     // Explicit cold mask=0 and clear IOP pending input, never a measured reset default.
     void diagnostic_dev9_irq_reset_clear();
+    // Explicit disconnected IRQ wire fault; device status/data remain unknown.
+    // Does not clear an earlier pending INTC event. Reset removes the fault.
+    void diagnostic_dev9_irq_disconnected();
     // Logical EEPROM words, explicitly bound to this console's NVM hash.
     // Never substitute the MECHACON MAC record or another console's data.
     void attach_speed_eeprom_words(std::span<const std::uint16_t> words,std::string_view nvm_sha256);
@@ -188,6 +191,9 @@ public:
     [[nodiscard]] std::uint64_t spu2_pio_words(unsigned core) const { return spu2_transfer_.at(core).words; }
     // Functional ADMA double buffering; explicit throughput/priming model.
     void diagnostic_spu2_adma_word_cycles(std::uint32_t cycles);
+    // Separate unmeasured end-of-RAM policy: normal DMA wraps to word zero.
+    // Writes into dynamic capture/input buffers retain unknown visibility.
+    void diagnostic_spu2_dma_wrap_to_zero();
     // Separate unmeasured readback hypothesis, never an assumed cold value.
     void diagnostic_spu2_admas_control_latch() {
         if(cycle_)throw DeviceRefusal("ADMAS readback experiment must be selected before guest execution");
@@ -403,6 +409,7 @@ private:
     ObservedWord dev9_power_{0,0xFFFFu};
     ObservedWord speed_irq_mask_{0,0xFFFFu};
     bool dev9_irq_acknowledged_{};
+    bool diagnostic_dev9_irq_disconnected_{};
     [[nodiscard]] bool dev9_irq_masked() const noexcept;
     Microwire64x16 speed_eeprom_;
     ObservedWord speed_gpio_dir_{0,0xFFu},speed_gpio_data_{0,0xFFu};
@@ -470,6 +477,7 @@ private:
     };
     std::array<Spu2Adma,2> spu2_adma_;
     std::uint32_t diagnostic_spu2_adma_cycles_{};
+    bool diagnostic_spu2_dma_wrap_zero_{};
     bool diagnostic_spu2_admas_control_latch_{};
     std::uint64_t spu2_adma_bus_available_{};
     unsigned spu2_adma_last_grant_{1u};

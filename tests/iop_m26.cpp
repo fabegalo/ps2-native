@@ -170,25 +170,32 @@ void check_speed_identities() {
     }
 }
 void check_speed_interrupt_masking() {
-    for(unsigned mode=0;mode<8;++mode) {
+    for(unsigned mode=0;mode<12;++mode) {
         Assembler a(0xBFC00000u);a.lui(t1,0xBF80);a.lui(t2,0xB000);a.lui(t3,0xA000);
         if(mode==2)a.sw(0,0x1070,t1); // An earlier ack cannot prove a later unknown source quiet.
         a.sh(0,0x2A,t2);
-        if(mode!=2 && mode!=5) {a.la(a1,mode==3 ? 0xFFFFFFFFu : 0u);a.sw(a1,0x1070,t1);}
-        if(mode==1){a.la(a1,4);a.sh(a1,0x2A,t2);}
+        if(mode!=2 && mode!=5 && mode!=10) {a.la(a1,(mode==3 || mode==11) ? 0xFFFFFFFFu : 0u);a.sw(a1,0x1070,t1);}
+        if(mode==1 || mode==9){a.la(a1,4);a.sh(a1,0x2A,t2);}
         if(mode==4 || mode>=6){a.la(a1,4);a.sh(a1,0x146C,t1);a.la(a1,5);a.sh(a1,0x146C,t1);}
         if(mode==7)a.sh(0,0x2A,t2);
-        if(mode>=6)a.sw(0,0x1070,t1);
+        if(mode>=6 && mode<8)a.sw(0,0x1070,t1);
         a.la(a1,1u<<13u);a.sw(a1,0x1074,t1);a.la(a1,1);a.sw(a1,0x1078,t1);
         a.la(a1,0x00400401);a.mtc0(a1,Status);a.nop();
         a.lw(a1,0x1070,t1);a.nop();a.andi(a1,a1,1u<<13u);a.sw(a1,0x100,t3);
         a.label("idle");a.beq(0,0,"idle");a.nop();const auto rom=rom_of(a);
         Iop iop;iop.reset(rom,find_console_hardware("SCPH-70004:GH-032-32"));
         iop.diagnostic_dev9_power_reset(5);iop.diagnostic_dev9_power_settle_cycles(1);
-        if(mode==5)iop.diagnostic_dev9_irq_reset_clear();iop.run_until(120);
-        if(mode==0 || mode==5 || mode==7)require(!iop.stopped() && iop.ee_read(0x100,4)==0,
+        if(mode==5)iop.diagnostic_dev9_irq_reset_clear();
+        if(mode>=8)iop.diagnostic_dev9_irq_disconnected();iop.run_until(120);
+        if(mode==0 || mode==5 || mode==7 || mode==8 || mode==9)require(!iop.stopped() && iop.ee_read(0x100,4)==0,
             "a real zero SPEED mask followed by INTC ack proves IRQ13 quiet without inventing pending status");
         else require_stop(iop,"sources that are not modeled (PCMCIA)");
+        if(mode>=8) {
+            rejects([&]{iop.diagnostic_dev9_irq_disconnected();},"before execution");
+            iop.reset(rom,find_console_hardware("SCPH-70004:GH-032-32"));
+            iop.diagnostic_dev9_power_reset(5);iop.diagnostic_dev9_power_settle_cycles(1);iop.run_until(120);
+            require_stop(iop,"sources that are not modeled (PCMCIA)");
+        }
     }
 }
 void check_speed_mask() {

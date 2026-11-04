@@ -164,6 +164,8 @@ public:
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
     void diagnostic_dev9_power_reset(std::uint16_t value) { registers_.diagnostic_dev9_power_reset(value); }
     void diagnostic_dev9_irq_reset_clear() { registers_.diagnostic_dev9_irq_reset_clear(); }
+    void diagnostic_dev9_irq_disconnected() { registers_.diagnostic_dev9_irq_disconnected(); }
+    void diagnostic_spu2_dma_wrap_to_zero() { registers_.diagnostic_spu2_dma_wrap_to_zero(); }
     void attach_speed_eeprom_words(std::span<const std::uint16_t> words,std::string_view hash) { registers_.attach_speed_eeprom_words(words,hash); }
     void diagnostic_speed_eeprom_presence(bool present) { registers_.diagnostic_speed_eeprom_presence(present); }
     void diagnostic_dev9_control_latches() { registers_.diagnostic_dev9_control_latches(); }

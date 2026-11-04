@@ -203,7 +203,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     std::fill(ram_.begin(), ram_.end(), std::uint8_t{0});
     std::fill(ram_written_.begin(), ram_written_.end(), std::uint8_t{0});
     gpr_ = {};
-    dev9_power_={0,0xFFFFu};speed_irq_mask_={0,0xFFFFu};dev9_irq_acknowledged_=false;
+    dev9_power_={0,0xFFFFu};speed_irq_mask_={0,0xFFFFu};dev9_irq_acknowledged_=false;diagnostic_dev9_irq_disconnected_=false;
     speed_eeprom_.reset();speed_gpio_dir_={0,0xFFu};speed_gpio_data_={0,0xFFu};speed_gpio_clock_at_.reset();
     diagnostic_dev9_controls_=dev9_initial_power_ready_=false;dev9_controls_={};
     diagnostic_dev9_settle_cycles_=0;dev9_power_ready_at_.reset();
@@ -251,7 +251,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     spu2_effect_area_dirty_={};
     spu2_next_sample_={};spu2_last_sample_={};spu2_sample_count_={};spu2_clock_active_=false;
     spu2_transfer_={};spu2_ram_.clear();spu2_ram_written_.clear();diagnostic_spu2_pio_cycles_=0;
-    spu2_adma_={};diagnostic_spu2_adma_cycles_=0;diagnostic_spu2_admas_control_latch_=false;
+    spu2_adma_={};diagnostic_spu2_adma_cycles_=0;diagnostic_spu2_dma_wrap_zero_=false;diagnostic_spu2_admas_control_latch_=false;
     spu2_adma_bus_available_=0;spu2_adma_last_grant_=1u;
     graphics_dma_={};
     dma_irq_output_=false;
@@ -1322,6 +1322,7 @@ void Iop::diagnostic_dev9_power_settle_cycles(std::uint32_t cycles) {
     diagnostic_dev9_settle_cycles_=cycles;
 }
 bool Iop::dev9_irq_masked() const noexcept {
+    if(diagnostic_dev9_irq_disconnected_)return true;
     // ps2sdk SpdIntrDisable/dev9_intr_dispatch: SPEED status AND mask
     // feeds DEV9. The measured fixed expansion-bay board has no PC-card
     // insertion source. Pending status remains unknown even with a zero mask.
@@ -1340,7 +1341,8 @@ void Iop::write_dev9_power(ObservedWord word) {
         throw IopStop{"DEV9 power write requires known bits 0/2; other active control bits are not modeled"};
     const auto old=dev9_power_;dev9_power_={word.value&5u,0xFFFAu};
     if((old.unknown&5u) || ((old.value^word.value)&5u)) {
-        dev9_initial_power_ready_=false;dev9_power_ready_at_.reset();dev9_irq_acknowledged_=false;
+        dev9_initial_power_ready_=false;dev9_power_ready_at_.reset();
+        if(!diagnostic_dev9_irq_disconnected_)dev9_irq_acknowledged_=false;
         // Neither retention nor reset constants of the external ASIC's
         // registers have been measured across this power/reset transition.
         speed_irq_mask_={0,0xFFFFu};speed_gpio_dir_={0,0xFFu};speed_gpio_data_={0,0xFFu};
@@ -1389,6 +1391,11 @@ ObservedWord Iop::read_speed_gpio(std::uint32_t address,std::size_t bytes) const
         }
     }
     return {value,~known&0xFFu};
+}
+void Iop::diagnostic_dev9_irq_disconnected() {
+    if(cycle_ || !hardware_ || !hardware_->speed_revisions)
+        throw DeviceRefusal("DEV9 disconnected IRQ fault requires a measured fixed SPEED board before execution");
+    diagnostic_dev9_irq_disconnected_=true;
 }
 void Iop::diagnostic_dev9_irq_reset_clear() {
     if(cycle_ || !hardware_ || !hardware_->speed_revisions)
@@ -1527,6 +1534,10 @@ void Iop::validate_spu2_pio(unsigned core,const ObservedWord& control) const {
     if(!spu2_transfer_[core].address)throw IopStop{"SPU2 PIO transfer address is incomplete"};
     if(spu2_transfer_[core^1u].next)throw IopStop{"SPU2 simultaneous PIO arbitration is not modeled"};
 }
+void Iop::diagnostic_spu2_dma_wrap_to_zero() {
+    if(cycle_)throw DeviceRefusal("SPU2 DMA wrap policy experiment requires reset state before execution");
+    diagnostic_spu2_dma_wrap_zero_=true;
+}
 void Iop::diagnostic_spu2_adma_word_cycles(std::uint32_t cycles) {
     if(!cycles || cycle_)throw DeviceRefusal("SPU2 ADMA experiment requires positive word cycles before guest execution");
     diagnostic_spu2_adma_cycles_=cycles;
@@ -1567,8 +1578,19 @@ void Iop::validate_spu2_normal_dma(unsigned core,std::uint32_t words) const {
        (control->value&0x80F0u)!=0x8020u)
         throw IopStop{"SPU2 normal DMA requires ADMAS written off and an enabled core in DMA-write mode without effects/IRQ"};
     const auto target=spu2_transfer_[core].address;
-    if(!target || *target<0x2800u || std::uint64_t{*target}+std::uint64_t{words}*2u>0x100000u)
-        throw IopStop{"SPU2 normal DMA target is unknown, overlaps dynamic buffers or wraps sound RAM"};
+    if(!target || *target<0x2800u)
+        throw IopStop{"SPU2 normal DMA target is unknown or starts in dynamic buffers"};
+    const auto length=std::uint64_t{words}*2u;
+    if(length>0x100000u)throw IopStop{"SPU2 normal DMA exceeds one sound RAM address space"};
+    if(std::uint64_t{*target}+length>0x100000u && !diagnostic_spu2_dma_wrap_zero_)
+        throw IopStop{"SPU2 normal DMA wraps sound RAM; explicit wrap-to-zero experiment required"};
+    // Contiguous arcs on the 20-bit halfword-address ring. Both lengths
+    // are bounded by one full circumference, including a wrapped suffix.
+    const auto overlaps=[&](std::uint32_t first,std::uint32_t count) {
+        if(!length || !count)return false;
+        return length==0x100000u || count>=0x100000u ||
+               ((*target-first)&0xFFFFFu)<count || ((first-*target)&0xFFFFFu)<length;
+    };
     for(unsigned c=0;c<2u;++c) {
         const auto attr=spu2_control_[c];
         if(!attr || ((attr->value|attr->unknown)&0x40u))
@@ -1577,13 +1599,13 @@ void Iop::validate_spu2_normal_dma(unsigned core,std::uint32_t words) const {
             throw IopStop{"SPU2 normal DMA and PIO arbitration is not modeled"};
         if(spu2_effects_active(c)) {
             const auto area=spu2_effect_area(c);
-            if(area.first<=area.second && *target<=area.second && *target+words*2u>area.first)
+            if(area.first<=area.second && overlaps(area.first,area.second-area.first+1u))
                 throw IopStop{"SPU2 normal DMA overlaps an uncomputed active effect workspace"};
         }
         const auto& other=spu2_adma_[c];
         if(c!=core && other.next && other.normal) {
-            const auto first=*spu2_transfer_[c].address,last=first+other.remaining*2u;
-            if(*target<last && *target+words*2u>first)
+            const auto first=*spu2_transfer_[c].address;
+            if(overlaps(first,other.remaining*2u))
                 throw IopStop{"SPU2 concurrent normal DMA destinations overlap"};
         }
     }
@@ -1658,8 +1680,12 @@ bool Iop::tick_spu2_adma(unsigned core) {
         (state.fill_word>=128u ? 0x200u : 0u)+(state.fill_word%128u)*2u;
     if(spu2_ram_.empty()){spu2_ram_.resize(0x100000u);spu2_ram_written_.resize(0x100000u);}
     for(unsigned n=0;n<2;++n) {
-        spu2_ram_[target+n]=static_cast<std::uint16_t>(ram_[source+2u*n]|(std::uint16_t{ram_[source+2u*n+1u]}<<8u));
-        spu2_ram_written_[target+n]=(ram_written_[source+2u*n] && ram_written_[source+2u*n+1u]) ? 1u : 0u;
+        const auto destination=(target+n)&0xFFFFFu;
+        spu2_ram_[destination]=static_cast<std::uint16_t>(ram_[source+2u*n]|(std::uint16_t{ram_[source+2u*n+1u]}<<8u));
+        // No captured CD/SPDIF/voice sample or arbitration result is invented
+        // when a normal transfer wraps into the device's dynamic RAM area.
+        const bool dynamic=state.normal && destination<0x2800u;
+        spu2_ram_written_[destination]=(!dynamic && ram_written_[source+2u*n] && ram_written_[source+2u*n+1u]) ? 1u : 0u;
     }
     state.dma[0]+=4u;
     if(state.normal) {
