@@ -995,3 +995,20 @@ continua recusado. Modos exponenciais/lentos ou mudança para esses modos
 não recebem um prazo inventado. ENDX/NAX/LSAX/ADPCM continuam desconhecidos.
 PS2Recomp áudio consultado previamente; taxa/envelope conferidos na descrição
 PSX-SPX e referência comportamental PCSX2 ADSR, sem código incorporado.
+
+Ensaio 70: ENVX após release foi provado e lido pelo guest; IOP avançou a
+`0x6575C` / 46.715.096, ATTR=0xC080 habilitando efeitos core 0. EE `0x81FD0` /
+360.000.000, 102,857 s; RAM EE SHA-256
+`40644d20191c124d5372260960d854d71136adf0804280d9fa44e118887145d4`.
+Ainda 16 pacotes/limpeza, sem PMODE. Original repetido após aritmética/release:
+mesmos PCs, contagens, zero pixels e hash canônico.
+
+Próxima fronteira: efeitos ativos com saída matematicamente zero. A habilitação
+só pode prosseguir com EVOLL/EVOLR conhecidos zero, área ESA/EEA conhecida,
+ambos comparadores IRQ desligados e nenhuma transferência concorrente.
+O conteúdo de toda a área potencialmente escrito pelo DSP perde conhecimento,
+sem zerar os bytes ou afirmar que a reverberação foi calculada. Ganho audível,
+IRQ, área desconhecida/sobreposta aos buffers dinâmicos e arbitragem PIO/ADMA
+recusam. Desabilitar efeitos não recupera dados de RAM já tornados desconhecidos.
+Isso é execução conservadora de estado parcial, não implementação de áudio
+reverberado. Referências comportamentais SPU2 já consultadas, código BSD próprio.

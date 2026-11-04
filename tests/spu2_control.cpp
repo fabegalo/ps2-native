@@ -364,5 +364,36 @@ int main() try {
             "two linear release steps prove ENVX zero and permit gain changes without inventing decoded audio");
         else require(iop.stopped(),"early ENVX, exponential/slow/changed release and a new attack cannot reuse a silence proof");
     }
+    for(unsigned effect_core=0;effect_core<2u;++effect_core)for(unsigned mode=0;mode<9u;++mode) {
+        m20::Assembler a(kEeResetVector);
+        const auto sh=[&](std::uint32_t address,std::uint32_t value){a.la(8,address);a.la(9,value);a.sh(9,0,8);};
+        const auto base=0xBF900000u+effect_core*0x400u,volume=0xBF900764u+effect_core*0x28u;
+        for(unsigned core=0;core<2u;++core)sh(0xBF90019Au+core*0x400u,0x8000u);
+        sh(base+0x1A8u,0);sh(base+0x1AAu,0xFFF8u);sh(base+0x1ACu,0xABCDu);sh(base+0x19Au,0x8010u);
+        for(unsigned n=0;n<20u;++n)a.nop();sh(base+0x19Au,0x8000u);
+        sh(base+0x2E0u,0);sh(base+0x2E2u,mode==5u ? 0x2000u : 0xFFF8u);
+        if(mode!=3u)sh(base+0x33Cu,0);
+        sh(volume,mode==1u ? 1u : 0u);sh(volume+2u,0);
+        if(mode==4u)sh(0xBF90019Au+(effect_core^1u)*0x400u,0x40u);
+        a.label("enable");sh(base+0x19Au,0x8080u);
+        if(mode==2u)sh(volume+2u,1u);
+        if(mode==6u)sh(base+0x19Au,0x8010u);
+        if(mode==7u)sh(0xBF90019Au+(effect_core^1u)*0x400u,0x40u);
+        if(mode==8u)sh(base+0x19Au,0x8000u);
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,true);
+        iop.diagnostic_spu2_pio_word_cycles(3u);iop.run_until((a.at("enable")-kEeResetVector)/4u);
+        require(!iop.stopped() && iop.spu2_ram_halfword(0xFFF8u)==0xABCDu,"fixture uploads real RAM before effects start");
+        iop.run_until(1536u);
+        if(mode==0u || mode==8u)require(!iop.stopped() && !iop.spu2_ram_halfword(0xFFF8u) &&
+            iop.spu2_last_sample(effect_core)->left==0 && iop.spu2_last_sample(effect_core)->right==0,
+            "zero effect gains prove output while workspace bytes become unknown, including after disable");
+        else {
+            require(iop.stopped(),"unknown effects refuse audible gain, absent workspace, IRQ, dynamic-buffer overlap and transfer arbitration");
+            if(mode==1u || mode==3u || mode==4u || mode==5u)
+                require(iop.spu2_ram_halfword(0xFFF8u)==0xABCDu,"rejected effect start leaves prior RAM knowledge untouched");
+        }
+    }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

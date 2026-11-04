@@ -1135,6 +1135,8 @@ std::optional<std::uint16_t> Iop::spu2_ram_halfword(std::uint32_t word_address) 
     return spu2_ram_[word_address];
 }
 void Iop::validate_spu2_pio(unsigned core,const ObservedWord& control) const {
+    if(spu2_effects_active(0) || spu2_effects_active(1))
+        throw IopStop{"SPU2 PIO bus arbitration with active effects is not modeled"};
     if(!diagnostic_spu2_pio_cycles_)throw IopStop{"SPU2 PIO transfer timing requires an explicit word-cycle experiment"};
     if(spu2_adma_[0].enabled || spu2_adma_[1].enabled)throw IopStop{"SPU2 PIO and ADMA cannot share the sound RAM path"};
     if(!diagnostic_spu2_quiescent_ || (control.unknown&0x80F0u) || (control.value&0x80F0u)!=0x8010u)
@@ -1161,6 +1163,8 @@ bool Iop::spu2_input_quiet(unsigned core,std::uint32_t mixer) const {
     return true;
 }
 void Iop::validate_spu2_adma(unsigned core) const {
+    if(spu2_effects_active(0) || spu2_effects_active(1))
+        throw IopStop{"SPU2 ADMA bus arbitration with active effects is not modeled"};
     if(!diagnostic_spu2_adma_cycles_ || !diagnostic_spu2_quiescent_)
         throw IopStop{"SPU2 AutoDMA transfers require an explicit bus throughput and quiet reset experiment"};
     for(unsigned c=0;c<2;++c) {
@@ -1269,12 +1273,27 @@ bool Iop::tick_spu2_adma(unsigned core) {
     }
     return true;
 }
+bool Iop::spu2_effects_active(unsigned core) const {
+    return spu2_control_[core] && (spu2_control_[core]->value&0x8080u)==0x8080u;
+}
+std::pair<std::uint32_t,std::uint32_t> Iop::spu2_effect_area(unsigned core) const {
+    const auto base=0x1F900000u+core*0x400u;
+    const auto high=latch(base+0x2E0u),low=latch(base+0x2E2u),end=latch(base+0x33Cu);
+    if(!high || !*high || !low || !*low || ((!end || !*end) && !diagnostic_spu2_effect_end_))
+        throw IopStop{"SPU2 effects require a known workspace start and end"};
+    const auto first=((**high&0xFu)<<16u)|(**low&0xFFFFu);
+    const auto last=(((end && *end) ? **end : (*diagnostic_spu2_effect_end_)[core])&0xFu)<<16u|0xFFFFu;
+    if((first&7u) || first>last || first<0x2800u)
+        throw IopStop{"SPU2 effect workspace alignment, wrap or overlap with capture/input buffers is not modeled"};
+    return {first,last};
+}
 void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
     word.unknown&=0xFFFFu;word.value&=0xFFFFu&~word.unknown;
     if(word.unknown&0x8030u)throw IopStop{"SPU2 control write leaves core enable or transfer mode unknown"};
     const auto core=(physical-0x1F90019Au)/0x400u;
     const auto mode=word.value&0x30u;
-    if((spu2_symbolic_voices_[0] || spu2_symbolic_voices_[1]) && ((word.value|word.unknown)&0x40u))
+    if((spu2_symbolic_voices_[0] || spu2_symbolic_voices_[1] || spu2_effects_active(0) || spu2_effects_active(1)) &&
+       ((word.value|word.unknown)&0x40u))
         throw IopStop{"SPU2 unknown voice RAM reads cannot enable either shared-RAM IRQ comparator"};
     if(spu2_adma_[core].enabled && (mode || !(word.value&0x8000u) || ((word.value|word.unknown)&0xC0u)))
         throw IopStop{"SPU2 active ADMA requires its core enabled and normal transfer/effects/IRQ disabled"};
@@ -1289,11 +1308,30 @@ void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
     if(word.value&0x8000u) {
         // The explicit cold-state experiment has no active voices/inputs.
         // Mute polarity is not needed to prove a zero source sum.
-        if(!diagnostic_spu2_quiescent_ || ((word.value|word.unknown)&0xC0u))
+        if(!diagnostic_spu2_quiescent_ || ((word.value|word.unknown)&0x40u) || (word.unknown&0x80u))
             throw IopStop{"SPU2 active voices, effects or IRQ processing is not modeled"};
+    }
+    std::optional<std::pair<std::uint32_t,std::uint32_t>> invalidate_effects;
+    if((word.value&0x8080u)==0x8080u) {
+        for(unsigned channel=0;channel<2u;++channel) {
+            const auto gain=latch(0x1F900764u+core*0x28u+channel*2u);
+            if(!gain || !*gain || **gain!=0u)throw IopStop{"SPU2 uncomputed effects require known zero left and right output gains"};
+        }
+        const auto other=spu2_control_[core^1u];
+        if(!other || ((other->value|other->unknown)&0x40u))
+            throw IopStop{"SPU2 effect RAM writes require both IRQ comparators disabled"};
+        if(mode || spu2_transfer_[0].next || spu2_transfer_[1].next || spu2_adma_[0].enabled || spu2_adma_[1].enabled)
+            throw IopStop{"SPU2 active effects and transfer bus arbitration is not modeled"};
+        invalidate_effects=spu2_effect_area(core);
     }
     if(mode==0x10u)validate_spu2_pio(core,word);
     // Validate before changing retained control, clocks or pending work.
+    if(invalidate_effects && !spu2_ram_written_.empty()) {
+        // The DSP may write any workspace tap. Preserve backing bytes but
+        // invalidate knowledge; never pretend that processing cleared RAM.
+        std::fill(spu2_ram_written_.begin()+invalidate_effects->first,
+                  spu2_ram_written_.begin()+invalidate_effects->second+1u,std::uint8_t{0});
+    }
     if(word.value&0x8000u) {
         // 36.864 MHz / 48 kHz = 768 IOP cycles; reset-aligned phase is modeled.
         if(!spu2_next_sample_[core])spu2_next_sample_[core]=(cycle_/768u+1u)*768u;
@@ -1853,6 +1891,9 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
     }
     if(is_spu2_boot_config(physical)) {
         if(bytes!=2u || !value)throw IopStop{"SPU2 output configuration requires a known halfword write"};
+        if((physical==0x1F900764u || physical==0x1F900766u || physical==0x1F90078Cu || physical==0x1F90078Eu) &&
+           *value && spu2_effects_active((physical-0x1F900764u)/0x28u))
+            throw IopStop{"SPU2 effect gain cannot expose an uncomputed DSP output"};
         if(is_spu2_effect_coefficient(physical)) {
             const auto core=(physical-0x1F900760u)/0x28u;
             const auto control=spu2_control_[core];
