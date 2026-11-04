@@ -711,20 +711,19 @@ void Iop::pump_sif0() {
         const auto* value=latch(address);
         return value && *value && ((**value&mask)==mask);
     };
-    const auto observed_source=[&](std::uint32_t address)->std::optional<std::uint32_t> {
-        if(address>ram_.size() || 4u>ram_.size()-address)
-            return std::nullopt;
-        std::uint32_t value=0;
+    const auto observed_source=[&](std::uint32_t address)->std::optional<ObservedWord> {
+        if(address>ram_.size() || 4u>ram_.size()-address)return std::nullopt;
+        ObservedWord word;
         for(unsigned b=0;b<4;++b) {
-            if(!ram_written_[address+b])return std::nullopt;
-            value|=std::uint32_t{ram_[address+b]}<<(b*8u);
+            word.value|=std::uint32_t{ram_[address+b]}<<(b*8u);
+            if(!ram_written_[address+b])word.unknown|=0xFFu<<(b*8u);
         }
-        return value;
+        return word;
     };
     const auto source_word=[&](std::uint32_t address) {
-        const auto value=observed_source(address);
-        if(!value)throw IopStop{"SIF0 source consumes undefined or out-of-range IOP RAM"};
-        return *value;
+        const auto word=observed_source(address);
+        if(!word || word->unknown)throw IopStop{"SIF0 tag consumes undefined or out-of-range IOP RAM at "+hex(address)};
+        return word->value;
     };
     if((iop_sif0_[2]&kChcrStart) && enabled(0x1F801578u,1u) && enabled(0x1F801570u,0x800u)) {
         if(!sif0_source_tag_) {
@@ -741,14 +740,14 @@ void Iop::pump_sif0() {
                     throw IopStop{"SIF0 source tag IRQ without END: stop/continue behavior not verified"};
                 if(source>ram_.size() || std::uint64_t{words}*4u>ram_.size()-source)
                     throw IopStop{"SIF0 source tag payload outside IOP RAM"};
-                sif0_fifo_.push_back(low);sif0_fifo_.push_back(high);
+                sif0_fifo_.push_back({low,0});sif0_fifo_.push_back({high,0});
                 // Upper half of an EE destination tag is unused: occupancy
                 // padding only, never returned to the guest or copied to RAM.
-                sif0_fifo_.push_back(0);sif0_fifo_.push_back(0);
+                sif0_fifo_.push_back({0,0});sif0_fifo_.push_back({0,0});
                 // Hardware measurements reported with PCSX2's SIF research:
                 // an incomplete payload retains corresponding lanes of the
                 // preceding full bus qword (initially EE tag + next IOP tag).
-                sif0_last_qword_={low,high,observed_source(at+16u),observed_source(at+20u)};
+                sif0_last_qword_={ObservedWord{low,0},ObservedWord{high,0},observed_source(at+16u),observed_source(at+20u)};
                 iop_sif0_[0]=source;iop_sif0_[3]+=16u;iop_sif0_written_|=1u;
                 sif0_source_words_=words;sif0_source_end_=(tag&0x80000000u)!=0;
                 sif0_source_irq_=(tag&0x40000000u)!=0;
@@ -757,14 +756,14 @@ void Iop::pump_sif0() {
         } else if(sif0_source_words_) {
             if(sif0_fifo_.size()>28u)++sif0_metrics_.source_full_cycles;
             else {
-                std::array<std::uint32_t,4> qword{};
+                std::array<ObservedWord,4> qword{};
                 const auto count=std::min(4u,sif0_source_words_);
                 for(unsigned w=0;w<4;++w) {
-                    if(w<count)qword[w]=source_word(iop_sif0_[0]+w*4u);
-                    else {
-                        if(!sif0_last_qword_[w])throw IopStop{"SIF0 partial qword would expose unknown retained bus data"};
-                        qword[w]=*sif0_last_qword_[w];
-                    }
+                    if(w<count) {
+                        const auto word=observed_source(iop_sif0_[0]+w*4u);
+                        if(!word)throw IopStop{"SIF0 payload outside IOP RAM"};
+                        qword[w]=*word;
+                    } else qword[w]=sif0_last_qword_[w].value_or(ObservedWord{0,~0u});
                 }
                 for(const auto word:qword)sif0_fifo_.push_back(word);
                 for(unsigned w=0;w<4;++w)sif0_last_qword_[w]=qword[w];
@@ -786,7 +785,9 @@ void Iop::pump_sif0() {
     if(!*priority)return;
     if(!qwc.value_or(0u)) {
         if(sif0_fifo_.size()<4u){++sif0_metrics_.destination_empty_cycles;return;}
-        const auto tag=sif0_fifo_[0],dest=sif0_fifo_[1];const auto id=(tag>>28u)&7u;
+        if(sif0_fifo_[0].unknown || sif0_fifo_[1].unknown)
+            throw IopStop{"SIF0 destination tag consumes unknown FIFO bits"};
+        const auto tag=sif0_fifo_[0].value,dest=sif0_fifo_[1].value;const auto id=(tag>>28u)&7u;
         if((tag&0x0FFF0000u) || (id!=0u && id!=1u && id!=7u) || (dest&0x8000000Fu))
             throw IopStop{"SIF0 destination tag: unsupported fields, ID or scratchpad/alignment"};
         const auto count=tag&0xFFFFu;
@@ -797,10 +798,18 @@ void Iop::pump_sif0() {
         sif0_dest_end_=id==7u || ((tag&0x80000000u) && (*chcr&0x80u));
     } else {
         if(sif0_fifo_.size()<4u){++sif0_metrics_.destination_empty_cycles;return;}
+        // DMA transports opaque payloads. It consumes tag fields, not data
+        // values; retain unknown lanes for the eventual EE instruction.
+        if(!ee_ram_unknown_)
+            for(unsigned w=0;w<4;++w)if(sif0_fifo_[w].unknown)
+                throw IopStop{"SIF0 unknown payload requires EE RAM knowledge tracking"};
         for(unsigned w=0;w<4;++w) {
             const auto word=sif0_fifo_.front();sif0_fifo_.pop_front();
-            for(unsigned b=0;b<4;++b)ee_ram_[*madr+w*4u+b]=static_cast<std::uint8_t>(word>>(b*8u));
-            if(ee_ram_unknown_)ee_ram_unknown_->erase(*madr+w*4u);
+            for(unsigned b=0;b<4;++b)ee_ram_[*madr+w*4u+b]=static_cast<std::uint8_t>(word.value>>(b*8u));
+            if(ee_ram_unknown_) {
+                if(word.unknown)(*ee_ram_unknown_)[*madr+w*4u]=word.unknown;
+                else ee_ram_unknown_->erase(*madr+w*4u);
+            }
         }
         *madr+=16u;--*qwc;sif0_metrics_.bytes+=16u;
     }

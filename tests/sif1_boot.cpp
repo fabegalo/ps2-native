@@ -187,7 +187,7 @@ void partial_sif0_packets() {
     std::vector<std::uint8_t> ram(0x800u,0xAAu);Iop unknown;unknown.reset(partial_sender(1,false,0x500u),nullptr);
     unknown.attach_ee_ram(ram);unknown.ee_dma_write(0x1000E000u,1);unknown.ee_dma_write(0x1000C020u,0);unknown.ee_dma_write(0x1000C000u,0x184u);
     unknown.run_until(600);
-    require(unknown.stopped() && unknown.stop_reason()->find("unknown retained bus data")!=std::string::npos,
+    require(unknown.stopped() && unknown.stop_reason()->find("unknown payload requires EE RAM knowledge tracking")!=std::string::npos,
             "undefined following IOP tag cannot become fake zero payload padding");
     require(!unknown.sif0_metrics().bytes && ram[0x400u]==0xAAu && !(unknown.ee_dma_read(0x1000E010u)&0x20u),
             "unknown retained lanes fail before exposing payload or a completion IRQ");

@@ -189,12 +189,12 @@ private:
     SifDmaMetrics sif1_metrics_;
     std::array<std::uint32_t,4> iop_sif0_{};
     std::uint8_t iop_sif0_written_{};
-    std::deque<std::uint32_t> sif0_fifo_;
+    std::deque<ObservedWord> sif0_fifo_;
     std::uint32_t sif0_source_words_{};
     bool sif0_source_tag_{},sif0_source_end_{},sif0_source_irq_{},sif0_dest_end_{};
     // Last complete SIF bus qword. Partial packets retain the lanes the IOP
     // did not supply; unknown tag padding stays unknown until overwritten.
-    std::array<std::optional<std::uint32_t>,4> sif0_last_qword_{};
+    std::array<std::optional<ObservedWord>,4> sif0_last_qword_{};
     SifDmaMetrics sif0_metrics_;
     struct PendingLoad {
         unsigned reg;

@@ -65,6 +65,61 @@ void refusal() {
         require(iop.ee_dma_read(0x1000C000u)&0x100u,"failure cannot manufacture successful EE completion");
     }
 }
+
+void opaque_payload() {
+    std::vector<std::uint8_t> ram(0x20000,0xAA);
+    std::unordered_map<std::uint32_t,std::uint32_t> unknown{{0x10000,~0u},{0x10100,1u}};
+    Iop iop;iop.reset({},nullptr);iop.load_program(sender(64,0x10000,true),0x1000,0x1000);
+    for(unsigned n=0;n<256;++n)if(n!=5 && n!=13 && n!=254)iop.ee_write(0x5000+n,1,(n+0x35u)&0xFFu);
+    iop.attach_ee_ram(ram,&unknown);iop.run_until(1800);
+    require(!iop.stopped() && iop.sif0_metrics().peak_fifo_words==32 && !iop.sif0_metrics().bytes &&
+            ram[0x10000]==0xAA && unknown.at(0x10000)==~0u,"opaque payload stalls in the bounded FIFO without prematurely changing EE RAM");
+    arm(iop);iop.run_until(2200);
+    require(!iop.stopped() && iop.sif0_metrics().bytes==256,"SIF0 transports opaque bytes without decoding or fabricating an RPC reply");
+    for(unsigned w=0;w<64;++w) {
+        std::uint32_t expected=0;
+        for(unsigned b=0;b<4;++b) {
+            const auto n=w*4u+b;
+            if(n==5 || n==13 || n==254)expected|=0xFFu<<(b*8u);
+            else require(ram[0x10000+n]==((n+0x35u)&0xFFu),"all independently known payload bytes survive FIFO backpressure");
+        }
+        const auto it=unknown.find(0x10000+w*4u);
+        require(expected ? it!=unknown.end() && it->second==expected : it==unknown.end(),
+                "destination metadata describes exactly the unknown source byte lanes");
+    }
+    require(unknown.at(0x10100)==1 && ram[0xFFFF]==0xAA && ram[0x10100]==0xAA,
+            "payload defines no byte or knowledge beyond the real transfer");
+    require(!(iop.ee_dma_read(0x1000C000)&0x100) && (iop.ee_dma_read(0x1000E010)&0x20),
+            "actual payload completion, independent of data knowledge, drives the EE DMA interrupt flag");
+}
+void opaque_retained_lanes() {
+    std::vector<std::uint8_t> ram(0x20000,0xAA);
+    std::unordered_map<std::uint32_t,std::uint32_t> unknown;
+    Iop iop;iop.reset({},nullptr);iop.load_program(sender(1),0x1000,0x1000);
+    iop.attach_ee_ram(ram,&unknown);arm(iop);iop.run_until(1800);
+    require(!iop.stopped() && iop.sif0_metrics().bytes==16 && ram[0x10003]==0xCA &&
+            !unknown.contains(0x10000) && !unknown.contains(0x10004) &&
+            unknown.at(0x10008)==~0u && unknown.at(0x1000C)==~0u,
+            "unobserved retained bus lanes remain opaque while supplied payload and destination-tag lanes remain known");
+}
+void opaque_tags_refuse() {
+    using direct_test::store;
+    for(unsigned missing:{0u,4u,8u,12u}) {
+        Assembler a(0x1000);store(a,0xBF801570,0x800);store(a,0xBF801578,1);store(a,0xBF80157C,1);
+        store(a,0xBF80152C,0x4000);store(a,0xBF801528,0x01000701);
+        a.label("idle");a.beq(zero,zero,"idle");a.nop();
+        std::vector<std::uint8_t> ram(0x20000,0xAA);std::unordered_map<std::uint32_t,std::uint32_t> unknown;
+        Iop iop;iop.reset({},nullptr);iop.load_program(le_words(a.finish()),0x1000,0x1000);
+        const std::uint32_t tag[]{0x80005000u,4,0x70000001u,0x10000};
+        for(unsigned n=0;n<16;++n)if(n!=missing)iop.ee_write(0x4000+n,1,(tag[n/4]>>(8*(n%4)))&0xFFu);
+        for(unsigned n=0;n<4;++n)iop.ee_write(0x5000+n*4,4,0x12345678);
+        iop.attach_ee_ram(ram,&unknown);arm(iop);iop.run_until(600);
+        require(iop.stopped() && iop.stop_reason()->find("SIF0 tag consumes undefined")!=std::string::npos &&
+                !iop.sif0_metrics().bytes && (iop.ee_dma_read(0x1000C000)&0x100) && ram[0x10000]==0xAA,
+                "unknown IOP source or EE destination tag fields cannot become guessed addresses, counts or completion");
+    }
+}
+
 void suspension() {
     std::vector<std::uint8_t> ram(0x20000,0xAA); Iop iop;
     iop.reset({},nullptr);iop.load_program(sender(),0x1000,0x1000);iop.attach_ee_ram(ram);
@@ -240,5 +295,5 @@ void partial_source() {
     }
 }
 }
-int main(){try{transfer();backpressure();refusal();suspension();chain_source();source_tag_irq();late_master_enable();stop_idle_receiver();partial_source();irq_entry();return 0;}
+int main(){try{transfer();backpressure();refusal();opaque_payload();opaque_retained_lanes();opaque_tags_refuse();suspension();chain_source();source_tag_irq();late_master_enable();stop_idle_receiver();partial_source();irq_entry();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
