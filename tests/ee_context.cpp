@@ -141,6 +141,61 @@ void leading_sign_count() {
     ee::exec<MipsOpcode::Plzcw>(state,memory,0,word&~(31u<<11));
     require(state.reg64(0)==0,"PLZCW cannot change zero register");
 }
+void disabled_cop0_context() {
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    auto state=ee_reset_state();state.pc=0x80001000u;state.set_reg32(16,0x80002000);
+    std::uint64_t executed=0;ExecutionContext ctx{state,memory,executed,100,0xFFFFFFFFu};
+    const auto step=[&](std::uint32_t word){memory.write32(state.pc,word);interpret_instruction(ctx);};
+    step(0x4008C000);step(0x4009C800); // MFBPC/MFPS, disabled with undefined configuration
+    require(state.unknown_gpr_bits[8]==0x17BF8007u && state.unknown_gpr_bits[9]==0xFFBFEu,
+            "COP0 reset preserves undefined configuration but knows enables and reserved zeros");
+    step(0x70000488u|(9u<<21)|(8u<<16)|(10u<<11)); // PEXTLW: BPC, PCCR
+    step(0xFE0A0000u); // SD t2,0(s0)
+    require(memory.load64_observed(0x80002000).unknown==0x000FFBFE17BF8007ull,
+            "packed context save preserves exact unknown bits in RAM");
+    step(0x8E0B0000);step(0x8E0C0004); // LW t3/t4 from saved fields
+    step(0x408BC000);step(0x408CC800);
+    require(state.bpc_unknown==0x17BF8007u && state.pccr_unknown==0xFFBFEu,"disabled COP0 roundtrip remains symbolic");
+    state.set_reg32(11,0x80000000u);
+    rejects([&]{step(0x408BC000);},"breakpoint enable");
+    rejects([&]{step(0x408BC800);},"counter enable");
+    require(state.bpc_unknown==0x17BF8007u && state.pccr_unknown==0xFFBFEu,"refused activation leaves configuration intact");
+    state.set_reg32(11,0);step(0x408BC000);step(0x408BC800);
+    step(0x4008C000);step(0x4009C800);
+    require(state.reg64(8)==0 && state.reg64(9)==0,"explicit zero writes establish known disabled controls");
+    state.set_reg128_observed(8,1,2,0xFF00,0xFF0000);
+    state.set_reg128_observed(9,3,4,0xF0000000,0xF000000000000000ull);
+    ee::exec<MipsOpcode::Pcpyud>(state,memory,0,0x700003A9u|(8u<<21)|(9u<<16)|(8u<<11));
+    require(state.unknown_gpr_bits[8]==0xFF0000 && state.unknown_gpr_high_bits[8]==0xF000000000000000ull,
+            "PCPYUD transports only selected halves, including alias and upper uncertainty");
+    ee::exec<MipsOpcode::Ppacw>(state,memory,0,0x700004C8u|(8u<<21)|(9u<<16)|(8u<<11));
+    require(state.unknown_gpr_bits[8]==0xF0000000 && state.unknown_gpr_high_bits[8]==0xFF0000,
+            "PPACW discards unselected unknown lanes while preserving selected ones");
+}
+void symbolic_shifts() {
+    EEState s;Memory memory;
+    // Saved BPC/PCCR pair: restoring PCCR discards all BPC bits.
+    s.set_reg128_observed(2,0,0x12345678,0x000FFBFE17BF8007ull,0xFF);
+    ee::exec<MipsOpcode::Dsra32>(s,memory,0,0x0002103Fu);
+    require(s.unknown_gpr_bits[2]==0xFFBFEu && s.gpr[2].low==0 &&
+            s.gpr[2].high==0x12345600 && s.unknown_gpr_high_bits[2]==0xFF,
+            "DSRA32 extracts symbolic PCCR without consuming discarded BPC or upper GPR bits");
+    s.set_reg64_observed(2,0,1);
+    ee::exec<MipsOpcode::Sll>(s,memory,0,(2u<<16)|(3u<<11)|(31u<<6));
+    require(s.unknown_gpr_bits[3]==0xFFFFFFFF80000000ull,"SLL extends uncertainty when it reaches the sign bit");
+    s.set_reg64_observed(2,0,0x8000000000000000ull);
+    ee::exec<MipsOpcode::Dsra32>(s,memory,0,(2u<<16)|(3u<<11)|(31u<<6));
+    require(s.unknown_gpr_bits[3]==~0ull,"DSRA32 replicates unknown sign across all 64 bits");
+    ee::exec<MipsOpcode::Dsrl32>(s,memory,0,(2u<<16)|(3u<<11)|(31u<<6));
+    require(s.unknown_gpr_bits[3]==1,"DSRL32 fills with known zeros");
+    s.set_reg64_observed(2,0x80000000,1);
+    s.set_reg64_observed(4,31,~31ull);
+    ee::exec<MipsOpcode::Srav>(s,memory,0,(4u<<21)|(2u<<16)|(3u<<11));
+    require(s.reg64(3)==~0ull,"SRAV uses only low five count bits and discards unknown payload bit");
+    s.set_reg64_observed(4,0,1);
+    rejects([&]{ee::exec<MipsOpcode::Dsllv>(s,memory,0,(4u<<21)|(2u<<16)|(3u<<11));},"unknown shift count");
+    require(s.reg64(3)==~0ull,"refused unknown shift count leaves destination unchanged");
+}
 void register_context() {
     EEState state;Memory memory;
     memory.reset_for_boot(m20::build_firmware().rom);
@@ -289,6 +344,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();nested_exception();packed_copy();leading_sign_count();register_context();divider();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();nested_exception();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();divider();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

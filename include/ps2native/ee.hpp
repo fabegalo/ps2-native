@@ -64,6 +64,9 @@ struct EEState {
     // (see ee_registers.hpp).
     std::uint64_t retired_instructions{};
     std::array<std::uint32_t, 32> cop0{};
+    // EE Core User's Manual pp.80/84: enables reset clear, configuration
+    // fields are undefined. Context save/restore must retain that distinction.
+    std::uint32_t bpc_unknown{0x17BF8007u}, pccr_unknown{0x000FFBFEu};
     // COP0 Count advances once per EE cycle: it reads as cop0[Count] plus the
     // cycles retired since the last MTC0 Count (count_anchor).
     std::uint64_t count_anchor{};
@@ -82,7 +85,11 @@ struct EEState {
     void set_reg128_observed(unsigned index, std::uint64_t low, std::uint64_t high,
                              std::uint64_t unknown_low, std::uint64_t unknown_high);
     [[nodiscard]] std::uint32_t cp0(Cop0 reg) const noexcept { return cop0[static_cast<unsigned>(reg)]; }
-    void set_cp0(Cop0 reg, std::uint32_t value) noexcept { cop0[static_cast<unsigned>(reg)] = value; }
+    void set_cp0(Cop0 reg, std::uint32_t value) noexcept {
+        cop0[static_cast<unsigned>(reg)] = value;
+        if(reg==Cop0::Debug)bpc_unknown=0;
+        if(reg==Cop0::Perf)pccr_unknown=0;
+    }
 };
 
 // EE core state after a hardware reset: every register cleared, PC at the

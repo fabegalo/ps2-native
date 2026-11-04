@@ -165,37 +165,39 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         else m.vu_add_integer(a_,d_,t_);
     } else if constexpr (Op == O::Nop || Op == O::Sync) {
     // 32-bit shifts produce sign-extended 64-bit results.
-    } else if constexpr (Op == O::Sll) {
-        s.set_reg64(d_, sx32(s.reg32(t_) << a_));
-    } else if constexpr (Op == O::Srl) {
-        s.set_reg64(d_, sx32(s.reg32(t_) >> a_));
-    } else if constexpr (Op == O::Sra) {
-        s.set_reg64(d_, sx32(static_cast<std::uint32_t>(static_cast<std::int32_t>(s.reg32(t_)) >> a_)));
-    } else if constexpr (Op == O::Sllv) {
-        s.set_reg64(d_, sx32(s.reg32(t_) << (s.reg32(s_) & 31u)));
-    } else if constexpr (Op == O::Srlv) {
-        s.set_reg64(d_, sx32(s.reg32(t_) >> (s.reg32(s_) & 31u)));
-    } else if constexpr (Op == O::Srav) {
-        s.set_reg64(d_, sx32(static_cast<std::uint32_t>(
-                            static_cast<std::int32_t>(s.reg32(t_)) >> (s.reg32(s_) & 31u))));
-    } else if constexpr (Op == O::Dsll) {
-        s.set_reg64(d_, s.reg64(t_) << a_);
-    } else if constexpr (Op == O::Dsrl) {
-        s.set_reg64(d_, s.reg64(t_) >> a_);
-    } else if constexpr (Op == O::Dsra) {
-        s.set_reg64(d_, static_cast<std::uint64_t>(s64(s.reg64(t_)) >> a_));
-    } else if constexpr (Op == O::Dsll32) {
-        s.set_reg64(d_, s.reg64(t_) << (a_ + 32u));
-    } else if constexpr (Op == O::Dsrl32) {
-        s.set_reg64(d_, s.reg64(t_) >> (a_ + 32u));
-    } else if constexpr (Op == O::Dsra32) {
-        s.set_reg64(d_, static_cast<std::uint64_t>(s64(s.reg64(t_)) >> (a_ + 32u)));
-    } else if constexpr (Op == O::Dsllv) {
-        s.set_reg64(d_, s.reg64(t_) << (s.reg32(s_) & 63u));
-    } else if constexpr (Op == O::Dsrlv) {
-        s.set_reg64(d_, s.reg64(t_) >> (s.reg32(s_) & 63u));
-    } else if constexpr (Op == O::Dsrav) {
-        s.set_reg64(d_, static_cast<std::uint64_t>(s64(s.reg64(t_)) >> (s.reg32(s_) & 63u)));
+    } else if constexpr (Op == O::Sll || Op == O::Srl || Op == O::Sra ||
+                         Op == O::Sllv || Op == O::Srlv || Op == O::Srav ||
+                         Op == O::Dsll || Op == O::Dsrl || Op == O::Dsra ||
+                         Op == O::Dsll32 || Op == O::Dsrl32 || Op == O::Dsra32 ||
+                         Op == O::Dsllv || Op == O::Dsrlv || Op == O::Dsrav) {
+        constexpr bool wide=Op==O::Dsll || Op==O::Dsrl || Op==O::Dsra ||
+            Op==O::Dsll32 || Op==O::Dsrl32 || Op==O::Dsra32 ||
+            Op==O::Dsllv || Op==O::Dsrlv || Op==O::Dsrav;
+        constexpr bool variable=Op==O::Sllv || Op==O::Srlv || Op==O::Srav ||
+            Op==O::Dsllv || Op==O::Dsrlv || Op==O::Dsrav;
+        constexpr bool left=Op==O::Sll || Op==O::Sllv || Op==O::Dsll || Op==O::Dsll32 || Op==O::Dsllv;
+        constexpr bool arithmetic=Op==O::Sra || Op==O::Srav || Op==O::Dsra || Op==O::Dsra32 || Op==O::Dsrav;
+        constexpr unsigned width=wide ? 64u : 32u;
+        unsigned count=a_;
+        if constexpr(variable) {
+            if(s.unknown_gpr_bits[s_]&(width-1u))
+                throw std::runtime_error("EE shift consumes unknown shift count");
+            count=static_cast<unsigned>(raw_gpr64(s,s_))&(width-1u);
+        } else if constexpr(Op==O::Dsll32 || Op==O::Dsrl32 || Op==O::Dsra32) count+=32u;
+        constexpr auto mask=wide ? ~0ull : 0xFFFFFFFFull;
+        auto value=raw_gpr64(s,t_)&mask, unknown=s.unknown_gpr_bits[t_]&mask;
+        if constexpr(left) {value=(value<<count)&mask;unknown=(unknown<<count)&mask;}
+        else {
+            const auto sign=1ull<<(width-1u);
+            const auto fill=count ? mask^(mask>>count) : 0ull;
+            value=(value>>count)|((arithmetic && (value&sign)) ? fill : 0ull);
+            unknown=(unknown>>count)|((arithmetic && (unknown&sign)) ? fill : 0ull);
+        }
+        if constexpr(!wide) {
+            value=sx32(static_cast<std::uint32_t>(value));
+            if(unknown&0x80000000u)unknown|=0xFFFFFFFF00000000ull;
+        }
+        s.set_reg64_observed(d_,value,unknown);
     } else if constexpr (Op == O::Addu) {
         s.set_reg32_sign_extended(d_, s.reg32(s_) + s.reg32(t_));
     } else if constexpr (Op == O::Subu) {
@@ -291,9 +293,7 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         constexpr auto repeat = 0x0001000100010001ull;
         s.set_reg128(d_, (source.low & 0xFFFFu) * repeat, (source.high & 0xFFFFu) * repeat);
     } else if constexpr (Op == O::Pcpyld) {
-        const auto low = s.reg64(t_);
-        const auto high = s.reg64(s_);
-        s.set_reg128(d_, low, high);
+        s.set_reg128_observed(d_,raw_gpr64(s,t_),raw_gpr64(s,s_),s.unknown_gpr_bits[t_],s.unknown_gpr_bits[s_]);
     } else if constexpr (Op == O::Plzcw) {
         // EE Instruction Set v6 p.215: count the leading sign bits minus
         // one independently in the low two words; preserve upper 64 bits.
@@ -306,12 +306,15 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         }
         s.set_reg64(d_,result);
     } else if constexpr (Op == O::Pcpyud) {
-        const auto low=s.reg128(s_).high, high=s.reg128(t_).high;
-        s.set_reg128(d_,low,high);
+        s.set_reg128_observed(d_,s_ ? s.gpr[s_].high : 0u,t_ ? s.gpr[t_].high : 0u,
+                             s.unknown_gpr_high_bits[s_],s.unknown_gpr_high_bits[t_]);
     } else if constexpr (Op == O::Pextlw || Op == O::Pextuw) {
-        const auto a=s.reg128(s_),b=s.reg128(t_);
+        const auto a=s_ ? s.gpr[s_] : Register128{},b=t_ ? s.gpr[t_] : Register128{};
         const auto x=Op==O::Pextlw?a.low:a.high, y=Op==O::Pextlw?b.low:b.high;
-        s.set_reg128(d_,(y&0xFFFFFFFFu)|(x<<32u),(y>>32u)|(x&0xFFFFFFFF00000000ull));
+        const auto ux=Op==O::Pextlw?s.unknown_gpr_bits[s_]:s.unknown_gpr_high_bits[s_];
+        const auto uy=Op==O::Pextlw?s.unknown_gpr_bits[t_]:s.unknown_gpr_high_bits[t_];
+        s.set_reg128_observed(d_,(y&0xFFFFFFFFu)|(x<<32u),(y>>32u)|(x&0xFFFFFFFF00000000ull),
+                             (uy&0xFFFFFFFFu)|(ux<<32u),(uy>>32u)|(ux&0xFFFFFFFF00000000ull));
     } else if constexpr (Op == O::Psubb) {
         const auto x=s.reg128(s_),y=s.reg128(t_);
         const auto subtract=[](std::uint64_t a,std::uint64_t b) {
@@ -322,8 +325,10 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         };
         s.set_reg128(d_,subtract(x.low,y.low),subtract(x.high,y.high));
     } else if constexpr (Op == O::Ppacw) {
-        const auto a=s.reg128(s_),b=s.reg128(t_);
-        s.set_reg128(d_,(b.low&0xFFFFFFFFu)|(b.high<<32u),(a.low&0xFFFFFFFFu)|(a.high<<32u));
+        const auto a=s_ ? s.gpr[s_] : Register128{},b=t_ ? s.gpr[t_] : Register128{};
+        s.set_reg128_observed(d_,(b.low&0xFFFFFFFFu)|(b.high<<32u),(a.low&0xFFFFFFFFu)|(a.high<<32u),
+            (s.unknown_gpr_bits[t_]&0xFFFFFFFFu)|(s.unknown_gpr_high_bits[t_]<<32u),
+            (s.unknown_gpr_bits[s_]&0xFFFFFFFFu)|(s.unknown_gpr_high_bits[s_]<<32u));
     // PAND/PXOR/POR/PNOR: bitwise over all 128 bits.
     } else if constexpr (Op == O::Pand || Op == O::Pxor || Op == O::Por || Op == O::Pnor) {
         const auto a = s.reg128(s_);

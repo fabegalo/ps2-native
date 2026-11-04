@@ -55,7 +55,9 @@ public:
                 s_.set_reg32_sign_extended(rt, s_.count());
                 return;
             case Cop0::Debug: case Cop0::Perf:
-                stop(StopKind::NotModeled, std::string("MFC0 ") + cop0_name(rd) + " (breakpoint/performance counters)");
+                s_.set_reg64_observed(rt,ee::sx32(s_.cop0[rd]),
+                    rd==static_cast<unsigned>(Cop0::Debug) ? s_.bpc_unknown : s_.pccr_unknown);
+                return;
             case Cop0::Index: case Cop0::EntryLo0: case Cop0::EntryLo1: case Cop0::Context:
             case Cop0::PageMask: case Cop0::Wired: case Cop0::BadVAddr: case Cop0::EntryHi:
             case Cop0::Compare: case Cop0::Status: case Cop0::Cause: case Cop0::Epc: case Cop0::PRid:
@@ -67,6 +69,19 @@ public:
     }
 
     void mtc0(unsigned rt, unsigned rd) {
+        if(rd==static_cast<unsigned>(Cop0::Debug) || rd==static_cast<unsigned>(Cop0::Perf)) {
+            const bool debug=rd==static_cast<unsigned>(Cop0::Debug);
+            const auto value=static_cast<std::uint32_t>(ee::raw_gpr64(s_,rt));
+            const auto unknown=static_cast<std::uint32_t>(s_.unknown_gpr_bits[rt]);
+            const auto enables=debug ? 0xE0000000u : 0x80000000u;
+            if((value|unknown)&enables)
+                stop(StopKind::NotModeled,debug ? "BPC breakpoint enable is active or unknown" : "PCCR counter enable is active or unknown");
+            const auto mask=debug ? 0xF7BF8007u : 0x800FFBFEu;
+            s_.cop0[rd]=value&mask&~unknown;
+            (debug ? s_.bpc_unknown : s_.pccr_unknown)=unknown&mask;
+            event(std::string("MTC0 ")+cop0_name(rd)+" disabled control saved (undefined fields preserved)");
+            return;
+        }
         const auto value = s_.reg32(rt);
         const auto old = s_.cop0[rd];
         std::uint32_t stored = value;
