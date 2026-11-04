@@ -1091,11 +1091,22 @@ std::uint32_t Iop::load(std::uint32_t address, std::size_t bytes, const char* wh
     if (a.kseg2) return io_read(a.physical, bytes, what);
     std::uint32_t value = 0;
     if (a.physical < kIopRamBytes) {
+        std::uint32_t unknown=0;
         for (std::size_t i = 0; i < bytes; ++i) {
-            if (ram_written_[a.physical + i] == 0u && !undefined_load_)
-                undefined_load_ = std::string(what) + " of IOP RAM " + hex(a.physical + static_cast<std::uint32_t>(i)) +
-                                  " at IOP " + hex(pc_) + ", never written with a known value";
+            if (ram_written_[a.physical + i] == 0u) {
+                unknown|=0xFFu<<(8u*i);
+                if(!undefined_load_)undefined_load_=std::string(what)+" of IOP RAM "+hex(a.physical+static_cast<std::uint32_t>(i))+
+                    " at IOP "+hex(pc_)+", never written with a known value";
+            }
             value |= static_cast<std::uint32_t>(ram_[a.physical + i]) << (8u * i);
+        }
+        if(unknown) {
+            const auto width=bytes==4u ? ~0u : (1u<<(bytes*8u))-1u;
+            auto known=width&~unknown;
+            const auto kind=std::string_view(what);
+            if(bytes==1u && (kind=="LBU" || (known&0x80u)))known|=0xFFFFFF00u;
+            if(bytes==2u && (kind=="LHU" || (known&0x8000u)))known|=0xFFFF0000u;
+            undefined_known_=known;
         }
         return value;
     }
@@ -1445,9 +1456,12 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
     if ((sr & kSrIsc) != 0u && a.cached && !a.kseg2) return;
     if (a.kseg2) return io_write(a.physical, bytes, value, what);
     if (a.physical < kIopRamBytes) {
+        const auto raw=value.value_or(observed ? observed->value : 0u);
         for (std::size_t i = 0; i < bytes; ++i) {
-            ram_[a.physical + i] = static_cast<std::uint8_t>(value.value_or(0u) >> (8u * i));
-            ram_written_[a.physical + i] = value ? 1u : 0u;
+            ram_[a.physical + i] = static_cast<std::uint8_t>(raw >> (8u * i));
+            // Copying opaque data does not consume it. Preserve each fully
+            // known byte, while a partially known byte remains unknown.
+            ram_written_[a.physical + i] = value || (observed && !(observed->unknown&(0xFFu<<(8u*i)))) ? 1u : 0u;
         }
         return;
     }
@@ -2537,12 +2551,19 @@ void Iop::step() {
         if (taken) target = pc + 4u + (imm << 2);
     };
     // LWL/LWR merge with the register as it will be after a load in flight.
-    const auto merge_base = [&](unsigned r) {
-        if (delayed && delayed->reg == r) {
-            if (!delayed->defined && !undefined_load_) undefined_load_ = delayed->origin;
-            return delayed->value;
+    const auto merge_base = [&](unsigned r)->PendingLoad {
+        if(delayed && delayed->reg==r)return *delayed;
+        const bool defined=(gpr_defined_&(1u<<r))!=0u;
+        return PendingLoad{r,gpr_[r],defined,defined ? std::string{} : gpr_origin_[r],defined ? ~0u : gpr_known_[r]};
+    };
+    const auto store_value = [&](std::uint32_t address,std::size_t bytes,unsigned r,const char* what) {
+        const auto mask=bytes==4u ? ~0u : (1u<<(bytes*8u))-1u;
+        const auto known=(gpr_defined_&(1u<<r)) ? ~0u : gpr_known_[r];
+        if((known&mask)==mask)store(address,bytes,gpr_[r]&mask,what);
+        else {
+            const ObservedWord observed{gpr_[r],~known};
+            store(address,bytes,std::nullopt,what,&observed,bytes==4u ? gpr_sio2_epoch_[r] : 0u);
         }
-        return reg(r);
     };
 
     switch (op) {
@@ -2660,53 +2681,37 @@ void Iop::step() {
         case 0x23: load_reg(rt, load(reg(rs) + imm, 4u, "LW")); break;
         case 0x24: load_reg(rt, load(reg(rs) + imm, 1u, "LBU")); break;
         case 0x25: load_reg(rt, load(reg(rs) + imm, 2u, "LHU")); break;
-        case 0x22: case 0x26: {                                                                 // LWL / LWR
-            const auto address = reg(rs) + imm;
-            const auto shift = address & 3u;
-            const auto aligned = address & ~3u;
-            auto value = merge_base(rt);
-            if (op == 0x22) {
-                for (unsigned k = 0; k <= shift; ++k) {
-                    const auto bit = 8u * (k + 3u - shift);
-                    value = (value & ~(0xFFu << bit)) | (load(aligned + k, 1u, "LWL") << bit);
-                }
-            } else {
-                for (unsigned k = shift; k < 4u; ++k) {
-                    const auto bit = 8u * (k - shift);
-                    value = (value & ~(0xFFu << bit)) | (load(aligned + k, 1u, "LWR") << bit);
-                }
+        case 0x22: case 0x26: { // LWL/LWR: byte lanes merge with a pending load, including its uncertainty.
+            const auto address=reg(rs)+imm,shift=address&3u,aligned=address&~3u;
+            const auto prior=merge_base(rt);
+            auto value=prior.value,known=prior.defined ? ~0u : prior.known;
+            auto origin=prior.origin;
+            const auto first=op==0x22u ? 0u : shift,last=op==0x22u ? shift+1u : 4u;
+            for(unsigned k=first;k<last;++k) {
+                const auto bit=8u*(op==0x22u ? k+3u-shift : k-shift);
+                undefined_load_.reset();undefined_known_=0;
+                const auto byte=load(aligned+k,1u,op==0x22u ? "LWL" : "LWR");
+                const auto byte_known=undefined_load_ ? undefined_known_&0xFFu : 0xFFu;
+                if(undefined_load_ && byte_known!=0xFFu)origin=*undefined_load_;
+                value=(value&~(0xFFu<<bit))|(byte<<bit);
+                known=(known&~(0xFFu<<bit))|(byte_known<<bit);
             }
-            load_reg(rt, value);
-            break;
+            undefined_load_.reset();undefined_sio2_epoch_=0;
+            if(known!=~0u)undefined_load_=origin.empty() ? "IOP unaligned merge retains unknown source/register bytes" : origin;
+            undefined_known_=known;load_reg(rt,value);break;
         }
-        case 0x28: { const auto v = stored_reg(rt); store(reg(rs) + imm, 1u, v ? std::optional<std::uint32_t>(*v & 0xFFu) : v, "SB"); break; }
-        case 0x29: {
-            const auto value=stored_reg(rt);
-            if(value)store(reg(rs)+imm,2u,*value&0xFFFFu,"SH");
-            else {
-                const ObservedWord observed{gpr_[rt]&0xFFFFu,(~gpr_known_[rt])&0xFFFFu};
-                store(reg(rs)+imm,2u,value,"SH",&observed);
+        case 0x28: store_value(reg(rs)+imm,1u,rt,"SB");break;
+        case 0x29: store_value(reg(rs)+imm,2u,rt,"SH");break;
+        case 0x2B: store_value(reg(rs)+imm,4u,rt,"SW");break;
+        case 0x2A: case 0x2E: { // SWL/SWR transport each selected byte; they never inspect the payload's value.
+            const auto address=reg(rs)+imm,shift=address&3u,aligned=address&~3u;
+            const auto value=gpr_[rt],known=(gpr_defined_&(1u<<rt)) ? ~0u : gpr_known_[rt];
+            const auto first=op==0x2Au ? 0u : shift,last=op==0x2Au ? shift+1u : 4u;
+            for(unsigned k=first;k<last;++k) {
+                const auto bit=8u*(op==0x2Au ? k+3u-shift : k-shift);
+                const ObservedWord byte{(value>>bit)&0xFFu,((~known)>>bit)&0xFFu};
+                store(aligned+k,1u,byte.unknown ? std::nullopt : std::optional<std::uint32_t>{byte.value},op==0x2Au ? "SWL" : "SWR",&byte);
             }
-            break;
-        }
-        case 0x2B: {
-            const auto value=stored_reg(rt);
-            if(value)store(reg(rs)+imm,4u,value,"SW");
-            else {
-                const ObservedWord observed{gpr_[rt],~gpr_known_[rt]};
-                store(reg(rs)+imm,4u,value,"SW",&observed,gpr_sio2_epoch_[rt]);
-            }
-            break;
-        }
-        case 0x2A: case 0x2E: {                                                                 // SWL / SWR
-            const auto address = reg(rs) + imm;
-            const auto shift = address & 3u;
-            const auto aligned = address & ~3u;
-            const auto value = reg(rt);
-            if (op == 0x2A)
-                for (unsigned k = 0; k <= shift; ++k) store(aligned + k, 1u, (value >> (8u * (k + 3u - shift))) & 0xFFu, "SWL");
-            else
-                for (unsigned k = shift; k < 4u; ++k) store(aligned + k, 1u, (value >> (8u * (k - shift))) & 0xFFu, "SWR");
             break;
         }
         default:
