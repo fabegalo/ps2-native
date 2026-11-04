@@ -255,6 +255,50 @@ O ensaio supervisionado usa `out/game-first/superbust-menu-probe.cpp`,
 arquivo local de entrada `superbust-pad.txt` e log `superbust-menu-102.log`.
 Progresso de menu/controle só será registrado após observação real do jogo.
 
+### Continuação supervisionada — ensaios 102 e 103
+
+O ensaio 102 repetiu os pixels do aviso e exercitou Cross, Start e Circle,
+com press/release pelo SIO2; terminou voluntariamente aos 20 minutos,
+2.540.000.000 instruções, EE `0x81FC8`, IOP `0xAE98` ativo. O aviso
+persistiu nesse intervalo. Isso não prova que todos esses botões já eram
+aceitos pelo estado do jogo. Capturas locais `superbust-menu-vblank-*`.
+
+Para observar mais tempo emulado, o diagnóstico 103 compilou offline
+somente os 32 bytes do laço de espera do mesmo kernel, com guardas por
+instrução e conferência de ROM0/perfil e bytes atuais da RAM. Nenhuma
+instrução/ciclo foi pulado. Tradução e ELF privados permanecem ignorados.
+Hash dos 32 bytes `edfd55ab427b1e8c971f6e4165caa558a1d542e69789f27a0bab0316ff5c9f97`;
+ELF local `07e1ecacc4412ad47000847438838e8279266f744fb26816a44dce46054b3470`.
+As entradas do 102 foram repetidas nos mesmos ciclos. Em 2.540.000.000,
+PCs EE/IOP e RAM coincidiram: `57a2ca102852f2044ebd7b2c33c593ec414478b21f2cdf80d26e3048e144dadf`.
+Tempo desse trecho: 852,579 s contra 1.204,92 s, redução de 29,2% numa
+comparação única do diagnóstico, não benchmark geral do produto.
+
+Uma inspeção somente de leitura do processo supervisionado confirmou
+Cross nos buffers reais do EE (`0x1E8C37`, `0x582A03`, `0x582A83`):
+byte de botões alto `FF` para `BF`. A amostra concorrente não é save-state
+coerente. Não houve escrita host em memória convidada ou alteração de flags.
+
+O fluxo saiu do redesenho contínuo do aviso e, em **3.781.852.170**
+instruções, chegou ao GS com sprite UV/PSMT4/DECAL e `TEST=0x5000F`.
+Recusa seguinte: teste de alpha não modelado, EE `0x1CE454`;
+IOP ativo `0xC7A4` / 476.783.608. Scanout preto da transição; ainda
+sem menu demonstrado. RAM `8eea2723acf93a4195dd2e3aae8f4cdc7e94c5072b545e8b06288eab57a0ca85`.
+Log `superbust-menu-103.log`, capturas `superbust-menu103-vblank-*`.
+
+Implementadas as oito comparações ATE e as quatro ações AFAIL sobre
+color/depth, com RGB_ONLY preservando alpha e FBMSK; comparação usa
+alpha após textura e antes de blending. KEEP não consome profundidade
+desconhecida. DATE continua recusado explicitamente. Consulta prévia:
+PS2Recomp `gs_cpu_backend.cpp` na revisão `e5636981`, comportamento da
+classificação do teste e máscaras; nenhuma implementação GPL incorporada.
+Fixtures próprios cobrem tabela de verdade em AREF-1/AREF/AREF+1,
+AFAIL, profundidade, máscaras e alpha DECAL diferente do alpha de vértice.
+Oito testes gráficos/DMA/Direct ELF passaram. Um teste Direct ELF foi
+alinhado ao motivo específico atual de recusa MSCAL sem motor VU.
+Reexecução seguinte: harness `superbust-menu104-probe.cpp`, mesma sequência
+de entrada do 103; nenhum resultado de menu antecipado.
+
 BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;
 ELF `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`.
 Seis arquivos IOP/IOPRP202, com hashes locais em `out/game-first/superbust-irx-manifest.json`.

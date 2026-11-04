@@ -53,7 +53,7 @@ void check_timer_edges() {
 }
 void check_vif() {
     Vif1 vif; Gif gif; GsRegisters gs; gif.reset();gs.reset(0);
-    rejects([&]{vif.write_fifo(0x14000000u,0,gif,gs);},"VIF1 command unsupported");
+    rejects([&]{vif.write_fifo(0x14000000u,0,gif,gs);},"MSCAL requires the shared VU micro engine");
     vif.write_fifo(0x50000001u,~0ull,gif,gs); // padding after DIRECT is skipped
     require(vif.direct_remaining()==1,"DIRECT aligns to next qword");
     vif.write_fifo(1u<<15,0,gif,gs); // empty EOP GIF packet

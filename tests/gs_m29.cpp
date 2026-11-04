@@ -248,6 +248,11 @@ void check_textured_sprites() {
     sprite(0,0);
     require(gs.vram().read(0,64,0,0,0)==0x80400010 && gs.vram().read(0,64,0,1,0)==0x80400008 &&
             gs.vram().read(0,64,0,2,0)==0x80400018,"T8 CSM1 exchanges index bits 3/4; DECAL RGB keeps fragment alpha");
+    gs.general_write(6,tex8|(1ull<<34));
+    gs.general_write(0x47,(3u<<16)|1u|(5u<<1)|(0x40u<<4));sprite(0,0);
+    require(gs.vram().read(0,64,0,0,0)==0x80400010,
+            "alpha comparison uses textured DECAL alpha before blending, not vertex alpha");
+    gs.general_write(0x47,3u<<16);gs.general_write(6,tex8);
     sprite(8,0,8,128,256);
     require(gs.vram().read(0,64,0,8,0)==0x80400010,"repeat wraps a full texture width");
     rejects([&]{gs.general_write(6,tex8|(1ull<<55)|(1ull<<61));},"CSM1");
@@ -264,6 +269,33 @@ void check_textured_sprites() {
     require(blend.vram().read(0,64,0,0,0)==0x80000000,"negative blend saturates to zero");
 }
 void check_drawing_scanout() {
+    // Truth table around AREF, independently of blending/frame masks.
+    constexpr bool comparison[8][3]={{false,false,false},{true,true,true},
+        {true,false,false},{true,true,false},{false,true,false},
+        {false,true,true},{false,false,true},{true,false,true}};
+    for(unsigned mode=0;mode<8;++mode)for(unsigned sample=0;sample<3;++sample) {
+        GsRegisters a;a.reset(0);configure_draw(a);a.general_write(0,0);
+        a.general_write(0x4E,1u|(10u<<24));a.general_write(5,5ull<<32);
+        const auto source=((127u+sample)<<24)|0x112233u;
+        a.general_write(1,source);a.general_write(0x47,(3u<<16)|1u|(mode<<1)|(128u<<4));
+        a.general_write(5,7ull<<32);
+        require(a.vram().read(0,64,0,0,0)==(comparison[mode][sample]?source:0x80402010u) &&
+            a.vram().read_depth(8192,64,10,0,0)==(comparison[mode][sample]?7u:5u),
+            "all eight alpha comparisons gate both color and depth before blending");
+    }
+    for(unsigned fail=0;fail<4;++fail) {
+        GsRegisters a;a.reset(0);configure_draw(a);a.general_write(0,0);
+        a.general_write(0x4E,1u|(10u<<24));a.general_write(5,5ull<<32);
+        a.general_write(0x4C,(1u<<16)|(0xFF00ull<<32));a.general_write(1,0x22112233u);
+        a.general_write(0x47,(3u<<16)|1u|(fail<<12));a.general_write(5,7ull<<32);
+        const unsigned expected[]={0x80402010u,0x22112033u,0x80402010u,0x80112033u};
+        require(a.vram().read(0,64,0,0,0)==expected[fail] &&
+            a.vram().read_depth(8192,64,10,0,0)==(fail==2u?7u:5u),
+            "AFAIL KEEP/FB_ONLY/ZB_ONLY/RGB_ONLY preserve framebuffer mask and alpha");
+    }
+    { GsRegisters a;a.reset(0);configure_draw(a);a.general_write(0,0);
+      a.general_write(0x47,0x50001u);a.general_write(5,0);
+      require(a.vram().pixel_writes()==0,"alpha KEEP avoids consuming unwritten destination depth"); }
     check_textured_sprites();
     {
         GsRegisters experiment;experiment.reset(0);
@@ -335,7 +367,7 @@ void check_drawing_scanout() {
     require(gs.vram().read(0,64,0,2,2)==0x80554433u,"XYZ3 suppresses kick");
     gs.general_write(0,3); rejects([&]{gs.general_write(5,0);},"point/sprite only");
     gs.general_write(0,6u|16u); rejects([&]{gs.general_write(5,0);},"texture");
-    configure_draw(gs); gs.general_write(0x47,1); gs.general_write(5,0);
+    configure_draw(gs); gs.general_write(0x47,1u<<14); gs.general_write(5,0);
     rejects([&]{gs.general_write(5,64u|(64ull<<16));},"alpha/depth");
     gs.write(kGsPmode,8,0,0,{}); rejects([&]{(void)gs.scanout(0);},"disabled");
     gs.write(kGsPmode,8,0xFF25,0,{}); gs.write(kGsSmode2,8,0,0,{});

@@ -178,8 +178,8 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     const auto scissor = required(static_cast<std::uint8_t>(0x40u + context));
     const auto test = required(static_cast<std::uint8_t>(0x47u + context));
     const auto zbuf = required(static_cast<std::uint8_t>(0x4Eu + context));
-    if ((test & 1u) || (test & (1u << 14)))
-        throw DeviceRefusal("GS alpha/depth pipeline: alpha tests are not modeled");
+    if (test & (1u << 14))
+        throw DeviceRefusal("GS alpha/depth pipeline: destination alpha test is not modeled");
     // Without blending or texture arithmetic, byte colors cannot overflow;
     // PABE/COLCLAMP and 16-bit dithering cannot affect a CT32/24 write.
     const bool conditional = !general_[0x22];
@@ -241,11 +241,6 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     for (int y = top; y < bottom; ++y) {
         if ((scanmask == 2u && !(y & 1)) || (scanmask == 3u && (y & 1))) continue;
         for (int x = left; x < right; ++x) {
-            if (ztest && zfunc == 0u) continue;
-            if (ztest && zfunc >= 2u) {
-                const auto old = vram_.read_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y));
-                if (z < old || (zfunc == 3u && z == old)) continue;
-            }
             auto color=fragment;
             if(textured) {
                 const auto sampled=sample_texture(tex,clamp,
@@ -259,34 +254,67 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
                     color|=component<<(8u*c);
                 }
             }
-            bool blend=blended;
-            if(blend && !(color&0x80000000u))blend=(required(0x49)&1u)==0u;
-            if(blend) {
-                auto factor=static_cast<int>((color>>24)&255u);
-                if(aa==ab)factor=0;
-                else if(ac==2u)factor=static_cast<int>((alpha>>32)&255u);
-                else if(ac==1u)factor=psm==1u ? 128 : static_cast<int>(vram_.read(base,bw,psm,
-                    static_cast<unsigned>(x),static_cast<unsigned>(y))>>24);
-                const auto sc=(int(aa==0u)-int(ab==0u))*factor+128*int(ad==0u);
-                const auto dc=(int(aa==1u)-int(ab==1u))*factor+128*int(ad==1u);
-                // Reduce the equation before reading destination RGB. For
-                // (Cs-Cd)*128/128+Cd the destination cancels exactly.
-                const auto dst=dc ? vram_.read(base,bw,1u,static_cast<unsigned>(x),static_cast<unsigned>(y)) : 0u;
-                auto result=color&0xFF000000u;
-                for(unsigned c=0;c<3;++c) {
-                    const auto sum=sc*static_cast<int>((color>>(8u*c))&255u)+dc*static_cast<int>((dst>>(8u*c))&255u);
-                    const auto channel=sum>=0 ? sum/128 : (sum-127)/128;
-                    result|=(saturate ? static_cast<unsigned>(std::clamp(channel,0,255)) : static_cast<unsigned>(channel)&255u)<<(8u*c);
+            bool color_write=true,depth_write=zwrite;
+            auto write_mask=static_cast<std::uint32_t>(frame>>32);
+            if(test&1u) {
+                const auto a=color>>24,reference=static_cast<unsigned>((test>>4)&255u);
+                bool pass=false;
+                switch((test>>1)&7u) {
+                    case 0: break; // NEVER
+                    case 1: pass=true;break;
+                    case 2: pass=a<reference;break;
+                    case 3: pass=a<=reference;break;
+                    case 4: pass=a==reference;break;
+                    case 5: pass=a>=reference;break;
+                    case 6: pass=a>reference;break;
+                    case 7: pass=a!=reference;break;
                 }
-                color=result;
+                if(!pass) {
+                    switch((test>>12)&3u) {
+                        case 0: continue; // KEEP, including no depth read
+                        case 1: depth_write=false;break; // FB_ONLY
+                        case 2: color_write=false;break; // ZB_ONLY
+                        case 3: depth_write=false;write_mask|=0xFF000000u;break; // RGB_ONLY
+                    }
+                }
             }
-            const auto color_unknown=!fba && !(color&0x80000000u) ? 0x80000000u : 0u;
-            if(fba && (*fba&1u))color|=0x80000000u;
-            texture_write_guard(GsVram::address(base,bw,psm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
-            if(zwrite)texture_write_guard(GsVram::depth_address(zbase,bw,zpsm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
-            vram_.write(base, bw, psm, static_cast<unsigned>(x), static_cast<unsigned>(y), color,
-                         static_cast<std::uint32_t>(frame >> 32), color_unknown, conditional);
-            if (zwrite) vram_.write_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y), z, conditional);
+            if (ztest && zfunc == 0u) continue;
+            if (ztest && zfunc >= 2u) {
+                const auto old = vram_.read_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y));
+                if (z < old || (zfunc == 3u && z == old)) continue;
+            }
+            if(color_write) {    
+                bool blend=blended;
+                if(blend && !(color&0x80000000u))blend=(required(0x49)&1u)==0u;
+                if(blend) {
+                    auto factor=static_cast<int>((color>>24)&255u);
+                    if(aa==ab)factor=0;
+                    else if(ac==2u)factor=static_cast<int>((alpha>>32)&255u);
+                    else if(ac==1u)factor=psm==1u ? 128 : static_cast<int>(vram_.read(base,bw,psm,
+                        static_cast<unsigned>(x),static_cast<unsigned>(y))>>24);
+                    const auto sc=(int(aa==0u)-int(ab==0u))*factor+128*int(ad==0u);
+                    const auto dc=(int(aa==1u)-int(ab==1u))*factor+128*int(ad==1u);
+                    // Reduce the equation before reading destination RGB. For
+                    // (Cs-Cd)*128/128+Cd the destination cancels exactly.
+                    const auto dst=dc ? vram_.read(base,bw,1u,static_cast<unsigned>(x),static_cast<unsigned>(y)) : 0u;
+                    auto result=color&0xFF000000u;
+                    for(unsigned c=0;c<3;++c) {
+                        const auto sum=sc*static_cast<int>((color>>(8u*c))&255u)+dc*static_cast<int>((dst>>(8u*c))&255u);
+                        const auto channel=sum>=0 ? sum/128 : (sum-127)/128;
+                        result|=(saturate ? static_cast<unsigned>(std::clamp(channel,0,255)) : static_cast<unsigned>(channel)&255u)<<(8u*c);
+                    }
+                    color=result;
+                }
+                const auto color_unknown=!fba && !(color&0x80000000u) ? 0x80000000u : 0u;
+                if(fba && (*fba&1u))color|=0x80000000u;
+                texture_write_guard(GsVram::address(base,bw,psm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
+                vram_.write(base, bw, psm, static_cast<unsigned>(x), static_cast<unsigned>(y), color,
+                             write_mask, color_unknown, conditional);
+            }
+            if (depth_write) {
+                texture_write_guard(GsVram::depth_address(zbase,bw,zpsm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
+                vram_.write_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y), z, conditional);
+            }
         }
     }
     first_vertex_.reset();

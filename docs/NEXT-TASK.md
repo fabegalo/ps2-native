@@ -1,5 +1,24 @@
 # Próxima execução — jogos reais
 
+Pedido atual: continuar Super Bust-A-Move do aviso de Memory Card até o
+menu e comprovar resposta aos controles. SIO2 agora aceita press/release;
+Cross chegou aos buffers EE sem escrita host em RAM. O ensaio 103 passou
+o redesenho do aviso, mas parou em `0x1CE454` / 3.781.852.170, teste de
+alpha GS. ATE/AFAIL implementados, oito testes focados passaram; executar
+`out/game-first/superbust-menu104-run.cmd` após build coerente para passar
+essa fronteira e investigar as seguintes. Capturar apenas pixels reais.
+Entrada supervisionada em `out/game-first/superbust-pad.txt`, palavra
+hex ativa baixa; `FFFF` solto, `BFFF` Cross, `FFF7` Start, `DFFF` Circle;
+`10000` encerra voluntariamente no próximo VBLANK conhecido.
+O harness 104 repete as entradas do 103 até o bloqueio antigo e depois
+aceita o arquivo. Limite 60 minutos/8 bilhões, processo sempre acompanhado.
+Usa AOT local do laço do mesmo kernel, bytes/ROM0 conferidos; em 2,54
+bilhões o 103 reproduziu PCs/RAM do 102 em 29,2% menos tempo. Nenhum
+save-state completo disponível. Hipóteses do diagnóstico permanecem
+explícitas. Evidência em FIRST-GAME-STATUS, sem menu ainda demonstrado.
+
+## Checkpoint preservado — Simpsons
+
 Continuação de The Simpsons: Hit & Run (SLUS-20624), ensaio 5: EE
 `0x80005F00` / 93.117.072, IOP `0x25E34` / 15.691.717, SCMD 08 ReadRTC
 não modelado. Investigar fonte/estado do RTC, formato BCD e transporte
