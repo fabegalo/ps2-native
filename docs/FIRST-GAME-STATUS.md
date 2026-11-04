@@ -236,6 +236,25 @@ Nenhum código dessas referências foi integrado. Quatro testes focados
 
 ## 04/11/2026 — Super Bust-A-Move (SLUS-20115)
 
+### Entrada digital durante a execução
+
+`set_sio2_digital_pad_buttons` atualiza os botões ativos em nível baixo
+de um controle digital explicitamente conectado. Não conecta periférico
+implicitamente nem muda timing/configuração. A resposta de um pacote já
+iniciado mantém a amostra anterior; apertar/soltar chega aos polls seguintes.
+Reset remove a conexão. Teste próprio exercita três polls, Cross solto,
+pressionado e solto, incluindo alterações durante pacotes em trânsito.
+Os três testes focados SIO2 pad/DMA/idle passaram.
+
+Consulta prévia de comportamento: PS2Recomp `ps2xRuntime/src/lib/ps2_pad.cpp`,
+revisão `e5636981`, entrada host em bits ativos baixos; o caminho HLE não
+foi adotado. Protocolo independente em
+[psx-spx](https://psx-spx.consoledev.net/controllersandmemorycards/).
+Implementação BSD original, sem código da referência incorporado.
+O ensaio supervisionado usa `out/game-first/superbust-menu-probe.cpp`,
+arquivo local de entrada `superbust-pad.txt` e log `superbust-menu-102.log`.
+Progresso de menu/controle só será registrado após observação real do jogo.
+
 BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;
 ELF `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`.
 Seis arquivos IOP/IOPRP202, com hashes locais em `out/game-first/superbust-irx-manifest.json`.

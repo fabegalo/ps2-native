@@ -69,6 +69,29 @@ void rejected_configuration() {
         iop.ee_read(0x310u,4)==0xF75A41FFu && iop.ee_read(0x314u,1)==0xFFu,
         "a rejected configuration packet leaves the digital ID and actual button state unchanged on the next poll");
 }
+void live_buttons() {
+    m20::Assembler a(kEeResetVector);sw(a,0xBF801070u,0);
+    for(unsigned attempt=0;attempt<3u;++attempt) {
+        sw(a,0xBF808268u,0x3BCu);packet(a,0,5u,0x42u);
+        sw(a,0xBF808204u,0);sw(a,0xBF808268u,0x3B1u);
+        a.label("sampled"+std::to_string(attempt));
+        for(unsigned n=0;n<80u;++n)a.nop();
+        a.la(8,0xBF808264u);a.la(10,0xA0000300u+attempt*16u);
+        for(unsigned n=0;n<5u;++n){a.lbu(9,0,8);a.nop();a.sb(9,n,10);}
+        sw(a,0xBF808280u,1u);
+    }
+    const auto data=rom(a);Iop iop;iop.reset(data,nullptr);
+    rejects([&]{iop.set_sio2_digital_pad_buttons(0,0);},"attached");
+    iop.diagnostic_sio2_digital_pad(0,0xFFFFu,32);
+    iop.run_until((a.at("sampled0")-kEeResetVector)/4u);
+    iop.set_sio2_digital_pad_buttons(0,0xBFFFu); // Cross down after first packet sampled.
+    iop.run_until((a.at("sampled1")-kEeResetVector)/4u);
+    iop.set_sio2_digital_pad_buttons(0,0xFFFFu); // release after second sampled.
+    iop.run_until(1000);require(!iop.stopped(),iop.stop_reason().value_or("running"));
+    require(iop.ee_read(0x303,1)==0xFFu && iop.ee_read(0x304,1)==0xFFu && iop.ee_read(0x313,1)==0xFFu && iop.ee_read(0x314,1)==0xBFu &&
+            iop.ee_read(0x323,1)==0xFFu && iop.ee_read(0x324,1)==0xFFu,"press/release reaches subsequent polls without rewriting in-flight bytes");
+    iop.reset(data,nullptr);rejects([&]{iop.set_sio2_digital_pad_buttons(0,0);},"attached");
+}
 }
 int main() try {
     for(unsigned ports=1;ports<=2;++ports)for(const auto buttons:{0xFFFFu,0xA55Au,0u})for(const auto cycles:{32u,64u})fifo(ports,static_cast<std::uint16_t>(buttons),cycles);
@@ -78,5 +101,5 @@ int main() try {
     iop.diagnostic_sio2_digital_pad(0,0,32);rejects([&]{iop.diagnostic_sio2_unplugged_ports(1,32);},"conflicts");
     rejects([&]{iop.diagnostic_sio2_digital_pad(1,0,64);},"share");
     iop.reset({},nullptr);iop.diagnostic_sio2_unplugged_ports(1,32);rejects([&]{iop.diagnostic_sio2_digital_pad(0,0,32);},"unplugged");
-    dma();rejected_configuration();std::cout<<"Digital pad serial payload, button state, timing, status and DMA passed\n";return 0;
+    dma();rejected_configuration();live_buttons();std::cout<<"Digital pad serial payload, button state, timing, status and DMA passed\n";return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

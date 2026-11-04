@@ -183,6 +183,9 @@ public:
     // Standard digital pad with explicit active-low buttons and unmeasured
     // packet duration. No analog/configuration commands are inferred.
     void diagnostic_sio2_digital_pad(unsigned port,std::uint16_t buttons,std::uint32_t packet_cycles);
+    // Host input for an explicitly attached digital pad. Active-low bits;
+    // a packet already started retains its sampled reply.
+    void set_sio2_digital_pad_buttons(unsigned port,std::uint16_t buttons);
     void diagnostic_sio2_unplugged_ports(unsigned mask,std::uint32_t timeout_cycles);
     void diagnostic_sio2_dma_word_cycles(std::uint32_t cycles);
     [[nodiscard]] std::uint64_t sio2_dma_words(unsigned channel) const { return sio2_dma_.at(channel).words; }

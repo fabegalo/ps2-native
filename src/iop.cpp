@@ -1252,6 +1252,11 @@ void Iop::diagnostic_sio2_port_timing(unsigned bits) {
     if(bits>3u || cycle_)throw DeviceRefusal("SIO2 port timing bits require a two-bit sample before guest execution");
     diagnostic_sio2_port_timing_=bits;
 }
+void Iop::set_sio2_digital_pad_buttons(unsigned port,std::uint16_t buttons) {
+    if(port>=sio2_digital_pads_.size() || !sio2_digital_pads_[port])
+        throw DeviceRefusal("SIO2 input requires an explicitly attached digital pad on port 0/1");
+    sio2_digital_pads_[port]=static_cast<std::uint16_t>(buttons|6u);
+}
 void Iop::diagnostic_sio2_dma_word_cycles(std::uint32_t cycles) {
     if(!cycles || cycle_)throw DeviceRefusal("SIO2 DMA experiment requires positive word cycles before guest execution");
     diagnostic_sio2_dma_cycles_=cycles;

@@ -84,6 +84,7 @@ public:
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles) { iop_.diagnostic_sio2_infrared_timeout(cycles); }
     void diagnostic_sio2_port_timing(unsigned bits) { iop_.diagnostic_sio2_port_timing(bits); }
     void diagnostic_sio2_digital_pad(unsigned port,std::uint16_t buttons,std::uint32_t cycles) { iop_.diagnostic_sio2_digital_pad(port,buttons,cycles); }
+    void set_sio2_digital_pad_buttons(unsigned port,std::uint16_t buttons) { iop_.set_sio2_digital_pad_buttons(port,buttons); }
     void diagnostic_sio2_dma_word_cycles(std::uint32_t cycles) { iop_.diagnostic_sio2_dma_word_cycles(cycles); }
     void diagnostic_sio2_reset_clears_completion() { iop_.diagnostic_sio2_reset_clears_completion(); }
     void diagnostic_sio2_unplugged_ports(unsigned mask,std::uint32_t cycles) { iop_.diagnostic_sio2_unplugged_ports(mask,cycles); }
