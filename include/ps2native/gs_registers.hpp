@@ -93,6 +93,10 @@ public:
     // Explicit hypothesis, disabled by default: GS reset invalidates texture
     // cache tags. This defines no VRAM data and fabricates no TEXFLUSH write.
     void diagnostic_texture_cache_reset_invalid();
+    // Independent diagnostic arithmetic assumptions: bit0 nominal rational
+    // UV interpolation floored to 10.4; bit1 horizontal then vertical
+    // bilinear truncation. Neither claims measured GS DDA/filter precision.
+    void diagnostic_texture_precision(unsigned modes);
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes) const;
     [[nodiscard]] ObservedDoubleword observe_csr() const noexcept {
         auto result=ObservedDoubleword{events_,std::uint64_t{unknown_events_}|~std::uint64_t{0x1F}};
@@ -161,6 +165,7 @@ private:
     std::optional<bool> diagnostic_reset_field_,field_;
     std::optional<unsigned> diagnostic_reset_scanmask_;
     bool diagnostic_reset_texture_cache_invalid_{};
+    unsigned diagnostic_texture_precision_{};
     std::optional<std::uint64_t> csr_written_;
     std::array<std::optional<std::uint64_t>, 256> general_{};
     std::array<std::uint64_t,256> general_unknown_{};

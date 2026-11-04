@@ -6,9 +6,10 @@ using namespace ps2native;
 using namespace boot_checks;
 namespace {
 std::uint32_t source(unsigned x,unsigned y){return 0x80000000u|(x*16u)|(y*16u<<8u)|((x+y)*8u<<16u);}
-void setup(GsRegisters& gs,bool flush=true,bool cold_experiment=false,bool cold_reset=true) {
+void setup(GsRegisters& gs,bool flush=true,bool cold_experiment=false,bool cold_reset=true,unsigned precision=0) {
     if(cold_reset)gs.reset(0);
     if(cold_experiment)gs.diagnostic_texture_cache_reset_invalid();
+    if(precision)gs.diagnostic_texture_precision(precision);
     gs.general_write(0,0x116);gs.general_write(1,0x3F80000080808080ull);
     gs.general_write(0x18,0);gs.general_write(0x1A,1);gs.general_write(0x4C,1u<<16u);
     gs.general_write(0x40,(7ull<<16u)|(7ull<<48u));gs.general_write(0x47,3u<<16u);
@@ -85,5 +86,20 @@ int main() try {
     setup(diagnostic,false,false,false);pixel(diagnostic,0,0,8,8);
     require(diagnostic.vram().read(0,64,0,0,0)==source(0,0),"soft reset preserves the explicitly selected cache-tag experiment");
     setup(diagnostic,false);rejects([&]{pixel(diagnostic,0,0,8,8);},"initial TEXFLUSH");
+    const auto fractional=[](GsRegisters& device) {
+        device.general_write(0x14,0);device.general_write(0,0x116);
+        device.general_write(3,8u|(8ull<<16u));device.general_write(5,32ull<<16u);
+        device.general_write(3,24u|(24ull<<16u));device.general_write(5,48u|(48ull<<16u));
+    };
+    GsRegisters ideal;setup(ideal,true,false,true,1);fractional(ideal);
+    require(ideal.vram().read(0,64,0,0,2)==source(0,0) && ideal.vram().read(0,64,0,1,2)==source(0,0) &&
+        ideal.vram().read(0,64,0,2,2)==source(1,0),"nominal-DDA experiment uses actual coordinates/VRAM and floors rational subtexel positions");
+    ideal.general_write(0x14,0x60);rejects([&]{pixel(ideal,0,0,9,9);},"bilinear truncation");
+    rejects([&]{ideal.diagnostic_texture_precision(3);},"before guest activity");
+    GsRegisters staged;setup(staged,true,false,true,2);pixel(staged,0,0,9,9);
+    require(staged.vram().read(0,64,0,0,0)==0x80000101u,"separable-filter experiment exposes both truncation stages rather than rounding a host bilinear sample");
+    rejects([&]{fractional(staged);},"fractional UV DDA");
+    setup(staged);rejects([&]{pixel(staged,0,0,9,9);},"bilinear truncation");
+    GsRegisters invalid;invalid.reset(0);rejects([&]{invalid.diagnostic_texture_precision(4);},"valid modes");
     std::cout<<"Exact level-zero bilinear/nearest, subtexel centers, independent edge wrapping, fixed LOD and explicit rounding boundaries passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

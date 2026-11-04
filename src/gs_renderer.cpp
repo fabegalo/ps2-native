@@ -288,14 +288,17 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
                ac=static_cast<unsigned>((alpha>>4)&3u),ad=static_cast<unsigned>((alpha>>6)&3u);
     if(blended && (aa==3u || ab==3u || ac==3u || ad==3u))throw DeviceRefusal("GS reserved alpha selector");
     const bool saturate=blended && (required(0x46)&1u);
-    const auto uv_at=[](int pixel,int p0,int p1,int t0,int t1) {
+    const auto uv_at=[&](int pixel,int p0,int p1,int t0,int t1) {
         auto den=std::int64_t{p1}-p0;
         auto num=std::int64_t{t0}*den+std::int64_t{t1-t0}*(pixel*16-p0);
         if(den<0){den=-den;num=-num;}
         // Exact 10.4 coordinates avoid inventing the GS DDA's precision for
         // fractional slopes. Scaled/flipped integer-step sprites are covered.
-        if(!den || num%den)throw DeviceRefusal("GS fractional UV DDA precision is not modeled");
-        const auto fixed=num/den;
+        if(!den || (num%den && !(diagnostic_texture_precision_&1u)))throw DeviceRefusal("GS fractional UV DDA precision is not modeled");
+        // Explicit experiment only: ideal rational interpolation, floored
+        // to the public 10.4 UV format. Real GS reciprocal/DDA truncation is
+        // not certified by this arithmetic (see jbit's measured sprites).
+        const auto fixed=num/den-(num<0 && num%den ? 1 : 0);
         return static_cast<int>(fixed);
     };
     const auto filtered_texture=[&](int u,int v) {
@@ -318,9 +321,14 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
             // No rounding hypothesis: accept only results also exact in
             // either separable evaluation order. Fractional cases remain
             // explicit until the GS truncation stages have evidence.
-            if(top%16u || (fy && bottom%16u) || left%16u || (fx && right%16u) || sum%256u)
-                throw DeviceRefusal("GS fractional bilinear truncation stages are not established");
-            color|=(sum/256u)<<(channel*8u);
+            auto value=sum/256u;
+            if(top%16u || (fy && bottom%16u) || left%16u || (fx && right%16u) || sum%256u) {
+                if(!(diagnostic_texture_precision_&2u))throw DeviceRefusal("GS fractional bilinear truncation stages are not established");
+                // Separately selected functional hypothesis, not a hardware
+                // measurement: truncate each horizontal lerp, then vertical.
+                value=((top/16u)*(16u-fy)+(bottom/16u)*fy)/16u;
+            }
+            color|=value<<(channel*8u);
         }
         return color;
     };
