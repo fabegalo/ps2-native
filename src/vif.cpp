@@ -7,7 +7,11 @@ namespace ps2native {
 std::uint32_t Vif::read_register(std::uint32_t offset) const {
     // EE User's Manual v6, pp.136 and 143-146. With synchronous FIFO
     // acceptance, DIRECT can wait for data but no qwords remain queued.
-    if(offset==0) return (processing() ? 1u : 0u)|(mark_detected_ ? 0x40u : 0u);
+    if(offset==0) {
+        const auto status=observe_status();
+        if(status.unknown)refuse(" STAT consumes unknown double-buffer phase; OFFSET has not established it");
+        return status.value;
+    }
     if(offset&15u) refuse(" registers require aligned 32-bit accesses");
     if(unit_==Unit::Vu0 && (offset==0xA0u || offset==0xB0u || offset==0xC0u || offset==0xE0u))
         refuse(" register is reserved (double buffering exists only on VIF1)");
@@ -91,16 +95,17 @@ void Vif::unpack_word(std::uint32_t word,VuControl& vu) {
     unpack_index_=0;--unpack_left_;++unpack_address_;
     if(++unpack_cycle_==unpack_wl_){unpack_address_+=unpack_cl_-unpack_wl_;unpack_cycle_=0;}
 }
-void Vif::write_fifo(std::uint64_t low, std::uint64_t high, Gif& gif, GsRegisters& gs,VuControl* vu) {
+void Vif::write_fifo(std::uint64_t low, std::uint64_t high, Gif& gif, GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
     const std::array<std::uint32_t,4> words{static_cast<std::uint32_t>(low), static_cast<std::uint32_t>(low >> 32),
         static_cast<std::uint32_t>(high), static_cast<std::uint32_t>(high >> 32)};
-    write_words(words,gif,gs,vu);
+    write_words(words,gif,gs,vu,cycle);
 }
-void Vif::write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs,VuControl* vu) {
+void Vif::write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
     const std::array<std::uint32_t,2> words{static_cast<std::uint32_t>(data),static_cast<std::uint32_t>(data>>32)};
-    write_words(words,gif,gs,vu);
+    write_words(words,gif,gs,vu,cycle);
 }
-void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters& gs,VuControl* vu) {
+void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
+    if(vu)vu->advance_micro(cycle);
     for (std::size_t lane=0;lane<words.size();++lane) {
         const auto command=words[lane];
         if(direct_left_) {
@@ -141,7 +146,7 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
         switch(opcode) {
             case 0: break; // NOP ignores NUM and IMMEDIATE.
             case 1: programmed_[4]=immediate;break;
-            case 2: programmed_[11]=immediate&0x3FFu;programmed_[12]=programmed_[10];break;
+            case 2: programmed_[11]=immediate&0x3FFu;programmed_[12]=programmed_[10];dbf_=false;break;
             case 3: programmed_[10]=immediate&0x3FFu;break;
             case 4: programmed_[9]=immediate&0x3FFu;break; // ITOPS, copied to ITOP only by a real start.
             case 5:
@@ -149,24 +154,36 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
                 programmed_[5]=immediate&3u;break;
             case 6: gif.set_vif_path3_mask((immediate&0x8000u)!=0u);break;
             case 7: mark_=immediate;mark_detected_=true;break;
-            case 0x10: // FLUSHE: both micro engines are Ready; every start is refused.
+            case 0x10: // FLUSHE waits for this VU, never marks it Ready.
+                if(vu && vu->micro_running(unit_==Unit::Vu1))refuse(" FLUSHE waits for the active microprogram; FIFO backpressure is not modeled");
                 break;
             case 0x11:
                 // EE manual: FLUSH waits for VU1 and PATH1/2, not PATH3.
-                // No microprogram/XGKICK can start in this runtime. An
-                // incomplete DIRECT packet still requires actual GIF data;
-                // refuse its unmodeled stall instead of discarding it.
+                if(vu && vu->micro_running(1))refuse(" FLUSH waits for the active microprogram; FIFO backpressure is not modeled");
                 if(((gif.read_stat()>>10u)&3u)==2u)
                     refuse(" FLUSH waits for an incomplete GIF PATH2 transfer; stall is not modeled");
                 break;
+            case 0x14: {
+                if(!vu)refuse(" MSCAL requires the shared VU micro engine");
+                const auto unit=unit_==Unit::Vu1 ? 1u : 0u;
+                vu->start_micro(unit,immediate,cycle);
+                programmed_[13]=programmed_[9]; // Unknown ITOPS remains unknown.
+                if(unit) {
+                    programmed_[14]=programmed_[12];
+                    if(dbf_)dbf_=!*dbf_;
+                    programmed_[12]=dbf_ && programmed_[10] && (!*dbf_ || programmed_[11]) ?
+                        std::optional<std::uint32_t>{(*programmed_[10]+(*dbf_ ? *programmed_[11] : 0u))&0x3FFu} : std::nullopt;
+                }
+                break;
+            }
             case 0x20: pending_=Pending::Mask;break;
             case 0x30: pending_=Pending::Row;break;
             case 0x31: pending_=Pending::Col;break;
             case 0x4A: {
                 // EE manual 6.3.3/MPG: the following instructions are
-                // aligned 64-bit data, not VIF commands. Every VU start
-                // is still refused, so the target micro engine is Ready.
+                // aligned 64-bit data, not VIF commands.
                 if(!vu)refuse(" MPG requires the shared VU micro memory");
+                if(vu->micro_running(unit_==Unit::Vu1))refuse(" MPG waits for the active microprogram; FIFO backpressure is not modeled");
                 if((lane+1u)&1u)refuse(" MPG payload requires 64-bit alignment");
                 const auto bytes=unit_==Unit::Vu0 ? 4096u : 16384u;
                 if(immediate>=bytes/8u)refuse(" MPG load address exceeds this VU micro memory");

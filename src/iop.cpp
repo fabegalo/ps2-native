@@ -1,4 +1,5 @@
 #include "ps2native/iop.hpp"
+#include "ps2native/vu_control.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -561,6 +562,7 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif,
     // fetch and payload qword costs a bus beat; no immediate completion.
     while(ee_cycle>=transfer.cycle && ee_cycle-transfer.cycle>=kEeCyclesPerBusCycle) {
         try {
+            if(vu)vu->advance_micro(transfer.cycle+kEeCyclesPerBusCycle);
             if(!*qwc && !transfer.end) {
                 const auto tag=read(*tadr,(*chcr&0x40u) ? 4u : 2u);
                 const auto id=(tag[0]>>28u)&7u, count=tag[0]&0xFFFFu;
@@ -577,7 +579,7 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif,
                     if((next&15u) || next>ee_ram_.size() || ee_ram_.size()-next<16u)
                         throw DeviceRefusal("EE graphics NEXT target outside aligned main RAM");
                 }
-                if(*chcr&0x40u) vif->write_dma_tag(std::uint64_t{tag[2]}|(std::uint64_t{tag[3]}<<32),gif,gs,vu);
+                if(*chcr&0x40u) vif->write_dma_tag(std::uint64_t{tag[2]}|(std::uint64_t{tag[3]}<<32),gif,gs,vu,transfer.cycle+kEeCyclesPerBusCycle);
                 transfer.end=id==0u || id==7u || ((tag[0]&0x80000000u) && (*chcr&0x80u));
                 transfer.inline_data=id==1u;
                 *chcr=(*chcr&0xFFFFu)|(tag[0]&0xFFFF0000u);
@@ -586,7 +588,7 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif,
                 const auto data=read(*madr,4);
                 const auto low=std::uint64_t{data[0]}|(std::uint64_t{data[1]}<<32);
                 const auto high=std::uint64_t{data[2]}|(std::uint64_t{data[3]}<<32);
-                if(vif) vif->write_fifo(low,high,gif,gs,vu);
+                if(vif) vif->write_fifo(low,high,gif,gs,vu,transfer.cycle+kEeCyclesPerBusCycle);
                 else gif.write_fifo(low,high,gs);
                 *madr+=16u;--*qwc;
                 if(transfer.inline_data) *tadr=*madr;

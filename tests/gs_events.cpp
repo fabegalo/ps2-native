@@ -452,16 +452,21 @@ void vif_control() {
     const auto fixture=gs_events_test::program();
     EEState state; Memory memory;
     prepare_ee_boot(load_bios_rom0(fixture.rom),nullptr,state,memory);
+    const auto unphased_status=[&] {
+        const auto status=memory.load32_observed(0xB0003C00u);
+        require(status.unknown==0x80u,"unestablished VIF1 double-buffer phase remains unknown");
+        return status.value;
+    };
     memory.write128(0xB0005000u,0x50000003u,0);
-    require(memory.read32(0xB0003C00u)==1 && memory.read32(0xB0003C80u)==0x50000003u &&
+    require(unphased_status()==1 && memory.read32(0xB0003C80u)==0x50000003u &&
             memory.read32(0xB0003C60u)==3,
             "VIF DIRECT waits for actual payload and records its command");
     device_refused([&] {memory.write32(0xB0003C10u,2);},"FIFO stall/backpressure");
-    require(memory.read32(0xB0003C00u)==1,"refused force break leaves pending DIRECT intact");
+    require(unphased_status()==1,"refused force break leaves pending DIRECT intact");
     memory.write32(0xB0003C10u,1);
-    require(memory.read32(0xB0003C00u)==0,"VIF reset discards pending DIRECT payload");
+    require(unphased_status()==0,"VIF reset discards pending DIRECT payload");
     memory.write128(0xB0005000u,0,0);
-    require(memory.read32(0xB0003C00u)==0,"post-reset NOP is parsed as VIFcode rather than GIF payload");
+    require(unphased_status()==0,"post-reset NOP is parsed as VIFcode rather than GIF payload");
     device_refused([&] {(void)memory.read32(0xB0003C10u);},"write-only");
     device_refused([&] {memory.write16(0xB0003C10u,1);},"32-bit");
     memory.write32(0xB0003C20u,5);

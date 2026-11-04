@@ -437,6 +437,9 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
             } else if(unknown!=nullptr && size==4u && target.physical==IpuRegisters::kControl) {
                 const auto observed=registers_.observe_ipu_control();
                 value=observed.value;*unknown=observed.unknown;
+            } else if(unknown!=nullptr && size==4u && (target.physical==0x10003800u || target.physical==0x10003C00u)) {
+                const auto observed=registers_.observe_vif_status(target.physical==0x10003C00u);
+                value=observed.value;*unknown=observed.unknown;
             } else value = registers_.read(target.physical, size);
         } catch (const DeviceRefusal& refusal) {
             throw device_refusal(BusFault::Device, false, size, address, target.physical, target.region, what,

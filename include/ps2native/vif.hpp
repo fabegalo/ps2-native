@@ -10,8 +10,7 @@ namespace ps2native {
 class VuControl;
 // Shared VIF0/VIF1 configuration parser. Command words arrive in little-endian
 // order; VIF1 DIRECT data starts on the next qword boundary. Unsupported commands
-// (including MSCAL) fail explicitly; MPG and 32-bit UNPACK write shared VU RAM,
-// and never starts or pretends to execute the uploaded instructions.
+// fail explicitly; MPG/UNPACK and MSCAL use the same shared, clocked VU.
 class Vif {
 public:
     enum class Unit { Vu0, Vu1 };
@@ -22,16 +21,21 @@ public:
         direct_words_=0;direct_buffer_={};
         mpg_left_=mpg_address_=0;mpg_low_.reset();
         unpack_left_=unpack_address_=unpack_index_=unpack_cycle_=0;
+        dbf_.reset();
     }
     [[nodiscard]] std::uint32_t read_register(std::uint32_t offset) const;
+    [[nodiscard]] ObservedWord observe_status() const noexcept {
+        return {(processing() ? 1u : 0u)|(mark_detected_ ? 0x40u : 0u)|(dbf_.value_or(false) ? 0x80u : 0u),
+            unit_==Unit::Vu1 && !dbf_ ? 0x80u : 0u};
+    }
     void write_register(std::uint32_t offset,std::uint32_t value,Gif& gif);
-    void write_fifo(std::uint64_t low, std::uint64_t high, Gif& gif, GsRegisters& gs,VuControl* vu=nullptr);
+    void write_fifo(std::uint64_t low, std::uint64_t high, Gif& gif, GsRegisters& gs,VuControl* vu=nullptr,std::uint64_t cycle=0);
     // TTE sends only the upper 64 bits, in lanes 2/3 of a DMA tag.
-    void write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr);
+    void write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr,std::uint64_t cycle=0);
     [[nodiscard]] std::uint32_t direct_remaining() const noexcept { return direct_left_; }
     [[nodiscard]] bool processing() const noexcept {return direct_left_ || mpg_left_ || unpack_left_ || pending_!=Pending::None;}
 private:
-    void write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters& gs,VuControl* vu);
+    void write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle);
     void start_unpack(std::uint32_t command,VuControl* vu);
     void unpack_word(std::uint32_t word,VuControl& vu);
     [[noreturn]] void refuse(const std::string& reason) const {
@@ -52,6 +56,7 @@ private:
     Pending pending_{Pending::None};
     unsigned pending_index_{};
     bool mark_detected_{};
+    std::optional<bool> dbf_;
     std::array<std::optional<std::uint32_t>,32> programmed_{};
 };
 using Vif1=Vif; // Preserve the existing PATH2 caller interface.

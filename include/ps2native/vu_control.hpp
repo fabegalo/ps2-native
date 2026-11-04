@@ -7,11 +7,13 @@
 
 namespace ps2native {
 // VU User's Manual 6.0, sections 1.3 and 5.1.3: control transfers and
-// reset of idle VUs. Starting/executing microprograms remains unsupported.
+// reset of idle VUs and a shared, clocked microinstruction engine. Unsupported
+// instructions stop with their real micro PC; they never finish successfully.
 class VuControl {
 public:
     VuControl() { reset(); }
     void reset() {
+        micro_={};
         pending_q_.reset();
         registers_ = {};
         unknown_ = {};
@@ -74,14 +76,22 @@ public:
         // FB/RS are commands that always read zero; DE/TE retain settings.
         // VU0 reset initializes its flag registers, not the integer registers.
         if (value & 2u) {
+            reset_micro(0);
             pending_q_.reset();
             for (const auto flag : {16u,17u,18u}) {registers_[flag] = 0;unknown_[flag]=0;}
         }
-        if (value & 0x200u)
+        if (value & 0x200u) {
+            reset_micro(1);
             for(unsigned index=0;index<3;++index) vu1_controls_[index]={};
+        }
         registers_[28] = value & 0x0C0Cu;
-        registers_[29] = 0; // Both VUs remain Ready; every start is refused.
+        registers_[29] = (micro_[0].running ? 1u : 0u)|(micro_[1].running ? 256u : 0u);
     }
+    void start_micro(unsigned unit,std::uint32_t instruction_address,std::uint64_t ee_cycle);
+    void advance_micro(std::uint64_t ee_cycle);
+    [[nodiscard]] bool micro_running(unsigned unit) const {return micro_.at(unit).running;}
+    [[nodiscard]] std::uint32_t diagnostic_micro_pc(unsigned unit) const {return micro_.at(unit).pc;}
+    [[nodiscard]] std::uint64_t diagnostic_micro_instructions(unsigned unit) const {return micro_.at(unit).instructions;}
     // VU Mem0 uses qword addresses in VISWR. VU1's integer registers live at
     // byte addresses 0x4200..0x42F0; only their low 16 bits are writable.
     [[nodiscard]] ObservedWord observe_data(std::uint32_t address) const {
@@ -254,6 +264,22 @@ public:
         }
     }
 private:
+    struct MicroIntegerWrite {unsigned index{};ObservedWord word{};std::uint64_t ready{};};
+    struct MicroState {
+        bool running{},end_delay{};
+        std::uint32_t pc{};
+        std::uint64_t next{},instructions{};
+        std::optional<std::uint32_t> branch;
+        std::optional<std::uint64_t> drain;
+        std::array<MicroIntegerWrite,4> pending{};
+        unsigned writes{};
+        std::optional<std::string> failure;
+    };
+    void reset_micro(unsigned unit);
+    void step_micro(unsigned unit);
+    [[nodiscard]] ObservedWord micro_integer(unsigned unit,unsigned index,bool forwarded) const;
+    void retire_micro_integers(unsigned unit);
+    std::array<MicroState,2> micro_{};
     struct PendingQ { std::uint64_t ready; std::uint32_t value,flags; };
     std::optional<PendingQ> pending_q_;
     ObservedWord& memory_word(std::uint32_t address) {

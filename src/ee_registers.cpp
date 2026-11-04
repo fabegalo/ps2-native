@@ -109,6 +109,7 @@ void EeRegisters::sync_iop() {
     iop_.run_until(now() / kEeCyclesPerIopCycle, &gs_);
     iop_.advance_vif_dma(now(),vif0_,vif1_,gif_,gs_,&vu_control_);
     iop_.advance_gif_dma(now(),gif_,gs_);
+    vu_control_.advance_micro(now());
 }
 
 std::uint64_t EeRegisters::now() const {
@@ -297,6 +298,7 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
     if((physical>=0x10003800u && physical<0x10003A00u) || (physical>=0x10003C00u && physical<0x10003E00u)) {
         if(bytes!=4u || (physical&15u)) throw DeviceRefusal("VIF registers require aligned 32-bit accesses");
         auto& vif=(physical&0x400u) ? vif1_ : vif0_;
+        if(clock_)sync_iop();
         return vif.read_register(physical&0x3FFu);
     }
     if (Iop::ee_dma_address(physical)) {
@@ -403,7 +405,8 @@ void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint6
     }
     if (physical==0x10004000u || physical==0x10005000u) {
         auto& vif=(physical&0x1000u) ? vif1_ : vif0_;
-        vif.write_fifo(low, high, gif_, gs_,&vu_control_);
+        if(clock_)sync_iop();
+        vif.write_fifo(low, high, gif_, gs_,&vu_control_,clock_ ? now() : 0);
         return;
     }
     if (physical == kGifFifo) return gif_.write_fifo(low, high, gs_);

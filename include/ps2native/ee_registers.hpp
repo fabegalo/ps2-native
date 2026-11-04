@@ -96,7 +96,12 @@ public:
     }
     [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return video_encoder_; }
     [[nodiscard]] ObservedWord observe_ipu_control() const noexcept {return ipu_.observe_control();}
+    [[nodiscard]] ObservedWord observe_vif_status(bool unit1) {
+        if(clock_)sync_iop();
+        return (unit1 ? vif1_ : vif0_).observe_status();
+    }
     [[nodiscard]] std::uint32_t read_vu_control(unsigned index) const {
+        if(clock_)const_cast<EeRegisters*>(this)->sync_iop();
         if (index==29u && (vif0_.processing() || vif1_.processing()))
             throw DeviceRefusal("VU status with active VIF processing is not modeled");
         vu_control_.advance_q(clock_ ? now() : 0);
@@ -104,6 +109,7 @@ public:
     }
     void write_vu_control(unsigned index, std::uint32_t value) { vu_control_.write(index,value); }
     [[nodiscard]] ObservedWord observe_vu_control(unsigned index) const {
+        if(clock_)const_cast<EeRegisters*>(this)->sync_iop();
         if (index==29u && (vif0_.processing() || vif1_.processing()))
             throw DeviceRefusal("VU status with active VIF processing is not modeled");
         vu_control_.advance_q(clock_ ? now() : 0);
