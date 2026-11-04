@@ -19,6 +19,22 @@ void ranges() {
     require(product && product->word.unknown && !product->flags &&
             contains(product->word,0x3F800003) && contains(product->word,0x3F800004),
             "ambiguous product retains both possible chopped results");
+    require(product->bounded && product->bounds[0]<=product->bounds[1] &&
+            contains(product->word,product->bounds[0]) && contains(product->word,product->bounds[1]),
+            "numeric endpoints survive independently of their coarser bit-mask hull");
+    const ObservedWord broad_a{0x3F000000u,0x7FFFFFu},broad_b{0x37800000u,0x7FFFFFu};
+    require(!vu_float_product(broad_a,broad_b),"a deliberately broad bit hull cannot certify the product exponent");
+    const auto narrow=vu_float_product(broad_a,broad_b,false,FloatBounds{0x3F490000u,0x3F490003u},FloatBounds{0x37CE8000u,0x37CE8003u});
+    require(narrow && narrow->bounded && !narrow->flags,"certified narrow numeric domains avoid artificial exponent uncertainty from a bit hull");
+    unsigned certified=0;
+    for(unsigned x=0;x<4;++x)for(unsigned y=0;y<4;++y) {
+        std::uint32_t local_flags=0;const auto exact=ee_fpu_multiply(0x3F490000u+x,0x37CE8000u+y,local_flags);
+        if(exact){++certified;require(contains(narrow->word,*exact) && *exact>=narrow->bounds[0] &&
+            *exact<=narrow->bounds[1] && local_flags==narrow->flags,"every certified concrete pair remains within the precise numeric interval and bit hull");}
+    }
+    require(certified,"the bounded-domain test exercises certified concrete products");
+    require(!vu_float_product(broad_a,broad_b,false,FloatBounds{0x3F800000u,0x3F800003u}),
+            "supplied bounds outside the raw operand domain cannot invent a different exponent");
     const auto absorbed=vu_float_add({0x50000000,0},product->word);
     require(absorbed && absorbed->word.value==0x50000000 && !absorbed->word.unknown && !absorbed->flags,
             "guard-column alignment proves insignificant uncertain product has no effect");

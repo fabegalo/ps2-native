@@ -246,7 +246,7 @@ public:
         auto& relation=s_.fpr_affine[index];
         if(!unknown || (unknown&0xFF800000u) || !(value&0x7F800000u)){relation={};return {};}
         if(!relation.origin || relation.value!=value || relation.unknown!=unknown)
-            relation={m_.allocate_fpu_origin(),0,(value>>23u)&255u,false,value,unknown};
+            relation={m_.allocate_fpu_origin(),0,(value>>23u)&255u,false,value,unknown,value,value|unknown};
         return relation;
     }
     void fpu_binary(MipsOpcode op,std::uint32_t word) {
@@ -259,6 +259,7 @@ public:
         if(op==MipsOpcode::SubS) {
             b.value=(b.value^0x80000000u)&~b.unknown;
             br.negated=!br.negated;br.offset=-br.offset;
+            br.minimum^=0x80000000u;br.maximum^=0x80000000u;
         }
         // Shared EE/VU normal-value bounds. The low bits remain unknown;
         // neither a host product nor one endpoint substitutes for hardware.
@@ -267,7 +268,11 @@ public:
         if(op!=MipsOpcode::MulS && ar.origin && ar.origin==br.origin && ar.exponent==br.exponent && ar.negated!=br.negated) {
             std::uint32_t flags=0;
             result=VuFloatResult{{ee_fpu_scaled_integer(ar.offset+br.offset,ar.exponent,flags),0},flags};
-        } else result=op==MipsOpcode::MulS ? vu_float_product(a,b) : vu_float_add(a,b);
+        } else {
+            const auto ab=ar.origin ? std::optional<FloatBounds>{{ar.minimum,ar.maximum}} : std::nullopt;
+            const auto bb=br.origin ? std::optional<FloatBounds>{{br.minimum,br.maximum}} : std::nullopt;
+            result=op==MipsOpcode::MulS ? vu_float_product(a,b,false,ab,bb) : vu_float_add(a,b,ab,bb);
+        }
         if(!result)stop(StopKind::NotModeled,"FPU arithmetic cannot certify value/exception bounds; FS="+hex32(a.value)+", FT="+hex32(b.value));
         if(op!=MipsOpcode::MulS && result->word.unknown && (a.unknown!=0u)!=(b.unknown!=0u)) {
             const auto source=a.unknown ? a : b,constant=a.unknown ? b : a;
@@ -279,13 +284,15 @@ public:
             };
             if(inherited.origin && ((constant.value>>23u)&255u)<=exponent &&
                ((result->word.value>>23u)&255u)==exponent && !((source.value^result->word.value)&0x80000000u)) {
-                std::uint32_t flags=0;const auto anchor=ee_fpu_add(source.value,constant.value,flags);
-                relation=inherited;relation.offset+=signed_mantissa(anchor)-signed_mantissa(source.value);
+                std::uint32_t flags=0;const auto anchor=ee_fpu_add(inherited.minimum,constant.value,flags);
+                relation=inherited;relation.offset+=signed_mantissa(anchor)-signed_mantissa(inherited.minimum);
             }
         }
         if(result->word.unknown && !relation.origin)
             relation={m_.allocate_fpu_origin(),0,(result->word.value>>23u)&255u,false,0,0};
         relation.value=result->word.value;relation.unknown=result->word.unknown;
+        relation.minimum=result->bounded ? result->bounds[0] : result->word.value;
+        relation.maximum=result->bounded ? result->bounds[1] : result->word.value|result->word.unknown;
         s_.fpr[fd]=result->word.value;s_.unknown_fpr_bits[fd]=result->word.unknown;
         s_.fpr_affine[fd]=relation;
         s_.fcr31=(s_.fcr31&~0xC000u)|result->flags;
@@ -491,6 +498,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
             auto relation=cpu.fpu_relation(ee::rd(word));
             if(instruction.opcode==MipsOpcode::NegS || (state.fpr[ee::rd(word)]&0x80000000u)) {
                 relation.negated=!relation.negated;relation.offset=-relation.offset;
+                relation.minimum^=0x80000000u;relation.maximum^=0x80000000u;
             }
             state.unknown_fpr_bits[ee::sa(word)]=state.unknown_fpr_bits[ee::rd(word)]&(instruction.opcode==MipsOpcode::AbsS ? 0x7FFFFFFFu : 0xFFFFFFFFu);
             state.fpr[ee::sa(word)]=(instruction.opcode==MipsOpcode::AbsS ?

@@ -10,5 +10,6 @@ struct FpuAffine {
     unsigned exponent{};
     bool negated{};
     std::uint32_t value{},unknown{}; // guards against replacement of raw data
+    std::uint32_t minimum{},maximum{}; // tighter numeric interval than a bit hull
 };
 }

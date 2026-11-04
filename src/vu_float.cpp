@@ -7,13 +7,20 @@ namespace {
 bool fraction_only(ObservedWord a) {return !(a.unknown&0xFF800000u);}
 std::uint32_t lower(ObservedWord a) {return a.value&~a.unknown;}
 std::uint32_t upper(ObservedWord a) {return a.value|a.unknown;}
+std::optional<FloatBounds> input_bounds(ObservedWord word,std::optional<FloatBounds> bounds) {
+    if(!bounds)return FloatBounds{lower(word),upper(word)};
+    const auto [lo,hi]=*bounds;
+    if(lo>hi || ((lo^hi)&0xFF800000u) || lo<lower(word) || hi>upper(word) ||
+       ((lo^word.value)&~word.unknown) || ((hi^word.value)&~word.unknown))return {};
+    return bounds;
+}
 std::optional<VuFloatResult> hull(std::uint32_t low,std::uint32_t high,std::uint32_t flags) {
     const auto different=low^high;
     if(different&0xFF800000u)return std::nullopt;
     // Endpoint XOR alone would omit intermediate values. All less significant
     // bits must be uncertain too, even when the endpoints agree there.
     const auto mask=different ? (1u<<std::bit_width(different))-1u : 0u;
-    return VuFloatResult{{low&~mask,mask},flags};
+    return VuFloatResult{{low&~mask,mask},flags,{low,high},true};
 }
 std::uint32_t magnitude(std::uint32_t a) {return a&0x7F800000u ? a&0x7FFFFFFFu : 0u;}
 VuFloatResult packed(std::uint64_t product,int exponent,std::uint32_t sign) {
@@ -29,13 +36,16 @@ VuFloatResult packed(std::uint64_t product,int exponent,std::uint32_t sign) {
              (static_cast<std::uint32_t>(product>>shift)&0x7FFFFFu),0},0};
 }
 }
-std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b) {
+std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
+    std::optional<FloatBounds> a_bounds,std::optional<FloatBounds> b_bounds) {
     if(!a.unknown && !b.unknown) {
         std::uint32_t flags=0;const auto value=ee_fpu_add(a.value,b.value,flags);
         return VuFloatResult{{value,0},flags};
     }
     if(!fraction_only(a) || !fraction_only(b))return std::nullopt;
-    const auto amin=lower(a),amax=upper(a),bmin=lower(b),bmax=upper(b);
+    const auto ar=input_bounds(a,a_bounds),br=input_bounds(b,b_bounds);
+    if(!ar || !br)return {};
+    const auto [amin,amax]=*ar;const auto [bmin,bmax]=*br;
     // Opposite signs with overlapping magnitudes can cancel inside the
     // interval. An exact zero there may have different underflow flags from
     // both endpoints; endpoint agreement alone is insufficient.
@@ -52,14 +62,17 @@ std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b) {
     }
     return hull(low,high,common_flags);
 }
-std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,bool diagnostic) {
+std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,bool diagnostic,
+    std::optional<FloatBounds> a_bounds,std::optional<FloatBounds> b_bounds) {
     if(!a.unknown && !b.unknown) {
         std::uint32_t flags=0;
         if(const auto value=ee_fpu_multiply(a.value,b.value,flags,diagnostic))
             return VuFloatResult{{*value,0},flags};
     }
     if(!fraction_only(a) || !fraction_only(b))return std::nullopt;
-    const auto amin=lower(a),amax=upper(a),bmin=lower(b),bmax=upper(b);
+    const auto ar=input_bounds(a,a_bounds),br=input_bounds(b,b_bounds);
+    if(!ar || !br)return {};
+    const auto [amin,amax]=*ar;const auto [bmin,bmax]=*br;
     const auto ea=(amin>>23u)&255u,eb=(bmin>>23u)&255u,sign=(amin^bmin)&0x80000000u;
     if(!ea || !eb)return VuFloatResult{{sign,0},0};
     const auto mantissa=[](std::uint32_t v){return (v&0x7FFFFFu)|0x800000u;};
