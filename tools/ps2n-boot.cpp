@@ -40,7 +40,9 @@ int boot_main(int argc, Character** argv) {
                      "                 [--diagnostic-omit-f510-zero-write] (unverified write omitted)\n"
                      "                 [--assume-sbus-configuration-latches] (unverified configuration model)\n"
                      "                 [--assume-iop-dmacinten=0..3] (unmeasured reset, diagnostic only)\n"
-                     "                 [--assume-iop-sio2-irq-clear] (unmeasured reset, diagnostic only)\n";
+                     "                 [--assume-iop-sio2-irq-clear] (unmeasured reset, diagnostic only)\n"
+                     "                 [--assume-spu2-quiescent-reset] (unmeasured inactive voices/inputs and IRQ9 clear)\n"
+                     "                 [--assume-spu2-pio-word-cycles=N] (unmeasured PIO throughput, diagnostic only)\n";
         return 2;
     }
     try {
@@ -93,6 +95,10 @@ int boot_main(int argc, Character** argv) {
                 assumptions.sbus_configuration_latches=true;
             } else if (flag=="--assume-iop-sio2-irq-clear") {
                 assumptions.iop_sio2_irq_clear=true;
+            } else if(flag.starts_with("--assume-spu2-pio-word-cycles=")) {
+                const auto value=number(flag.substr(sizeof("--assume-spu2-pio-word-cycles=")-1u),"--assume-spu2-pio-word-cycles");
+                if(!value || value>std::numeric_limits<std::uint32_t>::max())throw std::runtime_error("SPU2 PIO word cycles must be 1..UINT32_MAX");
+                assumptions.spu2_pio_word_cycles=static_cast<std::uint32_t>(value);
             } else if (flag=="--assume-spu2-quiescent-reset") {
                 assumptions.spu2_quiescent_reset=true;
             } else if (flag.starts_with("--assume-iop-dmacinten=")) {
@@ -171,6 +177,8 @@ int boot_main(int argc, Character** argv) {
                 header<<"# DIAGNOSTIC IOP DMACINTEN reset = "<<*assumptions.iop_dmacinten<<" (unmeasured)\n";
             if(assumptions.iop_sio2_irq_clear)
                 header<<"# DIAGNOSTIC IOP I_STAT.17 initially clear (unmeasured)\n";
+            if(assumptions.spu2_pio_word_cycles)
+                header<<"# DIAGNOSTIC SPU2 PIO throughput "<<*assumptions.spu2_pio_word_cycles<<" IOP cycles/halfword (unmeasured); actual FIFO bytes written to sound RAM\n";
             if(assumptions.spu2_quiescent_reset)
                 header<<"# DIAGNOSTIC SPU2 cores/voices/inputs inactive, no transfer and IRQ9 clear at reset; quiet clock phase modeled (unmeasured)\n";
         }

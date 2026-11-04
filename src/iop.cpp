@@ -216,6 +216,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     diagnostic_spu2_reserved_latches_=false;
     spu2_control_={};
     spu2_next_sample_={};spu2_last_sample_={};spu2_sample_count_={};spu2_clock_active_=false;
+    spu2_transfer_={};spu2_ram_.clear();spu2_ram_written_.clear();diagnostic_spu2_pio_cycles_=0;
     gif_dma_cycle_=0;
     gif_dma_stop_.reset();
     dma_irq_output_=false;
@@ -1069,32 +1070,75 @@ std::uint32_t Iop::load(std::uint32_t address, std::size_t bytes, const char* wh
     return io_read(a.physical, bytes, what);
 }
 
+void Iop::diagnostic_spu2_pio_word_cycles(std::uint32_t cycles) {
+    if(!cycles || cycle_)throw DeviceRefusal("SPU2 PIO experiment requires positive word cycles before guest execution");
+    diagnostic_spu2_pio_cycles_=cycles;
+}
+std::optional<std::uint16_t> Iop::spu2_ram_halfword(std::uint32_t word_address) const {
+    if(word_address>=0x100000u)throw DeviceRefusal("SPU2 RAM word address outside 2 MiB");
+    if(spu2_ram_written_.empty() || !spu2_ram_written_[word_address])return std::nullopt;
+    return spu2_ram_[word_address];
+}
+void Iop::validate_spu2_pio(unsigned core,const ObservedWord& control) const {
+    if(!diagnostic_spu2_pio_cycles_)throw IopStop{"SPU2 PIO transfer timing requires an explicit word-cycle experiment"};
+    if(!diagnostic_spu2_quiescent_ || (control.unknown&0x80F0u) || (control.value&0x80F0u)!=0x8010u)
+        throw IopStop{"SPU2 PIO requires an enabled core with effects and IRQ disabled"};
+    for(unsigned c=0;c<2;++c) {
+        const auto word=c==core ? std::optional<ObservedWord>{control} : spu2_control_[c];
+        if(!word || ((word->value|word->unknown)&0x40u))
+            throw IopStop{"SPU2 PIO requires both shared-RAM IRQ comparators explicitly disabled"};
+    }
+    if(!spu2_transfer_[core].address)throw IopStop{"SPU2 PIO transfer address is incomplete"};
+    if(spu2_transfer_[core^1u].next)throw IopStop{"SPU2 simultaneous PIO arbitration is not modeled"};
+}
 void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
     word.unknown&=0xFFFFu;word.value&=0xFFFFu&~word.unknown;
-    // Disabled synthesis and transfer mode are sufficient to retain the
-    // remaining configuration symbolically. No data processing is started.
-    if(word.unknown&0x8030u)throw IopStop{"SPU2 control write does not establish disabled synthesis and transfer"};
-    if(word.value&0x30u)throw IopStop{"SPU2 core processing/control configuration is not modeled"};
+    if(word.unknown&0x8030u)throw IopStop{"SPU2 control write leaves core enable or transfer mode unknown"};
     const auto core=(physical-0x1F90019Au)/0x400u;
+    const auto mode=word.value&0x30u;
+    if(mode==0x20u || mode==0x30u)throw IopStop{"SPU2 DMA processing/control configuration is not modeled"};
+    auto& transfer=spu2_transfer_[core];
+    if(transfer.next && (mode!=0x10u || !(word.value&0x8000u)))
+        throw IopStop{"SPU2 PIO cancellation while real FIFO data is pending is not modeled"};
+    if((spu2_transfer_[0].next || spu2_transfer_[1].next) && ((word.value|word.unknown)&0x40u))
+        throw IopStop{"SPU2 IRQ changes during a shared-RAM PIO transfer are not modeled"};
     if(word.value&0x8000u) {
-        // This is a real enabled clock, with no waveform source enabled by
-        // the explicitly selected cold-state experiment. Do not infer a
-        // mute polarity or synthesize an active voice's output.
+        // The explicit cold-state experiment has no active voices/inputs.
+        // Mute polarity is not needed to prove a zero source sum.
         if(!diagnostic_spu2_quiescent_ || ((word.value|word.unknown)&0xC0u))
             throw IopStop{"SPU2 active voices, effects or IRQ processing is not modeled"};
-        // 36.864 MHz / 48 kHz = 768 IOP cycles. The modeled clock phase is
-        // aligned to reset, sharing the existing deterministic IOP timebase.
+    }
+    if(mode==0x10u)validate_spu2_pio(core,word);
+    // Validate before changing retained control, clocks or pending work.
+    if(word.value&0x8000u) {
+        // 36.864 MHz / 48 kHz = 768 IOP cycles; reset-aligned phase is modeled.
         if(!spu2_next_sample_[core])spu2_next_sample_[core]=(cycle_/768u+1u)*768u;
     } else spu2_next_sample_[core].reset();
     spu2_control_[core]=word;
+    if(mode==0x10u && !transfer.fifo.empty() && !transfer.next)
+        transfer.next=cycle_+diagnostic_spu2_pio_cycles_;
     spu2_clock_active_=spu2_next_sample_[0].has_value() || spu2_next_sample_[1].has_value();
 }
 void Iop::tick_spu2_quiet() {
-    for(unsigned core=0;core<2;++core)if(spu2_next_sample_[core] && cycle_>=*spu2_next_sample_[core]) {
-        // Sum of the known inactive voice/input sources is zero. Nonquiet
-        // modes are refused at the control write, rather than faked here.
-        spu2_last_sample_[core]=Spu2Sample{*spu2_next_sample_[core],0,0};
-        ++spu2_sample_count_[core];*spu2_next_sample_[core]+=768u;
+    for(unsigned core=0;core<2;++core) {
+        if(spu2_next_sample_[core] && cycle_>=*spu2_next_sample_[core]) {
+            spu2_last_sample_[core]=Spu2Sample{*spu2_next_sample_[core],0,0};
+            ++spu2_sample_count_[core];*spu2_next_sample_[core]+=768u;
+        }
+        auto& transfer=spu2_transfer_[core];
+        if(transfer.next && cycle_>=*transfer.next) {
+            if(spu2_ram_.empty()){spu2_ram_.resize(0x100000u);spu2_ram_written_.resize(0x100000u);}
+            const auto address=*transfer.address;
+            spu2_ram_[address]=transfer.fifo.front();spu2_ram_written_[address]=1u;
+            transfer.fifo.pop_front();++transfer.words;
+            transfer.address=(address+1u)&0xFFFFFu;
+            transfer.high=static_cast<std::uint16_t>(*transfer.address>>16u);
+            transfer.low=static_cast<std::uint16_t>(*transfer.address);
+            if(transfer.fifo.empty()) {
+                transfer.next.reset();
+                events_.push_back({cycle_,"DIAGNOSTIC SPU2 core "+std::to_string(core)+" real PIO FIFO drained"});
+            } else *transfer.next+=diagnostic_spu2_pio_cycles_;
+        }
     }
 }
 void Iop::reset_sio2_observed(ObservedWord word,std::uint64_t epoch) {
@@ -1159,6 +1203,17 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         return iop_sif1_read(physical);
     }
     const auto name = std::string("load ") + what + " of IOP register " + hex(physical);
+    if(physical==0x1F9001A8u || physical==0x1F9001AAu || physical==0x1F9005A8u || physical==0x1F9005AAu) {
+        if(bytes!=2u)throw IopStop{"SPU2 transfer address requires halfword reads"};
+        const auto& transfer=spu2_transfer_[(physical-0x1F9001A8u)/0x400u];
+        const auto half=(physical&2u) ? transfer.low : transfer.high;
+        if(!half)throw IopStop{"SPU2 transfer address halfword is unknown before write"};
+        if(!(physical&2u)) {
+            undefined_load_="SPU2 transfer-address reserved high bits are unknown";
+            undefined_known_=0xFu|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
+        }
+        return *half;
+    }
     if(physical==0x1F900344u || physical==0x1F900744u) {
         if(bytes!=2u)throw IopStop{"SPU2 STATX requires halfword reads"};
         const auto core=(physical-0x1F900344u)/0x400u;
@@ -1169,8 +1224,9 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         undefined_load_="SPU2 STATX: status outside the quiet transfer/IRQ fields is unknown";
         auto known=0x7FFu;
         if((word->value|word->unknown)&0xFu)known&=~0xFu;
+        if(word->value&0x30u)known&=~0x30u; // transfer-mode echo fields remain unverified
         undefined_known_=known|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
-        return 0;
+        return spu2_transfer_[core].next ? 0x400u : 0u;
     }
     if(physical==0x1F9001B0u || physical==0x1F9005B0u)
         throw IopStop{"SPU2 AutoDMA readback/busy timing is not modeled"};
@@ -1358,6 +1414,32 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
 }
 
 void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what) {
+    if(physical==0x1F9001A8u || physical==0x1F9001AAu || physical==0x1F9005A8u || physical==0x1F9005AAu) {
+        if(bytes!=2u || !value)throw IopStop{"SPU2 transfer address requires a known halfword write"};
+        auto& transfer=spu2_transfer_[(physical-0x1F9001A8u)/0x400u];
+        if(transfer.next)throw IopStop{"SPU2 transfer address change while PIO is busy is not modeled"};
+        // All sources consulted agree on aligned PIO starts. Unaligned
+        // low-bit readback/rounding is not established by this model.
+        if((physical&2u) && (*value&7u))throw IopStop{"SPU2 unaligned transfer start is unverified"};
+        if(physical&2u)transfer.low=static_cast<std::uint16_t>(*value);
+        else transfer.high=static_cast<std::uint16_t>(*value&0xFu);
+        if(transfer.high && transfer.low)transfer.address=(std::uint32_t{*transfer.high}<<16u)|*transfer.low;
+        return;
+    }
+    if(physical==0x1F9001ACu || physical==0x1F9005ACu) {
+        if(bytes!=2u || !value)throw IopStop{"SPU2 PIO FIFO requires a known halfword write"};
+        const auto core=(physical-0x1F9001ACu)/0x400u;
+        auto& transfer=spu2_transfer_[core];const auto control=spu2_control_[core];
+        if(!diagnostic_spu2_pio_cycles_)throw IopStop{"SPU2 PIO FIFO timing requires an explicit word-cycle experiment"};
+        if(!control || (control->unknown&0x30u) || (control->value&0x20u))
+            throw IopStop{"SPU2 FIFO requires a known stopped or PIO transfer mode"};
+        if(transfer.fifo.size()>=32u)throw IopStop{"SPU2 32-halfword PIO FIFO is full; overflow behavior is not modeled"};
+        if(control->value&0x10u)validate_spu2_pio(core,*control);
+        transfer.fifo.push_back(static_cast<std::uint16_t>(*value));
+        if((control->value&0x10u) && !transfer.next)transfer.next=cycle_+diagnostic_spu2_pio_cycles_;
+        return;
+    }
+
     if(physical==0x1F9001A4u || physical==0x1F9001A6u ||
        physical==0x1F9005A4u || physical==0x1F9005A6u) {
         // KOFF selects 24 envelopes per core (16 low + 8 high). In the

@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-spu2-pio tests/spu2_pio.cpp)
+    target_link_libraries(ps2n-spu2-pio PRIVATE ps2n_core)
+    add_test(NAME native-spu2-pio COMMAND ps2n-spu2-pio)
+    set_tests_properties(native-spu2-pio PROPERTIES TIMEOUT 30)
     add_executable(ps2n-spu2-levels tests/spu2_levels.cpp)
     target_link_libraries(ps2n-spu2-levels PRIVATE ps2n_core)
     add_test(NAME native-spu2-levels COMMAND ps2n-spu2-levels)

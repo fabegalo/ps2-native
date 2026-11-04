@@ -129,6 +129,11 @@ public:
     // Separate hypothesis for the unassigned 0x346..0x3FF aperture and its
     // 0x800 mirror. Does not turn reads or functional registers into stubs.
     void diagnostic_spu2_reserved_latches() { diagnostic_spu2_reserved_latches_=true; }
+    // Functional FIFO-to-RAM transfer with an explicit, unmeasured rate.
+    // Select before guest execution. Reset removes this timing experiment.
+    void diagnostic_spu2_pio_word_cycles(std::uint32_t cycles);
+    [[nodiscard]] std::optional<std::uint16_t> spu2_ram_halfword(std::uint32_t word_address) const;
+    [[nodiscard]] std::uint64_t spu2_pio_words(unsigned core) const { return spu2_transfer_.at(core).words; }
     struct Spu2Sample { std::uint64_t cycle; std::int16_t left,right; };
     [[nodiscard]] const std::optional<Spu2Sample>& spu2_last_sample(unsigned core) const { return spu2_last_sample_.at(core); }
     [[nodiscard]] std::uint64_t spu2_sample_count(unsigned core) const { return spu2_sample_count_.at(core); }
@@ -235,6 +240,7 @@ private:
     void reset_sio2_observed(ObservedWord word,std::uint64_t epoch);
     void write_spu2_control(std::uint32_t physical,ObservedWord word);
     void tick_spu2_quiet();
+    void validate_spu2_pio(unsigned core,const ObservedWord& control) const;
     [[nodiscard]] std::uint32_t io_read(std::uint32_t physical, std::size_t bytes, const char* what);
     void io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what);
     void mechacon_command(std::uint8_t command, const char* what);
@@ -298,6 +304,17 @@ private:
     std::array<std::optional<Spu2Sample>,2> spu2_last_sample_;
     std::array<std::uint64_t,2> spu2_sample_count_{};
     bool spu2_clock_active_{};
+    struct Spu2Transfer {
+        std::optional<std::uint16_t> high,low;
+        std::optional<std::uint32_t> address;
+        std::deque<std::uint16_t> fifo;
+        std::optional<std::uint64_t> next;
+        std::uint64_t words{};
+    };
+    std::array<Spu2Transfer,2> spu2_transfer_;
+    std::vector<std::uint16_t> spu2_ram_;
+    std::vector<std::uint8_t> spu2_ram_written_;
+    std::uint32_t diagnostic_spu2_pio_cycles_{};
     std::uint64_t gif_dma_cycle_{};
     std::optional<std::string> gif_dma_stop_;
     std::optional<std::uint8_t> cdvd_howto_;
