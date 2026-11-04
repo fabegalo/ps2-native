@@ -473,14 +473,13 @@ private:
     bool diagnostic_spu2_admas_control_latch_{};
     std::uint64_t spu2_adma_bus_available_{};
     unsigned spu2_adma_last_grant_{1u};
-    std::uint64_t gif_dma_cycle_{};
-    std::optional<std::string> gif_dma_stop_;
-    struct VifDma {
+    void advance_graphics_dma(unsigned channel, std::uint64_t ee_cycle, Vif* vif, Gif& gif, GsRegisters& gs);
+    struct GraphicsDma {
         std::uint64_t cycle{};
         bool end{}, inline_data{};
         std::optional<std::string> stop;
     };
-    std::array<VifDma,2> vif_dma_{};
+    std::array<GraphicsDma,3> graphics_dma_{};
     std::optional<std::uint8_t> cdvd_howto_;
     std::vector<std::uint8_t> cdvd_params_;
     std::uint32_t cdvd_lba_{}, cdvd_sectors_{}, cdvd_sector_cycles_{};

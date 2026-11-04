@@ -1333,3 +1333,17 @@ Continuação PSMT8: consultado PS2Recomp GS memory e os diagramas GS
 colunas pares/ímpares e páginas 128x64. Upload IMAGE/HWREG e cópia local
 preservam bytes vizinhos e recusam alinhamento inválido. PSMT8 não é
 aceito como framebuffer de desenho ou formato de scanout.
+Ensaio 93: upload PSMT8 completo, 26.624 índices reais adicionais;
+25 pacotes novos, 1.075.456 escritas comprovadas. EE `0x1CC550` /
+387.571.287, IOP `0x4CAF8` / 52.498.498 ativo, 126,490 s.
+Bloqueio: start do DMA GIF source-chain, CHCR=105. Scanout continua preto.
+RAM SHA-256 `4e15e4c972a83f56926a3a337668f17d87a5998c2939680ae91af38bbc05737c`,
+um doubleword com bits desconhecidos.
+Continuação: tags do GIF usam o mesmo motor source-chain BSD do VIF,
+consultado previamente contra PS2Recomp DMA.cpp e os protocolos do EE.
+REFE/CNT/NEXT/REF/END e IRQ/TIE transportam bytes reais; TTE no GIF,
+CALL/RET/REFS, scratchpad e arbitragem simultânea continuam recusados.
+Fixture GIF atravessa REF+END e CNT+IRQ; dados da tag não viram pacote.
+Diagnóstico da RAM física é leitura sem efeitos, com máscara de incerteza:
+não refaz DMA recusado, não preenche/esvazia cache nem avança dispositivos.
+Oito testes focados aprovados. CI f6344e4: núcleo e launcher nos seis alvos.

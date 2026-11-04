@@ -8,6 +8,19 @@
 #include <string>
 
 namespace ps2native {
+ObservedDoubleword Memory::diagnostic_ram(std::uint32_t offset, std::size_t bytes) const {
+    if (!bytes || bytes > 8u || offset >= ram_.size() || bytes > ram_.size() - offset)
+        throw std::out_of_range("diagnostic RAM range outside backing memory");
+    ObservedDoubleword result{};
+    for (std::size_t i = 0; i < bytes; ++i) {
+        const auto at = offset + static_cast<std::uint32_t>(i);
+        result.value |= std::uint64_t{ram_[at]} << (8u * i);
+        const auto unknown = unknown_words_.find(at & ~3u);
+        if (unknown != unknown_words_.end())
+            result.unknown |= std::uint64_t{(unknown->second >> ((at & 3u) * 8u)) & 255u} << (8u * i);
+    }
+    return result;
+}
 namespace {
 std::string hex32(std::uint32_t value) {
     std::ostringstream stream;

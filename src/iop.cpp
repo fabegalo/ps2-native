@@ -253,9 +253,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     spu2_transfer_={};spu2_ram_.clear();spu2_ram_written_.clear();diagnostic_spu2_pio_cycles_=0;
     spu2_adma_={};diagnostic_spu2_adma_cycles_=0;diagnostic_spu2_admas_control_latch_=false;
     spu2_adma_bus_available_=0;spu2_adma_last_grant_=1u;
-    gif_dma_cycle_=0;
-    gif_dma_stop_.reset();
-    vif_dma_={};
+    graphics_dma_={};
     dma_irq_output_=false;
     // Cold drive: no command or host tray/power event has been submitted.
     // Only NOP/NOPsync completion is modeled; other commands fail before issue.
@@ -460,27 +458,18 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
             throw DeviceRefusal("EE SIF0 start requires programmed zero QWC (resume not modeled)");
         ee_dma_setup_[5][0]=value; sif0_dest_end_=false; return;
     }
-    if(channel==2u && field==0u && (value&0x100u)) {
-        if(value!=0x101u)throw DeviceRefusal("EE GIF DMA supports normal RAM-to-GIF mode only");
-        const auto madr=ee_dma_setup_[2][1],qwc=ee_dma_setup_[2][2];
-        if(!madr || !qwc)throw DeviceRefusal("EE GIF DMA requires programmed MADR and QWC");
-        if(*madr>ee_ram_.size() || std::uint64_t{*qwc}*16u>ee_ram_.size()-*madr)
-            throw DeviceRefusal("EE GIF DMA source outside main RAM (scratchpad unsupported)");
-        if(!ee_dma_priority(ee_dma_observe(0x1000E020u),2u).has_value())
-            throw DeviceRefusal("EE GIF DMA priority is unknown");
-        ee_dma_setup_[2][0]=value;return;
-    }
-    if(channel<2u && field==0u && (value&0x100u)) {
+    if(channel<=2u && field==0u && (value&0x100u)) {
         const bool chain=(value&0xCu)==4u;
         if((chain && ((value&~0xFFFF01C5u) || !(value&1u))) || (!chain && value!=0x101u))
-            throw DeviceRefusal("EE VIF DMA supports normal or source chain mode with empty address stack");
+            throw DeviceRefusal("EE graphics DMA supports normal or source chain mode with empty address stack");
+        if(channel==2u && (value&0x40u)) throw DeviceRefusal("EE GIF DMA tag transfer is not modeled");
         const auto madr=ee_dma_setup_[channel][1],qwc=ee_dma_setup_[channel][2],tadr=ee_dma_setup_[channel][3];
         if(!qwc || (chain && (!tadr || *qwc))) throw DeviceRefusal("EE VIF chain requires TADR and zero QWC; resume is not modeled");
         if(!chain && (!madr || *madr>ee_ram_.size() || std::uint64_t{*qwc}*16u>ee_ram_.size()-*madr))
             throw DeviceRefusal("EE VIF normal DMA requires source inside main RAM");
         if(!ee_dma_priority(ee_dma_observe(0x1000E020u),channel).has_value()) throw DeviceRefusal("EE VIF DMA priority is unknown");
-        if(vif_dma_[channel].stop) throw DeviceRefusal(*vif_dma_[channel].stop);
-        vif_dma_[channel].end=!chain;vif_dma_[channel].inline_data=false;ee_dma_setup_[channel][0]=value;return;
+        if(graphics_dma_[channel].stop) throw DeviceRefusal(*graphics_dma_[channel].stop);
+        graphics_dma_[channel].end=!chain;graphics_dma_[channel].inline_data=false;ee_dma_setup_[channel][0]=value;return;
     }
     if(field==0u && (value&0x100u))
         throw DeviceRefusal("EE DMAC channel "+std::to_string(channel)+" transfer engine is not modeled");
@@ -531,96 +520,73 @@ void Iop::iop_sif1_write(std::uint32_t address, std::uint32_t value) {
 }
 
 void Iop::advance_vif_dma(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs) {
-    unsigned active=0;
-    for(unsigned channel=0;channel<3;++channel) active+=(ee_dma_setup_[channel][0].value_or(0u)&0x100u)!=0;
-    if(active>1u) throw DeviceRefusal("Concurrent VIF/GIF DMA bus arbitration is not modeled");
-    for(unsigned channel=0;channel<2;++channel) {
-        auto& transfer=vif_dma_[channel];auto& regs=ee_dma_setup_[channel];
-        auto& chcr=regs[0];auto& madr=regs[1];auto& qwc=regs[2];auto& tadr=regs[3];
-        if(transfer.stop) throw DeviceRefusal(*transfer.stop);
-        if(!(chcr.value_or(0)&0x100u) || ee_dma_suspended_ || !(ee_dctrl_&1u)) {transfer.cycle=ee_cycle;continue;}
-        const auto priority=ee_dma_priority(ee_dma_observe(0x1000E020u),channel);
-        if(!priority) throw DeviceRefusal("EE VIF DMA priority is unknown");
-        if(!*priority) {transfer.cycle=ee_cycle;continue;}
-        auto& vif=channel==0 ? vif0 : vif1;
-        const auto read=[&](std::uint32_t at,unsigned words) {
-            if((at&3u) || at>ee_ram_.size() || words*4u>ee_ram_.size()-at)
-                throw DeviceRefusal("EE VIF DMA source outside aligned main RAM");
-            std::array<std::uint32_t,4> data{};
-            for(unsigned w=0;w<words;++w) {
-                if(ee_ram_unknown_ && ee_ram_unknown_->contains(at+4u*w)) throw DeviceRefusal("EE VIF DMA consumes unknown source bits");
-                for(unsigned b=0;b<4;++b) data[w]|=std::uint32_t{ee_ram_[at+w*4u+b]}<<(8u*b);
-            }
-            return data;
-        };
-        // Same functional bus-throughput hypothesis as GIF DMA. Every tag
-        // fetch and payload qword costs a bus beat; no immediate completion.
-        while(ee_cycle>=transfer.cycle && ee_cycle-transfer.cycle>=kEeCyclesPerBusCycle) {
-            try {
-                if(!*qwc && !transfer.end) {
-                    const auto tag=read(*tadr,(*chcr&0x40u) ? 4u : 2u);
-                    const auto id=(tag[0]>>28u)&7u, count=tag[0]&0xFFFFu;
-                    if((tag[0]&0x0C000000u) || (id>=4u && id<=6u))
-                        throw DeviceRefusal("EE VIF source chain supports REFE/CNT/NEXT/REF/END without PCE changes");
-                    const auto source=(id==0u || id==3u) ? tag[1] : *tadr+16u;
-                    if((source&15u) || source>ee_ram_.size() || std::uint64_t{count}*16u>ee_ram_.size()-source)
-                        throw DeviceRefusal("EE VIF DMA tag payload outside aligned main RAM");
-                    auto next=*tadr;
-                    if(id==0u || id==3u) next+=16u;
-                    else if(id==1u) next=source;
-                    else if(id==2u) {
-                        next=tag[1];
-                        if((next&15u) || next>ee_ram_.size() || ee_ram_.size()-next<16u)
-                            throw DeviceRefusal("EE VIF NEXT target outside aligned main RAM");
-                    }
-                    if(*chcr&0x40u) vif.write_dma_tag(std::uint64_t{tag[2]}|(std::uint64_t{tag[3]}<<32),gif,gs);
-                    transfer.end=id==0u || id==7u || ((tag[0]&0x80000000u) && (*chcr&0x80u));
-                    transfer.inline_data=id==1u;
-                    *chcr=(*chcr&0xFFFFu)|(tag[0]&0xFFFF0000u);
-                    madr=source;qwc=count;tadr=next;
-                } else if(*qwc) {
-                    const auto data=read(*madr,4);
-                    vif.write_fifo(std::uint64_t{data[0]}|(std::uint64_t{data[1]}<<32),
-                                   std::uint64_t{data[2]}|(std::uint64_t{data[3]}<<32),gif,gs);
-                    *madr+=16u;--*qwc;
-                    if(transfer.inline_data) *tadr=*madr;
-                }
-            } catch(const DeviceRefusal& error) {transfer.stop=error.what();throw;}
-            transfer.cycle+=kEeCyclesPerBusCycle;
-            if(!*qwc && transfer.end) {
-                *chcr&=~0x100u;ee_dstat_|=1u<<channel;transfer.cycle=ee_cycle;break;
-            }
-        }
-    }
+    advance_graphics_dma(0,ee_cycle,&vif0,gif,gs);
+    advance_graphics_dma(1,ee_cycle,&vif1,gif,gs);
 }
-
 void Iop::advance_gif_dma(std::uint64_t ee_cycle,Gif& gif,GsRegisters& gs) {
-    if(gif_dma_stop_)throw DeviceRefusal(*gif_dma_stop_);
-    auto& chcr=ee_dma_setup_[2][0];auto& madr=ee_dma_setup_[2][1];auto& qwc=ee_dma_setup_[2][2];
-    if(!(chcr.value_or(0u)&0x100u) || ee_dma_suspended_ || !(ee_dctrl_&1u)) {
-        gif_dma_cycle_=ee_cycle;return;
-    }
-    const auto priority=ee_dma_priority(ee_dma_observe(0x1000E020u),2u);
-    if(!priority)throw DeviceRefusal("EE GIF DMA priority is unknown");
-    if(!*priority){gif_dma_cycle_=ee_cycle;return;}
-    // Functional throughput hypothesis: one qword per BUSCLK. The existing
-    // GIF parser refuses unmodeled masking/arbitration instead of dropping data.
-    while(ee_cycle>=gif_dma_cycle_ && ee_cycle-gif_dma_cycle_>=kEeCyclesPerBusCycle) {
-        if(*qwc) {
-            if(ee_ram_unknown_)
-                for(unsigned w=0;w<4;++w)if(ee_ram_unknown_->contains(*madr+w*4u))
-                    throw DeviceRefusal("EE GIF DMA source consumes unknown RAM bits");
-            std::uint64_t low=0,high=0;
-            for(unsigned b=0;b<8;++b) {
-                low|=std::uint64_t{ee_ram_[*madr+b]}<<(8u*b);
-                high|=std::uint64_t{ee_ram_[*madr+8u+b]}<<(8u*b);
-            }
-            try {gif.write_fifo(low,high,gs);}
-            catch(const DeviceRefusal& error){gif_dma_stop_=error.what();throw;}
-            *madr+=16u;--*qwc;
+    advance_graphics_dma(2,ee_cycle,nullptr,gif,gs);
+}
+void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif,Gif& gif,GsRegisters& gs) {
+    auto& transfer=graphics_dma_[channel];auto& regs=ee_dma_setup_[channel];
+    auto& chcr=regs[0];auto& madr=regs[1];auto& qwc=regs[2];auto& tadr=regs[3];
+    if(transfer.stop) throw DeviceRefusal(*transfer.stop);
+    if(!(chcr.value_or(0)&0x100u) || ee_dma_suspended_ || !(ee_dctrl_&1u)) {transfer.cycle=ee_cycle;return;}
+    unsigned active=0;
+    for(unsigned c=0;c<3;++c) active+=(ee_dma_setup_[c][0].value_or(0u)&0x100u)!=0;
+    if(active>1u) throw DeviceRefusal("Concurrent VIF/GIF DMA bus arbitration is not modeled");
+    const auto priority=ee_dma_priority(ee_dma_observe(0x1000E020u),channel);
+    if(!priority) throw DeviceRefusal("EE graphics DMA priority is unknown");
+    if(!*priority) {transfer.cycle=ee_cycle;return;}
+    const auto read=[&](std::uint32_t at,unsigned words) {
+        if((at&3u) || at>ee_ram_.size() || words*4u>ee_ram_.size()-at)
+            throw DeviceRefusal("EE graphics DMA source outside aligned main RAM");
+        std::array<std::uint32_t,4> data{};
+        for(unsigned w=0;w<words;++w) {
+            if(ee_ram_unknown_ && ee_ram_unknown_->contains(at+4u*w))
+                throw DeviceRefusal("EE graphics DMA consumes unknown source bits (unknown RAM bits)");
+            for(unsigned b=0;b<4;++b) data[w]|=std::uint32_t{ee_ram_[at+w*4u+b]}<<(8u*b);
         }
-        gif_dma_cycle_+=kEeCyclesPerBusCycle;
-        if(!*qwc){*chcr&=~0x100u;ee_dstat_|=1u<<2u;gif_dma_cycle_=ee_cycle;return;}
+        return data;
+    };
+    // Same functional bus-throughput hypothesis as GIF DMA. Every tag
+    // fetch and payload qword costs a bus beat; no immediate completion.
+    while(ee_cycle>=transfer.cycle && ee_cycle-transfer.cycle>=kEeCyclesPerBusCycle) {
+        try {
+            if(!*qwc && !transfer.end) {
+                const auto tag=read(*tadr,(*chcr&0x40u) ? 4u : 2u);
+                const auto id=(tag[0]>>28u)&7u, count=tag[0]&0xFFFFu;
+                if((tag[0]&0x0C000000u) || (id>=4u && id<=6u))
+                    throw DeviceRefusal("EE graphics source chain supports REFE/CNT/NEXT/REF/END without PCE changes");
+                const auto source=(id==0u || id==3u) ? tag[1] : *tadr+16u;
+                if((source&15u) || source>ee_ram_.size() || std::uint64_t{count}*16u>ee_ram_.size()-source)
+                    throw DeviceRefusal("EE graphics DMA tag payload outside aligned main RAM");
+                auto next=*tadr;
+                if(id==0u || id==3u) next+=16u;
+                else if(id==1u) next=source;
+                else if(id==2u) {
+                    next=tag[1];
+                    if((next&15u) || next>ee_ram_.size() || ee_ram_.size()-next<16u)
+                        throw DeviceRefusal("EE graphics NEXT target outside aligned main RAM");
+                }
+                if(*chcr&0x40u) vif->write_dma_tag(std::uint64_t{tag[2]}|(std::uint64_t{tag[3]}<<32),gif,gs);
+                transfer.end=id==0u || id==7u || ((tag[0]&0x80000000u) && (*chcr&0x80u));
+                transfer.inline_data=id==1u;
+                *chcr=(*chcr&0xFFFFu)|(tag[0]&0xFFFF0000u);
+                madr=source;qwc=count;tadr=next;
+            } else if(*qwc) {
+                const auto data=read(*madr,4);
+                const auto low=std::uint64_t{data[0]}|(std::uint64_t{data[1]}<<32);
+                const auto high=std::uint64_t{data[2]}|(std::uint64_t{data[3]}<<32);
+                if(vif) vif->write_fifo(low,high,gif,gs);
+                else gif.write_fifo(low,high,gs);
+                *madr+=16u;--*qwc;
+                if(transfer.inline_data) *tadr=*madr;
+            }
+        } catch(const DeviceRefusal& error) {transfer.stop=error.what();throw;}
+        transfer.cycle+=kEeCyclesPerBusCycle;
+        if(!*qwc && transfer.end) {
+            *chcr&=~0x100u;ee_dstat_|=1u<<channel;transfer.cycle=ee_cycle;break;
+        }
     }
 }
 

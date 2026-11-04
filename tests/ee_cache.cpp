@@ -26,6 +26,9 @@ void visibility_and_tags() {
     tag=op(m,0x10,0);
     require(tag.value==0x2030u && tag.unknown==0xF87u,"refill records physical tag, valid and LRF");
     m.write16(0x80002002u,0xABCDu);
+    const auto prior_tag=op(m,0x10,0);
+    require(m.diagnostic_ram(0x2000,4).value==0x11223344u &&
+            op(m,0x10,0).value==prior_tag.value,"diagnostic reads backing RAM without cache refill/writeback");
     require(m.read32(0xA0002000u)==0x11223344u,"cached store is invisible to backing bus");
     require(m.read32(0x80002000u)==0xABCD3344u,"cached store preserves other byte lanes");
     require(op(m,0x10,0).value==0x2070u,"store dirties actual line");
@@ -49,6 +52,12 @@ void visibility_and_tags() {
 void replacement_and_knowledge() {
     Memory m;initialize(m);
     m.store32_observed(0xA0004000u,{0xF0000100u,0x0F0000FFu});
+    m.store32_observed(0xA0004004u,{0x12345678u,0x0000FF00u});
+    const auto diagnostic=m.diagnostic_ram(0x4001,6);
+    require(diagnostic.value==0x340078F00001ull && diagnostic.unknown==0x00FF000F0000ull,
+            "diagnostic unaligned range preserves knowledge across words");
+    rejects([&]{(void)m.diagnostic_ram(Memory::kMainRamBytes-1,2);},"outside backing");
+    rejects([&]{(void)m.diagnostic_ram(0x10000000u,4);},"outside backing");
     auto data=m.load32_observed(0x80004000u);
     require(data.value==0xF0000100u && data.unknown==0x0F0000FFu,"refill retains per-bit RAM knowledge");
     m.store16_observed(0x80004002u,{0x1122u,0x00F0u});

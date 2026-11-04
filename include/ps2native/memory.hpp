@@ -118,6 +118,9 @@ public:
     [[nodiscard]] ObservedWord load32_observed(std::uint32_t guest_address) const;
     [[nodiscard]] std::uint64_t read64(std::uint32_t guest_address) const;
     [[nodiscard]] ObservedDoubleword load64_observed(std::uint32_t guest_address) const;
+    // Host diagnostics only: inspect backing RAM without TLB/cache access,
+    // advancing devices, bus observers or retrying a latched DMA refusal.
+    [[nodiscard]] ObservedDoubleword diagnostic_ram(std::uint32_t physical_offset, std::size_t bytes = 8u) const;
     void write8(std::uint32_t guest_address, std::uint8_t value);
     void write16(std::uint32_t guest_address, std::uint16_t value);
     void write32(std::uint32_t guest_address, std::uint32_t value);
