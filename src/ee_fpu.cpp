@@ -90,14 +90,17 @@ std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std
     const auto ea=(a>>23u)&255u,eb=(b>>23u)&255u;
     const auto sign=(a^b)&0x80000000u;
     if(!ea || !eb){fcr31&=~0xC000u;return sign;}
-    auto product=static_cast<std::uint64_t>((a&0x7FFFFFu)|0x800000u)*((b&0x7FFFFFu)|0x800000u);
-    if((b&0xFFFFu)==0x8000u) {
-        // Boundary-column proof: the first nonzero radix-4 digit is -2
-        // at column 14. Its complement and delayed sign correction each
-        // contribute a bit at 14; discarding those separate columns loses
-        // exactly the carry into 15. Later digits start at column 16 and
-        // cannot change it. This applies to every multiplicand/sign/exponent,
-        // not just the physical 1 * 129.5 example. See FIRST-GAME-STATUS.md.
+    const auto significand_a=(a&0x7FFFFFu)|0x800000u;
+    auto product=static_cast<std::uint64_t>(significand_a)*((b&0x7FFFFFu)|0x800000u);
+    const auto negative_digit=0x10000u-(b&0xFFFFu);
+    if(std::has_single_bit(negative_digit) && negative_digit<=0x8000u &&
+       ((static_cast<std::uint64_t>(significand_a)*negative_digit)&0x7FFFu)==0) {
+        // If the low 16 multiplier bits are -2^k, their Booth expansion
+        // contains one negative digit; every later digit starts at >=16.
+        // When A*2^k has 15 clear low bits, the complemented row plus its
+        // separate sign correction produce a carry into column 15. Cutting
+        // both low portions loses that carry. Covers k=15 for every A and
+        // e.g. k=0 for A divisible by 2^15. See FIRST-GAME-STATUS.md.
         product-=std::uint64_t{1}<<15u;
     } else if(b&0xFFFFu) {
         // Certify a result without guessing the R5900's low-column tree.

@@ -398,7 +398,7 @@ void divider() {
         {0x7FFFFFFF,0x3F800000,0x7FFFFFFF},{0x7F800001,0x3F800000,0x7F800001}};
     for(const auto& row:products)require(ee_fpu_multiply(row[0],row[1],fcr)==row[2],"Booth multiplier physical result vector");
     const auto flags=fcr;
-    require(!ee_fpu_multiply(0x3F800000,0x3FFFFFFF,fcr) && fcr==flags,
+    require(!ee_fpu_multiply(0x3F800001,0x3F800001,fcr) && fcr==flags,
             "general asymmetric Booth case cannot substitute host multiplication or change flags");
     // Published physical VU observation: 1 * 129.5 loses one output ULP.
     // The shared multiplier boundary is asymmetric; the operand order matters.
@@ -410,6 +410,14 @@ void divider() {
             "column-15 proof applies across signs and non-unit multiplicands");
     require(ee_fpu_multiply(0x3F800001,0x3F808000,fcr)==0x3F808001,
             "a discarded carry need not change the retained output mantissa");
+    require(ee_fpu_multiply(0x3F800000,0x3FFFFFFF,fcr)==0x3FFFFFFE &&
+            ee_fpu_multiply(0x3FFFFFFF,0x3F800000,fcr)==0x3FFFFFFF &&
+            ee_fpu_multiply(0x3F800000,0xFFFFFFFF,fcr)==0xFFFFFFFE,
+            "physical EE maximum-mantissa products retain operand asymmetry");
+    require(ee_fpu_multiply(0x4A800000,0x4B7FFFFF,fcr)==0x567FFFFE &&
+            ee_fpu_multiply(0x3F800000,0x3FFFFFFE,fcr)==0x3FFFFFFD &&
+            ee_fpu_multiply(0x3F800000,0x3FFFFFFC,fcr)==0x3FFFFFFB,
+            "single negative Booth digit proof spans exponents and digit positions");
     require(ee_fpu_multiply(0x44FA0000,0x447A0000,fcr)==0x49F42400 &&
             ee_fpu_multiply(0x3F800001,0x3F810000,fcr)==0x3F810001 &&
             ee_fpu_multiply(0x3F800001,0x3F820000,fcr)==0x3F820001,

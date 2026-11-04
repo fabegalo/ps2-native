@@ -4,20 +4,21 @@ O checkpoint experimental já produziu 16 pacotes GIF PATH3 e 1.048.576 escritas
 de pixels por IMAGE: limpeza real da VRAM comandada pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução: ensaio 47, EE `0x100948`, 339.415.349 instruções; IOP ativo
-`0xAE94`, 46.479.003. SUB.S passou; MUL.S com fs=`C31B0000`, ft=`453B8000`
-para na fronteira de truncamento Booth. O produto inteiro `0x718680000000`
-não permite escolher entre as mantissas `E30CFF`/`E30D00` pelo limite atual.
-Caracterizar os carries descartados com referência verificável e implementação
-BSD independente. Não trocar por float host, não relaxar o teste de intervalo,
-não criar exceção por operandos/título/PC. Consultar PS2Recomp antes de implementar.
-PS2Float não declara licença; não copiar, adaptar ou incorporar seu código.
+Última execução concluída: ensaio 50, EE `0x1CDA04`, 339.416.893 instruções;
+IOP ativo `0xAE98`, 46.479.196. As multiplicações da projeção e NEG.S passaram.
+MUL.S com fs=`4A800000`, ft=`4B7FFFFF` revelou outra fronteira Booth, agora
+coberta pela prova de único dígito negativo abaixo da coluna 16. Testes locais
+passaram; ensaio 51 em andamento. PMODE ainda não foi escrito; sem scanout.
+Continuar reexecutando, registrando PCs e resolvendo os bloqueios até conteúdo
+real exibido. Não trocar por float host nem criar exceções por título/PC.
+Consultar PS2Recomp antes de implementar subsistemas; PS2Float não declara
+licença e não pode ter código copiado, adaptado ou incorporado.
 
 Após a correção, repetir o jogo, registrar novo PC/contagens e continuar pelos
 próximos bloqueios. O harness local está em `out/game-first/gs-iop-experiment-probe.cpp`,
-build isolado `out/gs-iop-build`. Seu limite inicial de parada após novos pacotes
-precisa ser ampliado se chegar ao orçamento de 340 milhões sem recusa, pois a
-primeira limpeza já foi atingida. Os logs e artefatos comerciais continuam ignorados.
+build isolado `out/gs-iop-build`. O limite de parada após novos pacotes foi removido;
+executa até recusa ou orçamento de 1 bilhão. Diagnóstico de scanout/registradores
+GS está ativo. Os logs e artefatos comerciais continuam ignorados.
 
 O modo original foi preservado em todas as verificações: ROM0/NVM param no encoder
 não medido, `0x80007D20`, 17.690.079 instruções. ELF injetado nesse estado para em

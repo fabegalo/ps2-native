@@ -34,10 +34,12 @@
   `0x1CDF74`, leitura GS CSR, após 338.172.827 instruções. O ensaio usa injeção
   de ELF e hipóteses explícitas, incluindo SPU2 inativo no reset; não comprova
   boot original. O modo original mantém PCs/contagens/hash anteriores.
-- Continuação até ensaio 47: CSR, IMR, aritmética inteira com overflow e
-  ADD.S/SUB.S superados. EE `0x100948` / 339.415.349 instruções, IOP ativo
-  `0xAE94` / 46.479.003. MUL.S ainda recusa uma fronteira de truncamento
-  Booth que o modelo não consegue decidir; sem novos pixels além da limpeza.
+- Continuação até ensaio 49: CSR, IMR, aritmética inteira com overflow,
+  ADD.S/SUB.S e as multiplicações da projeção superados. EE `0x1CD9CC` /
+  339.416.879 instruções, IOP ativo `0xAE98` / 46.479.194. A fronteira Booth
+  de 15 zeros baixos foi resolvida por perda do carry da coluna 15; 16 ou
+  mais zeros não atingem colunas descartadas. Demais casos ambíguos recusam.
+  Próxima recusa observada: NEG.S; sem novos pixels além da limpeza.
   Commits `d4d98a1` e `8410973` aprovados na CI dos seis alvos (núcleo e launcher);
   `94230de` e a correção de fixture FPU `dd6ed41` aprovados nos seis do núcleo.
   ADD.S/SUB.S (`1ddd0d1`) também aprovado nos seis do launcher.

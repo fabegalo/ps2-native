@@ -666,3 +666,30 @@ não resolve a fidelidade de flags. Valores confrontados com observações
 flags com manual EE e comportamento de referência PCSX2. Implementação BSD
 independente por operações inteiras, sem incorporar código das referências.
 Regressões próprias cobrem payloads, zeros, alias fd/fs, campos reservados e CU1.
+
+Após NEG.S/ABS.S, repetição original: firmware 17.690.079 instruções em
+`0x80007D20`; ELF injetado 4.486.087 em `0x80005F00`, IOP `0x40B0` /
+2.210.789. Zero pacotes/pixels do jogo e RAM canônica idêntica
+`cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
+CI de `278a1d0`: núcleo 41791750967 e launcher 41791750925, ambos aprovados
+nos seis alvos. A CI das correções seguintes é acompanhada separadamente.
+
+Ensaio 50: NEG.S passou; EE `0x1CDA04` / 339.416.893 instruções, IOP
+`0xAE98` / 46.479.196, 96,4465 s, RAM igual ao ensaio 49. MUL.S usa
+`4A800000 * 4B7FFFFF`; ainda só os 16 pacotes da limpeza. Instrumentação
+confirma SMODE2=3 e PMODE ainda não escrito; não existe scanout configurado.
+
+A prova do carry foi generalizada para os 16 bits baixos do multiplicador
+iguais a `-2^k` módulo 65536, k de 0 a 15. Há um único dígito Booth negativo
+abaixo da coluna 16; os seguintes não podem alterar colunas inferiores.
+Quando a mantissa do multiplicando vezes `2^k` tem 15 bits baixos nulos,
+a linha complementada e a correção separada de sinal geram um carry para 15,
+perdido pelo corte. O produto retido equivale ao produto inteiro menos 32768.
+Isso inclui a prova anterior (k=15) e a mantissa máxima (k=0), sem tabela de
+operandos, título ou PC. Classes fora da prova continuam recusadas quando o
+intervalo não decide. Mantissas de `1 * CF_MAX_MANTISSA`, ordem inversa e
+`1 * CF_MIN` conferem com observações físicas **EE**, em
+[muldiv.expected](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/cpu/ee_fpu/muldiv.expected).
+Regressões também cobrem posições diferentes do dígito e expoentes. Testes
+`native-ee-context` e `native-m20-boot` aprovados. A implementação permanece
+inteira e independente; não foi incorporada uma árvore de código externo.
