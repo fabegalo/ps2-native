@@ -343,6 +343,10 @@ void Iop::pump_sif1() {
     if (!sif1_words_) {
         sif1_have_tag_ = false;
         if (sif1_end_) {
+            const auto* dicr = latch(kDicr);
+            const auto* dicr2 = latch(kDicr2);
+            if (!dicr || !dicr->has_value() || !dicr2 || !dicr2->has_value())
+                throw IopStop{"SIF1 DMA completion: interrupt masks not programmed (pending state unknown)"};
             iop_sif1_[2] &= ~kChcrStart;
             // Channel 10 -> DICR2 mask 19 / completion flag 27.
             for (auto& [address, value] : latches_)

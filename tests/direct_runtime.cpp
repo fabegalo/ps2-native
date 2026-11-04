@@ -32,9 +32,11 @@ void check_loader(const ElfImage& elf) {
             require(memory.read8(seg.vaddr+off)==0,"ELF BSS zeroed");
     require(memory.read32(0x100)==0,"reload clears RAM");
     // Unknown opcode remains a named interpreter error, no fake success.
-    memory.write32(elf.entry,0xFFFFFFFFu);
+    memory.write32(elf.entry,0x7000003Fu); // Reserved/unimplemented MMI encoding.
     BootOptions options; options.max_instructions=1;
-    require(run_ee_boot(state,memory,nullptr,options).outcome==BootOutcome::BlockPoint,"unknown instruction boundary");
+    const auto unknown=run_ee_boot(state,memory,nullptr,options);
+    require(unknown.outcome==BootOutcome::BlockPoint && unknown.retired==0 &&
+            unknown.reason.find("not implemented by the interpreter")!=std::string::npos,"unknown instruction boundary");
 }
 void check_timer_edges() {
     EEState state; state.pc=0x00100004u;state.delay_pending=true;state.delay_target=0x00100020u;
@@ -77,6 +79,14 @@ void check_dma_errors(const ElfImage& elf) {
                 "refused tag transfers no payload and never completes");
     }
     Memory memory;EEState state;prepare_direct_elf(elf,nullptr,state,memory);
+    const auto unconfigured=direct_test::iop_receiver(false);
+    memory.load_iop_program(unconfigured,0x1000,0x1000);
+    BootOptions missing_masks;missing_masks.max_instructions=20000;
+    const auto unknown_irq=run_ee_boot(state,memory,nullptr,missing_masks);
+    require(unknown_irq.outcome==BootOutcome::BlockPoint &&
+            unknown_irq.reason.find("interrupt masks not programmed")!=std::string::npos &&
+            !contains(unknown_irq.iop_events,"destination complete"),"unknown SIF interrupt state is not replaced by zero");
+    prepare_direct_elf(elf,nullptr,state,memory);
     device_refused([&]{memory.write32(0xB000C400u,0x105);},"only normal source mode");
     memory.write32(0xB000C410u,Memory::kMainRamBytes-16);
     memory.write32(0xB000C420u,2);

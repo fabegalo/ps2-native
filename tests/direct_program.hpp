@@ -40,13 +40,15 @@ inline Program cpu() {
     return {{{text,5,le_words(a.finish())},{data,6,std::vector<std::uint8_t>(16),64},
              {0x00000200u,5,le_words(h.finish())}},stop,{}, {}};
 }
-inline std::vector<std::uint8_t> iop_receiver() {
+inline std::vector<std::uint8_t> iop_receiver(bool program_interrupt_masks=true) {
     Assembler a(0x1000u);
     store(a,0xBF801570u,0x8000u); // DPCR2 ch10 enable
     store(a,0xBF801578u,1u); // DMACEN
     store(a,0xBF80157Cu,1u); // DMACINTEN: master flags and IRQ enabled
-    store(a,0xBF8010F4u,1u<<23); // master IRQ enable
-    store(a,0xBF801574u,1u<<19); // ch10 IRQ enable
+    if(program_interrupt_masks) {
+        store(a,0xBF8010F4u,1u<<23); // master IRQ enable
+        store(a,0xBF801574u,1u<<19); // ch10 IRQ enable
+    }
     store(a,0xBF801538u,0x01000600u); // chain, destination
     a.la(t0,0xBF801538u);
     a.label("busy"); a.lw(t1,0,t0); a.nop(); a.lui(t2,0x0100); a.r(t1,t2,t1,0,0x24);
