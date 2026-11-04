@@ -396,6 +396,14 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
                 cpu.stop(StopKind::GuestException,"FPU add/sub with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
             state.fpr[ee::sa(word)]=ee_fpu_add(state.fpr[ee::rd(word)],
                 state.fpr[ee::rt(word)]^(instruction.opcode==MipsOpcode::SubS ? 0x80000000u : 0u),state.fcr31);break;
+        case MipsOpcode::AbsS: case MipsOpcode::NegS:
+            if(!(state.cp0(Cop0::Status)&kStatusCU1))
+                cpu.stop(StopKind::GuestException,"FPU sign operation with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+            // Sign operations preserve all magnitude bits, including denormals
+            // and exponent 255. They clear O/U causes, not their sticky history.
+            state.fpr[ee::sa(word)]=instruction.opcode==MipsOpcode::AbsS ?
+                state.fpr[ee::rd(word)]&0x7FFFFFFFu : state.fpr[ee::rd(word)]^0x80000000u;
+            state.fcr31&=~0xC000u;break;
         case MipsOpcode::MovS:
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"MOV.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");

@@ -292,6 +292,23 @@ void register_context() {
     memory.write32(0x80003000u,0x46000886u); // MOV.S f2,f1
     const auto saved_pc=state.pc;state.pc=0x80003000u;interpret_instruction(ctx);state.pc=saved_pc;
     require(state.fpr[2]==0xDEADBEEFu && state.fcr31==0x0183C079u,"MOV.S preserves raw payload and all FCR31 flags");
+    // Raw physical sign-operation vectors from ps2autotests arithmetic.expected.
+    const std::uint32_t signs[][3]={{0,0,0x80000000u},{0x80000000u,0,0},
+        {0x00001337u,0x00001337u,0x80001337u},{0x7F800001u,0x7F800001u,0xFF800001u},
+        {0xFFFFFFFFu,0x7FFFFFFFu,0x7FFFFFFFu},{0xDEADBEEFu,0x5EADBEEFu,0x5EADBEEFu}};
+    for(const auto& row:signs)for(unsigned op=0;op<2;++op) {
+        state.pc=0x80003000u;state.fpr[1]=row[0];state.fcr31=0x0183C079u;
+        memory.write32(state.pc,op ? 0x46000847u : 0x46000845u); // fd == fs
+        interpret_instruction(ctx);
+        require(state.fpr[1]==row[op+1] && state.fcr31==0x01830079u,
+                "ABS/NEG preserve raw magnitude and sticky flags with aliased destination");
+    }
+    require(!try_decode_r5900(0,0x46010845u) && !try_decode_r5900(0,0x46010847u),
+            "sign operations reject reserved ft fields");
+    state.pc=0x80003000u;state.set_cp0(Cop0::Status,0);state.fpr[1]=0x1234;
+    rejects([&]{interpret_instruction(ctx);},"Status.CU1 = 0");
+    require(state.fpr[1]==0x1234,"disabled FPU sign operation preserves destination");
+    state.set_cp0(Cop0::Status,kStatusCU1);state.pc=saved_pc;
     require(state.shift_amount==72 && state.reg64(12)==72 && state.reg128(8).high==0x1122334455667788ull,
             "SA context save/restore preserves full GPR upper half");
     require(!try_decode_r5900(0,0x444BF801u) && !try_decode_r5900(0,0x00004868u),"reserved COP1/SA transfer fields rejected");

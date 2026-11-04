@@ -650,3 +650,19 @@ passa a aceitar essa classe pelo produto inteiro exato; a classe de 15 zeros
 continua com perda de carry, e os demais casos continuam sujeitos à prova de
 intervalo ou recusa. Regressões incluem 16/17 zeros e multiplicando não inteiro.
 O harness local agora continua além do primeiro pacote, até recusa ou orçamento.
+
+Ensaio 49: multiplicações da projeção superadas; EE `0x1CD9CC`, 339.416.879
+instruções, IOP `0xAE98` / 46.479.194. Recusa de NEG.S `46008807`.
+95,7098 s; RAM SHA-256 `5c8f447f3c467323c9756f558ba05f76a1be98d99e8fe1e9683e74d5def8a6b5`.
+Os 16 pacotes/1.048.576 pixels continuam apenas a limpeza. Testes locais de
+contexto EE e boot aprovados após ampliar a classe esparsa.
+
+NEG.S e ABS.S acrescentados como fronteiras explícitas do interpretador:
+inversão/remoção do bit de sinal, preservação de todos os bits de magnitude,
+inclusive denormais e expoente 255; limpam causas O/U, preservam sticky/I/D.
+Consulta prévia ao tradutor FPU/macros do PS2Recomp; ele usa operações host e
+não resolve a fidelidade de flags. Valores confrontados com observações
+[ps2autotests arithmetic.expected](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/cpu/ee_fpu/arithmetic.expected),
+flags com manual EE e comportamento de referência PCSX2. Implementação BSD
+independente por operações inteiras, sem incorporar código das referências.
+Regressões próprias cobrem payloads, zeros, alias fd/fs, campos reservados e CU1.
