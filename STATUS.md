@@ -26,6 +26,9 @@
   Quatro testes focados passaram e modo BIOS original conservou PCs,
   contagens e hash canônicos. Evidência, referências e limites no
   [relatório](docs/FIRST-GAME-STATUS.md#continuação-do-simpsons--fpu-dvd-e-fifo-mechacon).
+  CI: `79bb6d6` aprovado nos seis alvos do núcleo; código `6328bb7`
+  aprovado nos seis do launcher. Híbrido e interpretador reproduziram
+  a parada ReadRTC e a mesma RAM; nenhum ganho de desempenho demonstrado.
 - **Reensaio de The Simpsons: Hit & Run (SLUS-20624):** com o núcleo que
   produziu as capturas do Super Bust-A-Move, híbrido e interpretador puro
   chegaram às mesmas 849.776 instruções e RAM, parando em `0x001681B0`:

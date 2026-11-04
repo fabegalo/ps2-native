@@ -219,6 +219,9 @@ A primeira CI de `6328bb7` revelou três fixtures MECHACON que exigiam
 recusa já na leitura vazia. Elas agora exercitam um branch sobre o byte
 opaco, preservando a prova de que ele não pode fabricar decisão numérica.
 Os três testes corrigidos e `native-ee-context` passaram localmente.
+CI final: núcleo de `79bb6d6`, execução `41850568279`, aprovado nos seis
+alvos; launcher do código `6328bb7`, execução `41849651243`, aprovado nos
+seis. A correção posterior altera somente fixtures/documentação.
 
 Consulta prévia: PS2Recomp revisão `e5636981`, `fpu_translator.cpp` e
 `ps2xIOP/src/emulator/imports/iop_cdvd.cpp`; serviços HLE não adotados.
