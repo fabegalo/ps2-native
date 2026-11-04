@@ -13,6 +13,7 @@ void GsRegisters::reset_drawing() {
     general_ = {}; general_unknown_={}; display_ = {}; first_vertex_.reset(); triangle_vertices_count_=0; transfer_ = {};
     general_[0x22]=diagnostic_reset_scanmask_;
     clut_={};clut_base_={};sampled_pages_={};dirty_texture_pages_={};transfer_generation_=0;texture_flush_generation_.reset();
+    if(diagnostic_reset_texture_cache_invalid_)texture_flush_generation_=0;
     imr_ = 0x7F00u;
 }
 void GsRegisters::start_transfer(std::uint64_t value) {

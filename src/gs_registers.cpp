@@ -52,6 +52,7 @@ void GsRegisters::reset(std::uint64_t now, std::optional<std::uint64_t> diagnost
     diagnostic_reset_syncv_ = diagnostic_reset_syncv;
     diagnostic_reset_field_ = diagnostic_reset_field;
     diagnostic_reset_scanmask_.reset();
+    diagnostic_reset_texture_cache_invalid_=false;
     mode_.back() = diagnostic_reset_syncv_;
     reset_drawing();
     reset_events(now);
@@ -64,6 +65,12 @@ void GsRegisters::diagnostic_scanmask_reset(unsigned mask) {
        std::any_of(general_.begin(),general_.end(),[](const auto& value){return value.has_value();}))
         throw DeviceRefusal("diagnostic SCANMSK needs a valid mask before guest activity");
     diagnostic_reset_scanmask_=mask;general_[0x22]=mask;
+}
+void GsRegisters::diagnostic_texture_cache_reset_invalid() {
+    if(event_cycle_ || std::any_of(general_.begin(),general_.end(),[](const auto& value){return value.has_value();}))
+        throw DeviceRefusal("diagnostic texture cache reset must precede guest activity");
+    diagnostic_reset_texture_cache_invalid_=true;
+    texture_flush_generation_=transfer_generation_;
 }
 
 std::uint64_t GsRegisters::read(std::uint32_t physical, std::size_t bytes) const {

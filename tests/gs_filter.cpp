@@ -6,8 +6,10 @@ using namespace ps2native;
 using namespace boot_checks;
 namespace {
 std::uint32_t source(unsigned x,unsigned y){return 0x80000000u|(x*16u)|(y*16u<<8u)|((x+y)*8u<<16u);}
-void setup(GsRegisters& gs,bool flush=true) {
-    gs.reset(0);gs.general_write(0,0x116);gs.general_write(1,0x3F80000080808080ull);
+void setup(GsRegisters& gs,bool flush=true,bool cold_experiment=false,bool cold_reset=true) {
+    if(cold_reset)gs.reset(0);
+    if(cold_experiment)gs.diagnostic_texture_cache_reset_invalid();
+    gs.general_write(0,0x116);gs.general_write(1,0x3F80000080808080ull);
     gs.general_write(0x18,0);gs.general_write(0x1A,1);gs.general_write(0x4C,1u<<16u);
     gs.general_write(0x40,(7ull<<16u)|(7ull<<48u));gs.general_write(0x47,3u<<16u);
     gs.general_write(0x4E,1ull<<32u);gs.general_write(0x22,0);gs.general_write(0x4A,0);
@@ -72,5 +74,16 @@ int main() try {
     require(cache.vram().read(0,64,0,3,0)==0x80808080u,"local VRAM copies dirty the same cached pages as host uploads");
     GsRegisters uninitialized;setup(uninitialized,false);
     rejects([&]{pixel(uninitialized,0,0,8,8);},"initial TEXFLUSH");
+    GsRegisters diagnostic;setup(diagnostic,false,true);pixel(diagnostic,0,0,8,8);
+    require(diagnostic.vram().read(0,64,0,0,0)==source(0,0) && !diagnostic.general(0x3F),
+        "explicit cold-tag experiment reads actual VRAM and fabricates neither a TEXFLUSH command nor texture data");
+    rejects([&]{diagnostic.diagnostic_texture_cache_reset_invalid();},"precede guest activity");
+    upload(diagnostic,32,0x80402010u);rejects([&]{pixel(diagnostic,1,0,8,8);},"cached texture page changed");
+    diagnostic.write(kGsCsr,8,kCsrReset,1,{});
+    require(!diagnostic.general(0x3F) && diagnostic.vram().read(8192,64,0,1,1)==0x80402010u,
+        "experimental soft reset preserves VRAM and does not fabricate a texture invalidation command");
+    setup(diagnostic,false,false,false);pixel(diagnostic,0,0,8,8);
+    require(diagnostic.vram().read(0,64,0,0,0)==source(0,0),"soft reset preserves the explicitly selected cache-tag experiment");
+    setup(diagnostic,false);rejects([&]{pixel(diagnostic,0,0,8,8);},"initial TEXFLUSH");
     std::cout<<"Exact level-zero bilinear/nearest, subtexel centers, independent edge wrapping, fixed LOD and explicit rounding boundaries passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

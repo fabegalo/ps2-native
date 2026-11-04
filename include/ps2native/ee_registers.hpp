@@ -72,6 +72,7 @@ public:
     [[nodiscard]] const Gif& gif() const noexcept { return gif_; }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return gs_; }
     void diagnostic_gs_scanmask_reset(unsigned mask) { gs_.diagnostic_scanmask_reset(mask); }
+    void diagnostic_gs_texture_cache_reset_invalid() { gs_.diagnostic_texture_cache_reset_invalid(); }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return mch_; }
     void diagnostic_dev9_power_reset(std::uint16_t value) { iop_.diagnostic_dev9_power_reset(value); }
     void diagnostic_dev9_irq_reset_clear() { iop_.diagnostic_dev9_irq_reset_clear(); }

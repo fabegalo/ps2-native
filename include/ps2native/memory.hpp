@@ -161,6 +161,7 @@ public:
     void set_clock(const std::uint64_t* ee_cycles,const std::uint64_t* stalls=nullptr) noexcept { registers_.set_clock(ee_cycles,stalls); cache_clock_=ee_cycles; }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return registers_.gs(); }
     void diagnostic_gs_scanmask_reset(unsigned mask) { registers_.diagnostic_gs_scanmask_reset(mask); }
+    void diagnostic_gs_texture_cache_reset_invalid() { registers_.diagnostic_gs_texture_cache_reset_invalid(); }
     [[nodiscard]] const Gif& gif() const noexcept { return registers_.gif(); }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
     void diagnostic_dev9_power_reset(std::uint16_t value) { registers_.diagnostic_dev9_power_reset(value); }
