@@ -340,5 +340,29 @@ int main() try {
             iop.ee_read(0x104u+core*32u,4)==0xF026u+core,"read-only MVOLX writes do not change gain; disabled effects retain all coefficients independently");
         else require(iop.stopped(),"MVOLX readback, unsupported widths and unproved disabled effects remain explicit");
     }
+    for(unsigned synth_core=0;synth_core<2u;++synth_core)for(unsigned mode=0;mode<8u;++mode) {
+        m20::Assembler a(kEeResetVector);unsigned padding=0;
+        const auto pad=[&](unsigned cycle){const auto name="pad"+std::to_string(padding++);a.label(name);
+            for(auto current=(a.at(name)-kEeResetVector)/4u;current<cycle;++current)a.nop();};
+        const auto sh=[&](std::uint32_t address,std::uint32_t value){a.la(8,address);a.la(9,value);a.sh(9,0,8);};
+        for(unsigned core=0;core<2u;++core)sh(0xBF90019Au+core*0x400u,0x8000u);
+        const auto voice=0xBF900170u+synth_core*0x400u; // voice 23, checks the upper command bank
+        sh(voice,0);sh(voice+2u,0);sh(voice+8u,mode==2u ? 0x20u : mode==3u ? 12u : 0u);
+        sh(0xBF9001A2u+synth_core*0x400u,0x80u);pad(780u);sh(0xBF9001A6u+synth_core*0x400u,0x80u);
+        pad(1540u);
+        if(mode==4u)sh(voice+8u,0x20u);
+        if(mode!=1u)pad(2310u);
+        a.la(8,voice+0xAu);a.lhu(9,0,8);a.nop();a.la(10,0xA0000100u);a.sw(9,0,10);
+        if(mode==5u || mode==6u)sh(voice,1u);
+        if(mode==5u || mode==7u)sh(0xBF9001A2u+synth_core*0x400u,0x80u);
+        if(mode==7u){a.la(8,voice+0xAu);a.lhu(9,0,8);}
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,true);
+        iop.run_until(3072u);
+        if(mode==0u || mode==6u)require(!iop.stopped() && iop.ee_read(0x100,4)==0u && iop.spu2_last_sample(synth_core)->left==0,
+            "two linear release steps prove ENVX zero and permit gain changes without inventing decoded audio");
+        else require(iop.stopped(),"early ENVX, exponential/slow/changed release and a new attack cannot reuse a silence proof");
+    }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

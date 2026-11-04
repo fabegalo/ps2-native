@@ -981,3 +981,17 @@ quando efeitos estão explicitamente desabilitados. Não executa reverberação,
 não habilita efeitos, não muda o volume atual nem inventa amostras.
 O push SSH deixou de autenticar; a sessão existente da mesma conta no GitHub
 CLI permitiu publicar `ab13949` por HTTPS, preservando origin e os commits.
+
+Ensaio 69: tabela MVOLX/coeficientes passou; IOP `0x64CE8` / 46.648.926,
+LHU de ENVX voz 0/core 0. EE `0x81FD0` / 360.000.000, 99,8434 s;
+mesmo hash/pacotes e sem PMODE. O guest já havia emitido KOFF com ADSR2=0.
+
+Implementado limite superior de envelope, não um nível fictício: após um
+KON aceito, a amplitude ADSR alcançável está entre 0 e 32767. KOFF é consumido
+na borda de amostra; release linear com shift 0..11 subtrai 8<<(11-shift) por
+amostra. O limite converge a zero em tempo finito; somente então ENVX=0 e
+mudança de ganho são permitidos. Novo KON invalida a prova, e ataque audível
+continua recusado. Modos exponenciais/lentos ou mudança para esses modos
+não recebem um prazo inventado. ENDX/NAX/LSAX/ADPCM continuam desconhecidos.
+PS2Recomp áudio consultado previamente; taxa/envelope conferidos na descrição
+PSX-SPX e referência comportamental PCSX2 ADSR, sem código incorporado.

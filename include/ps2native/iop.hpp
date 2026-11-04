@@ -325,6 +325,10 @@ private:
     std::array<std::uint32_t,2> spu2_symbolic_voices_{};
     std::array<std::array<std::optional<std::uint16_t>,4>,2> spu2_keys_;
     std::array<ObservedWord,2> spu2_endx_;
+    // Upper bounds, not invented envelope levels. Zero proves completion
+    // of a supported linear release; other values cannot be read as ENVX.
+    std::array<std::array<std::optional<std::uint16_t>,24>,2> spu2_release_upper_;
+    std::array<std::uint32_t,2> spu2_release_pending_{};
     std::optional<std::array<std::uint16_t,2>> diagnostic_spu2_effect_end_;
     // Quiet clocks are available only under the explicit cold-state
     // experiment: no active voices, inputs, effects or transfers.

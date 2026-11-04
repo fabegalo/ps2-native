@@ -230,6 +230,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     diagnostic_spu2_reserved_latches_=false;
     spu2_control_={};spu2_symbolic_voices_={};spu2_keys_={};
     spu2_endx_.fill(ObservedWord{0u,0xFFFFFFu});
+    spu2_release_upper_={};spu2_release_pending_={};
     diagnostic_spu2_effect_end_.reset();
     spu2_next_sample_={};spu2_last_sample_={};spu2_sample_count_={};spu2_clock_active_=false;
     spu2_transfer_={};spu2_ram_.clear();spu2_ram_written_.clear();diagnostic_spu2_pio_cycles_=0;
@@ -1305,6 +1306,30 @@ void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
 void Iop::tick_spu2_quiet() {
     for(unsigned core=0;core<2;++core) {
         if(spu2_next_sample_[core] && cycle_>=*spu2_next_sample_[core]) {
+            const auto off=std::uint32_t{spu2_keys_[core][2].value_or(0)}|
+                (std::uint32_t{spu2_keys_[core][3].value_or(0)}<<16u);
+            const auto on=std::uint32_t{spu2_keys_[core][0].value_or(0)}|
+                (std::uint32_t{spu2_keys_[core][1].value_or(0)}<<16u);
+            const auto releasing=off&spu2_symbolic_voices_[core]&~on;
+            if(releasing)for(unsigned voice=0;voice<24u;++voice)if(releasing&(1u<<voice)) {
+                auto& upper=spu2_release_upper_[core][voice];
+                if(upper && *upper==0u)continue; // another KOFF cannot raise a stopped envelope
+                upper=std::uint16_t{0x7FFFu};spu2_release_pending_[core]|=1u<<voice;
+            }
+            if(spu2_release_pending_[core])for(unsigned voice=0;voice<24u;++voice)
+                if(spu2_release_pending_[core]&(1u<<voice)) {
+                    auto& upper=spu2_release_upper_[core][voice];
+                    const auto adsr=latch(0x1F900008u+core*0x400u+voice*16u);
+                    if(!adsr || !*adsr || (**adsr&0x20u) || (**adsr&31u)>11u) {
+                        upper.reset();spu2_release_pending_[core]&=~(1u<<voice);continue;
+                    }
+                    // Linear release shift <= 11 advances every 48 kHz edge.
+                    // A reachable envelope is in [0,32767]. Subtracting
+                    // the same positive step shrinks that interval to zero.
+                    const auto step=8u<<(11u-(**adsr&31u));
+                    *upper=static_cast<std::uint16_t>(*upper>step ? *upper-step : 0u);
+                    if(!*upper)spu2_release_pending_[core]&=~(1u<<voice);
+                }
             // Pending key commands are consumed at a synthesis boundary.
             // Their observable readback is not an active-voice bitmap.
             for(auto& key:spu2_keys_[core])if(key)key=0;
@@ -1402,6 +1427,13 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
 }
 
 std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char* what) {
+    if(physical>=0x1F900000u && physical<0x1F900800u &&
+       (physical&0x3FFu)<0x180u && (physical&15u)==0xAu) {
+        if(bytes!=2u)throw IopStop{"SPU2 ENVX requires a halfword read"};
+        const auto& upper=spu2_release_upper_[(physical>>10u)&1u][(physical&0x3FFu)/16u];
+        if(!upper || *upper)throw IopStop{"SPU2 ENVX is unknown before a proven completed linear release"};
+        return 0u;
+    }
     if(physical==0x1F900340u || physical==0x1F900342u || physical==0x1F900740u || physical==0x1F900742u) {
         if(bytes!=2u)throw IopStop{"SPU2 ENDX requires halfword reads"};
         const auto& end=spu2_endx_[(physical>>10u)&1u];
@@ -1766,7 +1798,9 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
                 }
             }
             // Do not fabricate ENVX, ENDX, NAX, LSAX or decoded samples.
-            // Even after KOFF the voice stays symbolic, and cannot unmute.
+            // A new attack invalidates any earlier release-completion proof.
+            for(unsigned voice=0;voice<24u;++voice)if(mask&(1u<<voice))spu2_release_upper_[core][voice].reset();
+            spu2_release_pending_[core]&=~mask;
             spu2_symbolic_voices_[core]|=mask;
         }
         spu2_keys_[core][index]=static_cast<std::uint16_t>(half);
@@ -1828,8 +1862,10 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         if(is_spu2_voice_parameter(physical) || is_spu2_voice_start(physical)) {
             if(!diagnostic_spu2_quiescent_)throw IopStop{"SPU2 voice configuration requires established inactive voices"};
             if(is_spu2_voice_parameter(physical) && (physical&15u)<4u && *value &&
-               (spu2_symbolic_voices_[(physical>>10u)&1u]&(1u<<((physical&0x3FFu)/16u))))
-                throw IopStop{"SPU2 voice gain cannot expose an unknown decoder/envelope, including after KOFF"};
+               (spu2_symbolic_voices_[(physical>>10u)&1u]&(1u<<((physical&0x3FFu)/16u)))) {
+                const auto& upper=spu2_release_upper_[(physical>>10u)&1u][(physical&0x3FFu)/16u];
+                if(!upper || *upper)throw IopStop{"SPU2 voice gain cannot expose an unknown envelope before proven release completion"};
+            }
             if(is_spu2_voice_parameter(physical) && (physical&15u)<4u && (*value&0x8000u))
                 throw IopStop{"SPU2 voice volume sweep is not modeled"};
             if(is_spu2_voice_start(physical))*value&=(physical&2u) ? 0xFFF8u : 0xFu;
