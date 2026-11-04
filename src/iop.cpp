@@ -1395,8 +1395,11 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         return;
     }
     const auto name = std::string("store ") + what + " of IOP register " + hex(physical);
-    if(physical>=0x1F900000u && physical<0x1F901000u &&
-       (physical&0x7FFu)>=0x346u && (physical&0x7FFu)<=0x3FFu) {
+    const auto spu2_offset=physical&0x7FFu;
+    const bool unassigned_spu2=(spu2_offset>=0x346u && spu2_offset<=0x3FFu) ||
+        (spu2_offset>=0x746u && spu2_offset<=0x75Fu) ||
+        (spu2_offset>=0x7B0u && spu2_offset<=0x7BFu);
+    if(physical>=0x1F900000u && physical<0x1F901000u && unassigned_spu2) {
         if(!diagnostic_spu2_reserved_latches_ || bytes!=2u || (physical&1u) || !value)
             throw IopStop{"SPU2 unassigned register write side effects are unknown (diagnostic hypothesis disabled or invalid access)"};
         for(auto& [address,stored]:latches_)if(address==physical){stored=*value&0xFFFFu;return;}

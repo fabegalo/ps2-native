@@ -828,3 +828,11 @@ Acrescentada leitura diagnóstica da RAM IOP no instante da parada, com
 nullopt para bytes nunca escritos. Ela não é uma leitura de barramento EE,
 não retoma o IOP e não relaxa a recusa de ee_read após stop. Permite registrar
 as instruções próximas dos próximos bloqueios sem reconstruir código externo.
+
+Ensaio 58: região 0xB60 passou sob hipótese explícita; IOP `0x65B58` /
+46.497.746, escrita zero em 0x1F9007B8; EE espera `0x81FCC` / 340.000.000,
+22 stalls; 94,3279 s. RAM, GIF e ausência de PMODE iguais ao ensaio 57.
+Modo original repetido mantém o hash canônico. A tabela de referência marca
+também 0x746..0x75F e 0x7B0..0x7BF como regiões não atribuídas; o experimento
+foi estendido a essas lacunas e seus espelhos, sem aceitar leituras ou
+registradores funcionais. Isso segue sendo hipótese, não medição do hardware.

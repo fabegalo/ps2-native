@@ -67,8 +67,8 @@ int main() try {
         if(mode==1)require(!iop.stopped(),"explicit unknown-output latch experiment permits only a known halfword write");
         else require(iop.stopped(),"unknown output effects, reads, word writes and reset remain fail-closed");
     }
-    for(unsigned mode=0;mode<6;++mode) {
-        m20::Assembler a(kEeResetVector);a.la(8,mode==5 ? 0xBF9007CCu : 0xBF900B60u);
+    for(unsigned mode=0;mode<8;++mode) {
+        m20::Assembler a(kEeResetVector);a.la(8,mode==5 ? 0xBF9007CCu : mode==6 ? 0xBF9007B8u : mode==7 ? 0xBF900F50u : 0xBF900B60u);
         if(mode==2)a.sw(0,0,8);else a.sh(0,0,8);
         if(mode==3){a.raw((0x25u<<26)|(8u<<21)|(9u<<16));a.nop();}
         a.label("idle");a.beq(0,0,"idle");a.nop();
@@ -76,7 +76,7 @@ int main() try {
         if(mode)iop.diagnostic_spu2_reserved_latches();
         if(mode==4)iop.load_program(code,0x1000,0x1000);
         iop.run_until(40);
-        require(iop.stopped()==(mode!=1),"reserved aperture requires opt-in, known halfwords, no reads or unrelated registers");
+        require(iop.stopped()==(mode!=1 && mode!=6 && mode!=7),"reserved apertures require opt-in, known halfwords, no reads or unrelated registers");
         require(iop.diagnostic_ram32(0x1000)==0x3C08BF90u && !iop.diagnostic_ram32(0),"diagnostic snapshot preserves knownness even after stop");
         if(iop.stopped())rejects([&]{(void)iop.ee_read(0x1000,4);},"after the IOP stopped");
     }
