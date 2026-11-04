@@ -164,5 +164,27 @@ int main() try {
             }
         } else require(iop.stopped(),"reserved readback bits, unsupported widths and unproved inactive sources stay explicit");
     }
+    for(unsigned mode=0;mode<4;++mode) {
+        m20::Assembler a(kEeResetVector);
+        for(unsigned core=0;core<2;++core) {
+            a.la(8,0xBF90019Au+core*0x400u);if(mode!=2)a.sh(0,0,8);
+            a.la(8,0xBF9002E0u+core*0x400u);a.la(9,core+1u);a.sh(9,0,8);a.la(9,0xF012u+core);a.sh(9,2,8);
+            a.la(8,0xBF90033Cu+core*0x400u);a.la(9,14u-core);if(mode!=1)a.sh(9,0,8);
+            a.raw((0x25u<<26)|(8u<<21)|(9u<<16));a.nop();if(mode!=3)a.andi(9,9,0xFu);else a.addiu(9,9,1);
+            a.la(10,0xA0000100u+core*4u);a.sw(9,0,10);
+            a.la(8,0xBF9002E0u+core*0x400u);
+            a.raw((0x25u<<26)|(8u<<21)|(9u<<16));a.nop();a.andi(9,9,0xFu);
+            a.la(10,0xA0000110u+core*8u);a.sw(9,0,10);
+            a.raw((0x25u<<26)|(8u<<21)|(9u<<16)|2u);a.nop();a.sw(9,4,10);
+        }
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr);iop.run_until(80);
+        if(!mode)require(!iop.stopped() && iop.ee_read(0x100,4)==14 && iop.ee_read(0x104,4)==13,
+                         "disabled effects retain independent workspace end addresses without requiring an invented reset state");
+        if(!mode)for(unsigned core=0;core<2;++core)require(iop.ee_read(0x110u+core*8u,4)==core+1u &&
+            iop.ee_read(0x114u+core*8u,4)==0xF012u+core,"effect workspace start halves retain word-address bits without clearing RAM");
+        if(mode)require(iop.stopped(),"unknown workspace reset, effect-enable state and reserved readback bits stay explicit");
+    }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

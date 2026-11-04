@@ -148,8 +148,13 @@ bool is_spu2_voice_routing(std::uint32_t address) {
     const auto reg=(address-0x1F900000u)&0x3FFu;
     return reg>=0x180u && reg<=0x198u && !(reg&1u);
 }
+bool is_spu2_effect_address(std::uint32_t address) {
+    if(address<0x1F900000u || address>=0x1F900800u)return false;
+    const auto reg=(address-0x1F900000u)&0x3FFu;
+    return reg==0x2E0u || reg==0x2E2u || reg==0x33Cu;
+}
 bool is_spu2_boot_config(std::uint32_t address) {
-    if(is_spu2_voice_routing(address))return true;
+    if(is_spu2_voice_routing(address) || is_spu2_effect_address(address))return true;
     if(address==0x1F9001B0u || address==0x1F9005B0u)return true;
     if(address==0x1F9007C0u || address==0x1F9007C6u || address==0x1F9007C8u)return true;
     // PS2SDK spu2_mmio_hwport.h: two banks, 0x28 apart, containing
@@ -1184,6 +1189,13 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         if(bytes!=2u)throw IopStop{"SPU2 output configuration requires halfword reads"};
         const auto value=latch(physical);
         if(!value || !*value)throw IopStop{name+": SPU2 output configuration before a known halfword write"};
+        if(is_spu2_effect_address(physical) && !(physical&2u)) {
+            // ESA high and EEA identify the high four bits of a 20-bit
+            // word address. Reserved readback bits have not been measured.
+            undefined_load_="SPU2 effect-address reserved readback bits are unknown";
+            undefined_known_=0xFu|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
+            return **value&0xFu;
+        }
         if(is_spu2_voice_routing(physical) && ((physical&0x3FFu)!=0x198u) && (physical&2u)) {
             // Each upper half selects voices 16..23. Its unused eight
             // readback bits are unverified; consumers may use the bitmap.
@@ -1387,6 +1399,14 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
     }
     if(is_spu2_boot_config(physical)) {
         if(bytes!=2u || !value)throw IopStop{"SPU2 output configuration requires a known halfword write"};
+        if(is_spu2_effect_address(physical)) {
+            const auto core=(physical-0x1F900000u)/0x400u;
+            const auto control=spu2_control_[core];
+            if(!control || ((control->value|control->unknown)&0x80u))
+                throw IopStop{"SPU2 effect workspace configuration requires effects disabled"};
+            // Address setup alone does not clear or fabricate sound RAM.
+            // Active reverb still refuses at ATTR before reading the area.
+        }
         // These masks route/modulate voices; MMIX routes mixer inputs.
         // In the opt-in inactive-source state they cannot create samples.
         // Key-on, streaming and effects starts still refuse separately.
