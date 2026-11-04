@@ -285,11 +285,13 @@ private:
         unsigned vector_writes{};
         std::array<MicroFlagWrite,4> flags{};
         unsigned flag_writes{};
+        std::array<MicroVectorWrite,4> stores{}; // index is a qword address here
+        unsigned store_writes{};
         std::optional<std::string> failure;
     };
     void reset_micro(unsigned unit);
     void step_micro(unsigned unit);
-    [[nodiscard]] ObservedWord micro_integer(unsigned unit,unsigned index,bool forwarded) const;
+    [[nodiscard]] ObservedWord micro_integer(unsigned unit,unsigned index,bool forwarded,unsigned bypass_delay=1) const;
     void retire_micro_integers(unsigned unit);
     [[nodiscard]] MicroFmac evaluate_micro_upper(unsigned unit,std::uint32_t instruction) const;
     std::array<MicroState,2> micro_{};

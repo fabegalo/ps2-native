@@ -24,7 +24,7 @@ void VuControl::start_micro(unsigned unit,std::uint32_t address,std::uint64_t cy
     state={};state.running=true;state.pc=address*8u;state.next=cycle+1u;
     *registers_[29]|=unit ? 256u : 1u;
 }
-ObservedWord VuControl::micro_integer(unsigned unit,unsigned index,bool forwarded) const {
+ObservedWord VuControl::micro_integer(unsigned unit,unsigned index,bool forwarded,unsigned bypass_delay) const {
     if(index>=16u)throw DeviceRefusal("VU micro integer register is outside VI00..VI15");
     if(!index)return {};
     const auto& state=micro_[unit];
@@ -32,7 +32,7 @@ ObservedWord VuControl::micro_integer(unsigned unit,unsigned index,bool forwarde
     // transfers see the committed S-stage register, not this bypass.
     if(forwarded)for(unsigned n=state.writes;n>0;--n) {
         const auto& pending=state.pending[n-1u];
-        if(pending.index==index && pending.ready-3u<=state.next)return pending.word;
+        if(pending.index==index && pending.ready-4u+bypass_delay<=state.next)return pending.word;
     }
     return unit ? vu1_integers_[index] : ObservedWord{*registers_[index],unknown_[index]};
 }
@@ -71,6 +71,14 @@ void VuControl::retire_micro_integers(unsigned unit) {
         }
     }
     state.flag_writes=kept;
+    kept=0;
+    for(unsigned n=0;n<state.store_writes;++n) {
+        const auto write=state.stores[n];
+        if(write.ready>state.next){state.stores[kept++]=write;continue;}
+        auto& memory=unit ? data1_ : data_;
+        for(unsigned lane=0;lane<4u;++lane)if(write.mask&(8u>>lane))memory[write.index*4u+lane]=write.words[lane];
+    }
+    state.store_writes=kept;
 }
 VuControl::MicroFmac VuControl::evaluate_micro_upper(unsigned unit,std::uint32_t instruction) const {
     MicroFmac result;
@@ -149,9 +157,10 @@ void VuControl::step_micro(unsigned unit) {
     const auto op=lo>>25u,is=(lo>>11u)&31u,it=(lo>>16u)&31u,id=(lo>>6u)&31u;
     std::optional<std::pair<unsigned,std::uint32_t>> result;
     std::optional<MicroVectorWrite> vector_result;
+    std::optional<MicroVectorWrite> store_result;
     std::optional<std::uint32_t> branch;
-    const auto reg=[&](unsigned r) {
-        const auto word=micro_integer(unit,r,true);
+    const auto reg=[&](unsigned r,unsigned bypass_delay=1) {
+        const auto word=micro_integer(unit,r,true,bypass_delay);
         if(word.unknown&0xFFFFu)throw DeviceRefusal("integer operand VI"+std::to_string(r)+" contains unknown bits");
         return word.value&0xFFFFu;
     };
@@ -169,6 +178,16 @@ void VuControl::step_micro(unsigned unit) {
             if(it>=16u)throw DeviceRefusal("BAL link register is outside VI00..VI15");
             result=std::pair{it,(state.pc/8u+2u)&(slots-1u)};
         }
+    } else if(op==0x24u || op==0x25u) {
+        if(state.branch || state.end_delay)throw DeviceRefusal("branch in a branch/E delay slot is not modeled");
+        if((lo&0x01E007FFu) || (op==0x24u && it))throw DeviceRefusal("JR/JALR reserved fields are nonzero");
+        // Branch operands have the documented one-instruction integer gap.
+        // In particular, a preceding IALU result cannot replace the old target.
+        branch=(reg(is,2)&(unit ? 2047u : 511u))*8u;
+        if(op==0x25u) {
+            if(it>=16u)throw DeviceRefusal("JALR link register is outside VI00..VI15");
+            result=std::pair{it,(state.pc/8u+2u)&(unit ? 2047u : 511u)};
+        }
     } else if(op==0x40u && (lo&0x7FFu)==0x37Cu) { // LQI, VU manual p.179, 1/4.
         if(state.end_delay)throw DeviceRefusal("VU memory load in the E delay slot is invalid");
         const auto address=reg(is),mask=(lo>>21u)&15u;
@@ -181,6 +200,17 @@ void VuControl::step_micro(unsigned unit) {
         }
         vector_result=load;
         result=std::pair{is,(address+1u)&0xFFFFu};
+    } else if(op==0x40u && (lo&0x7FFu)==0x37Du) { // SQI, VU manual p.192, 1/4.
+        if(state.end_delay)throw DeviceRefusal("VU memory store in the E delay slot is invalid");
+        const auto address=reg(it),mask=(lo>>21u)&15u;
+        if(mask) {
+            if(address>=(unit ? 1024u : 256u))
+                throw DeviceRefusal("SQI address outside direct VU data RAM; mirrors/register windows are not modeled");
+            for(unsigned n=0;n<state.vector_writes;++n)
+                if(is && state.vectors[n].index==is && (state.vectors[n].mask&mask)) {++state.next;return;}
+            store_result=MicroVectorWrite{address,mask,unit ? vu1_vectors_[is] : vectors_[is],state.next+4u};
+        }
+        result=std::pair{it,(address+1u)&0xFFFFu};
     } else if(lo==0x8000033Cu) { // MOVE with no fields and VF00 operands: lower NOP
     } else if(op==0x40u && ((lo&63u)==0x30u || (lo&63u)==0x31u || (lo&63u)==0x32u || (lo&63u)==0x34u || (lo&63u)==0x35u)) {
         const auto function=lo&63u;
@@ -205,12 +235,14 @@ void VuControl::step_micro(unsigned unit) {
     if(state.vector_writes+static_cast<unsigned>(lower_write)+static_cast<unsigned>(upper_write)>state.vectors.size())
         throw DeviceRefusal("VU vector writeback queue is full");
     if(fmac.active && state.flag_writes==state.flags.size())throw DeviceRefusal("VU flag writeback queue is full");
+    if(store_result && state.store_writes==state.stores.size())throw DeviceRefusal("VU memory store queue is full");
     if(result && result->first) {
         state.pending[state.writes++]={result->first,{result->second,0},state.next+4u};
     }
     if(lower_write)state.vectors[state.vector_writes++]=*vector_result;
     if(upper_write)state.vectors[state.vector_writes++]=fmac.output;
     if(fmac.active)state.flags[state.flag_writes++]={fmac.mac,fmac.status,state.next+4u};
+    if(store_result)state.stores[state.store_writes++]=*store_result;
     const auto next=state.branch.value_or((state.pc+8u)&(unit ? 16383u : 4095u));
     state.branch=branch;state.pc=next;++state.instructions;
     if(state.end_delay)state.drain=state.next+4u; // the delay pair must reach S before Ready

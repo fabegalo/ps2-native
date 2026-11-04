@@ -130,6 +130,40 @@ int main() try {
         instruction(vu,unit,0,addiu(1,0,7),upper(8,5,1,0,8));vu.start_micro(unit,0,0);
         rejects([&]{vu.advance_micro(1);},"unknown ACC");
         require(integer(vu,unit,1).unknown,"an unknown accumulator cannot be replaced by zero");
+        vu.reset();seed_vector(vu,unit,1,{0x3F800000,0x40000000,0x40800000,0x41000000});
+        seed_vector(vu,unit,2,{0x40000000,0,0,0});
+        instruction(vu,unit,0,addiu(1,0,1));
+        instruction(vu,unit,1,nop,upper(0x18,5,1,2,15));
+        instruction(vu,unit,2,0x8000037Du|(10u<<21u)|(1u<<16u)|(5u<<11u));
+        instruction(vu,unit,3,0x8000037Du|(4u<<21u)|(1u<<16u)|(5u<<11u));
+        instruction(vu,unit,4,nop,upper_nop|0x40000000u);instruction(vu,unit,5,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(5);
+        require(vu.diagnostic_micro_instructions(unit)==2,"SQI stalls on a pending FMAC source without incrementing its address twice");
+        vu.advance_micro(9);require(vu.read_memory(data+16u,4).unknown==0xFFFFFFFFu,"SQI payload is not published before its writeback stage");
+        vu.advance_micro(10);
+        require(vu.read_memory(data+16u,4).value==0x40000000 && vu.read_memory(data+24u,4).value==0x41000000 &&
+            vu.read_memory(data+20u,4).unknown==0xFFFFFFFFu,"SQI stores actual selected FMAC result fields and preserves other memory bits");
+        vu.advance_micro(13);
+        require(vu.read_memory(data+36u,4).value==0x40800000 && integer(vu,unit,1).value==3 && !vu.micro_running(unit),
+            "consecutive SQI operations use VI post-increment bypass and drain their real stores before E completion");
+        vu.reset();instruction(vu,unit,0,addiu(1,0,0));
+        instruction(vu,unit,1,0x8000037Du|(8u<<21u)|(1u<<16u)|(7u<<11u));
+        instruction(vu,unit,2,nop,upper_nop|0x40000000u);instruction(vu,unit,3,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(8);
+        require(vu.read_memory(data,4).unknown==0xFFFFFFFFu && integer(vu,unit,1).value==1,
+            "SQI transports an unknown payload without inventing its numeric value");
+        vu.reset();instruction(vu,unit,0,addiu(1,0,5));instruction(vu,unit,1,nop);
+        instruction(vu,unit,2,addiu(1,0,8));instruction(vu,unit,3,(0x24u<<25u)|(1u<<11u));
+        instruction(vu,unit,4,addiu(2,0,7));instruction(vu,unit,5,nop,upper_nop|0x40000000u);
+        instruction(vu,unit,6,nop);vu.start_micro(unit,0,0);vu.advance_micro(20);
+        require(vu.diagnostic_micro_instructions(unit)==7 && integer(vu,unit,1).value==8 && integer(vu,unit,2).value==7,
+            "JR uses the pre-gap integer target, executes its delay instruction and retains the newer VI writeback");
+        vu.reset();instruction(vu,unit,0,addiu(1,0,7));instruction(vu,unit,1,nop);instruction(vu,unit,2,nop);
+        instruction(vu,unit,3,(0x25u<<25u)|(1u<<16u)|(1u<<11u));instruction(vu,unit,4,addiu(2,0,8));
+        instruction(vu,unit,7,nop,upper_nop|0x40000000u);instruction(vu,unit,8,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(20);
+        require(vu.diagnostic_micro_instructions(unit)==7 && integer(vu,unit,1).value==5 && integer(vu,unit,2).value==8,
+            "JALR snapshots an aliased target before saving its return index and executing its delay pair");
     }
     VuControl cold;cold.start_micro(1,0,0);rejects([&]{cold.advance_micro(1);},"unwritten micro memory");
     std::cout<<"Clocked VU integer LIW, bypass/S visibility, BAL delay, E drain, reset and refusals passed\n";
