@@ -2,6 +2,7 @@
 #include "ps2native/gif.hpp"
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <span>
 #include <string>
@@ -22,10 +23,12 @@ public:
         mpg_left_=mpg_address_=0;mpg_low_.reset();
         unpack_left_=unpack_address_=unpack_index_=unpack_cycle_=0;
         dbf_.reset();
+        fifo_.clear();input_={};input_index_=input_count_=0;waiting_=padding_=false;
     }
     [[nodiscard]] std::uint32_t read_register(std::uint32_t offset) const;
     [[nodiscard]] ObservedWord observe_status() const noexcept {
-        return {(processing() ? 1u : 0u)|(mark_detected_ ? 0x40u : 0u)|(dbf_.value_or(false) ? 0x80u : 0u),
+        return {(waiting_ ? 6u : processing() ? 1u : 0u)|(mark_detected_ ? 0x40u : 0u)|
+            (dbf_.value_or(false) ? 0x80u : 0u)|(static_cast<std::uint32_t>(fifo_.size())<<24u),
             unit_==Unit::Vu1 && !dbf_ ? 0x80u : 0u};
     }
     void write_register(std::uint32_t offset,std::uint32_t value,Gif& gif);
@@ -33,9 +36,12 @@ public:
     // TTE sends only the upper 64 bits, in lanes 2/3 of a DMA tag.
     void write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr,std::uint64_t cycle=0);
     [[nodiscard]] std::uint32_t direct_remaining() const noexcept { return direct_left_; }
-    [[nodiscard]] bool processing() const noexcept {return direct_left_ || mpg_left_ || unpack_left_ || pending_!=Pending::None;}
+    [[nodiscard]] bool processing() const noexcept {return direct_left_ || mpg_left_ || unpack_left_ || pending_!=Pending::None || !fifo_.empty() || input_index_<input_count_;}
+    [[nodiscard]] bool can_accept_dma() const noexcept {return fifo_.size()<(unit_==Unit::Vu1 ? 16u : 8u);}
 private:
-    void write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle);
+    friend void advance_vpus(std::uint64_t,Vif*,Vif*,VuControl*,Gif&,GsRegisters&);
+    void write_words(std::span<const std::uint32_t> words,unsigned first_lane,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle);
+    void drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs);
     void start_unpack(std::uint32_t command,VuControl* vu);
     void unpack_word(std::uint32_t word,VuControl& vu);
     [[noreturn]] void refuse(const std::string& reason) const {
@@ -57,7 +63,15 @@ private:
     unsigned pending_index_{};
     bool mark_detected_{};
     std::optional<bool> dbf_;
+    struct Input {std::array<std::uint32_t,4> words{};unsigned first{},count{};};
+    std::deque<Input> fifo_;
+    Input input_{};
+    unsigned input_index_{},input_count_{};
+    bool waiting_{},padding_{};
     std::array<std::optional<std::uint32_t>,32> programmed_{};
 };
+// Shared VIF/VU event ordering, including a queued call starting on the exact
+// Ready event instead of the later host polling time.
+void advance_vpus(std::uint64_t cycle,Vif* vif0,Vif* vif1,VuControl* vu,Gif& gif,GsRegisters& gs);
 using Vif1=Vif; // Preserve the existing PATH2 caller interface.
 } // namespace ps2native

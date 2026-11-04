@@ -530,13 +530,19 @@ void Iop::iop_sif1_write(std::uint32_t address, std::uint32_t value) {
 }
 
 void Iop::advance_vif_dma(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl* vu) {
-    advance_graphics_dma(0,ee_cycle,&vif0,gif,gs,vu);
-    advance_graphics_dma(1,ee_cycle,&vif1,gif,gs,vu);
+    advance_graphics_dma(0,ee_cycle,&vif0,&vif1,gif,gs,vu);
+    advance_graphics_dma(1,ee_cycle,&vif0,&vif1,gif,gs,vu);
+    advance_vpus(ee_cycle,&vif0,&vif1,vu,gif,gs);
 }
 void Iop::advance_gif_dma(std::uint64_t ee_cycle,Gif& gif,GsRegisters& gs) {
-    advance_graphics_dma(2,ee_cycle,nullptr,gif,gs);
+    advance_graphics_dma(2,ee_cycle,nullptr,nullptr,gif,gs);
 }
-void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif,Gif& gif,GsRegisters& gs,VuControl* vu) {
+void Iop::advance_graphics(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu) {
+    for(unsigned channel=0;channel<3;++channel)advance_graphics_dma(channel,ee_cycle,&vif0,&vif1,gif,gs,&vu);
+    advance_vpus(ee_cycle,&vif0,&vif1,&vu,gif,gs);
+}
+void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0,Vif* vif1,Gif& gif,GsRegisters& gs,VuControl* vu) {
+    auto* vif=channel==0u ? vif0 : channel==1u ? vif1 : nullptr;
     auto& transfer=graphics_dma_[channel];auto& regs=ee_dma_setup_[channel];
     auto& chcr=regs[0];auto& madr=regs[1];auto& qwc=regs[2];auto& tadr=regs[3];
     if(transfer.stop) throw DeviceRefusal(*transfer.stop);
@@ -562,7 +568,10 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif,
     // fetch and payload qword costs a bus beat; no immediate completion.
     while(ee_cycle>=transfer.cycle && ee_cycle-transfer.cycle>=kEeCyclesPerBusCycle) {
         try {
-            if(vu)vu->advance_micro(transfer.cycle+kEeCyclesPerBusCycle);
+            advance_vpus(transfer.cycle+kEeCyclesPerBusCycle,vif0,vif1,vu,gif,gs);
+            if(vif && (*qwc || (*chcr&0x40u)) && !vif->can_accept_dma()) {
+                transfer.cycle+=kEeCyclesPerBusCycle;continue;
+            }
             if(!*qwc && !transfer.end) {
                 const auto tag=read(*tadr,(*chcr&0x40u) ? 4u : 2u);
                 const auto id=(tag[0]>>28u)&7u, count=tag[0]&0xFFFFu;

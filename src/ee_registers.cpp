@@ -107,9 +107,7 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
 // see the same IOP.
 void EeRegisters::sync_iop() {
     iop_.run_until(now() / kEeCyclesPerIopCycle, &gs_);
-    iop_.advance_vif_dma(now(),vif0_,vif1_,gif_,gs_,&vu_control_);
-    iop_.advance_gif_dma(now(),gif_,gs_);
-    vu_control_.advance_micro(now());
+    iop_.advance_graphics(now(),vif0_,vif1_,gif_,gs_,vu_control_);
 }
 
 std::uint64_t EeRegisters::now() const {

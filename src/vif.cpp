@@ -98,16 +98,50 @@ void Vif::unpack_word(std::uint32_t word,VuControl& vu) {
 void Vif::write_fifo(std::uint64_t low, std::uint64_t high, Gif& gif, GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
     const std::array<std::uint32_t,4> words{static_cast<std::uint32_t>(low), static_cast<std::uint32_t>(low >> 32),
         static_cast<std::uint32_t>(high), static_cast<std::uint32_t>(high >> 32)};
-    write_words(words,gif,gs,vu,cycle);
+    write_words(words,0,gif,gs,vu,cycle);
 }
 void Vif::write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
     const std::array<std::uint32_t,2> words{static_cast<std::uint32_t>(data),static_cast<std::uint32_t>(data>>32)};
-    write_words(words,gif,gs,vu,cycle);
+    write_words(words,2,gif,gs,vu,cycle);
 }
-void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
-    if(vu)vu->advance_micro(cycle);
-    for (std::size_t lane=0;lane<words.size();++lane) {
-        const auto command=words[lane];
+void advance_vpus(std::uint64_t cycle,Vif* vif0,Vif* vif1,VuControl* vu,Gif& gif,GsRegisters& gs) {
+    const auto drain=[&](std::uint64_t at) {
+        if(vif0)vif0->drain(at,vu,gif,gs);
+        if(vif1)vif1->drain(at,vu,gif,gs);
+    };
+    if(vu) {
+        while((vif0 && vif0->waiting_) || (vif1 && vif1->waiting_)) {
+            const auto next=vu->next_micro_cycle();
+            if(!next || *next>cycle)break;
+            vu->advance_micro(*next);drain(*next);
+        }
+        vu->advance_micro(cycle);
+    }
+    drain(cycle);
+}
+void Vif::write_words(std::span<const std::uint32_t> words,unsigned first_lane,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
+    advance_vpus(cycle,this,nullptr,vu,gif,gs);
+    if(!can_accept_dma())refuse(" FIFO full: CPU store backpressure is not modeled");
+    Input incoming;incoming.first=first_lane;incoming.count=static_cast<unsigned>(words.size());
+    std::copy(words.begin(),words.end(),incoming.words.begin());fifo_.push_back(incoming);
+    drain(cycle,vu,gif,gs);
+}
+void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
+    waiting_=false;
+    for(;;) {
+        if(input_index_==input_count_) {
+            if(fifo_.empty())return;
+            input_=fifo_.front();fifo_.pop_front();input_index_=0;input_count_=input_.count;
+        }
+        const auto lane=input_.first+input_index_,command=input_.words[input_index_];
+        if(padding_) {if(++input_index_==input_count_)padding_=false;continue;}
+        const bool payload=direct_left_ || mpg_left_ || unpack_left_ || pending_!=Pending::None;
+        const auto op=command>>24u;
+        if(!payload && !(command&0x80000000u) && vu && vu->micro_running(unit_==Unit::Vu1) &&
+            (op==0x10u || (op==0x11u && unit_==Unit::Vu1) || op==0x14u || op==0x17u || op==0x4Au)) {
+            code_=command;waiting_=true;return;
+        }
+        ++input_index_;
         if(direct_left_) {
             direct_buffer_[direct_words_]=command;
             if(direct_words_==3u) {
@@ -154,19 +188,19 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
                 programmed_[5]=immediate&3u;break;
             case 6: gif.set_vif_path3_mask((immediate&0x8000u)!=0u);break;
             case 7: mark_=immediate;mark_detected_=true;break;
-            case 0x10: // FLUSHE waits for this VU, never marks it Ready.
-                if(vu && vu->micro_running(unit_==Unit::Vu1))refuse(" FLUSHE waits for the active microprogram; FIFO backpressure is not modeled");
+            case 0x10: // The FIFO decoder waited for the actual Ready event.
                 break;
             case 0x11:
                 // EE manual: FLUSH waits for VU1 and PATH1/2, not PATH3.
-                if(vu && vu->micro_running(1))refuse(" FLUSH waits for the active microprogram; FIFO backpressure is not modeled");
                 if(((gif.read_stat()>>10u)&3u)==2u)
                     refuse(" FLUSH waits for an incomplete GIF PATH2 transfer; stall is not modeled");
                 break;
-            case 0x14: {
+            case 0x14:
+            case 0x17: {
                 if(!vu)refuse(" MSCAL requires the shared VU micro engine");
                 const auto unit=unit_==Unit::Vu1 ? 1u : 0u;
-                vu->start_micro(unit,immediate,cycle);
+                if(opcode==0x17u)vu->resume_micro(unit,cycle);
+                else vu->start_micro(unit,immediate,cycle);
                 programmed_[13]=programmed_[9]; // Unknown ITOPS remains unknown.
                 if(unit) {
                     programmed_[14]=programmed_[12];
@@ -183,7 +217,6 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
                 // EE manual 6.3.3/MPG: the following instructions are
                 // aligned 64-bit data, not VIF commands.
                 if(!vu)refuse(" MPG requires the shared VU micro memory");
-                if(vu->micro_running(unit_==Unit::Vu1))refuse(" MPG waits for the active microprogram; FIFO backpressure is not modeled");
                 if((lane+1u)&1u)refuse(" MPG payload requires 64-bit alignment");
                 const auto bytes=unit_==Unit::Vu0 ? 4096u : 16384u;
                 if(immediate>=bytes/8u)refuse(" MPG load address exceeds this VU micro memory");
@@ -200,7 +233,8 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
                     refuse(" DIRECTHL waits for GIF PATH3; stall is not modeled");
                 direct_left_=immediate ? immediate : 65536u;
                 code_=command;
-                return; // Remaining bytes before qword alignment are padding.
+                padding_=input_index_!=input_count_; // discard only this physical qword's remaining words
+                break;
             default: {
                 constexpr char hex[]="0123456789ABCDEF";
                 auto reason=std::string(" command unsupported: 0x");

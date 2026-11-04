@@ -90,7 +90,17 @@ public:
     }
     void start_micro(unsigned unit,std::uint32_t instruction_address,std::uint64_t ee_cycle);
     void advance_micro(std::uint64_t ee_cycle);
+    void resume_micro(unsigned unit,std::uint64_t ee_cycle) {
+        const auto& previous=micro_.at(unit);
+        if(previous.running || !previous.instructions)throw DeviceRefusal("VU MSCNT requires an established Ready termination PC");
+        start_micro(unit,previous.pc/8u,ee_cycle);
+    }
     [[nodiscard]] bool micro_running(unsigned unit) const {return micro_.at(unit).running;}
+    [[nodiscard]] std::optional<std::uint64_t> next_micro_cycle() const noexcept {
+        std::optional<std::uint64_t> result;
+        for(const auto& unit:micro_)if(unit.running && (!result || unit.next<*result))result=unit.next;
+        return result;
+    }
     [[nodiscard]] std::uint32_t diagnostic_micro_pc(unsigned unit) const {return micro_.at(unit).pc;}
     [[nodiscard]] std::uint64_t diagnostic_micro_instructions(unsigned unit) const {return micro_.at(unit).instructions;}
     // VU Mem0 uses qword addresses in VISWR. VU1's integer registers live at

@@ -136,6 +136,7 @@ public:
     [[nodiscard]] bool reads_ee_ram() const noexcept { return (ee_sif1_chcr_ & 0x100u) != 0u ||
         ((ee_dma_setup_[0][0].value_or(0u)|ee_dma_setup_[1][0].value_or(0u)|ee_dma_setup_[2][0].value_or(0u))&0x100u)!=0u; }
     void advance_gif_dma(std::uint64_t ee_cycle, Gif& gif, GsRegisters& gs);
+    void advance_graphics(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu);
     void advance_vif_dma(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr);
     [[nodiscard]] bool writes_ee_ram() const noexcept { return (ee_dma_setup_[5][0].value_or(0u)&0x100u)!=0; }
     struct SifDmaMetrics {
@@ -523,7 +524,7 @@ private:
     bool diagnostic_spu2_admas_control_latch_{};
     std::uint64_t spu2_adma_bus_available_{};
     unsigned spu2_adma_last_grant_{1u};
-    void advance_graphics_dma(unsigned channel, std::uint64_t ee_cycle, Vif* vif, Gif& gif, GsRegisters& gs,VuControl* vu=nullptr);
+    void advance_graphics_dma(unsigned channel, std::uint64_t ee_cycle,Vif* vif0,Vif* vif1,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr);
     struct GraphicsDma {
         std::uint64_t cycle{};
         bool end{}, inline_data{};
