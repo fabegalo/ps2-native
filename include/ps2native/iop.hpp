@@ -52,19 +52,21 @@ inline constexpr std::uint32_t kDev9Revision = 0x1F80146Eu;
 
 class Iop {
 public:
+    // External machine event, not a ROM/NVM value (ps2sdk wakeup reasons).
+    enum class PowerEvent : std::uint8_t { FrontPanelPowerOn=0, MainReset=1, Alarm=2, ExternalDevice=3 };
     struct Event {
         std::uint64_t cycle; // IOP cycle
         std::string text;
     };
     Iop();
-    // Power-on with `rom0` (empty: no ROM, the IOP stays stopped) on console
+    // User/front-panel power-on with `rom0` (empty: no ROM, the IOP stays stopped) on console
     // `hardware` (nullptr: none, so its PRId read stops the IOP), whose
     // MECHACON holds `nvm` (nullptr: none, so NVM reads stop the IOP). `nvm`
     // must have been validated for `hardware` and outlive the IOP.
     void reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware, const NvmImage* nvm = nullptr,
                bool diagnostic_sbus_latches = false, std::optional<std::uint32_t> diagnostic_dmacinten = std::nullopt,
                std::span<const std::uint8_t> rom1 = {}, bool diagnostic_sio2_irq_clear = false,
-               bool diagnostic_spu2_quiescent = false);
+               bool diagnostic_spu2_quiescent = false, PowerEvent power_event = PowerEvent::FrontPanelPowerOn);
     // Runs until `cycle` IOP cycles since reset, or until the IOP stops.
     // `video` (nullptr: none) is the GS whose vertical clock raises VBLANK
     // start/end (I_STAT bits 0 and 11); its timing must not change while the
@@ -94,6 +96,13 @@ public:
     void diagnostic_forbid_dvdp_error_bit_clear() {
         if(cycle_)throw DeviceRefusal("ForbidDVDP error-bit experiment requires reset state before execution");
         diagnostic_forbid_dvdp_error_clear_=true;
+    }
+    // Explicit initial alarm-control experiment: seconds=FF (disabled),
+    // minute bit 7=0. Status, time and user word remain opaque. Power cause
+    // comes independently from the external event supplied to reset().
+    void diagnostic_wakeup_alarm_disabled() {
+        if(cycle_)throw DeviceRefusal("Wakeup alarm experiment requires reset state before execution");
+        diagnostic_wakeup_alarm_disabled_=true;
     }
     // Last recognized BootCertify input, never an authentication-success flag.
     [[nodiscard]] const std::optional<std::array<std::uint8_t,4>>& boot_certify_request() const noexcept {
@@ -402,6 +411,8 @@ private:
     std::optional<std::array<std::uint8_t,4>> boot_certify_request_;
     bool dvd_playback_forbid_requested_{};
     bool diagnostic_forbid_dvdp_error_clear_{};
+    bool diagnostic_wakeup_alarm_disabled_{};
+    PowerEvent power_event_{PowerEvent::FrontPanelPowerOn};
     struct MechaReplyByte {
         std::uint8_t value,known{0xFFu};
         const char* origin{};

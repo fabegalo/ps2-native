@@ -195,7 +195,9 @@ Iop::Iop() : ram_(kIopRamBytes), ram_known_(kIopRamBytes) {}
 void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware, const NvmImage* nvm,
                 bool diagnostic_sbus_latches, std::optional<std::uint32_t> diagnostic_dmacinten,
                 std::span<const std::uint8_t> rom1, bool diagnostic_sio2_irq_clear,
-                bool diagnostic_spu2_quiescent) {
+                bool diagnostic_spu2_quiescent, PowerEvent power_event) {
+    if(static_cast<unsigned>(power_event)>3u)throw DeviceRefusal("MECHACON power event is invalid");
+    power_event_=power_event;
     if(diagnostic_dmacinten && (*diagnostic_dmacinten&~3u))
         throw DeviceRefusal("diagnostic IOP DMACINTEN supports only bits 0-1");
     rom_.assign(rom0.begin(), rom0.end());
@@ -231,6 +233,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     nvm_ = nvm;
     s_params_.clear();
     s_command_.reset();boot_certify_request_.reset();dvd_playback_forbid_requested_=false;diagnostic_forbid_dvdp_error_clear_=false;
+    diagnostic_wakeup_alarm_disabled_=false;
     s_results_.clear();
     config_.reset();
     ilink_bus_reset_ = false;
@@ -2840,6 +2843,27 @@ void Iop::mechacon_command(std::uint8_t command, const char* what) {
             // the MECHACON's authentication reply. Transport it as opaque,
             // never synthesize the emulator-reference success byte 1.
             s_results_.push_back({0u,0u,"MECHACON BootCertify result is unmeasured; matching ROMVER/NVM does not prove authentication success"});
+            break;
+        }
+        case 0x22: { // ps2sdk sceCdReadWakeUpTime: no input, ten result bytes.
+            if(!s_params_.empty())throw IopStop{name+": ReadWakeUpTime takes no parameters"};
+            if(!hardware_ || !hardware_->mechacon)
+                throw IopStop{name+": ReadWakeUpTime requires the selected MECHACON profile"};
+            // Status, power/reset cause, alarm time/flags and user word are
+            // separate battery-backed state. ROM0 and MECHACON NVM do not
+            // establish these values. Preserve the documented wire framing
+            // without the reference emulator's fabricated ten zero bytes.
+            for(unsigned n=0;n<10u;++n) {
+                // reset() is a machine power/reset event, not an IOP-only
+                // reboot. Its cause is established by that external input;
+                // it must never be inferred from ROM region or NVM contents.
+                if(n==1u){s_results_.push_back(static_cast<std::uint8_t>(power_event_));continue;}
+                if(diagnostic_wakeup_alarm_disabled_ && n==2u){s_results_.push_back(0xFFu);continue;}
+                if(diagnostic_wakeup_alarm_disabled_ && n==3u){s_results_.push_back({0u,0x80u,"MECHACON wakeup minute low seven bits remain unmeasured"});continue;}
+                s_results_.push_back({0u,0u,
+                n==0u ? "MECHACON ReadWakeUpTime status is unmeasured" :
+                        "MECHACON ReadWakeUpTime battery-backed alarm/flags/user data are not supplied"});
+            }
             break;
         }
         case 0x36: { // ReadRegionParams (PS2SDK: no input, 15-byte result).

@@ -65,6 +65,7 @@ struct DiagnosticAssumptions {
     // modeled; absent means that a guest write is required before use.
     std::optional<std::uint32_t> iop_dmacinten;
     bool mechacon_forbid_dvdp_error_bit_clear{}; // Unmeasured SCMD 15 bit 7 only, not a success byte.
+    bool mechacon_wakeup_alarm_disabled{}; // Explicit SCMD 22 seconds FF and minute bit 7 clear; no status/time input.
     bool iop_sio2_irq_clear{}; // Unmeasured cold I_STAT.17; diagnostic only.
     bool spu2_admas_control_latch{}; // Unmeasured whole control readback after an explicit known write; no cold value.
     std::optional<std::uint32_t> spu2_adma_word_cycles; // Unmeasured shared-bus rate, cross-controller round-robin and full-bank priming/underflow wait.
@@ -79,7 +80,7 @@ struct DiagnosticAssumptions {
     std::optional<std::uint64_t> gs_reset_syncv;
     // Unmeasured FIELD reset polarity and analog GS-vsync phase experiment.
     std::optional<bool> gs_reset_field;
-    [[nodiscard]] bool empty() const noexcept { return video_encoder_registers.empty() && !gs_reset_syncv && !gs_reset_field && !omit_f510_zero_write && !sbus_configuration_latches && !iop_dmacinten && !iop_sio2_irq_clear && !mechacon_forbid_dvdp_error_bit_clear && !spu2_quiescent_reset && !spu2_pio_word_cycles && !spu2_effect_end_reset && !spu2_effect_start_reset && !spu2_effect_address_reserved_zero && !spu2_inverted_effect_area_inactive && !spu2_adma_word_cycles && !spu2_admas_control_latch; }
+    [[nodiscard]] bool empty() const noexcept { return video_encoder_registers.empty() && !gs_reset_syncv && !gs_reset_field && !omit_f510_zero_write && !sbus_configuration_latches && !iop_dmacinten && !iop_sio2_irq_clear && !mechacon_forbid_dvdp_error_bit_clear && !mechacon_wakeup_alarm_disabled && !spu2_quiescent_reset && !spu2_pio_word_cycles && !spu2_effect_end_reset && !spu2_effect_start_reset && !spu2_effect_address_reserved_zero && !spu2_inverted_effect_area_inactive && !spu2_adma_word_cycles && !spu2_admas_control_latch; }
 };
 
 // The slave and the transactions that reach it (shared by both masters).
