@@ -297,7 +297,13 @@ private:
     // command and its pending result bytes.
     std::vector<std::uint8_t> s_params_;
     std::optional<std::uint8_t> s_command_;
-    std::deque<std::uint8_t> s_results_;
+    struct MechaReplyByte {
+        std::uint8_t value,known{0xFFu};
+        const char* origin{};
+        MechaReplyByte(std::uint8_t byte):value(byte){}
+        MechaReplyByte(std::uint8_t byte,std::uint8_t mask,const char* why):value(byte),known(mask),origin(why){}
+    };
+    std::deque<MechaReplyByte> s_results_;
     // Configuration area opened by OpenConfig (read mode only).
     struct OpenConfig {
         unsigned area;

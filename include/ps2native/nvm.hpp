@@ -39,6 +39,7 @@ struct NvmLayoutInfo {
     std::uint16_t model_name; // 16 bytes, NUL-terminated ASCII (sceCdRM, S command 0x17)
     std::uint16_t ilink_id;   // 8 bytes (sceCdRI, S command 0x12)
     std::uint16_t console_id; // 8 bytes
+    std::uint16_t region_parameters; // Slim region record; SCMD 0x36 exposes its first eight bytes.
     std::string_view source;
 };
 [[nodiscard]] const NvmLayoutInfo& nvm_layout_info(NvmLayout layout) noexcept;

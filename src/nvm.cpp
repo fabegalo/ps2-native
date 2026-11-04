@@ -21,6 +21,7 @@ constexpr NvmLayoutInfo kDragon{
     0x1B0u,
     0x1E0u,
     0x1F0u,
+    0x180u,
     "PCSX2 NVM layout for BIOS v1.70+ and psdevwiki's Dragon model name offset",
 };
 

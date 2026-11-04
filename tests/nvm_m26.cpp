@@ -242,6 +242,28 @@ void check_commands() {
     require(!again.stopped(), "reset clears the MECHACON state");
 }
 
+void check_region_parameters() {
+    const auto image=load_nvm_image(synthetic_nvm(),kProfile);
+    const auto read=program([](Assembler& a) {
+        command(a,0x36u);results(a,15u,0x100);
+        a.label("checkpoint");a.lbu(s1,0x101,t2);a.nop();a.addiu(s1,s1,1);
+    });
+    Iop iop;iop.reset(read.rom,&kProfile,&image);iop.run_until(read.checkpoint);
+    require(!iop.stopped() && iop.ee_read(0x100,1)==0 && iop.ee_read(0x10F,1)==0x40u,
+            "ReadRegionParams performs a read and drains exactly its 15-byte response");
+    for(unsigned n=0;n<8;++n)require(iop.ee_read(0x103u+n,1)==image.bytes[0x180u+n],
+        "region record is read from this NVM, preserving every byte without profile or region defaults");
+    for(const unsigned offset:{1u,2u,11u,12u,13u,14u})rejects([&]{(void)iop.ee_read(0x100u+offset,1);},"has not been written");
+    require(sha256_hex(image.bytes)==image.sha256,"region reads preserve the source EEPROM");
+    iop.run_until(read.checkpoint+3u);stops_with(iop,"used while its value is unknown");
+    const auto extra=program([](Assembler& a){params(a,{1u});command(a,0x36u);a.label("checkpoint");});
+    Iop invalid;run(invalid,extra,&image);stops_with(invalid,"requires no parameter bytes");
+    const auto request=program([](Assembler& a){command(a,0x36u);a.label("checkpoint");});
+    Iop missing;run(missing,request,nullptr);stops_with(missing,"matching console NVM");
+    auto old=kProfile;old.mechacon->version[1]=5u;
+    Iop unsupported;run(unsupported,request,&image,old);stops_with(unsupported,"only established for a version-6");
+}
+
 void check_boot_plumbing() {
     const auto firmware = build_firmware(Stage::M20);
     const auto bios = load_bios_rom0(firmware.rom, {});
@@ -257,6 +279,7 @@ int main() {
     try {
         check_image();
         check_commands();
+        check_region_parameters();
         check_boot_plumbing();
         std::cout << "M2.6 NVM checks passed\n";
         return 0;

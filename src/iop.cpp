@@ -1708,7 +1708,11 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         if (s_results_.empty()) throw IopStop{name + ": no result byte is pending"};
         const auto result = s_results_.front();
         s_results_.pop_front();
-        return result;
+        if(result.known!=0xFFu) {
+            undefined_load_=result.origin;
+            undefined_known_=result.known|(std::string_view(what)=="LBU" ? 0xFFFFFF00u : 0u);
+        }
+        return result.value;
     }
     if (const auto timer = timer_index(physical)) return timer_read(*timer, physical & 0xFu, name);
     if (physical == kIStat) {
@@ -2136,6 +2140,24 @@ void Iop::mechacon_command(std::uint8_t command, const char* what) {
             if(cdvd_complete_at_ || cdvd_sectors_)s_results_.push_back(1u);
             else {cdvd_sticky_=cdvd_status_;s_results_.push_back(0u);}
             break;
+        case 0x36: { // ReadRegionParams (PS2SDK: no input, 15-byte result).
+            if(!s_params_.empty())throw IopStop{name+": ReadRegionParams requires no parameter bytes"};
+            if(!hardware_ || !hardware_->mechacon || hardware_->mechacon->version[1]<6u)
+                throw IopStop{name+": region-result layout is only established for a version-6 MECHACON profile"};
+            if(!nvm_)throw IopStop{name+": ReadRegionParams needs the matching console NVM"};
+            const auto offset=nvm_layout_info(nvm_->layout).region_parameters;
+            if(offset>nvm_->bytes.size() || 8u>nvm_->bytes.size()-offset)
+                throw IopStop{name+": NVM region record is out of range"};
+            // Perform the actual EEPROM read. Profile/region strings never
+            // replace its bytes. The encrypted region/unlock flags and the
+            // undocumented suffix cannot be inferred from this plaintext
+            // record, so keep those bytes unknown instead of fabricating 0.
+            s_results_.push_back(0u); // successful validated read, no storage fault modeled
+            for(unsigned n=0;n<2;++n)s_results_.push_back({0u,0u,"MECHACON region/unlock flags are not established by the supplied NVM plaintext"});
+            for(unsigned n=0;n<8;++n)s_results_.push_back(nvm_->bytes[offset+n]);
+            for(unsigned n=0;n<4;++n)s_results_.push_back({0u,0u,"MECHACON ReadRegionParams suffix is not verified"});
+            break;
+        }
         case 0x0A: { // ReadNVM: address high, low -> status, data high, data low (ps2sdk)
             if (s_params_.size() != 2u) throw IopStop{name + ": ReadNVM takes a 2-byte word address"};
             const auto address = static_cast<std::uint32_t>(s_params_[0] << 8 | s_params_[1]);
