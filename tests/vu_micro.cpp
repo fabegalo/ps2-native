@@ -29,6 +29,10 @@ void seed_vector(VuControl& vu,unsigned unit,unsigned index,const std::array<std
         vu.write(2,0x400u+index);vu.vector_store_increment(31,2,15);
     } else vu.write_vector(index,{{words[0]|(std::uint64_t{words[1]}<<32u),0},{words[2]|(std::uint64_t{words[3]}<<32u),0}});
 }
+void seed_integer(VuControl& vu,unsigned unit,unsigned index,ObservedWord word) {
+    if(!unit)vu.write_observed(index,word);
+    else {vu.write_observed(1,word);vu.write(2,0x420u+index);vu.integer_store(1,2,8);}
+}
 std::uint32_t upper(unsigned op,unsigned destination,unsigned left,unsigned right,unsigned mask=15) {
     return (mask<<21)|(right<<16)|(left<<11)|(destination<<6)|op;
 }
@@ -59,11 +63,13 @@ int main() try {
         rejects([&]{vu.advance_micro(1);},"contains unknown bits");require(vu.micro_running(unit) && integer(vu,unit,1).unknown,
             "unknown operands cannot fabricate a result or a successful end");
         rejects([&]{vu.start_micro(unit,0,2);},"busy");vu.write(28,unit ? 0x200u : 2u);require(!vu.micro_running(unit),"selected VU reset cancels the failed pipeline");
-        vu.reset();instruction(vu,unit,0,addiu(1,0,5),0x28);vu.start_micro(unit,0,0);
+        vu.reset();instruction(vu,unit,0,addiu(1,0,5),0x3A);vu.start_micro(unit,0,0);
         rejects([&]{vu.advance_micro(1);},"upper instruction");require(integer(vu,unit,1).unknown,"unsupported upper instruction cannot commit a valid lower half");
-        vu.reset();instruction(vu,unit,0,0x81E1033Cu);vu.start_micro(unit,0,0);
-        rejects([&]{vu.advance_micro(1);},"lower instruction");
-        require(vu.diagnostic_micro_instructions(unit)==0,"a real MOVE cannot be silently mistaken for the lower NOP alias");
+        vu.reset();instruction(vu,unit,0,0x81E1033Cu);
+        instruction(vu,unit,1,nop,upper_nop|0x40000000u);instruction(vu,unit,2,nop);vu.start_micro(unit,0,0);vu.advance_micro(4);
+        require(vector_lane(vu,unit,1,0).unknown==~0u,"MOVE never publishes its vector before S");
+        vu.advance_micro(7);require(vector_lane(vu,unit,1,0).value==0 && !vector_lane(vu,unit,1,0).unknown && vector_lane(vu,unit,1,3).value==0x3F800000,
+            "the real VF00 MOVE alias copies (0,0,0,1) instead of silently acting like the unmasked lower NOP");
         vu.reset();
         const auto data=unit ? 0x1100C000u : 0x11004000u;
         for(unsigned lane=0;lane<4u;++lane)vu.write_memory(data+16u+lane*4u,4,{0x12340000u+lane,lane==2u ? 0xFFu : 0u});
@@ -228,6 +234,84 @@ int main() try {
         require(vu.read_memory(data+48u,4).value==0x11223344 && vu.read_memory(data+52u,4).value==0x55555555 &&
             vu.read_memory(data+60u,4).value==0xFE00BA98 && vu.read_memory(data+60u,4).unknown==0x00FF0000 && integer(vu,unit,1).value==2,
             "signed LQ/SQ offsets transfer exact selected bits while retaining masks and the unmodified VI base");
+        vu.reset();seed_vector(vu,unit,1,{0xBF800000,0x3F800000,0x80000000,0x7FFFFFFF});
+        seed_vector(vu,unit,2,{0,0x40000000,0,0xFF7FFFFF});
+        instruction(vu,unit,0,nop,upper(0x18,5,0,0));
+        instruction(vu,unit,1,nop,upper(0x10,3,1,0));
+        instruction(vu,unit,2,nop,upper(0x2F,4,1,2)|0x40000000u);instruction(vu,unit,3,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(8);
+        const std::array<std::uint32_t,4> max_expected{0,0x3F800000,0,0x7FFFFFFF};
+        const std::array<std::uint32_t,4> min_expected{0xBF800000,0x3F800000,0,0xFF7FFFFF};
+        for(unsigned lane=0;lane<4u;++lane)require(vector_lane(vu,unit,3,lane).value==max_expected[lane] &&
+            vector_lane(vu,unit,4,lane).value==min_expected[lane],"MAX broadcast and MINI vector forms use PS2 finite sign/magnitude ordering and FT ties");
+        const auto mac_after=unit ? vu.observe_data(0x4310) : vu.observe(17);
+        const auto status_after=unit ? vu.observe_data(0x4300) : vu.observe(16);
+        require(mac_after.value==15 && status_after.value==0x41,"MAX/MINI preserve the prior arithmetic MAC and sticky STATUS flags");
+        vu.reset();seed_vector(vu,unit,1,{0x3F800000,0xC0000000,0x40800000,0});
+        seed_vector(vu,unit,2,{0x40000000,0x40800000,0xC1000000,0});
+        instruction(vu,unit,0,nop,upper(0x2C,3,1,2));instruction(vu,unit,1,nop,upper(1,4,1,2));
+        instruction(vu,unit,2,nop,upper_nop|0x40000000u);instruction(vu,unit,3,nop);vu.start_micro(unit,0,0);vu.advance_micro(5);
+        const std::array<std::uint32_t,4> sub_expected{0xBF800000,0xC0C00000,0x41400000,0};
+        for(unsigned lane=0;lane<4u;++lane)require(vector_lane(vu,unit,3,lane).value==sub_expected[lane],"SUB vector fields have the exact signed arithmetic results");
+        require((unit ? vu.observe_data(0x4310) : vu.observe(17)).value==0xC1,"SUB publishes its sign/zero MAC fields at S");
+        vu.advance_micro(8);const std::array<std::uint32_t,4> add_expected{0x40A00000,0x40000000,0x41000000,0x40800000};
+        for(unsigned lane=0;lane<4u;++lane)require(vector_lane(vu,unit,4,lane).value==add_expected[lane],"ADD broadcast selects the requested FT component independently in each result lane");
+        require((unit ? vu.observe_data(0x4300) : vu.observe(16)).value==0xC0,"later positive ADD clears current Z/S and retains the true sticky flags");
+        vu.reset();seed_integer(vu,unit,1,{0xFFFE,0});
+        instruction(vu,unit,0,0x800303FDu|(5u<<21u)|(1u<<11u));
+        instruction(vu,unit,1,0x8004033Du|(12u<<21u)|(3u<<11u));
+        instruction(vu,unit,2,nop,upper_nop|0x40000000u);instruction(vu,unit,3,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(11);
+        require(vector_lane(vu,unit,3,0).unknown==~0u && vector_lane(vu,unit,3,1).value==0xFFFFFFFEu &&
+            vector_lane(vu,unit,3,3).value==0xFFFFFFFEu && vector_lane(vu,unit,4,0).value==0xFFFFFFFEu && vector_lane(vu,unit,4,1).unknown==~0u,
+            "MFIR sign-extends actual VI bits and MR32 rotates the selected old VF fields after the true source latency");
+        vu.reset();seed_integer(vu,unit,1,{0x12,0x8000});
+        instruction(vu,unit,0,0x800303FDu|(15u<<21u)|(1u<<11u));
+        instruction(vu,unit,1,nop,upper_nop|0x40000000u);instruction(vu,unit,2,nop);vu.start_micro(unit,0,0);vu.advance_micro(7);
+        require(vector_lane(vu,unit,3,0).value==0x12 && vector_lane(vu,unit,3,0).unknown==0xFFFF8000u,
+            "an unknown VI sign bit propagates through all sixteen sign-extension bits in MFIR");
+        for(unsigned format=0;format<4u;++format) {
+            vu.reset();seed_vector(vu,unit,1,{0xBEE66666,0x3EE66666,0x3F0CCCCD,0x42F6E666});
+            instruction(vu,unit,0,nop,upper(0x18,5,0,0));
+            instruction(vu,unit,1,nop,(15u<<21u)|(3u<<16u)|(1u<<11u)|(0x17Cu+format)|0x40000000u);
+            instruction(vu,unit,2,nop);vu.start_micro(unit,0,0);vu.advance_micro(5);
+            require(vector_lane(vu,unit,3,0).unknown==~0u,"FTOI output retains the four-cycle vector latency");
+            vu.advance_micro(8);
+            constexpr std::uint32_t expected[4][4]{{0,0,0,123},{0u-7u,7,8,1975},{0u-1843u,1843,2252,505651},{0u-14745u,14745,18022,4045209}};
+            for(unsigned lane=0;lane<4u;++lane)require(vector_lane(vu,unit,3,lane).value==expected[format][lane],"FTOI formats truncate signed fractional values toward zero with exact fixed-point scaling");
+            require((unit ? vu.observe_data(0x4310) : vu.observe(17)).value==15 && (unit ? vu.observe_data(0x4300) : vu.observe(16)).value==0x41,
+                "FTOI preserves prior MAC and STATUS flags");
+        }
+        vu.reset();seed_vector(vu,unit,1,{0x4F000000,0xCF000000,0x7FFFFFFF,0xFFFFFFFF});
+        instruction(vu,unit,0,nop,(15u<<21u)|(3u<<16u)|(1u<<11u)|0x17Cu|0x40000000u);instruction(vu,unit,1,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(6);
+        require(vector_lane(vu,unit,3,0).value==0x7FFFFFFF && vector_lane(vu,unit,3,1).value==0x80000000 &&
+            vector_lane(vu,unit,3,2).value==0x7FFFFFFF && vector_lane(vu,unit,3,3).value==0x80000000,
+            "FTOI clamps signed overflow including finite PS2 exponent-255 values instead of using host NaN conversions");
+        vu.reset();vu.write_memory(data,4,{0x3FF80000,0});seed_vector(vu,unit,3,{0,0x12345678,0,0});
+        instruction(vu,unit,0,0x8101037Cu);instruction(vu,unit,1,addiu(1,0,7),(8u<<21u)|(3u<<16u)|(1u<<11u)|0x17Du);
+        instruction(vu,unit,2,nop,upper_nop|0x40000000u);instruction(vu,unit,3,nop);vu.start_micro(unit,0,0);vu.advance_micro(4);
+        require(vu.diagnostic_micro_instructions(unit)==1 && integer(vu,unit,1).unknown,"FTOI interlocks its actual selected loaded source and stalls the paired lower operation");
+        vu.advance_micro(8);require(vector_lane(vu,unit,3,0).value==0,"a dependent FTOI cannot publish before its own S stage");
+        vu.advance_micro(11);require(vector_lane(vu,unit,3,0).value==31 && vector_lane(vu,unit,3,1).value==0x12345678 && integer(vu,unit,1).value==7,
+            "masked FTOI uses the true loaded coordinate, ignores unselected unknown operands, and preserves other destination fields");
+        vu.reset();instruction(vu,unit,0,addiu(1,0,9),(8u<<21u)|(3u<<16u)|(1u<<11u)|0x17Du);vu.start_micro(unit,0,0);
+        rejects([&]{vu.advance_micro(1);},"FTOI consumes unknown");require(integer(vu,unit,1).unknown,"unknown FTOI input refuses both halves without inventing a vertex");
+        vu.reset();seed_vector(vu,unit,1,{0x3F800000,0xBF800000,0,0x3F800000});seed_integer(vu,unit,1,{});
+        instruction(vu,unit,0,nop,upper(0x1B,5,1,0));instruction(vu,unit,1,addiu(2,0,0x40));
+        instruction(vu,unit,2,nop);instruction(vu,unit,3,nop);
+        instruction(vu,unit,4,(0x1Au<<25u)|(1u<<16u)|(2u<<11u));
+        instruction(vu,unit,5,(0x29u<<25u)|(1u<<11u)|2u);instruction(vu,unit,6,addiu(3,0,7));
+        instruction(vu,unit,7,addiu(3,0,99));instruction(vu,unit,8,nop,upper_nop|0x40000000u);instruction(vu,unit,9,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(6);require(integer(vu,unit,1).value==0,"flag check bypass does not publish external VI before S");
+        vu.advance_micro(16);require(integer(vu,unit,1).value==0x40 && integer(vu,unit,3).value==7 && vu.diagnostic_micro_instructions(unit)==9,
+            "FMAND reads actual retired arithmetic MAC bits and supplies the next conditional branch without the ordinary integer gap");
+        require((unit ? vu.observe_data(0x4310) : vu.observe(17)).value==0x42,"MAC checks preserve the actual flags");
+        vu.reset();seed_integer(vu,unit,2,{0,0xFFFFu});instruction(vu,unit,0,(0x1Au<<25u)|(1u<<16u)|(2u<<11u));
+        instruction(vu,unit,1,(0x1Bu<<25u)|(3u<<16u)|(2u<<11u));instruction(vu,unit,2,(0x18u<<25u)|(4u<<16u)|(2u<<11u)|0u,upper_nop|0x40000000u);
+        instruction(vu,unit,3,nop);vu.start_micro(unit,0,0);vu.advance_micro(8);
+        require(integer(vu,unit,1).value==0 && !integer(vu,unit,1).unknown && integer(vu,unit,3).unknown==0xFFFFu && integer(vu,unit,4).unknown==1,
+            "MAC flag checks preserve uncertain source bits, prove AND with zero, and cannot fabricate an equality result");
     }
     VuControl cold;cold.start_micro(1,0,0);rejects([&]{cold.advance_micro(1);},"unwritten micro memory");
     std::cout<<"Clocked VU integer LIW, bypass/S visibility, BAL delay, E drain, reset and refusals passed\n";

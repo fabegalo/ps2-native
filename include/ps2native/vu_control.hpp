@@ -18,6 +18,7 @@ public:
         micro_={};
         path1_.reset();
         pending_q_.reset();
+        pending_q1_.reset();
         registers_ = {};
         unknown_ = {};
         registers_[0] = 0;
@@ -46,7 +47,10 @@ public:
     [[nodiscard]] ObservedWord observe(unsigned index) const {
         if (index >= registers_.size() || !registers_[index])
             throw DeviceRefusal("VU control register is reserved or undefined before write");
-        return {*registers_[index],unknown_[index]};
+        const auto value=*registers_[index];
+        if(index==29u)return {value|(pending_q_ ? 1u<<5u : 0u)|(pending_q1_ ? 1u<<13u : 0u)|
+            (path1_ ? 1u<<12u : 0u),unknown_[index]};
+        return {value,unknown_[index]};
     }
     void write(unsigned index, std::uint32_t value) {
         write_observed(index,{value,0});
@@ -86,6 +90,7 @@ public:
         }
         if (value & 0x200u) {
             reset_micro(1);
+            pending_q1_.reset();
             for(unsigned index=0;index<3;++index) vu1_controls_[index]={};
         }
         registers_[28] = value & 0x0C0Cu;
@@ -282,14 +287,14 @@ public:
         }
     }
 private:
-    struct MicroIntegerWrite {unsigned index{};ObservedWord word{};std::uint64_t ready{};bool memory_load{};};
+    struct MicroIntegerWrite {unsigned index{};ObservedWord word{};std::uint64_t ready{};bool memory_load{},flag_check{};};
     struct MicroVectorWrite {
         unsigned index{},mask{};
         std::array<ObservedWord,4> words{};
         std::uint64_t ready{};
     };
     struct MicroFlagWrite {std::uint32_t mac{},status{};std::uint64_t ready{};};
-    struct MicroFmac {MicroVectorWrite output{};std::uint32_t mac{},status{};bool active{},hazard{};};
+    struct MicroFmac {MicroVectorWrite output{};std::uint32_t mac{},status{};bool active{},hazard{},changes_flags{};};
     struct MicroState {
         bool running{},end_delay{};
         std::uint32_t pc{};
@@ -310,6 +315,7 @@ private:
     void reset_micro(unsigned unit);
     void step_micro(unsigned unit,Gif* gif,GsRegisters* gs);
     void step_path1(Gif* gif,GsRegisters* gs);
+    void advance_micro_q(std::uint64_t cycle);
     [[nodiscard]] ObservedWord micro_integer(unsigned unit,unsigned index,bool forwarded,unsigned bypass_delay=1) const;
     void retire_micro_integers(unsigned unit);
     [[nodiscard]] MicroFmac evaluate_micro_upper(unsigned unit,std::uint32_t instruction) const;
@@ -323,6 +329,7 @@ private:
     std::optional<Path1> path1_;
     struct PendingQ { std::uint64_t ready; std::uint32_t value,flags; };
     std::optional<PendingQ> pending_q_;
+    std::optional<PendingQ> pending_q1_;
     ObservedWord& memory_word(std::uint32_t address) {
         if(address>=0x11000000u && address<0x11001000u) return micro0_[(address-0x11000000u)/4u];
         if(address>=0x11004000u && address<0x11005000u) return data_[(address-0x11004000u)/4u];

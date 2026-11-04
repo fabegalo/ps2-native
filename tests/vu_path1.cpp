@@ -21,13 +21,13 @@ int main() try {
     {
         VuControl vu;Gif gif;GsRegisters gs;gs.reset(0);setup(vu);vu.start_micro(1,0,0);
         vu.advance_micro(2,&gif,&gs);
-        require(vu.path1_transfer_pending() && (gif.read_stat()&0x100u) && gif.packets().empty(),"XGKICK latches a real queued PATH1 request without inline GIF execution");
+        require(vu.path1_transfer_pending() && (gif.read_stat()&0x100u) && (vu.read(29)&0x1000u) && gif.packets().empty(),"XGKICK latches a real queued PATH1 request and VPU status without inline GIF execution");
         rejects([&]{gif.write_fifo(0x8000u,0,gs);},"pending PATH1");
         vu.advance_micro(4,&gif,&gs);
         require(((gif.read_stat()>>10u)&3u)==1u && !(gif.read_stat()&0x100u),"the first real GIFtag establishes PATH1 and clears its wait indication");
         vu.advance_micro(6,&gif,&gs);require(gs.read(kGsSiglblid+4u,4)==0x11223344,"the next bus beat reads the actual wrapped VU1 payload and writes GS LABEL");
         vu.advance_micro(8,&gif,&gs);
-        require(!vu.micro_running(1) && vu.path1_transfer_pending() && gif.packets().empty(),"E completion does not fabricate the end of a still-transferring chained GIF packet");
+        require(!vu.micro_running(1) && vu.path1_transfer_pending() && vu.read(29)==0x1000u && gif.packets().empty(),"E completion does not fabricate the end of a still-transferring chained GIF packet");
         Vif vif;vif.write_fifo(0x11000000,0,gif,gs,&vu,8);
         require((vif.observe_status().value&15u)==10u,"FLUSH reports a GIF wait while the VU itself is Ready");
         advance_vpus(10,&vif,nullptr,&vu,gif,gs);
