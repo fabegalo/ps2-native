@@ -145,7 +145,11 @@ public:
             device_events_ = true;
             memory_.diagnostic_events(options.max_trace_events ? options.max_trace_events : 256,
                 [&options,&state](std::string_view component,std::uint64_t cycle,std::string_view text) {
-                    options.diagnostics->system(state,std::string(component)+" cycle="+std::to_string(cycle)+" "+std::string(text));
+                    // Only the IOP supplies a device-local clock. GIF/video
+                    // events retain the recorder's EE observation timestamp;
+                    // the unused callback argument is not a measured cycle 0.
+                    const auto stamp=component=="IOP" ? " cycle="+std::to_string(cycle) : std::string{};
+                    options.diagnostics->system(state,std::string(component)+stamp+" "+std::string(text));
                 });
         }
     }
