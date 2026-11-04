@@ -14,9 +14,9 @@ std::optional<FloatBounds> input_bounds(ObservedWord word,std::optional<FloatBou
        ((lo^word.value)&~word.unknown) || ((hi^word.value)&~word.unknown))return {};
     return bounds;
 }
-std::optional<VuFloatResult> hull(std::uint32_t low,std::uint32_t high,std::uint32_t flags) {
+std::optional<VuFloatResult> hull(std::uint32_t low,std::uint32_t high,std::uint32_t flags,bool allow_exponent=false) {
     const auto different=low^high;
-    if(different&0xFF800000u)return std::nullopt;
+    if(different&(allow_exponent ? 0x80000000u : 0xFF800000u))return std::nullopt;
     // Endpoint XOR alone would omit intermediate values. All less significant
     // bits must be uncertain too, even when the endpoints agree there.
     const auto mask=different ? (1u<<std::bit_width(different))-1u : 0u;
@@ -63,7 +63,7 @@ std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
     return hull(low,high,common_flags);
 }
 std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,bool diagnostic,
-    std::optional<FloatBounds> a_bounds,std::optional<FloatBounds> b_bounds) {
+    std::optional<FloatBounds> a_bounds,std::optional<FloatBounds> b_bounds,bool allow_exponent) {
     if(!a.unknown && !b.unknown) {
         std::uint32_t flags=0;
         if(const auto value=ee_fpu_multiply(a.value,b.value,flags,diagnostic))
@@ -85,7 +85,7 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,bool
     const auto high=packed(std::uint64_t{mantissa(amax)}*mantissa(bmax),
                            static_cast<int>(ea)+static_cast<int>(eb)-127,sign);
     if(low.flags!=high.flags)return std::nullopt;
-    return hull(low.word.value,high.word.value,low.flags);
+    return hull(low.word.value,high.word.value,low.flags,allow_exponent);
 }
 std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a) {
     if(!fraction_only(a) || std::popcount(a.unknown)>8)return std::nullopt;

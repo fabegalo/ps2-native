@@ -1,6 +1,7 @@
 #include "ps2native/interpreter.hpp"
 #include "ps2native/ee_fpu.hpp"
 #include "ps2native/vu_float.hpp"
+#include <algorithm>
 #include <bit>
 
 #include <iomanip>
@@ -244,10 +245,70 @@ public:
     FpuAffine fpu_relation(unsigned index) {
         const auto value=s_.fpr[index]&~s_.unknown_fpr_bits[index],unknown=s_.unknown_fpr_bits[index];
         auto& relation=s_.fpr_affine[index];
+        if(unknown && relation.candidates && relation.origin && relation.value==value && relation.unknown==unknown)return relation;
         if(!unknown || (unknown&0xFF800000u) || !(value&0x7F800000u)){relation={};return {};}
         if(!relation.origin || relation.value!=value || relation.unknown!=unknown)
             relation={m_.allocate_fpu_origin(),0,(value>>23u)&255u,false,value,unknown,value,value|unknown};
         return relation;
+    }
+    static void transform_candidates(FpuAffine& relation,bool absolute=false) {
+        if(!relation.candidates)return;
+        auto values=std::make_shared<std::vector<std::uint32_t>>(*relation.candidates);
+        for(auto& value:*values)value=absolute ? value&0x7FFFFFFFu : value^0x80000000u;
+        std::sort(values->begin(),values->end());values->erase(std::unique(values->begin(),values->end()),values->end());
+        relation.minimum=values->front();relation.maximum=values->back();relation.candidates=std::move(values);
+    }
+    static std::vector<std::uint32_t> fpu_candidates(ObservedWord word,const FpuAffine& relation) {
+        if(!word.unknown)return {word.value};
+        if(relation.candidates)return *relation.candidates;
+        const auto lo=relation.origin ? relation.minimum : word.value&~word.unknown;
+        const auto hi=relation.origin ? relation.maximum : word.value|word.unknown;
+        std::vector<std::uint32_t> values;
+        if(hi>=lo && hi-lo<64u) {
+            for(std::uint64_t value=lo;value<=hi;++value)if(!((value^word.value)&~word.unknown))values.push_back(static_cast<std::uint32_t>(value));
+        } else if(std::popcount(word.unknown)<=6) {
+            auto subset=word.unknown;
+            for(;;) {
+                const auto value=(word.value&~word.unknown)|subset;
+                if(value>=lo && value<=hi)values.push_back(value);
+                if(!subset)break;
+                subset=(subset-1u)&word.unknown;
+            }
+        }
+        return values;
+    }
+    static std::optional<VuFloatResult> finite_fpu(MipsOpcode op,ObservedWord a,ObservedWord b,
+        const FpuAffine& ar,const FpuAffine& br,bool identical,std::shared_ptr<const std::vector<std::uint32_t>>& candidates) {
+        const auto av=fpu_candidates(a,ar),bv=fpu_candidates(b,br);
+        if(av.empty() || bv.empty() || av.size()*(identical ? 1u : bv.size())>256u)return {};
+        std::vector<std::uint32_t> values;std::optional<std::uint32_t> common_flags;
+        const auto append=[&](std::uint32_t value,std::uint32_t flags) {
+            if(common_flags && *common_flags!=flags)return false;
+            common_flags=flags;values.push_back(value);return values.size()<=512u;
+        };
+        for(const auto x:av)for(unsigned i=0;i<(identical ? 1u : bv.size());++i) {
+            const auto y=identical ? (op==MipsOpcode::SubS ? x^0x80000000u : x) : bv[i];
+            if(op!=MipsOpcode::MulS) {
+                std::uint32_t flags=0;const auto value=ee_fpu_add(x,y,flags);
+                if(!append(value,flags))return {};
+            } else {
+                // Known input pairs may still have uncertified Booth low bits.
+                // Enumerate every value in their proven result interval; never
+                // replace it with one guessed product or a host float.
+                const auto product=vu_float_product({x,0},{y,0},false,{},{},true);
+                if(!product)return {};
+                const auto low=product->bounded ? product->bounds[0] : product->word.value;
+                const auto high=product->bounded ? product->bounds[1] : product->word.value;
+                if(high<low || high-low>16u)return {};
+                for(std::uint64_t value=low;value<=high;++value)if(!append(static_cast<std::uint32_t>(value),product->flags))return {};
+            }
+        }
+        if(values.empty())return {};
+        std::sort(values.begin(),values.end());values.erase(std::unique(values.begin(),values.end()),values.end());
+        std::uint32_t all=~0u,any=0;for(const auto value:values){all&=value;any|=value;}
+        const VuFloatResult result{{all,all^any},*common_flags,{values.front(),values.back()},true};
+        if(result.word.unknown)candidates=std::make_shared<const std::vector<std::uint32_t>>(std::move(values));
+        return result;
     }
     void fpu_binary(MipsOpcode op,std::uint32_t word) {
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
@@ -260,10 +321,12 @@ public:
             b.value=(b.value^0x80000000u)&~b.unknown;
             br.negated=!br.negated;br.offset=-br.offset;
             br.minimum^=0x80000000u;br.maximum^=0x80000000u;
+            transform_candidates(br);
         }
         // Shared EE/VU normal-value bounds. The low bits remain unknown;
         // neither a host product nor one endpoint substitutes for hardware.
         std::optional<VuFloatResult> result;
+        std::shared_ptr<const std::vector<std::uint32_t>> candidates;
         FpuAffine relation;
         if(op!=MipsOpcode::MulS && ar.origin && ar.origin==br.origin && ar.exponent==br.exponent && ar.negated!=br.negated) {
             std::uint32_t flags=0;
@@ -272,6 +335,11 @@ public:
             const auto ab=ar.origin ? std::optional<FloatBounds>{{ar.minimum,ar.maximum}} : std::nullopt;
             const auto bb=br.origin ? std::optional<FloatBounds>{{br.minimum,br.maximum}} : std::nullopt;
             result=op==MipsOpcode::MulS ? vu_float_product(a,b,false,ab,bb) : vu_float_add(a,b,ab,bb);
+        }
+        if(!result || (result->word.unknown && (ar.candidates || br.candidates ||
+           (result->bounded && result->bounds[1]-result->bounds[0]>64u)))) {
+            const auto finite=finite_fpu(op,a,b,ar,br,fs==ft,candidates);
+            if(finite)result=finite;
         }
         if(!result)stop(StopKind::NotModeled,"FPU arithmetic cannot certify value/exception bounds; FS="+hex32(a.value)+", FT="+hex32(b.value));
         if(op!=MipsOpcode::MulS && result->word.unknown && (a.unknown!=0u)!=(b.unknown!=0u)) {
@@ -282,17 +350,19 @@ public:
                 const auto m=static_cast<std::int64_t>((bits&0x7FFFFFu)|0x800000u);
                 return bits&0x80000000u ? -m : m;
             };
-            if(inherited.origin && ((constant.value>>23u)&255u)<=exponent &&
+            if(inherited.origin && inherited.exponent && !(source.unknown&0xFF800000u) && !(result->word.unknown&0xFF800000u) &&
+               ((constant.value>>23u)&255u)<=exponent &&
                ((result->word.value>>23u)&255u)==exponent && !((source.value^result->word.value)&0x80000000u)) {
                 std::uint32_t flags=0;const auto anchor=ee_fpu_add(inherited.minimum,constant.value,flags);
                 relation=inherited;relation.offset+=signed_mantissa(anchor)-signed_mantissa(inherited.minimum);
             }
         }
         if(result->word.unknown && !relation.origin)
-            relation={m_.allocate_fpu_origin(),0,(result->word.value>>23u)&255u,false,0,0};
+            relation={m_.allocate_fpu_origin(),0,(result->word.unknown&0xFF800000u) ? 0u : (result->word.value>>23u)&255u,false,0,0};
         relation.value=result->word.value;relation.unknown=result->word.unknown;
         relation.minimum=result->bounded ? result->bounds[0] : result->word.value;
         relation.maximum=result->bounded ? result->bounds[1] : result->word.value|result->word.unknown;
+        relation.candidates=std::move(candidates);
         s_.fpr[fd]=result->word.value;s_.unknown_fpr_bits[fd]=result->word.unknown;
         s_.fpr_affine[fd]=relation;
         s_.fcr31=(s_.fcr31&~0xC000u)|result->flags;
@@ -496,10 +566,13 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
             // and exponent 255. They clear O/U causes, not their sticky history.
             {
             auto relation=cpu.fpu_relation(ee::rd(word));
+            const bool uncertain_abs=instruction.opcode==MipsOpcode::AbsS && (state.unknown_fpr_bits[ee::rd(word)]&0x80000000u);
             if(instruction.opcode==MipsOpcode::NegS || (state.fpr[ee::rd(word)]&0x80000000u)) {
                 relation.negated=!relation.negated;relation.offset=-relation.offset;
                 relation.minimum^=0x80000000u;relation.maximum^=0x80000000u;
+                cpu.transform_candidates(relation,instruction.opcode==MipsOpcode::AbsS);
             }
+            if(uncertain_abs){cpu.transform_candidates(relation,true);relation.origin=memory.allocate_fpu_origin();relation.offset=0;relation.negated=false;}
             state.unknown_fpr_bits[ee::sa(word)]=state.unknown_fpr_bits[ee::rd(word)]&(instruction.opcode==MipsOpcode::AbsS ? 0x7FFFFFFFu : 0xFFFFFFFFu);
             state.fpr[ee::sa(word)]=(instruction.opcode==MipsOpcode::AbsS ?
                 state.fpr[ee::rd(word)]&0x7FFFFFFFu : state.fpr[ee::rd(word)]^0x80000000u);

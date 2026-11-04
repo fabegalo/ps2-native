@@ -62,5 +62,31 @@ int main() try {
     require(state.unknown_fpr_bits[1],"an ordinary aliased RAM overwrite with identical opaque bits cannot retain a false origin relationship");
     step(math(6,1,4,0));step(math(1,0,4,1));require(!state.fpr[0] && !state.unknown_fpr_bits[0],
         "MOV.S preserves identity so subtraction of the same opaque value proves exact positive zero");
+    state.fpr[0]=0x40490F00u;state.unknown_fpr_bits[0]=0xFFu;
+    state.fpr_affine[0]={memory.allocate_fpu_origin(),0,128,false,0x40490F00u,0xFFu,0x40490F7Fu,0x40490F80u};
+    state.fpr[5]=0x40490FDAu;state.unknown_fpr_bits[5]=0;
+    state.fpr[3]=0x37B54442u;state.unknown_fpr_bits[3]=0;
+    step(math(1,4,5,0));require(state.fpr_affine[4].candidates && state.fpr_affine[4].candidates->size()==2,
+        "two possible adjacent large inputs remain two small cancellation results rather than a spurious 131073-value interval");
+    step(math(1,0,4,3));require(state.fpr_affine[0].candidates && state.fpr_affine[0].candidates->size()==2 &&
+        (state.unknown_fpr_bits[0]&0x80000000u),"a finite cancellation domain preserves both possible signs without guessing one");
+    for(const auto input:{0x40490F7Fu,0x40490F80u}) {
+        std::uint32_t flags=0;const auto first=ee_fpu_add(0x40490FDAu,input^0x80000000u,flags);
+        const auto residual=ee_fpu_add(first,0xB7B54442u,flags);
+        require(std::find(state.fpr_affine[0].candidates->begin(),state.fpr_affine[0].candidates->end(),residual)!=state.fpr_affine[0].candidates->end(),
+            "each concrete source reproduces one certified residual and flags");
+    }
+    step(math(2,1,0,0));require(!(state.unknown_fpr_bits[1]&0x80000000u) && !(state.fpr[1]&0x80000000u),
+        "squaring the same finite-domain register preserves correlation and cannot invent a negative cross-product");
+    state.set_reg64(1,0x80002100);step(0xE4200000);step(0xC4220000);
+    require(state.fpr_affine[2].candidates==state.fpr_affine[0].candidates,"SWC1/LWC1 transports the same immutable candidate domain through actual RAM");
+    step(math(5,2,2,0));require(!(state.unknown_fpr_bits[2]&0x80000000u) && state.fpr_affine[2].candidates,
+        "ABS preserves both finite magnitude candidates and proves a positive sign");
+    state.fpr[8]=0x00800000u;state.unknown_fpr_bits[8]=0x80000000u;
+    state.fpr_affine[8]={memory.allocate_fpu_origin(),0,0,false,0x00800000u,0x80000000u,0x00800000u,0x80800000u,
+        std::make_shared<const std::vector<std::uint32_t>>(std::initializer_list<std::uint32_t>{0x00800000u,0x80800000u})};
+    state.fpr[9]=0x00800001u;state.unknown_fpr_bits[9]=0;state.fcr31=0x0183C079u;
+    rejects([&]{step(math(0,10,8,9));},"cannot certify");
+    require(state.fcr31==0x0183C079u,"different concrete underflow classes cannot fabricate shared FPU exception flags");
     std::cout<<"EE floating bounds, dominated addition, raw register/RAM transport, sign operations, consumer refusals and comparison parity passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

@@ -13,8 +13,10 @@ struct VuFloatResult {
 // Unsupported uncertainty/cancellation/exception boundaries return nullopt.
 std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
     std::optional<FloatBounds> a_bounds={},std::optional<FloatBounds> b_bounds={});
+// The opt-in exponent hull is for finite EE enumeration only. Default VU
+// callers retain a proven single exponent for their separate MAC flag model.
 std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,bool diagnostic_early_digit_carry=false,
-    std::optional<FloatBounds> a_bounds={},std::optional<FloatBounds> b_bounds={});
+    std::optional<FloatBounds> a_bounds={},std::optional<FloatBounds> b_bounds={},bool allow_exponent_bounds=false);
 // Enumerate at most eight uncertain fraction bits; larger/invalid domains
 // remain refused. Never assume monotonic rounding of the SRT circuit.
 std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a);
