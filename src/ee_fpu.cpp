@@ -1,5 +1,6 @@
 #include "ps2native/ee_fpu.hpp"
 #include <array>
+#include <bit>
 
 namespace ps2native {
 namespace {
@@ -24,6 +25,33 @@ int digit(const Rows& remainder) {
     if(high&8u)return high==15u ? 0 : -1;
     return high || ((remainder[0]|remainder[1])&(1u<<24u)) ? 1 : 0;
 }
+}
+std::uint32_t ee_fpu_add(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31) {
+    fcr31&=~0xC000u; // O/U causes are replaced; I/D and sticky flags survive.
+    const auto ea=(a>>23u)&255u,eb=(b>>23u)&255u;
+    if(!ea)a&=0x80000000u;
+    if(!eb)b&=0x80000000u;
+    if(!ea && !eb)return a&b; // only two negative zeros produce negative zero
+    if(!ea)return b;
+    if(!eb)return a;
+    const auto common=ea>eb ? ea : eb;
+    const auto aligned=[&](std::uint32_t value,unsigned exponent) -> std::int64_t {
+        const auto distance=common-exponent;
+        // One retained guard column, no sticky-bit injection. Bits shifted
+        // below it are lost BEFORE cancellation/normalization on the EE.
+        const auto magnitude=distance>=25u ? 0u : (((value&0x7FFFFFu)|0x800000u)<<1u)>>distance;
+        return (value&0x80000000u) ? -static_cast<std::int64_t>(magnitude) : magnitude;
+    };
+    const auto sum=aligned(a,ea)+aligned(b,eb);
+    if(!sum)return 0;
+    const std::uint32_t sign=sum<0 ? 0x80000000u : 0;
+    const auto magnitude=static_cast<std::uint32_t>(sum<0 ? -sum : sum);
+    const auto top=31u-std::countl_zero(magnitude);
+    const auto exponent=static_cast<int>(common)+static_cast<int>(top)-24;
+    if(exponent<=0){fcr31|=0x4008u;return sign;}
+    if(exponent>255){fcr31|=0x8010u;return sign|0x7FFFFFFFu;}
+    const auto significand=top>23u ? magnitude>>(top-23u) : magnitude<<(23u-top);
+    return sign|(static_cast<std::uint32_t>(exponent)<<23u)|(significand&0x7FFFFFu);
 }
 std::uint32_t ee_fpu_divide(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31) {
     const auto sign=(a^b)&0x80000000u;

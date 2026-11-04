@@ -32,7 +32,7 @@ namespace ps2native {
 #define PS2N_R5900_SYSTEM_OPCODES(X) \
     X(Mfc0) X(Mtc0) X(Tlbr) X(Tlbwi) X(Tlbwr) X(Tlbp) X(Eret) X(Ei) X(Di) \
     X(Cache) X(Pref) X(Syscall) X(Break) X(Lwc1) X(Swc1) X(Mfc1) X(Mtc1) X(Cfc1) X(Ctc1) X(MovS) X(DivS) X(MulS) X(CvtWS) X(CvtSW) X(MaddS) X(AddaS) X(Addi) \
-    X(Add) X(Sub) X(Dadd) X(Dsub) X(Daddi)
+    X(Add) X(Sub) X(Dadd) X(Dsub) X(Daddi) X(AddS) X(SubS)
 
 enum class MipsOpcode : std::uint8_t {
 #define PS2N_OPCODE_ENUMERATOR(name) name,

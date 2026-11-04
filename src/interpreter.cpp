@@ -391,6 +391,11 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
             }
             state.fpr[ee::sa(word)]=result;break;
         }
+        case MipsOpcode::AddS: case MipsOpcode::SubS:
+            if(!(state.cp0(Cop0::Status)&kStatusCU1))
+                cpu.stop(StopKind::GuestException,"FPU add/sub with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+            state.fpr[ee::sa(word)]=ee_fpu_add(state.fpr[ee::rd(word)],
+                state.fpr[ee::rt(word)]^(instruction.opcode==MipsOpcode::SubS ? 0x80000000u : 0u),state.fcr31);break;
         case MipsOpcode::MovS:
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"MOV.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");

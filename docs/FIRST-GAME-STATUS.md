@@ -555,3 +555,28 @@ com aritmética host unsigned para não introduzir overflow indefinido em C++.
 AOT continua com fronteira explícita. Testes cobrem resultados nos limites,
 overflow nos dois sentidos, alias e campos reservados. PS2Recomp special
 translator foi consultado antes; não foi copiada sua tradução sem exceções.
+
+### Após aritmética inteira — ensaio 46
+
+EE `0x100938`, 339.415.345 instruções (100,716 s): SUB.S ausente, operandos
+`00000000` e `431B0000`. IOP ativo `0xAE98` / 46.479.002; mesmos 16 pacotes e
+1.048.576 pixels. RAM canônica
+`7bb5c94c14e55264f66f654a4ec47a197133bf3c6f9ba9b5db458b787c9d1049`.
+O modo original foi repetido após a família inteira: mesmo hash/PC/contagens.
+
+ADD.S/SUB.S passam a usar um somador inteiro independente de float do host:
+alinhamento com um bit de guarda, descarte antes da normalização, truncamento,
+expoente 255 finito, denormais como zero e flags O/U com histórico sticky.
+Consultados previamente [PS2Recomp FPU](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/ps2xRecomp/src/lib/fpu_translator.cpp)
+e seus macros; implementação própria baseada no contrato aritmético e na
+[descrição de precisão](https://pcsx2.net/blog/2009/ps2-vu-vector-unit-documentation-part-1/).
+Testes próprios usam observações numéricas de
+[ps2autotests](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/cpu/ee_fpu/arithmetic.expected),
+incluindo sinais de zero e valores no expoente estendido. Isso não certifica
+a FPU inteira: MUL/MADD e o acumulador continuam com os limites registrados.
+
+Commit `8410973` (IMR/ADDI): núcleo e launcher aprovados nas seis arquiteturas,
+runs [41787441581](https://github.com/fabegalo/ps2-native/actions/runs/41787441581)
+e [41787441462](https://github.com/fabegalo/ps2-native/actions/runs/41787441462).
+Commit `94230de` (família aritmética inteira): testes focados aprovados localmente;
+CI e ensaios posteriores registrados separadamente.

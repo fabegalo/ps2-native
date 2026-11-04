@@ -280,6 +280,8 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
     } else if (op == 0x11) {
         if(rs==16 && rt==0 && funct==0x24)return make(MipsOpcode::CvtWS);
         if(rs==20 && rt==0 && funct==0x20)return make(MipsOpcode::CvtSW);
+        if(rs==16 && funct==0)return make(MipsOpcode::AddS);
+        if(rs==16 && funct==1)return make(MipsOpcode::SubS);
         if(rs==16 && funct==2)return make(MipsOpcode::MulS);
         if(rs==16 && funct==3)return make(MipsOpcode::DivS);
         if(rs==16 && rt==0 && funct==6)return make(MipsOpcode::MovS);

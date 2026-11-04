@@ -319,6 +319,39 @@ void register_context() {
             state.reg128(10).low==state.reg128(8).low && state.reg128(10).high==state.reg128(8).high,
             "128-bit HI/LO context moves preserve both pipelines");
 }
+void adder() {
+    // Numeric observations in ps2autotests ee_fpu/arithmetic.expected.
+    const std::uint32_t observed[][3]{
+        {0,0x80000000,0},{0x80000000,0x80000000,0x80000000},
+        {0x3F800000,0x3F800000,0x40000000},{0x40400000,0x3F800000,0x40800000},
+        {0x7FFFFFFF,0x7FFFFFFF,0x7FFFFFFF},{0x7FFFFFFF,0xFFFFFFFF,0},
+        {0xFFFFFFFF,0xFFFFFFFF,0xFFFFFFFF},{0,0x7F800000,0x7F800000},
+        {0x7F800000,0x7F800000,0x7FFFFFFF},{0x3FFFFFFF,0x3F800000,0x403FFFFF},
+        {0x7F800001,0x3F800000,0x7F800001},{1,0x3F800000,0x3F800000},
+        {0x1337,0xDEADBEEF,0xDEADBEEF},{0,0xBF800000,0xBF800000},
+        {0x3FFFFFFF,0xBF800000,0x3F7FFFFE},{0x3F800000,0xBFFFFFFF,0xBF7FFFFE},
+    };
+    for(const auto& c:observed){std::uint32_t flags=0;require(ee_fpu_add(c[0],c[1],flags)==c[2],"EE adder physical result vector");}
+    std::uint32_t flags=0x0183C079u;
+    require(ee_fpu_add(0x3F800000,0xBE800001,flags)==0x3F400000 && flags==0x01830079u,
+            "one guard bit drops the small addend tail before cancellation, preserving I/D and sticky flags");
+    require(ee_fpu_add(0x00800001,0x80800000,flags)==0 && (flags&0xC008u)==0x4008u,
+            "a tiny nonzero difference flushes and sets underflow");
+    require(ee_fpu_add(0x7FFFFFFF,0x7FFFFFFF,flags)==0x7FFFFFFF && (flags&0xC018u)==0x8018u,
+            "extended exponent overflow saturates and retains sticky underflow");
+    require(ee_fpu_add(0x80000001,0,flags)==0 && !(flags&0xC000u),"denormal operands are signed zeros");
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    EEState state;state.pc=0x80001000;state.set_cp0(Cop0::Status,kStatusCU1);
+    state.fpr[0]=0x3F800000;state.fpr[1]=0x3E800001;
+    memory.write32(state.pc,0x46010001u); // SUB.S f0,f0,f1, aliased destination
+    memory.write32(state.pc+4,0x46010000u); // ADD.S f0,f0,f1
+    std::uint64_t executed=0;ExecutionContext ctx{state,memory,executed,4,0};
+    interpret_instruction(ctx);require(state.fpr[0]==0x3F400000,"SUB.S uses the EE adder with sign inversion");
+    interpret_instruction(ctx);require(state.fpr[0]==0x3F800000,"ADD.S truncates without host nearest rounding");
+    state.pc=0x80001000;state.set_cp0(Cop0::Status,0);
+    rejects([&]{interpret_instruction(ctx);},"Status.CU1 = 0");
+    require(state.fpr[0]==0x3F800000,"disabled COP1 cannot change the destination");
+}
 void divider() {
     // Numeric observations from unknownbrackets/ps2autotests, ee_fpu/muldiv.expected.
     // Test code/circuit implementation here is independently authored.
@@ -419,6 +452,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();divider();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();adder();divider();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }
