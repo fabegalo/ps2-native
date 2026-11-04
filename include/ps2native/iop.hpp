@@ -80,12 +80,25 @@ public:
         if(offset>ram_.size()-4u)return std::nullopt;
         std::uint32_t value=0;
         for(unsigned byte=0;byte<4;++byte) {
-            if(!ram_written_[offset+byte])return std::nullopt;
+            if(ram_known_[offset+byte]!=0xFFu)return std::nullopt;
             value|=std::uint32_t{ram_[offset+byte]}<<(8u*byte);
         }
         return value;
     }
     void ee_write(std::uint32_t offset, std::size_t bytes, std::uint64_t value);
+    // Records only the request; neither acknowledgement nor DVD permissions
+    // are inferred from an unmeasured MECHACON reply.
+    [[nodiscard]] bool dvd_playback_forbid_requested() const noexcept {return dvd_playback_forbid_requested_;}
+    // Explicit behavioral-reference experiment only: SCMD 15 reply bit 7=0.
+    // The other seven bits and resulting DVD permission state stay unknown.
+    void diagnostic_forbid_dvdp_error_bit_clear() {
+        if(cycle_)throw DeviceRefusal("ForbidDVDP error-bit experiment requires reset state before execution");
+        diagnostic_forbid_dvdp_error_clear_=true;
+    }
+    // Last recognized BootCertify input, never an authentication-success flag.
+    [[nodiscard]] const std::optional<std::array<std::uint8_t,4>>& boot_certify_request() const noexcept {
+        return boot_certify_request_;
+    }
     // The EE sees the same physical CDVD registers through the SBUS.
     // Call after synchronizing the IOP; no second command/result queue.
     [[nodiscard]] std::uint32_t ee_cdvd_read(std::uint32_t physical,std::size_t bytes);
@@ -350,7 +363,7 @@ private:
     std::vector<std::uint8_t> rom_;
     std::vector<std::uint8_t> rom1_;
     std::vector<std::uint8_t> ram_;
-    std::vector<std::uint8_t> ram_written_; // 1 per byte written since power-on
+    std::vector<std::uint8_t> ram_known_; // bit mask of established bits in each RAM byte
     std::array<std::uint32_t, 32> gpr_{};
     std::uint32_t gpr_defined_{1u};         // bit n: GPR n holds a known value ($zero always)
     std::array<std::string, 32> gpr_origin_; // why an unknown GPR is unknown
@@ -386,6 +399,9 @@ private:
     // command and its pending result bytes.
     std::vector<std::uint8_t> s_params_;
     std::optional<std::uint8_t> s_command_;
+    std::optional<std::array<std::uint8_t,4>> boot_certify_request_;
+    bool dvd_playback_forbid_requested_{};
+    bool diagnostic_forbid_dvdp_error_clear_{};
     struct MechaReplyByte {
         std::uint8_t value,known{0xFFu};
         const char* origin{};

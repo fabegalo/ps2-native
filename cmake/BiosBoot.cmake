@@ -1,5 +1,13 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-iop-bit-memory tests/iop_bit_memory.cpp)
+    target_link_libraries(ps2n-iop-bit-memory PRIVATE ps2n_core)
+    add_test(NAME native-iop-bit-memory COMMAND ps2n-iop-bit-memory)
+    set_tests_properties(native-iop-bit-memory PROPERTIES TIMEOUT 30)
+    add_executable(ps2n-mechacon-boot-certify tests/mechacon_boot_certify.cpp)
+    target_link_libraries(ps2n-mechacon-boot-certify PRIVATE ps2n_core)
+    add_test(NAME native-mechacon-boot-certify COMMAND ps2n-mechacon-boot-certify)
+    set_tests_properties(native-mechacon-boot-certify PROPERTIES TIMEOUT 30)
     add_executable(ps2n-iop-hblank tests/iop_hblank.cpp)
     target_link_libraries(ps2n-iop-hblank PRIVATE ps2n_core)
     add_test(NAME native-iop-hblank COMMAND ps2n-iop-hblank)

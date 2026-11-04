@@ -190,7 +190,7 @@ bool is_latch(std::uint32_t address) {
 }
 } // namespace
 
-Iop::Iop() : ram_(kIopRamBytes), ram_written_(kIopRamBytes) {}
+Iop::Iop() : ram_(kIopRamBytes), ram_known_(kIopRamBytes) {}
 
 void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware, const NvmImage* nvm,
                 bool diagnostic_sbus_latches, std::optional<std::uint32_t> diagnostic_dmacinten,
@@ -201,7 +201,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     rom_.assign(rom0.begin(), rom0.end());
     rom1_.assign(rom1.begin(),rom1.end());
     std::fill(ram_.begin(), ram_.end(), std::uint8_t{0});
-    std::fill(ram_written_.begin(), ram_written_.end(), std::uint8_t{0});
+    std::fill(ram_known_.begin(), ram_known_.end(), std::uint8_t{0});
     gpr_ = {};
     dev9_power_={0,0xFFFFu};speed_irq_mask_={0,0xFFFFu};dev9_irq_acknowledged_=false;diagnostic_dev9_irq_disconnected_=false;
     speed_eeprom_.reset();speed_gpio_dir_={0,0xFFu};speed_gpio_data_={0,0xFFu};speed_gpio_clock_at_.reset();
@@ -230,7 +230,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     hardware_ = hardware;
     nvm_ = nvm;
     s_params_.clear();
-    s_command_.reset();
+    s_command_.reset();boot_certify_request_.reset();dvd_playback_forbid_requested_=false;diagnostic_forbid_dvdp_error_clear_=false;
     s_results_.clear();
     config_.reset();
     ilink_bus_reset_ = false;
@@ -330,7 +330,7 @@ void Iop::load_program(std::span<const std::uint8_t> bytes, std::uint32_t addres
     ee_ram_ = ee_ram;
     ee_ram_unknown_ = ee_ram_unknown;
     std::copy(bytes.begin(), bytes.end(), ram_.begin() + address);
-    std::fill_n(ram_written_.begin() + address, bytes.size(), std::uint8_t{1});
+    std::fill_n(ram_known_.begin() + address, bytes.size(), std::uint8_t{0xFF});
     pc_ = entry;
     stop_.reset();
     // Documented development environment: known registers, no firmware services.
@@ -679,7 +679,7 @@ void Iop::pump_sif1() {
             const auto value = sif1_fifo_.front(); sif1_fifo_.pop_front();
             for (unsigned b = 0; b < 4u; ++b) {
                 ram_[iop_sif1_[0]] = static_cast<std::uint8_t>(value >> (8u * b));
-                ram_written_[iop_sif1_[0]++] = 1u;
+                ram_known_[iop_sif1_[0]++] = 0xFFu;
             }
         }
         sif1_words_ -= 4u;
@@ -777,7 +777,7 @@ void Iop::pump_sif0() {
         ObservedWord word;
         for(unsigned b=0;b<4;++b) {
             word.value|=std::uint32_t{ram_[address+b]}<<(b*8u);
-            if(!ram_written_[address+b])word.unknown|=0xFFu<<(b*8u);
+            word.unknown|=std::uint32_t{static_cast<std::uint8_t>(~ram_known_[address+b])}<<(b*8u);
         }
         return word;
     };
@@ -918,7 +918,7 @@ void Iop::pump_cdvd() {
     auto& dicr=regptr(kDicr);
     if(blocks==1u && !dicr)throw IopStop{"CDVD DMA interrupt mask is unknown"};
     std::copy_n(cdvd_sector_.begin()+cdvd_sector_offset_,bytes,ram_.begin()+*madr);
-    std::fill_n(ram_written_.begin()+*madr,bytes,std::uint8_t{1});
+    std::fill_n(ram_known_.begin()+*madr,bytes,std::uint8_t{0xFF});
     *madr+=bytes;*bcr-=0x10000u;cdvd_sector_offset_+=bytes;
     if(blocks==1u) {
         *chcr&=~kChcrStart;
@@ -1000,7 +1000,7 @@ std::uint64_t Iop::ee_read(std::uint32_t offset, std::size_t bytes) const {
     if (offset >= kIopRamBytes || bytes > kIopRamBytes - offset)
         throw DeviceRefusal("IOP RAM offset " + hex(offset) + " is beyond the 2 MiB of IOP RAM");
     for (std::size_t i = 0; i < bytes; ++i)
-        if (ram_written_[offset + i] == 0u)
+        if (ram_known_[offset + i] != 0xFFu)
             throw DeviceRefusal("IOP RAM " + hex(offset) + " has not been written by the IOP (undefined since "
                                 "power-on); " + (stop_ ? "the IOP stopped: " + *stop_
                                                        : "the IOP is at " + hex(pc_) + " after " +
@@ -1021,7 +1021,7 @@ void Iop::ee_write(std::uint32_t offset, std::size_t bytes, std::uint64_t value)
     if(stop_) throw DeviceRefusal("EE write to IOP RAM after the IOP stopped: "+*stop_);
     for(std::size_t i=0;i<bytes;++i) {
         ram_[offset+i]=static_cast<std::uint8_t>(value>>(8u*i));
-        ram_written_[offset+i]=1;
+        ram_known_[offset+i]=0xFFu;
     }
 }
 
@@ -1141,7 +1141,7 @@ std::uint32_t Iop::fetch(std::uint32_t address) const {
     const auto a = translate(address, 4u, false, "fetch");
     if (a.physical < kIopRamBytes) {
         for (unsigned i = 0; i < 4u; ++i)
-            if (ram_written_[a.physical + i] == 0u)
+            if (ram_known_[a.physical + i] != 0xFFu)
                 throw IopStop{"instruction fetch from IOP RAM " + hex(a.physical) + ", never written"};
         return static_cast<std::uint32_t>(ram_[a.physical]) | (static_cast<std::uint32_t>(ram_[a.physical + 1]) << 8) |
                (static_cast<std::uint32_t>(ram_[a.physical + 2]) << 16) |
@@ -1175,8 +1175,8 @@ std::uint32_t Iop::load(std::uint32_t address, std::size_t bytes, const char* wh
     if (a.physical < kIopRamBytes) {
         std::uint32_t unknown=0;
         for (std::size_t i = 0; i < bytes; ++i) {
-            if (ram_written_[a.physical + i] == 0u) {
-                unknown|=0xFFu<<(8u*i);
+            if (ram_known_[a.physical + i] != 0xFFu) {
+                unknown|=std::uint32_t{static_cast<std::uint8_t>(~ram_known_[a.physical+i])}<<(8u*i);
                 if(!undefined_load_)undefined_load_=std::string(what)+" of IOP RAM "+hex(a.physical+static_cast<std::uint32_t>(i))+
                     " at IOP "+hex(pc_)+", never written with a known value";
             }
@@ -1291,12 +1291,12 @@ void Iop::pump_sio2_dma() {
     if(chosen<0)return;
     const auto channel=static_cast<unsigned>(chosen);auto& dma=sio2_dma_[channel];const auto at=dma.registers[0];
     if(!channel) {
-        for(unsigned b=0;b<4;++b)if(!ram_written_[at+b])
+        for(unsigned b=0;b<4;++b)if(ram_known_[at+b]!=0xFFu)
             throw IopStop{"SIO2 DMA input requires known source byte at "+hex(at+b)};
         for(unsigned b=0;b<4;++b)sio2_input_.push_back(ram_[at+b]);
     } else for(unsigned b=0;b<4;++b) {
         const auto byte=sio2_output_.front();sio2_output_.pop_front();
-        ram_[at+b]=static_cast<std::uint8_t>(byte.value);ram_written_[at+b]=byte.unknown ? 0u : 1u;
+        ram_[at+b]=static_cast<std::uint8_t>(byte.value);ram_known_[at+b]=static_cast<std::uint8_t>(~byte.unknown);
     }
     ++dma.words;dma.registers[0]+=4u;
     if(!--dma.words_left) {
@@ -1677,7 +1677,7 @@ bool Iop::tick_spu2_adma(unsigned core) {
         state.next=cycle_+diagnostic_spu2_adma_cycles_;return false; // true backpressure; no catch-up burst
     }
     const auto source=state.dma[0];
-    if(!state.normal)for(unsigned b=0;b<4;++b)if(!ram_written_[source+b])throw IopStop{"SPU2 DMA consumes unknown IOP RAM bytes"};
+    if(!state.normal)for(unsigned b=0;b<4;++b)if(ram_known_[source+b]!=0xFFu)throw IopStop{"SPU2 DMA consumes unknown IOP RAM bytes"};
     const auto target=state.normal ? *spu2_transfer_[core].address : 0x2000u+core*0x400u+state.fill_bank*0x100u+
         (state.fill_word>=128u ? 0x200u : 0u)+(state.fill_word%128u)*2u;
     if(spu2_ram_.empty()){spu2_ram_.resize(0x100000u);spu2_ram_written_.resize(0x100000u);}
@@ -1687,7 +1687,7 @@ bool Iop::tick_spu2_adma(unsigned core) {
         // No captured CD/SPDIF/voice sample or arbitration result is invented
         // when a normal transfer wraps into the device's dynamic RAM area.
         const bool dynamic=state.normal && destination<0x2800u;
-        spu2_ram_written_[destination]=(!dynamic && ram_written_[source+2u*n] && ram_written_[source+2u*n+1u]) ? 1u : 0u;
+        spu2_ram_written_[destination]=(!dynamic && ram_known_[source+2u*n]==0xFFu && ram_known_[source+2u*n+1u]==0xFFu) ? 1u : 0u;
     }
     state.dma[0]+=4u;
     if(state.normal) {
@@ -1916,7 +1916,7 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
             ram_[a.physical + i] = static_cast<std::uint8_t>(raw >> (8u * i));
             // Copying opaque data does not consume it. Preserve each fully
             // known byte, while a partially known byte remains unknown.
-            ram_written_[a.physical + i] = value || (observed && !(observed->unknown&(0xFFu<<(8u*i)))) ? 1u : 0u;
+            ram_known_[a.physical + i] = value ? 0xFFu : observed ? static_cast<std::uint8_t>(~(observed->unknown>>(8u*i))) : 0u;
         }
         return;
     }
@@ -2810,6 +2810,38 @@ void Iop::mechacon_command(std::uint8_t command, const char* what) {
             if(cdvd_complete_at_ || cdvd_sectors_)s_results_.push_back(1u);
             else {cdvd_sticky_=cdvd_status_;s_results_.push_back(0u);}
             break;
+        case 0x15: { // ps2sdk sceCdForbidDVDP: no input, one status byte.
+            if(!s_params_.empty())throw IopStop{name+": ForbidDVDP takes no parameters"};
+            if(!hardware_ || !hardware_->mechacon)
+                throw IopStop{name+": ForbidDVDP requires the selected MECHACON profile"};
+            dvd_playback_forbid_requested_=true;
+            // No DVD-video read/decryption path is enabled by this request.
+            // A later consumer of its acknowledgement must retain uncertainty.
+            s_results_.push_back({0u,static_cast<std::uint8_t>(diagnostic_forbid_dvdp_error_clear_ ? 0x80u : 0u),"MECHACON ForbidDVDP acknowledgement and resulting permission state are unmeasured"});
+            break;
+        }
+        case 0x1A: { // ps2sdk sceCdBootCertify: four ROM-name bytes, one reply byte.
+            if(s_params_.size()!=4u)throw IopStop{name+": BootCertify requires exactly four ROM-name bytes"};
+            if(!hardware_ || !hardware_->mechacon || hardware_->romver.size()<6u)
+                throw IopStop{name+": BootCertify requires the selected console ROMVER and MECHACON profile"};
+            if(!nvm_ || nvm_->model_name!=hardware_->model || nvm_->layout!=hardware_->mechacon->layout || nvm_->bytes.size()!=kNvmBytes)
+                throw IopStop{name+": BootCertify requires the matching console NVM"};
+            const auto version=hardware_->romver;
+            for(unsigned n=0;n<4u;++n)if(version[n]<'0' || version[n]>'9')
+                throw IopStop{name+": BootCertify ROMVER major/minor are not decimal pairs"};
+            const std::array<std::uint8_t,4> expected{
+                static_cast<std::uint8_t>((version[0]-'0')*10+version[1]-'0'),
+                static_cast<std::uint8_t>((version[2]-'0')*10+version[3]-'0'),
+                static_cast<std::uint8_t>(version[4]),static_cast<std::uint8_t>(version[5])};
+            if(!std::equal(expected.begin(),expected.end(),s_params_.begin()))
+                throw IopStop{name+": BootCertify ROM name differs from the selected firmware profile; rejection response is unmeasured"};
+            boot_certify_request_=expected;
+            // Framing is documented; the supplied ROM/NVM does not measure
+            // the MECHACON's authentication reply. Transport it as opaque,
+            // never synthesize the emulator-reference success byte 1.
+            s_results_.push_back({0u,0u,"MECHACON BootCertify result is unmeasured; matching ROMVER/NVM does not prove authentication success"});
+            break;
+        }
         case 0x36: { // ReadRegionParams (PS2SDK: no input, 15-byte result).
             if(!s_params_.empty())throw IopStop{name+": ReadRegionParams requires no parameter bytes"};
             if(!hardware_ || !hardware_->mechacon || hardware_->mechacon->version[1]<6u)
