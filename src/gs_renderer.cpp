@@ -248,8 +248,24 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     bottom = std::min(bottom, static_cast<int>((scissor >> 48) & 2047u) + 1);
     const auto tex=textured ? required(static_cast<std::uint8_t>(6u+context)) : 0;
     const auto clamp=textured ? required(static_cast<std::uint8_t>(8u+context)) : 0;
-    if(textured && (required(static_cast<std::uint8_t>(0x14u+context))&0x1FCu))
-        throw DeviceRefusal("GS texture filtering supports nearest level zero only");
+    bool bilinear=false;
+    if(textured) {
+        const auto lod=required(static_cast<std::uint8_t>(0x14u+context));
+        const auto magnification=static_cast<unsigned>((lod>>5u)&1u),minification=static_cast<unsigned>((lod>>6u)&7u);
+        if(minification>1u)throw DeviceRefusal("GS mipmap texture levels are not modeled");
+        // GS manual 3.4.12: MMIN=0/1 always uses level zero. When both
+        // filters agree, neither Q nor K can change the sampling operation.
+        auto selected=magnification;
+        if(magnification!=minification) {
+            if(!(lod&1u))throw DeviceRefusal("GS texture filter selection requires proven dynamic LOD");
+            const auto k=static_cast<unsigned>((lod>>32u)&0xFFFu);
+            if(!k)throw DeviceRefusal("GS texture filter selection at the zero-LOD boundary is not established");
+            selected=(k&0x800u) ? magnification : minification;
+        }
+        bilinear=selected!=0u;
+        if(bilinear && (((tex>>26u)&15u)<3u || ((tex>>30u)&15u)<3u))
+            throw DeviceRefusal("GS bilinear texture dimensions must be at least 8 by 8");
+    }
     const auto tfx=static_cast<unsigned>((tex>>35)&3u);
     if(textured && tfx>1u)throw DeviceRefusal("GS texture function supports MODULATE/DECAL only");
     const auto alpha=blended ? required(static_cast<std::uint8_t>(0x42u+context)) : 0;
@@ -265,7 +281,33 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         // fractional slopes. Scaled/flipped integer-step sprites are covered.
         if(!den || num%den)throw DeviceRefusal("GS fractional UV DDA precision is not modeled");
         const auto fixed=num/den;
-        return static_cast<int>(fixed>=0 ? fixed/16 : (fixed-15)/16);
+        return static_cast<int>(fixed);
+    };
+    const auto filtered_texture=[&](int u,int v) {
+        if(!bilinear)return sample_texture(tex,clamp,floor16(u),floor16(v));
+        // GS manual 3.4.8: four texel centers, shifted by half a texel;
+        // wrap/clamp applies independently to each tap, after the shift.
+        const auto x=floor16(u-8),y=floor16(v-8);
+        const auto fx=static_cast<unsigned>(u-8-x*16),fy=static_cast<unsigned>(v-8-y*16);
+        const auto a=sample_texture(tex,clamp,x,y);
+        const auto b=fx ? sample_texture(tex,clamp,x+1,y) : a;
+        const auto c=fy ? sample_texture(tex,clamp,x,y+1) : a;
+        const auto d=fx && fy ? sample_texture(tex,clamp,x+1,y+1) : fy ? c : b;
+        std::uint32_t color=0;
+        for(unsigned channel=0;channel<4u;++channel) {
+            const auto av=(a>>(channel*8u))&255u,bv=(b>>(channel*8u))&255u,
+                       cv=(c>>(channel*8u))&255u,dv=(d>>(channel*8u))&255u;
+            const auto top=av*(16u-fx)+bv*fx,bottom=cv*(16u-fx)+dv*fx;
+            const auto left=av*(16u-fy)+cv*fy,right=bv*(16u-fy)+dv*fy;
+            const auto sum=top*(16u-fy)+bottom*fy;
+            // No rounding hypothesis: accept only results also exact in
+            // either separable evaluation order. Fractional cases remain
+            // explicit until the GS truncation stages have evidence.
+            if(top%16u || (fy && bottom%16u) || left%16u || (fx && right%16u) || sum%256u)
+                throw DeviceRefusal("GS fractional bilinear truncation stages are not established");
+            color|=(sum/256u)<<(channel*8u);
+        }
+        return color;
     };
     const auto inclusive=[](const Vertex& a,const Vertex& b){return b.y<a.y || (b.y==a.y && b.x>a.x);};
     const auto interpolate=[&](const std::array<std::int64_t,3>& weights,const std::array<std::uint32_t,3>& attribute) {
@@ -316,11 +358,10 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
                 int u=0,tv=0;
                 if(triangle) {
                     for(unsigned n=0;n<3u;++n)if(!vertices[n].uv)throw DeviceRefusal("GS triangle consumes unwritten UV coordinates");
-                    u=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].u),static_cast<std::uint32_t>(vertices[1].u),static_cast<std::uint32_t>(vertices[2].u)}))/16;
-                    tv=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].v),static_cast<std::uint32_t>(vertices[1].v),static_cast<std::uint32_t>(vertices[2].v)}))/16;
+                    u=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].u),static_cast<std::uint32_t>(vertices[1].u),static_cast<std::uint32_t>(vertices[2].u)}));
+                    tv=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].v),static_cast<std::uint32_t>(vertices[1].v),static_cast<std::uint32_t>(vertices[2].v)}));
                 } else {u=uv_at(x,first_vertex_->x,v.x,first_vertex_->u,v.u);tv=uv_at(y,first_vertex_->y,v.y,first_vertex_->v,v.v);}
-                const auto sampled=sample_texture(tex,clamp,
-                    u,tv);
+                const auto sampled=filtered_texture(u,tv);
                 const auto shaded=color;
                 color=0;
                 for(unsigned c=0;c<4;++c) {

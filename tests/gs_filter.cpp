@@ -1,0 +1,54 @@
+// Independent 8x8 source grid and exact expected filter samples.
+#include "boot_checks.hpp"
+#include "ps2native/gs_registers.hpp"
+#include <iostream>
+using namespace ps2native;
+using namespace boot_checks;
+namespace {
+std::uint32_t source(unsigned x,unsigned y){return 0x80000000u|(x*16u)|(y*16u<<8u)|((x+y)*8u<<16u);}
+void setup(GsRegisters& gs) {
+    gs.reset(0);gs.general_write(0,0x116);gs.general_write(1,0x3F80000080808080ull);
+    gs.general_write(0x18,0);gs.general_write(0x1A,1);gs.general_write(0x4C,1u<<16u);
+    gs.general_write(0x40,(7ull<<16u)|(7ull<<48u));gs.general_write(0x47,3u<<16u);
+    gs.general_write(0x4E,1ull<<32u);gs.general_write(0x22,0);gs.general_write(0x4A,0);
+    gs.general_write(0x50,(32ull|(1ull<<16u))<<32u);gs.general_write(0x51,0);
+    gs.general_write(0x52,8u|(8ull<<32u));gs.general_write(0x53,0);
+    for(unsigned n=0;n<64;n+=4)gs.image_write(source(n%8,n/8)|(std::uint64_t{source((n+1)%8,(n+1)/8)}<<32u),
+        source((n+2)%8,(n+2)/8)|(std::uint64_t{source((n+3)%8,(n+3)/8)}<<32u));
+    gs.general_write(0x3F,0);gs.general_write(6,32ull|(1ull<<14u)|(3ull<<26u)|(3ull<<30u)|(1ull<<34u)|(1ull<<35u));
+    gs.general_write(8,0);gs.general_write(0x14,0x60);
+}
+void pixel(GsRegisters& gs,unsigned x,unsigned y,unsigned u,unsigned v) {
+    gs.general_write(0,0x116);gs.general_write(3,u|(std::uint64_t{v}<<16u));
+    gs.general_write(5,x*16u|(std::uint64_t{y*16u}<<16u));
+    gs.general_write(3,(u+16u)|(std::uint64_t{v+16u}<<16u));
+    gs.general_write(5,(x+1u)*16u|(std::uint64_t{(y+1u)*16u}<<16u));
+}
+}
+int main() try {
+    GsRegisters gs;setup(gs);pixel(gs,0,0,8,8);
+    require(gs.vram().read(0,64,0,0,0)==source(0,0),"half-texel coordinates sample their exact texel center without neighbor blending");
+    pixel(gs,1,0,16,16);require(gs.vram().read(0,64,0,1,0)==0x80080808u,
+        "integer texel coordinates average four independently known surrounding texels and all RGBA channels");
+    pixel(gs,2,0,12,20);require(gs.vram().read(0,64,0,2,0)==0x80080C04u,
+        "quarter and three-quarter subtexel positions retain all four UV fractional bits");
+    gs.general_write(8,5);pixel(gs,3,0,0,0);require(gs.vram().read(0,64,0,3,0)==source(0,0),
+        "negative half-texel tap indices clamp independently at each texture edge");
+    gs.general_write(8,0);pixel(gs,4,0,0,0);require(gs.vram().read(0,64,0,4,0)==0x80383838u,
+        "repeat applies separately to all four half-texel taps across both texture borders");
+    for(const auto lod:{0ull,1ull,0x18ull}) {
+        gs.general_write(0x14,lod);pixel(gs,5,0,16,16);
+        require(gs.vram().read(0,64,0,5,0)==source(1,1),"nearest level-zero filters ignore unused MIP maximum levels and preserve previous nearest coordinates");
+    }
+    for(const auto lod:{0x0000000100000041ull,0x0000080000000021ull}) {
+        gs.general_write(0x14,lod);pixel(gs,6,0,16,16);
+        require(gs.vram().read(0,64,0,6,0)==0x80080808u,"a fixed strictly positive/negative K selects the documented minification/magnification filter");
+    }
+    gs.general_write(0x14,0x20);rejects([&]{pixel(gs,7,0,16,16);},"dynamic LOD");
+    gs.general_write(0x14,0x21);rejects([&]{pixel(gs,7,0,16,16);},"zero-LOD boundary");
+    gs.general_write(0x14,0x80);rejects([&]{pixel(gs,7,0,16,16);},"mipmap");
+    gs.general_write(0x14,0x60);const auto before=gs.vram().pixel_writes();
+    rejects([&]{pixel(gs,7,0,9,9);},"fractional bilinear truncation");
+    require(gs.vram().pixel_writes()==before,"unproven intermediate rounding cannot fabricate even one fragment");
+    std::cout<<"Exact level-zero bilinear/nearest, subtexel centers, independent edge wrapping, fixed LOD and explicit rounding boundaries passed\n";
+}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

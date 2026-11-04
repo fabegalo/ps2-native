@@ -233,7 +233,7 @@ void check_textured_sprites() {
     gs.general_write(8,0);sprite(32,0,16); // exact half-rate UV increments
     require(gs.vram().read(0,64,0,32,0)==gs.vram().read(0,64,0,33,0),"nearest scaled sprite repeats texel");
     rejects([&]{sprite(0,4,3,0,16);},"fractional UV DDA");
-    gs.general_write(0x14,0x21);rejects([&]{sprite(0,4);},"nearest level zero");gs.general_write(0x14,1);
+    gs.general_write(0x14,0x21);rejects([&]{sprite(0,4);},"zero-LOD boundary");gs.general_write(0x14,1);
     upload(0x10000,20,128,8,2,{0});rejects([&]{sprite(0,4);},"TEXFLUSH");
     gs.general_write(0x3F,0);gs.general_write(0x4C,8u|(1u<<16));
     rejects([&]{sprite(0,0);},"aliases sampled texture");
