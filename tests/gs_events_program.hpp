@@ -17,6 +17,20 @@ inline Program program() {
     a.la(t0, 0xB000E020u); a.lw(t1, 0, t0); a.la(t2, 0xFFFFFC00u);
     a.la(t3, 0x80001800u); a.sw(t1, 0, t3); a.lw(t1, 0, t3); // actual stack spill/reload
     a.r(t1, t2, t1, 0, 0x24u); a.sw(t1, 0, t0); // retain unknown PCR bits outside CPC
+    a.la(t0,0x50400004u); a.mtc0(t0,Status); // CU2, no pending VU operations
+    a.ori(t1,zero,0xA0Au);
+    a.raw((0x12u<<26)|(6u<<21)|(t1<<16)|(28u<<11)|1u); // CTC2.I FBRST
+    a.raw((0x12u<<26)|(2u<<21)|(t1<<16)|(28u<<11)); // CFC2.NI FBRST
+    a.la(t0,0x8000100Cu); a.sw(t1,0,t0);
+    a.ori(t1,zero,0x421u); a.raw((0x12u<<26)|(6u<<21)|(t1<<16)|(2u<<11));
+    a.ori(t1,zero,0x1234u); a.raw((0x12u<<26)|(6u<<21)|(t1<<16)|(3u<<11));
+    a.raw(0x4B0003FFu|(3u<<16)|(2u<<11)); // VISWR.x VI03,(VI02)x
+    a.raw(0x48240800u); // QMFC2 a0,VF01 (undefined power-on lanes)
+    a.la(t0,0x80002000u); a.sq(4,0,t0); a.lq(5,0,t0);
+    a.raw(0x48A51000u); // QMTC2 a1,VF02 preserves unknown bits
+    a.raw(0x4BE000ECu); // VSUB.xyzw VF03,VF00,VF00, exact zero
+    a.ori(t1,zero,0x402u); a.raw((0x12u<<26)|(6u<<21)|(t1<<16)|(2u<<11));
+    a.raw(0x4BE21B7Du); // VSQI.xyzw VF03,(VI02++) -> VU1 VF02
     a.la(t0, 0xB2000010u); a.la(t1, 1u << 17); a.sd(t1, 0, t0); // SINT held
     a.la(t0, 0xB2001000u); a.ori(t1, zero, 31u); a.sw(t1, 0, t0);
     a.la(t0, 0xB000F000u); a.ori(t1, zero, 0x7FFFu); a.sw(t1, 0, t0);

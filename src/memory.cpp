@@ -322,6 +322,8 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
     switch (region) {
         case BusRegion::MainRam:
             return {physical, region, physical};
+        case BusRegion::VuMemory:
+            return {physical, region, 0u};
         case BusRegion::BiosRom:
             if (rom_.empty()) throw refuse(BusFault::Unmapped);
             if (write) throw refuse(BusFault::RomWrite);
@@ -364,7 +366,17 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
     const auto target = resolve(address, size, false, what);
     if (unknown) *unknown = 0;
     std::uint64_t value = 0;
-    if (is_ee_register_region(target.region)) {
+    if (target.region==BusRegion::VuMemory) {
+        try {
+            if(!notify) throw DeviceRefusal("EE instruction fetch from VU memory is not modeled");
+            const auto observed=registers_.read_vu_memory(target.physical,size);
+            if(observed.unknown && !unknown) throw DeviceRefusal("read consumes unknown VU memory bits");
+            value=observed.value;
+            if(unknown) *unknown=observed.unknown;
+        } catch(const DeviceRefusal& refusal) {
+            throw device_refusal(BusFault::Device,false,size,address,target.physical,target.region,what,refusal.what());
+        }
+    } else if (is_ee_register_region(target.region)) {
         // Only instruction fetches are not notified: never execute from registers.
         if (!notify)
             throw device_refusal(BusFault::Device, false, size, address, target.physical, target.region, what,
@@ -404,12 +416,17 @@ void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t val
     // The lazy IOP must consume old EE source bytes before this CPU store.
     if (registers_.dma_reads_ram()) registers_.sync_iop();
     const auto target = resolve(address, size, true, what);
-    if (unknown && target.region != BusRegion::MainRam && target.region != BusRegion::Scratchpad &&
+    if (unknown && target.region != BusRegion::MainRam && target.region != BusRegion::Scratchpad && target.region!=BusRegion::VuMemory &&
         (size != 4u || target.physical != 0x1000E020u))
         throw device_refusal(BusFault::Device, true, size, address, target.physical, target.region, what,
                              "unknown MMIO bits cannot be stored in this device");
     value &= ~std::uint64_t{unknown};
-    if (is_ee_register_region(target.region)) {
+    if (target.region==BusRegion::VuMemory) {
+        try {registers_.write_vu_memory(target.physical,size,{value,unknown});}
+        catch(const DeviceRefusal& refusal) {
+            throw device_refusal(BusFault::Device,true,size,address,target.physical,target.region,what,refusal.what());
+        }
+    } else if (is_ee_register_region(target.region)) {
         try {
             if (unknown) registers_.write_dma_word(target.physical,
                 {static_cast<std::uint32_t>(value),static_cast<std::uint32_t>(unknown)});
@@ -490,6 +507,15 @@ void Memory::write128(std::uint32_t address, std::uint64_t low, std::uint64_t hi
         observer_->on_bus_access({true, 8, address, target.physical, target.region, low});
         observer_->on_bus_access({true, 8, address + 8u, target.physical + 8u, target.region, high});
     }
+}
+void Memory::store128_observed(std::uint32_t address, ObservedQuadword word) {
+    if (!(word.low.unknown|word.high.unknown)) {write128(address,word.low.value,word.high.value);return;}
+    const auto target=resolve(address,16,true,"SQ");
+    if(target.region!=BusRegion::MainRam && target.region!=BusRegion::Scratchpad && target.region!=BusRegion::VuMemory)
+        throw device_refusal(BusFault::Device,true,16,address,target.physical,target.region,"SQ",
+                             "unknown bits cannot be stored in this device");
+    store64_observed(address,word.low);
+    store64_observed(address+8u,word.high);
 }
 std::uint32_t Memory::fetch32(std::uint32_t address) const {
     return static_cast<std::uint32_t>(read_le(address, 4, "instruction fetch", false));

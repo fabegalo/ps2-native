@@ -33,6 +33,7 @@ struct EEState {
     // Unknown bits from partially specified MMIO are symbolic. Ordinary GPR
     // consumers refuse them; bitwise semantics may prove a result independent.
     std::array<std::uint64_t, 32> unknown_gpr_bits{};
+    std::array<std::uint64_t, 32> unknown_gpr_high_bits{};
     std::uint32_t unknown_gprs{};
     std::array<Register128, 32> gpr{};
     // LO/HI are 128 bits: lo/hi are the lower halves (pipeline 0), lo1/hi1 the
@@ -77,6 +78,8 @@ struct EEState {
     void set_reg64(unsigned index, std::uint64_t value);
     void set_reg64_observed(unsigned index, std::uint64_t value, std::uint64_t unknown);
     void set_reg128(unsigned index, std::uint64_t low, std::uint64_t high);
+    void set_reg128_observed(unsigned index, std::uint64_t low, std::uint64_t high,
+                             std::uint64_t unknown_low, std::uint64_t unknown_high);
     [[nodiscard]] std::uint32_t cp0(Cop0 reg) const noexcept { return cop0[static_cast<unsigned>(reg)]; }
     void set_cp0(Cop0 reg, std::uint32_t value) noexcept { cop0[static_cast<unsigned>(reg)] = value; }
 };

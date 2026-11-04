@@ -69,6 +69,7 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
     // Hypothesis: GIF not stopped, PATH3 unmasked, continuous mode at power-on.
     gif_.reset();
     vif1_.reset();
+    vu_control_.reset();
     video_encoder_.reset(assumptions);
     encoder_master_190x_.reset();
     encoder_master_1a_.reset();

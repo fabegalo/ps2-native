@@ -125,6 +125,7 @@ public:
     // two 64-bit halves (traced as such); a device register (the GIF FIFO)
     // receives the whole quadword at once.
     void write128(std::uint32_t guest_address, std::uint64_t low, std::uint64_t high);
+    void store128_observed(std::uint32_t guest_address, ObservedQuadword word);
     // Instruction fetch: same translation and checks, not reported to the observer.
     [[nodiscard]] std::uint32_t fetch32(std::uint32_t guest_address) const;
     // Translation only (CACHE hit operations): physical address or BusError.
@@ -147,6 +148,20 @@ public:
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
     [[nodiscard]] const Iop& iop() const noexcept { return registers_.iop(); }
     [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return registers_.video_encoder(); }
+    [[nodiscard]] std::uint32_t read_vu_control(unsigned index) const { return registers_.read_vu_control(index); }
+    void write_vu_control(unsigned index, std::uint32_t value) { registers_.write_vu_control(index,value); }
+    [[nodiscard]] ObservedWord observe_vu_control(unsigned index) const {return registers_.observe_vu_control(index);}
+    void write_vu_control_observed(unsigned index, ObservedWord word) {registers_.write_vu_control_observed(index,word);}
+    void vu_integer_store(unsigned source,unsigned base,unsigned mask) {registers_.vu_integer_store(source,base,mask);}
+    [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return registers_.observe_vu_data(address);}
+    [[nodiscard]] ObservedQuadword observe_vu_vector(unsigned index) const {return registers_.observe_vu_vector(index);}
+    void write_vu_vector(unsigned index,ObservedQuadword word) {registers_.write_vu_vector(index,word);}
+    void vu_subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {
+        registers_.vu_subtract(destination,left,right,mask);
+    }
+    void vu_vector_store_increment(unsigned source,unsigned base,unsigned mask) {
+        registers_.vu_vector_store_increment(source,base,mask);
+    }
     // Runs the IOP up to the current EE time (boot mapping, clock attached).
     void sync_iop() { registers_.sync_iop(); }
     [[nodiscard]] bool intc_interrupt_pending() const;

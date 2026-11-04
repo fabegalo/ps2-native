@@ -85,7 +85,7 @@ std::optional<unsigned> MipsInstruction::written_gpr() const noexcept {
         case MipsOpcode::Xori: case MipsOpcode::Lui:
         case MipsOpcode::Lb: case MipsOpcode::Lbu: case MipsOpcode::Lh:
         case MipsOpcode::Lhu: case MipsOpcode::Lw: case MipsOpcode::Lwu:
-        case MipsOpcode::Ld: case MipsOpcode::Lq: case MipsOpcode::Mfc0: case MipsOpcode::Mfc1: case MipsOpcode::Cfc1:
+        case MipsOpcode::Ld: case MipsOpcode::Lq: case MipsOpcode::Mfc0: case MipsOpcode::Mfc1: case MipsOpcode::Cfc1: case MipsOpcode::Cfc2: case MipsOpcode::Qmfc2:
         case MipsOpcode::Lwl: case MipsOpcode::Lwr: case MipsOpcode::Ldl: case MipsOpcode::Ldr:
             target = rt;
             break;
@@ -261,6 +261,15 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
                 default: break;
             }
         }
+    } else if (op == 0x12) {
+        if (rs>=16u && funct==0x2Cu) return make(MipsOpcode::Vsub);
+        if (rs>=16u && (word&0x7FFu)==0x37Du && rt<16u) return make(MipsOpcode::Vsqi);
+        if (rs>=16u && (word&0x7FFu)==0x3FFu && rt<16u && rd<16u) return make(MipsOpcode::Viswr);
+        if (word & 0x7FEu) return std::nullopt;
+        if (rs == 1u) return make(MipsOpcode::Qmfc2);
+        if (rs == 2u) return make(MipsOpcode::Cfc2);
+        if (rs == 5u) return make(MipsOpcode::Qmtc2);
+        if (rs == 6u) return make(MipsOpcode::Ctc2);
     } else if (op == 0x11) {
         if(rs==16 && rt==0 && funct==0x24)return make(MipsOpcode::CvtWS);
         if(rs==20 && rt==0 && funct==0x20)return make(MipsOpcode::CvtSW);

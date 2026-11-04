@@ -132,7 +132,29 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     (void)m;
     (void)pc;
     // Host execution is sequential: guest memory accesses are already ordered (SYNC).
-    if constexpr (Op == O::Nop || Op == O::Sync) {
+    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi) {
+        if (!(s.cp0(Cop0::Status) & (1u<<30)))
+            throw std::runtime_error("COP2 transfer with Status.CU2 = 0; coprocessor unusable vectoring is not modeled");
+        // Implemented macros complete synchronously in the shared instruction
+        // timing model. Microprogram starts remain refused, so no pending
+        // microprogram can distinguish interlocked and NI transfers here.
+        if constexpr (Op == O::Cfc2) {
+            const auto word=m.observe_vu_control(rd(w));
+            const auto unknown=std::uint64_t{word.unknown} | ((word.unknown&0x80000000u) ? 0xFFFFFFFF00000000ull : 0u);
+            s.set_reg64_observed(t_,sx32(word.value),unknown);
+        } else if constexpr (Op == O::Ctc2)
+            m.write_vu_control_observed(rd(w),{static_cast<std::uint32_t>(raw_gpr64(s,t_)),
+                                              static_cast<std::uint32_t>(s.unknown_gpr_bits[t_])});
+        else if constexpr (Op == O::Qmfc2) {
+            const auto word=m.observe_vu_vector(d_);
+            s.set_reg128_observed(t_,word.low.value,word.high.value,word.low.unknown,word.high.unknown);
+        } else if constexpr (Op == O::Qmtc2) {
+            const auto value=t_ ? s.gpr[t_] : Register128{};
+            m.write_vu_vector(d_,{{value.low,s.unknown_gpr_bits[t_]},{value.high,s.unknown_gpr_high_bits[t_]}});
+        } else if constexpr (Op == O::Viswr) m.vu_integer_store(t_,d_,(w>>21u)&15u);
+        else if constexpr (Op == O::Vsub) m.vu_subtract(a_,d_,t_,(w>>21u)&15u);
+        else m.vu_vector_store_increment(d_,t_,(w>>21u)&15u);
+    } else if constexpr (Op == O::Nop || Op == O::Sync) {
     // 32-bit shifts produce sign-extended 64-bit results.
     } else if constexpr (Op == O::Sll) {
         s.set_reg64(d_, sx32(s.reg32(t_) << a_));
@@ -378,8 +400,8 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     // LQ/SQ silently clear the low four address bits (no address error).
     } else if constexpr (Op == O::Lq) {
         const auto quad = effective_address(s, w) & ~15u;
-        const auto low = m.read64(quad);
-        s.set_reg128(t_, low, m.read64(quad + 8u));
+        const auto low = m.load64_observed(quad),high=m.load64_observed(quad+8u);
+        s.set_reg128_observed(t_,low.value,high.value,low.unknown,high.unknown);
     } else if constexpr (Op == O::Sb) {
         m.write8(effective_address(s, w), static_cast<std::uint8_t>(s.reg32(t_)));
     } else if constexpr (Op == O::Sh) {
@@ -394,8 +416,14 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         else m.write64(effective_address(s,w),s.reg64(t_));
     } else if constexpr (Op == O::Sq) {
         const auto quad = effective_address(s, w) & ~15u;
-        const auto value = s.reg128(t_);
-        m.write128(quad, value.low, value.high);
+        const auto unknown_low=s.unknown_gpr_bits[t_],unknown_high=s.unknown_gpr_high_bits[t_];
+        if (unknown_low|unknown_high) {
+            const auto value=t_ ? s.gpr[t_] : Register128{};
+            m.store128_observed(quad,{{value.low,unknown_low},{value.high,unknown_high}});
+        } else {
+            const auto value=s.reg128(t_);
+            m.write128(quad,value.low,value.high);
+        }
     // R5900 branches compare the full lower 64 bits. The condition reads rs
     // before BxxZAL writes the link register.
     } else if constexpr (Op == O::Beq || Op == O::Beql) {

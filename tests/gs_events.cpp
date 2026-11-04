@@ -277,6 +277,98 @@ void ram_knowledge() {
     require(memory.read32(0x80001800u)==0,"reset clears symbolic memory with RAM");
 }
 
+void vu_control() {
+    const auto fixture=gs_events_test::program();
+    EEState state; Memory memory;
+    prepare_ee_boot(load_bios_rom0(fixture.rom),nullptr,state,memory);
+    constexpr auto cfc2=(0x12u<<26)|(2u<<21)|(9u<<16)|(28u<<11);
+    constexpr auto ctc2=(0x12u<<26)|(6u<<21)|(9u<<16)|(28u<<11);
+    require(decode_mips(0,cfc2).opcode==MipsOpcode::Cfc2 &&
+            decode_mips(0,ctc2|1u).opcode==MipsOpcode::Ctc2,"COP2 control transfers decode in both engines");
+    rejects([&] { (void)decode_mips(0,cfc2|2u); },"AOT unsupported");
+    rejects([&] { ee::exec<MipsOpcode::Cfc2>(state,memory,0,cfc2); },"Status.CU2 = 0");
+    state.set_cp0(Cop0::Status,state.cp0(Cop0::Status)|(1u<<30));
+    ee::exec<MipsOpcode::Cfc2>(state,memory,0,cfc2);
+    require(state.reg64(9)==0,"VU FBRST documented initial value");
+    state.set_reg64(9,0xA0Au); // RS0/RS1 commands and TE0/TE1 enables
+    ee::exec<MipsOpcode::Ctc2>(state,memory,0,ctc2|1u);
+    ee::exec<MipsOpcode::Cfc2>(state,memory,0,cfc2|1u);
+    require(state.reg64(9)==0x808u,"VU reset commands read zero while debug enables retain values");
+    require(memory.read_vu_control(29)==0,"reset leaves idle VUs in Ready state");
+    rejects([&] { memory.write_vu_control(28,0xF0Fu); },"force break transition");
+    require(memory.read_vu_control(28)==0x808u,"refused transition leaves VU controls intact");
+    rejects([&] { memory.write_vu_control(28,0x10); },"reserved bits");
+    rejects([&] { (void)memory.read_vu_control(1); },"unknown initial bits");
+    require(memory.observe_vu_control(1).unknown==0xFFFFu,"uninitialized VI bits are symbolic");
+    memory.write_vu_control(1,0xFFFF8000u);
+    ee::exec<MipsOpcode::Cfc2>(state,memory,0,(cfc2&~(31u<<11))|(1u<<11));
+    require(state.reg64(9)==0x8000u,"VI register transfers are unsigned 16-bit");
+    rejects([&] { memory.write_vu_control(31,0); },"not modeled");
+    memory.write_vu_control(2,0x421u);
+    constexpr auto viswr=0x4A0003FFu|(1u<<16)|(2u<<11)|(8u<<21);
+    require(decode_mips(0,viswr).opcode==MipsOpcode::Viswr,"VISWR decodes actual integer store");
+    ee::exec<MipsOpcode::Viswr>(state,memory,0,viswr);
+    require(memory.observe_vu_data(0x4210u).value==0x8000u && memory.observe_vu_data(0x4210u).unknown==0,
+            "VISWR scales address by sixteen and writes remote VU1 integer x lane");
+    require(memory.observe_vu_data(0x4220u).unknown==0xFFFFu,"adjacent VU1 integer remains undefined");
+    memory.write_vu_control(2,0);
+    ee::exec<MipsOpcode::Viswr>(state,memory,0,viswr|(7u<<21));
+    for(unsigned lane=0;lane<4;++lane)
+        require(memory.observe_vu_data(lane*4u).value==0x8000u && !memory.observe_vu_data(lane*4u).unknown,
+                "VISWR stores zero-extended integer in each selected data lane");
+    memory.write_vu_control(2,1);
+    ee::exec<MipsOpcode::Viswr>(state,memory,0,(viswr&~(15u<<21))|(1u<<21));
+    require(memory.observe_vu_data(16u).unknown==~0u && memory.observe_vu_data(28u).value==0x8000u,
+            "VISWR lane mask does not define untouched words");
+    memory.write_vu_control(2,0x434u);
+    ee::exec<MipsOpcode::Viswr>(state,memory,0,viswr);
+    require(memory.observe_vu_data(0x4340u).value==0x8000u && memory.observe_vu_data(0x4350u).unknown==~0u,
+            "VISWR writes actual VU1 R register without defining I/Q/P");
+    constexpr auto qmfc2=0x48290000u; // QMFC2 t1,VF00
+    constexpr auto qmtc2=0x48A90800u; // QMTC2 t1,VF01
+    ee::exec<MipsOpcode::Qmfc2>(state,memory,0,qmfc2);
+    require(state.reg128(9).low==0 && state.reg128(9).high==0x3F80000000000000ull,"VF00 has constant (0,0,0,1)");
+    ee::exec<MipsOpcode::Qmfc2>(state,memory,0,qmfc2|(1u<<11));
+    require(state.unknown_gpr_bits[9]==~0ull && state.unknown_gpr_high_bits[9]==~0ull,
+            "uninitialized VF01 is preserved symbolically across all 128 bits");
+    state.set_reg64(8,0x80001800u);
+    ee::exec<MipsOpcode::Sq>(state,memory,0,0x7D090000u);
+    ee::exec<MipsOpcode::Lq>(state,memory,0,0x790A0000u);
+    require(state.unknown_gpr_bits[10]==~0ull && state.unknown_gpr_high_bits[10]==~0ull,
+            "SQ/LQ spills preserve unknown vector halves");
+    state.set_reg64(10,7);
+    require(state.reg64(10)==7,"scalar overwrite defines low half independently");
+    rejects([&] { (void)state.reg128(10); },"128-bit operand");
+    state.set_reg128(9,0x1122334455667788ull,0x99AABBCCDDEEFF00ull);
+    ee::exec<MipsOpcode::Qmtc2>(state,memory,0,qmtc2|1u);
+    ee::exec<MipsOpcode::Qmfc2>(state,memory,0,qmfc2|(1u<<11));
+    require(state.reg128(9).low==0x1122334455667788ull && state.reg128(9).high==0x99AABBCCDDEEFF00ull,
+            "QMTC2/QMFC2 roundtrip all vector lanes without arithmetic");
+    constexpr auto vsub=0x4BE0006Cu; // VSUB.xyzw VF01,VF00,VF00
+    ee::exec<MipsOpcode::Vsub>(state,memory,0,vsub);
+    ee::exec<MipsOpcode::Qmfc2>(state,memory,0,qmfc2|(1u<<11));
+    require(state.reg128(9).low==0 && state.reg128(9).high==0 && memory.read_vu_control(17)==15 &&
+            memory.read_vu_control(16)==0x41u,"exact cancellation defines destination and zero/sticky flags");
+    rejects([&] { memory.vu_subtract(1,0,1,15); },"outside proven exact-cancellation");
+    memory.write_vu_control(2,0x400u);
+    constexpr auto vsqi=0x4BE20B7Du; // VSQI.xyzw VF01,(VI02++)
+    ee::exec<MipsOpcode::Vsqi>(state,memory,0,vsqi);
+    require(memory.read_vu_control(2)==0x401u && memory.observe_vu_data(0x400Cu).value==0x3F800000u,
+            "VSQI increments qword address and preserves immutable VU1 VF00");
+    ee::exec<MipsOpcode::Vsqi>(state,memory,0,vsqi);
+    for(unsigned lane=0;lane<4;++lane)
+        require(!memory.observe_vu_data(0x4010u+lane*4u).unknown && !memory.observe_vu_data(0x4010u+lane*4u).value,
+                "VSQI writes four real vector lanes to VU1 VF01");
+    for(const auto address : {0x11000000u,0x11004000u,0x11008000u,0x1100C000u}) {
+        device_refused([&] { (void)memory.read64(address+0x100u); },"unknown VU memory bits");
+        memory.write128(address+0x100u,0x1122334455667788ull,0x99AABBCCDDEEFF00ull);
+        require(memory.read64(address+0x100u)==0x1122334455667788ull &&
+                memory.read64(address+0x108u)==0x99AABBCCDDEEFF00ull,"EE writes/readback actual VU micro/data bytes");
+    }
+    require(memory.read32(0x11004000u)==memory.observe_vu_data(0).value,"EE and VU use the same VU0 data storage");
+    device_refused([&] {memory.write32(0x11001000u,0);},"unimplemented VU memory aperture");
+}
+
 void guest(const std::filesystem::path& rom_path) {
     const auto fixture = gs_events_test::program();
     const auto bios = load_bios_rom0(read_file(rom_path));
@@ -291,6 +383,12 @@ void guest(const std::filesystem::path& rom_path) {
         require(memory.read32(0x80001000u) == 3 && memory.read32(0x80001004u) == 1 &&
                 memory.read32(0x80001008u) == 0x12345678u,
                 "guest interrupt handler acknowledges actual SIGNAL/FINISH exactly once and returns");
+        require(memory.read32(0x8000100Cu)==0x808u,"guest executes real VU control reset/readback in both engines");
+        require(memory.observe_vu_data(0x4210u).value==0x1234u && !memory.observe_vu_data(0x4210u).unknown,
+                "guest VISWR writes shared VU1 register state in both engines");
+        require(state.unknown_gpr_bits[5]==~0ull && state.unknown_gpr_high_bits[5]==~0ull &&
+                !memory.observe_vu_data(0x4020u).unknown && memory.observe_vu_data(0x4020u).value==0 &&
+                memory.read_vu_control(17)==15,"guest vector spill, exact subtraction and VSQI agree in both engines");
         require(state.cp0(Cop0::Epc) != 0 && !(state.cp0(Cop0::Status) & kStatusEXL), "IRQ delivered and ERET restored state");
         if (run) require(report.aot_instructions > 0 && report.retired == retired, "AOT executed with identical instruction count");
         else retired = report.retired;
@@ -342,6 +440,7 @@ int main(int argc, char** argv) {
         else if (mode == "reset") reset(); else if (mode == "irq") irq();
         else if (mode == "knowledge") knowledge();
         else if (mode == "ram-knowledge") ram_knowledge();
+        else if (mode == "vu-control") vu_control();
         else if (mode == "held-counter") held_counter();
         else if (mode == "dma-setup") dma_setup();
         else if (mode == "guest") guest(argv[2]); else throw std::runtime_error("unknown GS events test");

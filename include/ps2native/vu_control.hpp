@@ -1,0 +1,197 @@
+#pragma once
+#include "ps2native/device_timing.hpp"
+#include <array>
+#include <optional>
+#include <vector>
+
+namespace ps2native {
+// VU User's Manual 6.0, sections 1.3 and 5.1.3: control transfers and
+// reset of idle VUs. Starting/executing microprograms remains unsupported.
+class VuControl {
+public:
+    VuControl() { reset(); }
+    void reset() {
+        registers_ = {};
+        unknown_ = {};
+        registers_[0] = 0;
+        for (unsigned index=1;index<16;++index) {registers_[index]=0;unknown_[index]=0xFFFFu;}
+        for (const auto index : {16u,17u,18u,28u,29u}) registers_[index] = 0;
+        vu1_integers_.fill({0,0xFFFFu}); vu1_integers_[0]={};
+        vu1_controls_.fill({0,~0u});
+        for(unsigned index=0;index<3;++index) vu1_controls_[index]={};
+        data_.assign(1024u,{0,~0u});
+        for(auto& vector : vectors_) vector.fill({0,~0u});
+        vectors_[0]={ObservedWord{},ObservedWord{},ObservedWord{},ObservedWord{0x3F800000u,0}};
+        vu1_vectors_=vectors_;
+        micro0_.assign(1024u,{0,~0u}); micro1_.assign(4096u,{0,~0u}); data1_.assign(4096u,{0,~0u});
+    }
+    [[nodiscard]] std::uint32_t read(unsigned index) const {
+        const auto word=observe(index);
+        if (word.unknown) throw DeviceRefusal("VU register read consumes unknown initial bits");
+        return word.value;
+    }
+    [[nodiscard]] ObservedWord observe(unsigned index) const {
+        if (index >= registers_.size() || !registers_[index])
+            throw DeviceRefusal("VU control register is reserved or undefined before write");
+        return {*registers_[index],unknown_[index]};
+    }
+    void write(unsigned index, std::uint32_t value) {
+        write_observed(index,{value,0});
+    }
+    void write_observed(unsigned index, ObservedWord word) {
+        const auto value=word.value&~word.unknown;
+        if (index == 0) return; // VI00 is the constant zero register.
+        if (index < 16) { registers_[index] = value & 0xFFFFu; unknown_[index]=word.unknown&0xFFFFu; return; }
+        if (word.unknown) throw DeviceRefusal("VU control write consumes unknown bits");
+        if (index != 28)
+            throw DeviceRefusal("VU control register write is not modeled");
+        if (value & ~0x0F0Fu)
+            throw DeviceRefusal("VU FBRST reserved bits set");
+        if (value & 0x0101u)
+            throw DeviceRefusal("VU force break transition is not modeled");
+        // FB/RS are commands that always read zero; DE/TE retain settings.
+        // VU0 reset initializes its flag registers, not the integer registers.
+        if (value & 2u)
+            for (const auto flag : {16u,17u,18u}) registers_[flag] = 0;
+        if (value & 0x200u)
+            for(unsigned index=0;index<3;++index) vu1_controls_[index]={};
+        registers_[28] = value & 0x0C0Cu;
+        registers_[29] = 0; // Both VUs remain Ready; every start is refused.
+    }
+    // VU Mem0 uses qword addresses in VISWR. VU1's integer registers live at
+    // byte addresses 0x4200..0x42F0; only their low 16 bits are writable.
+    [[nodiscard]] ObservedWord observe_data(std::uint32_t address) const {
+        if (address & 3u) throw DeviceRefusal("unaligned VU data word");
+        if (address < 0x1000u) return data_[address/4u];
+        if (address>=0x4000u && address<0x4200u)
+            return vu1_vectors_[(address-0x4000u)/16u][(address&15u)/4u];
+        if (address>=0x4200u && address<0x4300u)
+            return (address&15u) ? ObservedWord{} : vu1_integers_[(address-0x4200u)/16u];
+        if (address>=0x4300u && address<0x43B0u) {
+            const auto index=(address-0x4300u)/16u;
+            if (index<3u || (index>=4u && index<=7u) || index==10u)
+                return (address&15u) ? ObservedWord{} : vu1_controls_[index];
+        }
+        throw DeviceRefusal("VU data/register window is not modeled");
+    }
+    void integer_store(unsigned source, unsigned base, unsigned mask) {
+        if (source>=16u || base>=16u) throw DeviceRefusal("VISWR requires integer registers VI00..VI15");
+        if (!mask) return;
+        const auto address=read(base)*16u;
+        // Check the entire destination before any store can change it.
+        for (unsigned lane=0;lane<4u;++lane)
+            if (mask&(8u>>lane)) check_data_write(address+lane*4u);
+        const auto word=observe(source);
+        for (unsigned lane=0;lane<4u;++lane)
+            if (mask&(8u>>lane)) store_data(address+lane*4u,word);
+    }
+    [[nodiscard]] ObservedQuadword observe_vector(unsigned index) const {
+        const auto& v=vectors_.at(index);
+        return {{std::uint64_t{v[0].value}|(std::uint64_t{v[1].value}<<32),
+                 std::uint64_t{v[0].unknown}|(std::uint64_t{v[1].unknown}<<32)},
+                {std::uint64_t{v[2].value}|(std::uint64_t{v[3].value}<<32),
+                 std::uint64_t{v[2].unknown}|(std::uint64_t{v[3].unknown}<<32)}};
+    }
+    void write_vector(unsigned index, ObservedQuadword word) {
+        if(index==0) return; // VF00 = (0,0,0,1).
+        auto& v=vectors_.at(index);
+        for(unsigned lane=0;lane<4;++lane) {
+            const auto half=lane<2 ? word.low : word.high;
+            const auto shift=(lane&1u)*32u;
+            v[lane]={static_cast<std::uint32_t>((half.value&~half.unknown)>>shift),
+                     static_cast<std::uint32_t>(half.unknown>>shift)};
+        }
+    }
+    void subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {
+        // Exact cancellation needs neither an alignment/rounding hypothesis nor
+        // a host float. Other arithmetic remains refused until independently
+        // validated (VU manual 2.2 and 4.2 SUB; MAC/status flags section 3.3).
+        for(unsigned lane=0;lane<4;++lane) {
+            if (!(mask&(8u>>lane))) continue;
+            const auto a=vectors_.at(left)[lane],b=vectors_.at(right)[lane];
+            const auto exponent=(a.value>>23u)&255u;
+            if(a.unknown || b.unknown || a.value!=b.value ||
+               (a.value && (!exponent || exponent==255u)))
+                throw DeviceRefusal("VU SUB outside proven exact-cancellation operands");
+        }
+        if(destination)
+            for(unsigned lane=0;lane<4;++lane)
+                if(mask&(8u>>lane)) vectors_.at(destination)[lane]={};
+        registers_[17]=mask; // Selected zero flags, all inactive ALU flags clear.
+        registers_[16]=(*registers_[16]&~0xFu)|(mask ? 0x41u : 0u); // Z + sticky ZS
+    }
+    void vector_store_increment(unsigned source,unsigned base,unsigned mask) {
+        if(base>=16u) throw DeviceRefusal("VSQI base must be VI00..VI15");
+        const auto qword=read(base),address=qword*16u;
+        for(unsigned lane=0;lane<4;++lane)
+            if(mask&(8u>>lane)) check_data_write(address+lane*4u);
+        const auto value=vectors_.at(source); // Snapshot before any aliased writes.
+        for(unsigned lane=0;lane<4;++lane)
+            if(mask&(8u>>lane)) store_data(address+lane*4u,value[lane]);
+        write(base,(qword+1u)&0xFFFFu);
+    }
+    [[nodiscard]] ObservedDoubleword read_memory(std::uint32_t physical,std::size_t bytes) const {
+        ObservedDoubleword result;
+        for(std::size_t byte=0;byte<bytes;++byte) {
+            const auto address=physical+static_cast<std::uint32_t>(byte);
+            const auto word=memory_word(address&~3u);
+            const auto shift=(address&3u)*8u;
+            result.value|=std::uint64_t{(word.value>>shift)&0xFFu}<<(byte*8u);
+            result.unknown|=std::uint64_t{(word.unknown>>shift)&0xFFu}<<(byte*8u);
+        }
+        return result;
+    }
+    void write_memory(std::uint32_t physical,std::size_t bytes,ObservedDoubleword value) {
+        for(std::size_t byte=0;byte<bytes;++byte)
+            (void)memory_word((physical+static_cast<std::uint32_t>(byte))&~3u);
+        for(std::size_t byte=0;byte<bytes;++byte) {
+            const auto address=physical+static_cast<std::uint32_t>(byte);
+            auto& word=memory_word(address&~3u);
+            const auto shift=(address&3u)*8u,mask=0xFFu<<shift;
+            word.value=(word.value&~mask)|(static_cast<std::uint32_t>((value.value&~value.unknown)>>(byte*8u))<<shift&mask);
+            word.unknown=(word.unknown&~mask)|(static_cast<std::uint32_t>(value.unknown>>(byte*8u))<<shift&mask);
+        }
+    }
+private:
+    ObservedWord& memory_word(std::uint32_t address) {
+        if(address>=0x11000000u && address<0x11001000u) return micro0_[(address-0x11000000u)/4u];
+        if(address>=0x11004000u && address<0x11005000u) return data_[(address-0x11004000u)/4u];
+        if(address>=0x11008000u && address<0x1100C000u) return micro1_[(address-0x11008000u)/4u];
+        if(address>=0x1100C000u && address<0x11010000u) return data1_[(address-0x1100C000u)/4u];
+        throw DeviceRefusal("unimplemented VU memory aperture");
+    }
+    const ObservedWord& memory_word(std::uint32_t address) const {
+        return const_cast<VuControl*>(this)->memory_word(address);
+    }
+    void check_data_write(std::uint32_t address) const {
+        (void)observe_data(address);
+        if((address&~15u)==0x4310u || (address&~15u)==0x43A0u)
+            throw DeviceRefusal("VU store to read-only VU1 control register is not modeled");
+    }
+    void store_data(std::uint32_t address,ObservedWord word) {
+        if(address<0x1000u) {data_[address/4u]=word;return;}
+        const auto lane=(address&15u)/4u;
+        if(address<0x4200u) {
+            const auto index=(address-0x4000u)/16u;
+            if(index) vu1_vectors_[index][lane]=word;
+        } else if(address<0x4300u) {
+            const auto index=(address-0x4200u)/16u;
+            if(index && !lane) vu1_integers_[index]={word.value&0xFFFFu,word.unknown&0xFFFFu};
+        } else if(!lane) {
+            const auto index=(address-0x4300u)/16u;
+            const auto writable=index==0u ? 0xFC0u : index==2u ? 0xFFFFFFu : ~0u;
+            auto& destination=vu1_controls_[index];
+            destination.value=(destination.value&~writable)|(word.value&writable);
+            destination.unknown=(destination.unknown&~writable)|(word.unknown&writable);
+        }
+    }
+    std::array<std::optional<std::uint32_t>,32> registers_{};
+    std::array<std::uint32_t,32> unknown_{};
+    std::array<ObservedWord,16> vu1_integers_{};
+    std::array<ObservedWord,16> vu1_controls_{};
+    std::vector<ObservedWord> data_;
+    std::array<std::array<ObservedWord,4>,32> vectors_{};
+    std::array<std::array<ObservedWord,4>,32> vu1_vectors_{};
+    std::vector<ObservedWord> micro0_,micro1_,data1_;
+};
+} // namespace ps2native

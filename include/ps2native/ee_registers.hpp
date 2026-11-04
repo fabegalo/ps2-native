@@ -15,6 +15,7 @@
 #include "ps2native/mch.hpp"
 #include "ps2native/video_encoder.hpp"
 #include "ps2native/vif.hpp"
+#include "ps2native/vu_control.hpp"
 
 #include <array>
 #include <cstddef>
@@ -71,6 +72,34 @@ public:
     [[nodiscard]] const MchRegisters& mch() const noexcept { return mch_; }
     [[nodiscard]] const Iop& iop() const noexcept { return iop_; }
     [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return video_encoder_; }
+    [[nodiscard]] std::uint32_t read_vu_control(unsigned index) const {
+        if (index==29u && vif1_.direct_remaining())
+            throw DeviceRefusal("VU status with active VIF1 DIRECT is not modeled");
+        return vu_control_.read(index);
+    }
+    void write_vu_control(unsigned index, std::uint32_t value) { vu_control_.write(index,value); }
+    [[nodiscard]] ObservedWord observe_vu_control(unsigned index) const {
+        if (index==29u && vif1_.direct_remaining())
+            throw DeviceRefusal("VU status with active VIF1 DIRECT is not modeled");
+        return vu_control_.observe(index);
+    }
+    void write_vu_control_observed(unsigned index, ObservedWord word) {vu_control_.write_observed(index,word);}
+    void vu_integer_store(unsigned source,unsigned base,unsigned mask) {vu_control_.integer_store(source,base,mask);}
+    [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return vu_control_.observe_data(address);}
+    [[nodiscard]] ObservedQuadword observe_vu_vector(unsigned index) const {return vu_control_.observe_vector(index);}
+    void write_vu_vector(unsigned index,ObservedQuadword word) {vu_control_.write_vector(index,word);}
+    void vu_subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {
+        vu_control_.subtract(destination,left,right,mask);
+    }
+    void vu_vector_store_increment(unsigned source,unsigned base,unsigned mask) {
+        vu_control_.vector_store_increment(source,base,mask);
+    }
+    [[nodiscard]] ObservedDoubleword read_vu_memory(std::uint32_t physical,std::size_t bytes) const {
+        return vu_control_.read_memory(physical,bytes);
+    }
+    void write_vu_memory(std::uint32_t physical,std::size_t bytes,ObservedDoubleword value) {
+        vu_control_.write_memory(physical,bytes,value);
+    }
     // INTC sources enabled in I_MASK (an interrupt reaches COP0 IP2 when one
     // of them is pending).
     [[nodiscard]] std::uint32_t intc_mask() const noexcept { return intc_mask_; }
@@ -130,6 +159,7 @@ private:
     std::uint64_t vertical_sample_{};
     Gif gif_;
     Vif1 vif1_;
+    VuControl vu_control_;
     // Video encoder serial bus and its two masters.
     VideoEncoderBus video_encoder_;
     VideoEncoderMaster encoder_master_190x_{VideoEncoderMaster::Layout::Byte190x};

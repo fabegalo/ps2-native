@@ -66,7 +66,7 @@ std::uint64_t EEState::reg64(unsigned index) const {
 }
 Register128 EEState::reg128(unsigned index) const {
     check_index(index, gpr.size());
-    if (unknown_gprs & (1u << index))
+    if ((unknown_gprs & (1u << index)) || unknown_gpr_high_bits[index])
         throw std::runtime_error("EE GPR " + std::to_string(index) + " consumes unknown MMIO bits (128-bit operand)");
     return index == 0 ? Register128{} : gpr[index];
 }
@@ -100,7 +100,17 @@ void EEState::set_reg64_observed(unsigned index, std::uint64_t value, std::uint6
 void EEState::set_reg128(unsigned index, std::uint64_t low, std::uint64_t high) {
     check_index(index, gpr.size());
     if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
+    unknown_gpr_high_bits[index] = 0;
     if (index != 0) gpr[index] = {low, high};
+}
+void EEState::set_reg128_observed(unsigned index, std::uint64_t low, std::uint64_t high,
+                                  std::uint64_t unknown_low, std::uint64_t unknown_high) {
+    set_reg128(index,low&~unknown_low,high&~unknown_high);
+    if (index!=0) {
+        unknown_gpr_bits[index]=unknown_low;
+        unknown_gpr_high_bits[index]=unknown_high;
+        if (unknown_low) unknown_gprs|=1u<<index;
+    }
 }
 EEState ee_reset_state() {
     EEState state;
