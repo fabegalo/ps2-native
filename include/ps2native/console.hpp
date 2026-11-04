@@ -63,6 +63,9 @@ struct ConsoleHardware {
     std::optional<std::uint16_t> mpu_board_id{};
     // Measured GS CSR bytes: REV (bits 16..23), ID (bits 24..31).
     std::optional<std::array<std::uint8_t,2>> gs_revision_id{};
+    // PS2Ident SPEED.rev1/rev3/rev8: complete halfword measurements at
+    // offsets 0x02/0x04/0x0E. Absence never falls back to another board.
+    std::optional<std::array<std::uint16_t,3>> speed_revisions{};
 };
 
 [[nodiscard]] std::span<const ConsoleHardware> known_console_hardware() noexcept;

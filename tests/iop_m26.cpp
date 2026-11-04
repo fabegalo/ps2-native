@@ -132,6 +132,106 @@ void check_dev9_halfword() {
             "DEV9 byte/halfword aliases retain the measured lane, LHU upper zeros, and masked signed loads without inventing bits 8..15");
     refuses([](Assembler& p){p.lhu(a1,0x146E,t1);},kNoDev9,"no console profile with the SSBUS revision");
 }
+void check_dev9_power() {
+    Assembler a(0xBFC00000u);a.lui(t1,0xBF80);a.lui(t2,0xA000);
+    a.lhu(a1,0x146C,t1);a.nop();a.r(0,a1,a1,16,0x02);a.sw(a1,0x100,t2);
+    a.lhu(a1,0x146C,t1);a.nop();a.andi(a1,a1,5);a.addiu(a1,a1,1);a.sw(a1,0x104,t2);
+    a.label("idle");a.beq(0,0,"idle");a.nop();const auto rom=rom_of(a);
+    Iop cold;cold.reset(rom,&kProfile);cold.run_until(100);
+    require_stop(cold,"DEV9 POWER reset/control bits have not been established");
+    require(cold.diagnostic_ram32(0x100)==0,"unsigned extension is known without inventing any POWER bit");
+    for(const auto value:{0u,1u,4u,5u}) {
+        Iop iop;iop.reset(rom,&kProfile);iop.diagnostic_dev9_power_reset(static_cast<std::uint16_t>(value));iop.run_until(100);
+        require(!iop.stopped() && iop.ee_read(0x104,4)==value+1u,"explicit reset inputs define only independently documented bits 0/2");
+        rejects([&]{iop.diagnostic_dev9_power_reset(0);},"before execution");
+        iop.reset(rom,&kProfile);iop.run_until(100);require_stop(iop,"DEV9 POWER reset/control bits have not been established");
+    }
+    refuses([](Assembler& p){p.lhu(a1,0x146C,t1);p.nop();p.andi(a1,a1,2);p.addiu(a1,a1,1);},kProfile,"DEV9 POWER");
+    Iop bad;bad.reset(rom,&kProfile);rejects([&]{bad.diagnostic_dev9_power_reset(2);},"only bits 0/2");
+    bad.reset(rom,&kNoDev9);rejects([&]{bad.diagnostic_dev9_power_reset(0);},"expansion-bay hardware");
+}
+void check_speed_identities() {
+    Assembler a(0xBFC00000u);a.lui(t1,0xB000);a.lui(t2,0xA000);
+    for(const auto offset:{2u,4u,14u}){a.lhu(a1,offset,t1);a.nop();a.sw(a1,offset*4u,t2);}
+    a.label("idle");a.beq(0,0,"idle");a.nop();const auto rom=rom_of(a);
+    for(const auto name:{"SCPH-70004:GH-032-11","SCPH-70004:GH-032-32"}) {
+        const auto* profile=find_console_hardware(name);require(profile && profile->speed_revisions.has_value(),"matching measured board profile exists");
+        Iop iop;iop.reset(rom,profile);iop.diagnostic_dev9_power_reset(5);iop.run_until(100);
+        require(!iop.stopped() && iop.ee_read(8,4)==0x13 && iop.ee_read(16,4)==0xB && iop.ee_read(56,4)==2,
+                "all three complete SPEED halfwords come from the exact board/ROMVER measurements");
+        auto alternate=*profile;alternate.speed_revisions=std::array<std::uint16_t,3>{0xA1B2,0xC3D4,0xE5F6};
+        iop.reset(rom,&alternate);iop.diagnostic_dev9_power_reset(5);iop.run_until(100);
+        require(!iop.stopped() && iop.ee_read(8,4)==0xA1B2 && iop.ee_read(16,4)==0xC3D4 && iop.ee_read(56,4)==0xE5F6,
+                "hardware lookup preserves complete profile values rather than hardcoding one revision");
+        alternate.speed_revisions.reset();iop.reset(rom,&alternate);iop.diagnostic_dev9_power_reset(5);iop.run_until(100);
+        require_stop(iop,"no measured SPEED identity");
+        iop.reset(rom,profile);iop.run_until(100);require_stop(iop,"requires established power");
+        iop.reset(rom,profile);iop.diagnostic_dev9_power_reset(0);iop.run_until(100);require_stop(iop,"requires established power");
+    }
+}
+void check_speed_interrupt_masking() {
+    for(unsigned mode=0;mode<8;++mode) {
+        Assembler a(0xBFC00000u);a.lui(t1,0xBF80);a.lui(t2,0xB000);a.lui(t3,0xA000);
+        if(mode==2)a.sw(0,0x1070,t1); // An earlier ack cannot prove a later unknown source quiet.
+        a.sh(0,0x2A,t2);
+        if(mode!=2 && mode!=5) {a.la(a1,mode==3 ? 0xFFFFFFFFu : 0u);a.sw(a1,0x1070,t1);}
+        if(mode==1){a.la(a1,4);a.sh(a1,0x2A,t2);}
+        if(mode==4 || mode>=6){a.la(a1,4);a.sh(a1,0x146C,t1);a.la(a1,5);a.sh(a1,0x146C,t1);}
+        if(mode==7)a.sh(0,0x2A,t2);
+        if(mode>=6)a.sw(0,0x1070,t1);
+        a.la(a1,1u<<13u);a.sw(a1,0x1074,t1);a.la(a1,1);a.sw(a1,0x1078,t1);
+        a.la(a1,0x00400401);a.mtc0(a1,Status);a.nop();
+        a.lw(a1,0x1070,t1);a.nop();a.andi(a1,a1,1u<<13u);a.sw(a1,0x100,t3);
+        a.label("idle");a.beq(0,0,"idle");a.nop();const auto rom=rom_of(a);
+        Iop iop;iop.reset(rom,find_console_hardware("SCPH-70004:GH-032-32"));
+        iop.diagnostic_dev9_power_reset(5);iop.diagnostic_dev9_power_settle_cycles(1);
+        if(mode==5)iop.diagnostic_dev9_irq_reset_clear();iop.run_until(120);
+        if(mode==0 || mode==5 || mode==7)require(!iop.stopped() && iop.ee_read(0x100,4)==0,
+            "a real zero SPEED mask followed by INTC ack proves IRQ13 quiet without inventing pending status");
+        else require_stop(iop,"sources that are not modeled (PCMCIA)");
+    }
+}
+void check_speed_mask() {
+    Assembler a(0xBFC00000u);a.lui(t1,0xB000);a.lui(t2,0xA000);
+    a.lhu(a1,0x2A,t1);a.nop();a.andi(a1,a1,0);a.sh(a1,0x2A,t1);
+    a.lhu(a1,0x2A,t1);a.nop();a.sw(a1,0x100,t2);
+    a.la(a1,0x64);a.sh(a1,0x2A,t1);a.lhu(a1,0x2A,t1);a.nop();a.sw(a1,0x104,t2);
+    a.lhu(a1,0x28,t1);a.nop();a.andi(a1,a1,0);a.sw(a1,0x108,t2);
+    a.lhu(a1,0x28,t1);a.nop();a.addiu(a1,a1,1);
+    const auto rom=rom_of(a);Iop iop;iop.reset(rom,find_console_hardware("SCPH-70004:GH-032-32"));
+    iop.diagnostic_dev9_power_reset(5);iop.run_until(200);require_stop(iop,"SPEED interrupt pending/mask bits are not established");
+    require(iop.diagnostic_ram32(0x100)==0 && iop.diagnostic_ram32(0x104)==0x64 && iop.diagnostic_ram32(0x108)==0,
+            "a real zero mask is established by firmware, later masks retain their bytes, and unknown pending bits are never fabricated");
+}
+void check_dev9_power_transition() {
+    Assembler a(0xBFC00000u);a.lui(t1,0xBF80);a.la(a1,5);a.sh(a1,0x146C,t1);a.label("written");
+    a.lhu(a1,0x146C,t1);a.nop();a.andi(a1,a1,5);a.lui(t2,0xA000);a.sw(a1,0x100,t2);
+    a.lui(t3,0xB000);a.label("sample");a.lhu(a1,2,t3);a.nop();a.sw(a1,0x104,t2);
+    a.label("idle");a.beq(0,0,"idle");a.nop();const auto rom=rom_of(a);
+    const auto write=index_of(a,"written")-1u,sample=index_of(a,"sample");
+    for(unsigned late:{0u,1u}) {
+        Iop iop;iop.reset(rom,find_console_hardware("SCPH-70004:GH-032-32"));
+        iop.diagnostic_dev9_power_settle_cycles(static_cast<std::uint32_t>(sample-write+late));iop.run_until(100);
+        if(late)require_stop(iop,"requires established power");
+        else require(!iop.stopped() && iop.ee_read(0x100,4)==5 && iop.ee_read(0x104,4)==0x13,
+                     "guest power writes retain control bits immediately but SPEED access waits for the exact configured boundary");
+    }
+    Iop cold;cold.reset(rom,find_console_hardware("SCPH-70004:GH-032-32"));cold.run_until(100);
+    require_stop(cold,"requires established power");require(cold.diagnostic_ram32(0x100)==5,"a written POWER control does not invent transition latency");
+}
+void check_dev9_control_experiment() {
+    Assembler a(0xBFC00000u);a.lui(t1,0xBF80);a.lui(t2,0xA000);a.la(a1,1);a.sh(a1,0x1466,t1);
+    a.la(a1,3);a.sh(a1,0x1464,t1);a.lhu(a1,0x1464,t1);a.nop();a.sw(a1,0x100,t2);
+    a.la(a1,2);a.sh(a1,0x1460,t1);a.lhu(a1,0x1460,t1);a.nop();a.sw(a1,0x104,t2);
+    a.sh(0,0x1466,t1);a.lhu(a1,0x1466,t1);a.nop();a.sw(a1,0x108,t2);
+    a.label("idle");a.beq(0,0,"idle");a.nop();const auto rom=rom_of(a);
+    Iop iop;iop.reset(rom,&kProfile);iop.run_until(100);require_stop(iop,"control side effects are unverified");
+    iop.reset(rom,&kProfile);iop.diagnostic_dev9_control_latches();iop.run_until(100);
+    require(!iop.stopped() && iop.ee_read(0x100,4)==3 && iop.ee_read(0x104,4)==2 && !iop.ee_read(0x108,4),
+            "explicit control-latch experiment retains distinct actual guest writes instead of supplying cold constants or device success");
+    rejects([&]{iop.diagnostic_dev9_control_latches();},"before execution");
+    iop.reset(rom,&kProfile);iop.run_until(100);require_stop(iop,"control side effects are unverified");
+}
 void check_timers() {
     Assembler a(0xBFC00000u);
     a.lui(t1, 0xBF80u);
@@ -287,7 +387,7 @@ void check_exceptions() {
 
 int main() {
     try {
-        check_devices();check_dev9_halfword();
+        check_devices();check_dev9_halfword();check_dev9_power();check_speed_identities();check_speed_mask();check_speed_interrupt_masking();check_dev9_power_transition();check_dev9_control_experiment();
         check_timers();
         check_exceptions();
         std::cout << "M2.6 IOP checks passed\n";

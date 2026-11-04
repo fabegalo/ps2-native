@@ -72,6 +72,12 @@ public:
     [[nodiscard]] const Gif& gif() const noexcept { return gif_; }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return gs_; }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return mch_; }
+    void diagnostic_dev9_power_reset(std::uint16_t value) { iop_.diagnostic_dev9_power_reset(value); }
+    void diagnostic_dev9_irq_reset_clear() { iop_.diagnostic_dev9_irq_reset_clear(); }
+    void attach_speed_eeprom_words(std::span<const std::uint16_t> words,std::string_view hash) { iop_.attach_speed_eeprom_words(words,hash); }
+    void diagnostic_speed_eeprom_presence(bool present) { iop_.diagnostic_speed_eeprom_presence(present); }
+    void diagnostic_dev9_control_latches() { iop_.diagnostic_dev9_control_latches(); }
+    void diagnostic_dev9_power_settle_cycles(std::uint32_t cycles) { iop_.diagnostic_dev9_power_settle_cycles(cycles); }
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles) { iop_.diagnostic_sio2_infrared_timeout(cycles); }
     void diagnostic_sio2_port_timing(unsigned bits) { iop_.diagnostic_sio2_port_timing(bits); }
     void diagnostic_sio2_digital_pad(unsigned port,std::uint16_t buttons,std::uint32_t cycles) { iop_.diagnostic_sio2_digital_pad(port,buttons,cycles); }

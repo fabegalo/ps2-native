@@ -18,6 +18,7 @@
 #include "ps2native/device_timing.hpp"
 #include "ps2native/gs_registers.hpp"
 #include "ps2native/nvm.hpp"
+#include "ps2native/microwire.hpp"
 #include "ps2native/disc.hpp"
 #include "ps2native/gif.hpp"
 #include "ps2native/vif.hpp"
@@ -131,6 +132,20 @@ public:
     // completion flag bit 0. Timing and
     // these control/status details are not physical measurements. Reset
     // disables it. Other peripherals and SIO2 DMA remain unsupported.
+    // Unmeasured DEV9 expansion-bay reset/power bits 0/2 only.
+    // All other POWER bits remain unknown; reset removes this hypothesis.
+    void diagnostic_dev9_power_reset(std::uint16_t value);
+    // Explicit cold mask=0 and clear IOP pending input, never a measured reset default.
+    void diagnostic_dev9_irq_reset_clear();
+    // Logical EEPROM words, explicitly bound to this console's NVM hash.
+    // Never substitute the MECHACON MAC record or another console's data.
+    void attach_speed_eeprom_words(std::span<const std::uint16_t> words,std::string_view nvm_sha256);
+    void diagnostic_speed_eeprom_presence(bool present);
+    [[nodiscard]] std::uint64_t speed_eeprom_words_read() const {return speed_eeprom_.words_read();}
+    // Unmeasured 1460/1464/1466 side effects: explicit passive-latch
+    // experiment only. No active peripheral or IRQ response is supplied.
+    void diagnostic_dev9_control_latches();
+    void diagnostic_dev9_power_settle_cycles(std::uint32_t cycles);
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles);
     void diagnostic_sio2_reset_clears_completion() {
         if(cycle_)throw DeviceRefusal("SIO2 reset-latch experiment requires reset state before execution");
@@ -379,6 +394,21 @@ private:
     std::optional<OpenConfig> config_;
     std::array<Timer, 6> timers_{};
     bool timers_running_{};
+    void write_dev9_power(ObservedWord word);
+    [[nodiscard]] bool dev9_power_ready() const;
+    bool diagnostic_dev9_controls_{},dev9_initial_power_ready_{};
+    std::array<std::optional<std::uint16_t>,3> dev9_controls_{};
+    std::uint32_t diagnostic_dev9_settle_cycles_{};
+    std::optional<std::uint64_t> dev9_power_ready_at_;
+    ObservedWord dev9_power_{0,0xFFFFu};
+    ObservedWord speed_irq_mask_{0,0xFFFFu};
+    bool dev9_irq_acknowledged_{};
+    [[nodiscard]] bool dev9_irq_masked() const noexcept;
+    Microwire64x16 speed_eeprom_;
+    ObservedWord speed_gpio_dir_{0,0xFFu},speed_gpio_data_{0,0xFFu};
+    std::optional<std::uint64_t> speed_gpio_clock_at_;
+    void write_speed_gpio(std::uint32_t address,std::size_t bytes,std::uint32_t value);
+    [[nodiscard]] ObservedWord read_speed_gpio(std::uint32_t address,std::size_t bytes) const;
     std::uint32_t istat_{}; // I_STAT bits of the modeled sources
     bool sio2_irq_acknowledged_{};
     bool dma_irq_output_{};

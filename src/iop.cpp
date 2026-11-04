@@ -203,6 +203,10 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     std::fill(ram_.begin(), ram_.end(), std::uint8_t{0});
     std::fill(ram_written_.begin(), ram_written_.end(), std::uint8_t{0});
     gpr_ = {};
+    dev9_power_={0,0xFFFFu};speed_irq_mask_={0,0xFFFFu};dev9_irq_acknowledged_=false;
+    speed_eeprom_.reset();speed_gpio_dir_={0,0xFFu};speed_gpio_data_={0,0xFFu};speed_gpio_clock_at_.reset();
+    diagnostic_dev9_controls_=dev9_initial_power_ready_=false;dev9_controls_={};
+    diagnostic_dev9_settle_cycles_=0;dev9_power_ready_at_.reset();
     gpr_sio2_epoch_={};sio2_control_epoch_=undefined_sio2_epoch_=0;
     diagnostic_sio2_port_timing_.reset();
     sio2_digital_pads_={};sio2_response_status_=0;
@@ -1343,6 +1347,93 @@ void Iop::pump_sio2_dma() {
     sio2_dma_turn_=channel^1u;sio2_dma_next_=cycle_+diagnostic_sio2_dma_cycles_;
 }
 
+void Iop::diagnostic_dev9_control_latches() {
+    if(cycle_)throw DeviceRefusal("DEV9 control latch experiment requires reset state before execution");
+    diagnostic_dev9_controls_=true;
+}
+void Iop::diagnostic_dev9_power_settle_cycles(std::uint32_t cycles) {
+    if(!cycles || cycle_)throw DeviceRefusal("DEV9 power settling experiment requires positive cycles before execution");
+    diagnostic_dev9_settle_cycles_=cycles;
+}
+bool Iop::dev9_irq_masked() const noexcept {
+    // ps2sdk SpdIntrDisable/dev9_intr_dispatch: SPEED status AND mask
+    // feeds DEV9. The measured fixed expansion-bay board has no PC-card
+    // insertion source. Pending status remains unknown even with a zero mask.
+    return hardware_ && hardware_->speed_revisions && hardware_->dev9_revision &&
+           ((*hardware_->dev9_revision&0xF0u)==0x30u) && dev9_power_ready() &&
+           !(speed_irq_mask_.unknown&0xFFFFu) && !(speed_irq_mask_.value&0xFFFFu);
+}
+bool Iop::dev9_power_ready() const {
+    return !(dev9_power_.unknown&5u) && (dev9_power_.value&5u)==5u &&
+           (dev9_initial_power_ready_ || (dev9_power_ready_at_ && cycle_>=*dev9_power_ready_at_));
+}
+void Iop::write_dev9_power(ObservedWord word) {
+    if(!hardware_ || !hardware_->dev9_revision || ((*hardware_->dev9_revision&0xF0u)!=0x30u))
+        throw IopStop{"DEV9 expansion-bay power control requires an established interface family"};
+    if((word.unknown&5u) || (word.value&~word.unknown&~5u&0xFFFFu))
+        throw IopStop{"DEV9 power write requires known bits 0/2; other active control bits are not modeled"};
+    const auto old=dev9_power_;dev9_power_={word.value&5u,0xFFFAu};
+    if((old.unknown&5u) || ((old.value^word.value)&5u)) {
+        dev9_initial_power_ready_=false;dev9_power_ready_at_.reset();dev9_irq_acknowledged_=false;
+        // Neither retention nor reset constants of the external ASIC's
+        // registers have been measured across this power/reset transition.
+        speed_irq_mask_={0,0xFFFFu};speed_gpio_dir_={0,0xFFu};speed_gpio_data_={0,0xFFu};
+        speed_eeprom_.drive(false,false,false);speed_gpio_clock_at_.reset();
+        if((word.value&5u)==5u && diagnostic_dev9_settle_cycles_)
+            dev9_power_ready_at_=cycle_+diagnostic_dev9_settle_cycles_;
+    }
+}
+void Iop::attach_speed_eeprom_words(std::span<const std::uint16_t> words,std::string_view nvm_sha256) {
+    if(cycle_ || !hardware_ || !hardware_->speed_revisions || !nvm_ ||
+       nvm_->model_name!=hardware_->model || nvm_sha256!=nvm_->sha256 || nvm_sha256.size()!=64u)
+        throw DeviceRefusal("SPEED EEPROM requires a matching measured profile and explicit NVM hash binding before execution");
+    speed_eeprom_.attach(words);
+}
+void Iop::diagnostic_speed_eeprom_presence(bool present) {
+    if(cycle_)throw DeviceRefusal("SPEED EEPROM presence experiment requires reset state before execution");
+    speed_eeprom_.diagnostic_presence(present);
+}
+void Iop::write_speed_gpio(std::uint32_t address,std::size_t bytes,std::uint32_t value) {
+    if(bytes!=1u || !dev9_power_ready())throw IopStop{"SPEED GPIO requires byte accesses and established power/reset state"};
+    value&=0xFFu;
+    if(address==0x1000002Cu) {
+        if(speed_eeprom_.selected() && (value&0xF0u)!=0xE0u)
+            throw IopStop{"SPEED EEPROM pin direction changed while chip select is active"};
+        speed_gpio_dir_={value,0};return;
+    }
+    speed_gpio_data_={value,0};
+    if(!(speed_gpio_dir_.unknown&0xF0u) && (speed_gpio_dir_.value&0xF0u)==0xE0u) {
+        try {
+            if(speed_eeprom_.drive((value&0x80u)!=0,(value&0x40u)!=0,(value&0x20u)!=0))speed_gpio_clock_at_=cycle_;
+        }catch(const DeviceRefusal& error){throw IopStop{error.what()};}
+    }
+}
+ObservedWord Iop::read_speed_gpio(std::uint32_t address,std::size_t bytes) const {
+    if(bytes!=1u || !dev9_power_ready())throw IopStop{"SPEED GPIO requires byte accesses and established power/reset state"};
+    if(address==0x1000002Cu)return speed_gpio_dir_;
+    const auto outputs=speed_gpio_dir_.value&~speed_gpio_dir_.unknown&~speed_gpio_data_.unknown&0xFFu;
+    auto known=outputs,value=speed_gpio_data_.value&outputs;
+    if(!(speed_gpio_dir_.unknown&0x10u) && !(speed_gpio_dir_.value&0x10u)) {
+        if(const auto input=speed_eeprom_.data_out()) {
+            // Conservative maximum DO propagation from the compatible
+            // Microwire datasheet: 400 ns rounds up to fifteen IOP cycles.
+            if(speed_eeprom_.presence()==Microwire64x16::Presence::Present && speed_gpio_clock_at_ && cycle_-*speed_gpio_clock_at_<15u)
+                throw IopStop{"SPEED EEPROM DO sampled before the conservative propagation boundary"};
+            known|=0x10u;if(*input)value|=0x10u;
+        }
+    }
+    return {value,~known&0xFFu};
+}
+void Iop::diagnostic_dev9_irq_reset_clear() {
+    if(cycle_ || !hardware_ || !hardware_->speed_revisions)
+        throw DeviceRefusal("DEV9 interrupt reset experiment requires a measured fixed SPEED board before execution");
+    speed_irq_mask_={0,0};dev9_irq_acknowledged_=true;
+}
+void Iop::diagnostic_dev9_power_reset(std::uint16_t value) {
+    if(cycle_ || (value&~5u) || !hardware_ || !hardware_->dev9_revision || ((*hardware_->dev9_revision&0xF0u)!=0x30u))
+        throw DeviceRefusal("DEV9 power experiment requires expansion-bay hardware and only bits 0/2 before execution");
+    dev9_power_={value,0xFFFAu};dev9_initial_power_ready_=(value&5u)==5u;
+}
 void Iop::diagnostic_sio2_infrared_timeout(std::uint32_t cycles) {
     if(!cycles || cycle_ || sio2_control_epoch_)
         throw DeviceRefusal("SIO2 infrared experiment requires positive timeout cycles before guest execution");
@@ -1835,6 +1926,10 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
         }
         return;
     }
+    if(a.physical==0x1F80146Cu) {
+        if(bytes!=2u)throw IopStop{"DEV9 POWER requires a halfword write"};
+        write_dev9_power(value ? ObservedWord{*value,0} : observed ? *observed : ObservedWord{0,0xFFFFu});return;
+    }
     if(a.physical>=0x1E000000u && a.physical<0x1E400000u)
         throw IopStop{std::string("store ")+what+" to read-only ROM1 at "+hex(address)};
     if (a.physical >= kRomPhysical && a.physical - kRomPhysical < kRomBytes)
@@ -2115,6 +2210,67 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         }
         return 1u;
     }
+    if(physical==0x1F801462u) {
+        if(bytes!=2u)throw IopStop{name+": DEV9 presence requires a halfword read"};
+        // ps2sdk expbay_device_probe: bit 0 is active-low device presence.
+        // Complete SPEED measurements establish a populated, fixed device
+        // on these boards; they establish no other status or reset bit.
+        const bool measured=hardware_ && hardware_->dev9_revision &&
+            ((*hardware_->dev9_revision&0xF0u)==0x30u) && hardware_->speed_revisions.has_value();
+        undefined_load_="DEV9 presence status has unmeasured bits";
+        undefined_known_=(measured ? 1u : 0u)|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
+        return 0;
+    }
+    if(physical==0x1F801460u || physical==0x1F801464u || physical==0x1F801466u) {
+        if(bytes!=2u || !diagnostic_dev9_controls_)
+            throw IopStop{"DEV9 1460/1464/1466 control side effects are unverified; explicit latch experiment required"};
+        const auto index=(physical-0x1F801460u)/2u-(physical==0x1F801460u ? 0u : 1u);
+        const auto value=dev9_controls_[index];
+        if(!value) {
+            undefined_load_="DEV9 control reset value has not been measured";
+            undefined_known_=std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u;
+        }
+        return value.value_or(0u);
+    }
+    if(physical==0x1000002Cu || physical==0x1000002Eu) {
+        const auto word=read_speed_gpio(physical,bytes);
+        if(word.unknown) {
+            undefined_load_="SPEED GPIO input/output bits are unestablished (EEPROM presence/content not supplied)";
+            const auto known=~word.unknown&0xFFu;
+            undefined_known_=known|((std::string_view(what)=="LBU" || (known&0x80u)) ? 0xFFFFFF00u : 0u);
+        }
+        return word.value;
+    }
+    if(physical==0x1000002Au || physical==0x10000028u) {
+        if(bytes!=2u)throw IopStop{name+": SPEED interrupt registers require halfword reads"};
+        if(!dev9_power_ready())
+            throw IopStop{"SPEED interrupt registers require established power and released interface reset"};
+        const auto word=physical==0x1000002Au ? speed_irq_mask_ : ObservedWord{0,0xFFFFu};
+        if(word.unknown) {
+            undefined_load_="SPEED interrupt pending/mask bits are not established";
+            undefined_known_=(~word.unknown&0xFFFFu)|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
+        }
+        return word.value;
+    }
+    if(physical==0x10000002u || physical==0x10000004u || physical==0x1000000Eu) {
+        if(bytes!=2u)throw IopStop{name+": SPEED identity requires a halfword read"};
+        if(!hardware_ || !hardware_->speed_revisions)
+            throw IopStop{name+": no measured SPEED identity for this profile"};
+        if(!dev9_power_ready())
+            throw IopStop{"SPEED identity requires established power and released interface reset"};
+        const auto index=physical==0x10000002u ? 0u : physical==0x10000004u ? 1u : 2u;
+        return (*hardware_->speed_revisions)[index];
+    }
+    if(physical==0x1F80146Cu) {
+        if(bytes!=2u)throw IopStop{name+": DEV9 POWER requires a halfword read"};
+        // DEV9_REG(DEV9_R_POWER), ps2sdk dev9regs.h. No cold state is
+        // supplied by the measured revision byte or by the MECHACON NVM.
+        if(dev9_power_.unknown) {
+            undefined_load_="DEV9 POWER reset/control bits have not been established";
+            undefined_known_=(~dev9_power_.unknown&0xFFFFu)|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
+        }
+        return dev9_power_.value;
+    }
     if (physical == kDev9Revision) {
         // ps2sdk dev9regs.h defines a 16-bit register. The profile records
         // only its measured revision byte; preserve the unmeasured lane.
@@ -2211,6 +2367,25 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
 }
 
 void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what) {
+    if(physical==0x1000002Cu || physical==0x1000002Eu) {
+        if(!value)throw IopStop{"SPEED GPIO write requires known pin data"};
+        write_speed_gpio(physical,bytes,*value);return;
+    }
+
+    if(physical==0x1F801460u || physical==0x1F801464u || physical==0x1F801466u) {
+        if(bytes!=2u || !value || !diagnostic_dev9_controls_)
+            throw IopStop{"DEV9 1460/1464/1466 control side effects are unverified; explicit latch experiment required"};
+        const auto index=(physical-0x1F801460u)/2u-(physical==0x1F801460u ? 0u : 1u);
+        dev9_controls_[index]=static_cast<std::uint16_t>(*value);return;
+    }
+
+    if(physical==0x1000002Au) {
+        if(bytes!=2u || !value)throw IopStop{"SPEED interrupt mask requires a known halfword write"};
+        if(!dev9_power_ready())
+            throw IopStop{"SPEED interrupt mask requires established power and released interface reset"};
+        speed_irq_mask_={*value&0xFFFFu,0};if(!dev9_irq_masked())dev9_irq_acknowledged_=false;return;
+    }
+
     if(physical==0x1F900770u || physical==0x1F900772u || physical==0x1F900798u || physical==0x1F90079Au) {
         if(bytes!=2u)throw IopStop{"SPU2 current master volume accepts only halfword write attempts"};
         // MVOLX is read-only. A write cannot change the current gain or
@@ -2555,6 +2730,7 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         if (!value) throw IopStop{name + ": unknown value"};
         istat_ &= *value;
         if(!(*value&(1u<<17u)))sio2_irq_acknowledged_=true;
+        if(!(*value&(1u<<13u)) && dev9_irq_masked())dev9_irq_acknowledged_=true;
         return;
     }
     if (is_latch(physical)) {
@@ -2804,7 +2980,8 @@ std::uint32_t Iop::modeled_irqs() const noexcept {
     // This proves the idle source only, not peripheral responses or timing.
     // The opt-in cold-state experiment has no active voices or inputs. Only
     // quiet clocks with effects/IRQ disabled are accepted; no IRQ9 is created.
-    return kTimerIrqs | kDmaIrq | (1u<<2u) | (sio2_irq_acknowledged_ ? (1u<<17u) : 0u) |
+    return (dev9_irq_acknowledged_ && dev9_irq_masked() ? (1u<<13u) : 0u) |
+           kTimerIrqs | kDmaIrq | (1u<<2u) | (sio2_irq_acknowledged_ ? (1u<<17u) : 0u) |
            (diagnostic_spu2_quiescent_ ? (1u<<9u) : 0u) |
            (video_.state != GsRegisters::VerticalClock::State::Unknown ? kVblankStartIrq | kVblankEndIrq : 0u);
 }
