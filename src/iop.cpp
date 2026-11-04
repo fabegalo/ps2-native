@@ -238,6 +238,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     diagnostic_spu2_effect_end_.reset();
     diagnostic_spu2_effect_start_.reset();
     diagnostic_spu2_effect_address_reserved_zero_=false;
+    diagnostic_spu2_inverted_effect_area_inactive_=false;
     spu2_effect_area_dirty_={};
     spu2_next_sample_={};spu2_last_sample_={};spu2_sample_count_={};spu2_clock_active_=false;
     spu2_transfer_={};spu2_ram_.clear();spu2_ram_written_.clear();diagnostic_spu2_pio_cycles_=0;
@@ -1312,6 +1313,10 @@ void Iop::diagnostic_spu2_effect_address_reserved_zero() {
 bool Iop::spu2_effects_active(unsigned core) const {
     return spu2_control_[core] && (spu2_control_[core]->value&0x8080u)==0x8080u;
 }
+void Iop::diagnostic_spu2_inverted_effect_area_inactive() {
+    if(cycle_)throw DeviceRefusal("SPU2 inverted-area experiment must be selected before execution");
+    diagnostic_spu2_inverted_effect_area_inactive_=true;
+}
 std::pair<std::uint32_t,std::uint32_t> Iop::spu2_effect_area(unsigned core) const {
     const auto base=0x1F900000u+core*0x400u;
     const auto field=[&](std::uint32_t address)->std::optional<std::uint32_t> {
@@ -1323,6 +1328,8 @@ std::pair<std::uint32_t,std::uint32_t> Iop::spu2_effect_area(unsigned core) cons
     const auto initial=diagnostic_spu2_effect_start_ ? (*diagnostic_spu2_effect_start_)[core] : 0u;
     const auto first=((high.value_or(initial>>16u)&0xFu)<<16u)|(low.value_or(initial)&0xFFFFu);
     const auto last=((end ? *end : (*diagnostic_spu2_effect_end_)[core])&0xFu)<<16u|0xFFFFu;
+    if(first>last && !(first&7u) && first>=0x2800u && diagnostic_spu2_inverted_effect_area_inactive_)
+        return {first,first-1u}; // empty under the explicit experiment; does not recover prior RAM knowledge
     if((first&7u) || first>last || first<0x2800u)
         throw IopStop{"SPU2 effect workspace alignment, wrap or overlap with capture/input buffers is not modeled"};
     return {first,last};

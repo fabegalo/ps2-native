@@ -71,11 +71,12 @@ struct DiagnosticAssumptions {
     std::optional<std::array<std::uint16_t,2>> spu2_effect_end_reset; // Unmeasured full initial EEA readbacks.
     std::optional<std::array<std::uint32_t,2>> spu2_effect_start_reset; // Unmeasured initial internal ESA, no readback.
     bool spu2_effect_address_reserved_zero{}; // Unmeasured unused ESA-high/EEA readback bits.
+    bool spu2_inverted_effect_area_inactive{}; // Unmeasured DSP inactivity when ESA exceeds EEA.
     bool spu2_quiescent_reset{}; // Unmeasured inactive SPU2 cores/voices/inputs, no transfer and clear IRQ9.
     // Experimental PCRTC timing after power-on/CSR reset, never a console
     // default. Guest SYNCV writes replace it until the next reset.
     std::optional<std::uint64_t> gs_reset_syncv;
-    [[nodiscard]] bool empty() const noexcept { return video_encoder_registers.empty() && !gs_reset_syncv && !omit_f510_zero_write && !sbus_configuration_latches && !iop_dmacinten && !iop_sio2_irq_clear && !spu2_quiescent_reset && !spu2_pio_word_cycles && !spu2_effect_end_reset && !spu2_effect_start_reset && !spu2_effect_address_reserved_zero && !spu2_adma_word_cycles && !spu2_admas_control_latch; }
+    [[nodiscard]] bool empty() const noexcept { return video_encoder_registers.empty() && !gs_reset_syncv && !omit_f510_zero_write && !sbus_configuration_latches && !iop_dmacinten && !iop_sio2_irq_clear && !spu2_quiescent_reset && !spu2_pio_word_cycles && !spu2_effect_end_reset && !spu2_effect_start_reset && !spu2_effect_address_reserved_zero && !spu2_inverted_effect_area_inactive && !spu2_adma_word_cycles && !spu2_admas_control_latch; }
 };
 
 // The slave and the transactions that reach it (shared by both masters).

@@ -1082,3 +1082,17 @@ podem atravessar um estado intermediário inválido entre bordas; se tal estado
 alcançar a borda, recusa. Testes diferenciam correção antes/depois da borda,
 sem permitir workspace circular desconhecido ou áudio fabricado. A fase
 reset-alinhada permanece hipótese já explícita do relógio SPU2.
+
+Ensaio 77: configuração ainda invertida na borda, IOP `0x4710` / 46.741.248;
+EE `0x81FC8` / 360.000.000, 101,559 s. RAM
+`433532101c80ab10c8d8cbd0a2933d4e8844ad8d592b23507992a740c6579257`.
+Sem novos pixels/PMODE. A referência PCSX2 Reverb.cpp trata ESA>EEA como
+área inativa, mas isso não é medição física. O próximo ensaio isola essa
+hipótese em opção própria antes da execução; defaults/reset continuam
+recusando. Área invertida torna-se intervalo vazio apenas nesse experimento,
+sem recuperar conhecimento de RAM anteriormente invalidada. Áreas desalinhadas
+ou sobrepostas a buffers dinâmicos continuam recusadas. Ganhos de efeitos
+continuam obrigatoriamente zero; não é implementação de DSP.
+Referência consultada: https://github.com/PCSX2/pcsx2/blob/master/pcsx2/SPU2/Reverb.cpp
+Sem copiar/incorporar código GPL. Busca em documentação pública não forneceu
+confirmação física do comportamento ESA>EEA; a incerteza permanece registrada.

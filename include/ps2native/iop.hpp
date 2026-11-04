@@ -138,6 +138,9 @@ public:
     // Explicit hypothesis for the twelve unused ESA-high/EEA readback bits.
     // Does not supply an initial address, IRQ status or sound data.
     void diagnostic_spu2_effect_address_reserved_zero();
+    // Behavioral-reference hypothesis, not a measured hardware rule: an
+    // inverted effect workspace performs no DSP memory accesses.
+    void diagnostic_spu2_inverted_effect_area_inactive();
     // Functional FIFO-to-RAM transfer with an explicit, unmeasured rate.
     // Select before guest execution. Reset removes this timing experiment.
     void diagnostic_spu2_pio_word_cycles(std::uint32_t cycles);
@@ -346,6 +349,7 @@ private:
     std::optional<std::array<std::uint16_t,2>> diagnostic_spu2_effect_end_;
     std::optional<std::array<std::uint32_t,2>> diagnostic_spu2_effect_start_;
     bool diagnostic_spu2_effect_address_reserved_zero_{};
+    bool diagnostic_spu2_inverted_effect_area_inactive_{};
     std::array<bool,2> spu2_effect_area_dirty_{};
     // Quiet clocks are available only under the explicit cold-state
     // experiment: no active voices, inputs, effects or transfers.
