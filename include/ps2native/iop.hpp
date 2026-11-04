@@ -140,6 +140,7 @@ public:
     void advance_graphics(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu);
     void advance_vif_dma(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr);
     [[nodiscard]] bool writes_ee_ram() const noexcept { return (ee_dma_setup_[5][0].value_or(0u)&0x100u)!=0; }
+    [[nodiscard]] std::uint64_t ee_ram_write_generation() const noexcept {return ee_ram_write_generation_;}
     struct SifDmaMetrics {
         std::uint64_t bytes{}, source_full_cycles{}, destination_empty_cycles{};
         std::size_t peak_fifo_words{};
@@ -254,6 +255,7 @@ private:
     std::uint32_t iop_sif1_read(std::uint32_t address) const;
     void iop_sif1_write(std::uint32_t address, std::uint32_t value);
     std::span<std::uint8_t> ee_ram_;
+    std::uint64_t ee_ram_write_generation_{};
     std::span<std::uint8_t> ee_scratchpad_;
     std::unordered_map<std::uint32_t,std::uint32_t>* ee_ram_unknown_{};
     std::uint32_t ee_dctrl_{}, ee_dstat_{}, ee_sif1_chcr_{}, ee_sif1_madr_{}, ee_sif1_qwc_{};

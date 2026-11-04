@@ -305,6 +305,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     stop_cycle_ = 0;
     events_.clear();
     ee_ram_ = {};
+    ++ee_ram_write_generation_;
     ee_scratchpad_ = {};
     ee_ram_unknown_ = nullptr;
     ee_dctrl_ = ee_dstat_ = ee_sif1_chcr_ = ee_sif1_madr_ = ee_sif1_qwc_ = 0;
@@ -331,10 +332,12 @@ void Iop::load_program(std::span<const std::uint8_t> bytes, std::uint32_t addres
         static_cast<std::uint64_t>(entry) + 4u > address + bytes.size())
         throw std::runtime_error("invalid IOP bare-metal image range or entry");
     const auto ee_ram = ee_ram_;
+    const auto ee_write_generation=ee_ram_write_generation_;
     const auto ee_scratchpad = ee_scratchpad_;
     auto* ee_ram_unknown = ee_ram_unknown_;
     reset({}, nullptr);
     ee_ram_ = ee_ram;
+    ee_ram_write_generation_=ee_write_generation;
     ee_scratchpad_ = ee_scratchpad;
     ee_ram_unknown_ = ee_ram_unknown;
     std::copy(bytes.begin(), bytes.end(), ram_.begin() + address);
@@ -902,6 +905,7 @@ void Iop::pump_sif0() {
         for(unsigned w=0;w<4;++w) {
             const auto word=sif0_fifo_.front();sif0_fifo_.pop_front();
             for(unsigned b=0;b<4;++b)ee_ram_[*madr+w*4u+b]=static_cast<std::uint8_t>(word.value>>(b*8u));
+            ++ee_ram_write_generation_;
             if(ee_ram_unknown_) {
                 if(word.unknown)(*ee_ram_unknown_)[*madr+w*4u]=word.unknown;
                 else ee_ram_unknown_->erase(*madr+w*4u);

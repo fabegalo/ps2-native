@@ -241,18 +241,53 @@ public:
     void require_fpr_known(unsigned index,const char* operation) {
         if(s_.unknown_fpr_bits[index])stop(StopKind::NotModeled,std::string(operation)+" consumes unknown FPR bits");
     }
+    FpuAffine fpu_relation(unsigned index) {
+        const auto value=s_.fpr[index]&~s_.unknown_fpr_bits[index],unknown=s_.unknown_fpr_bits[index];
+        auto& relation=s_.fpr_affine[index];
+        if(!unknown || (unknown&0xFF800000u) || !(value&0x7F800000u)){relation={};return {};}
+        if(!relation.origin || relation.value!=value || relation.unknown!=unknown)
+            relation={m_.allocate_fpu_origin(),0,(value>>23u)&255u,false,value,unknown};
+        return relation;
+    }
     void fpu_binary(MipsOpcode op,std::uint32_t word) {
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
             stop(StopKind::GuestException,"FPU arithmetic with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
         const auto fs=ee::rd(word),ft=ee::rt(word),fd=ee::sa(word);
         const ObservedWord a{s_.fpr[fs]&~s_.unknown_fpr_bits[fs],s_.unknown_fpr_bits[fs]};
         ObservedWord b{s_.fpr[ft]&~s_.unknown_fpr_bits[ft],s_.unknown_fpr_bits[ft]};
-        if(op==MipsOpcode::SubS)b.value=(b.value^0x80000000u)&~b.unknown;
+        auto ar=fpu_relation(fs),br=fpu_relation(ft);
+        if(op==MipsOpcode::SubS) {
+            b.value=(b.value^0x80000000u)&~b.unknown;
+            br.negated=!br.negated;br.offset=-br.offset;
+        }
         // Shared EE/VU normal-value bounds. The low bits remain unknown;
         // neither a host product nor one endpoint substitutes for hardware.
-        const auto result=op==MipsOpcode::MulS ? vu_float_product(a,b) : vu_float_add(a,b);
+        std::optional<VuFloatResult> result;
+        FpuAffine relation;
+        if(op!=MipsOpcode::MulS && ar.origin && ar.origin==br.origin && ar.exponent==br.exponent && ar.negated!=br.negated) {
+            std::uint32_t flags=0;
+            result=VuFloatResult{{ee_fpu_scaled_integer(ar.offset+br.offset,ar.exponent,flags),0},flags};
+        } else result=op==MipsOpcode::MulS ? vu_float_product(a,b) : vu_float_add(a,b);
         if(!result)stop(StopKind::NotModeled,"FPU arithmetic cannot certify value/exception bounds; FS="+hex32(a.value)+", FT="+hex32(b.value));
+        if(op!=MipsOpcode::MulS && result->word.unknown && (a.unknown!=0u)!=(b.unknown!=0u)) {
+            const auto source=a.unknown ? a : b,constant=a.unknown ? b : a;
+            const auto inherited=a.unknown ? ar : br;
+            const auto exponent=(source.value>>23u)&255u;
+            const auto signed_mantissa=[](std::uint32_t bits) {
+                const auto m=static_cast<std::int64_t>((bits&0x7FFFFFu)|0x800000u);
+                return bits&0x80000000u ? -m : m;
+            };
+            if(inherited.origin && ((constant.value>>23u)&255u)<=exponent &&
+               ((result->word.value>>23u)&255u)==exponent && !((source.value^result->word.value)&0x80000000u)) {
+                std::uint32_t flags=0;const auto anchor=ee_fpu_add(source.value,constant.value,flags);
+                relation=inherited;relation.offset+=signed_mantissa(anchor)-signed_mantissa(source.value);
+            }
+        }
+        if(result->word.unknown && !relation.origin)
+            relation={m_.allocate_fpu_origin(),0,(result->word.value>>23u)&255u,false,0,0};
+        relation.value=result->word.value;relation.unknown=result->word.unknown;
         s_.fpr[fd]=result->word.value;s_.unknown_fpr_bits[fd]=result->word.unknown;
+        s_.fpr_affine[fd]=relation;
         s_.fcr31=(s_.fcr31&~0xC000u)|result->flags;
     }
     void cop1_transfer(bool store, std::uint32_t word) {
@@ -261,8 +296,10 @@ public:
                  " with Status.CU1 = 0: coprocessor unusable exception; vectoring is not modeled");
         const auto address = ee::effective_address(s_, word);
         const auto index=ee::rt(word);auto& fpr = s_.fpr[index];
-        if (store) m_.store32_observed(address,{fpr,s_.unknown_fpr_bits[index]});
-        else {const auto value=m_.load32_observed(address);fpr=value.value;s_.unknown_fpr_bits[index]=value.unknown;}
+        if (store) {
+            const auto relation=fpu_relation(index);const ObservedWord value{fpr,s_.unknown_fpr_bits[index]};
+            m_.store32_observed(address,value);m_.remember_fpu_relation(address,value,relation);
+        } else {const auto value=m_.load32_observed(address);fpr=value.value;s_.unknown_fpr_bits[index]=value.unknown;s_.fpr_affine[index]=m_.fpu_relation(address,value);}
     }
     void cop1_register(MipsOpcode op,std::uint32_t word) {
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
@@ -272,6 +309,7 @@ public:
             const auto mask=s_.unknown_fpr_bits[fs];
             s_.set_reg64_observed(rt,ee::sx32(s_.fpr[fs]),std::uint64_t{mask}|((mask&0x80000000u) ? 0xFFFFFFFF00000000ull : 0ull));
         } else if(op==MipsOpcode::Mtc1) {
+            s_.fpr_affine[fs]={};
             s_.unknown_fpr_bits[fs]=static_cast<std::uint32_t>(s_.unknown_gpr_bits[rt]);
             s_.fpr[fs]=static_cast<std::uint32_t>(s_.gpr[rt].low)&~s_.unknown_fpr_bits[fs];
         }
@@ -295,6 +333,7 @@ public:
             stop(StopKind::NotModeled,"MADD.S accumulator overflow state not modeled");
         s_.fpr[ee::sa(word)]=s_.fpu_acc;
         s_.unknown_fpr_bits[ee::sa(word)]=0;
+        s_.fpr_affine[ee::sa(word)]={};
         s_.fcr31&=~0x0000C000u; // no overflow/underflow from an exact zero product
     }
     void adda(std::uint32_t word) {
@@ -439,7 +478,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
                     result=(input&0x80000000u)|((exponent+127u)<<23u)|(mantissa&0x7FFFFFu);
                 }
             }
-            state.fpr[ee::sa(word)]=result;state.unknown_fpr_bits[ee::sa(word)]=0;break;
+            state.fpr[ee::sa(word)]=result;state.unknown_fpr_bits[ee::sa(word)]=0;state.fpr_affine[ee::sa(word)]={};break;
         }
         case MipsOpcode::AddS: case MipsOpcode::SubS:
             cpu.fpu_binary(instruction.opcode,word);break;
@@ -448,20 +487,30 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
                 cpu.stop(StopKind::GuestException,"FPU sign operation with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
             // Sign operations preserve all magnitude bits, including denormals
             // and exponent 255. They clear O/U causes, not their sticky history.
+            {
+            auto relation=cpu.fpu_relation(ee::rd(word));
+            if(instruction.opcode==MipsOpcode::NegS || (state.fpr[ee::rd(word)]&0x80000000u)) {
+                relation.negated=!relation.negated;relation.offset=-relation.offset;
+            }
             state.unknown_fpr_bits[ee::sa(word)]=state.unknown_fpr_bits[ee::rd(word)]&(instruction.opcode==MipsOpcode::AbsS ? 0x7FFFFFFFu : 0xFFFFFFFFu);
             state.fpr[ee::sa(word)]=(instruction.opcode==MipsOpcode::AbsS ?
                 state.fpr[ee::rd(word)]&0x7FFFFFFFu : state.fpr[ee::rd(word)]^0x80000000u);
             state.fpr[ee::sa(word)]&=~state.unknown_fpr_bits[ee::sa(word)];
+            relation.value=state.fpr[ee::sa(word)];relation.unknown=state.unknown_fpr_bits[ee::sa(word)];state.fpr_affine[ee::sa(word)]=relation;
+            }
             state.fcr31&=~0xC000u;break;
         case MipsOpcode::MovS:
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"MOV.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
-            state.fpr[ee::sa(word)]=state.fpr[ee::rd(word)];state.unknown_fpr_bits[ee::sa(word)]=state.unknown_fpr_bits[ee::rd(word)];break;
+            {
+            const auto relation=cpu.fpu_relation(ee::rd(word));
+            state.fpr[ee::sa(word)]=state.fpr[ee::rd(word)];state.unknown_fpr_bits[ee::sa(word)]=state.unknown_fpr_bits[ee::rd(word)];state.fpr_affine[ee::sa(word)]=relation;break;
+            }
         case MipsOpcode::DivS:
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"DIV.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
             cpu.require_fpr_known(ee::rd(word),"DIV.S");cpu.require_fpr_known(ee::rt(word),"DIV.S");
-            state.fpr[ee::sa(word)]=ee_fpu_divide(state.fpr[ee::rd(word)],state.fpr[ee::rt(word)],state.fcr31);state.unknown_fpr_bits[ee::sa(word)]=0;break;
+            state.fpr[ee::sa(word)]=ee_fpu_divide(state.fpr[ee::rd(word)],state.fpr[ee::rt(word)],state.fcr31);state.unknown_fpr_bits[ee::sa(word)]=0;state.fpr_affine[ee::sa(word)]={};break;
         case MipsOpcode::SqrtS: {
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"SQRT.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
@@ -475,6 +524,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
             if(!root)cpu.stop(StopKind::NotModeled,"SQRT.S nonnegative SRT root unavailable");
             state.fpr[ee::sa(word)]=exponent ? *root : input&0x80000000u;
             state.unknown_fpr_bits[ee::sa(word)]=0;
+            state.fpr_affine[ee::sa(word)]={};
             state.fcr31&=~0x30000u;
             if(exponent && (input&0x80000000u))state.fcr31|=0x20040u;
             break;

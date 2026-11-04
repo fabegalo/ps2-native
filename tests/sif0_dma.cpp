@@ -22,7 +22,10 @@ void transfer() {
     std::unordered_map<std::uint32_t,std::uint32_t> unknown{{0x10000u,0xFFFFFFFFu},{0x10100u,1u}};
     Iop iop;iop.reset({},nullptr);iop.load_program(sender(),0x1000,0x1000);iop.attach_ee_ram(ram);
     iop.attach_ee_ram(ram,&unknown);
-    arm(iop);iop.run_until(1800);
+    const auto write_generation=iop.ee_ram_write_generation();
+    arm(iop);require(iop.ee_ram_write_generation()==write_generation,"arming a DMA cannot fabricate an EE memory write generation");
+    iop.run_until(1800);
+    require(iop.ee_ram_write_generation()==write_generation+64u,"each actually written EE payload word invalidates cached numeric provenance");
     require(!iop.stopped(),"source/destination execute: "+iop.stop_reason().value_or(""));
     require(iop.sif0_metrics().bytes==256,"real DMA payload length");
     for(unsigned w=0;w<64;++w) {
@@ -180,6 +183,24 @@ void irq_entry() {
             (state.cp0(Cop0::Cause)&kStatusIM3) && state.cp0(Cop0::Epc)==0x80002000,
             "SIF0 completion enters architectural EE interrupt vector through IP3");
 }
+void fpu_provenance_invalidation() {
+    Memory memory;EEState state;
+    prepare_direct_elf(parse_ee_elf(direct_test::elf(direct_test::cpu())),nullptr,state,memory);
+    memory.load_iop_program(sender(64,0x10000u,true),0x1000,0x1000);
+    memory.write8(0xBC005002u,0x80);memory.write8(0xBC005003u,0x3F);
+    const ObservedWord opaque{0x3F800000u,0xFFFFu};
+    const auto origin=memory.allocate_fpu_origin();
+    memory.store32_observed(0x80010000u,opaque);
+    memory.remember_fpu_relation(0x80010000u,opaque,{origin,0,127,false,opaque.value,opaque.unknown});
+    require(memory.fpu_relation(0x80010000u,opaque).origin==origin,"opaque EE memory stores may retain their exact numeric origin");
+    memory.write32(0xB000E020,0);memory.write32(0xB000E000,1);
+    memory.write32(0xB000C020,0);memory.write32(0xB000C000,0x184);
+    state.retired_instructions=16000;(void)memory.read32(0xB000E010);
+    const auto delivered=memory.load32_observed(0x80010000u);
+    require(delivered.value==opaque.value && delivered.unknown==opaque.unknown && memory.iop().sif0_metrics().bytes==256,
+        "real SIF0 transfer can replace a word with identical value/unknown masks from a different opaque source");
+    require(!memory.fpu_relation(0x80010000u,delivered).origin,"actual external EE writes invalidate provenance even when a raw-bit fingerprint is unchanged");
+}
 void source_tag_irq() {
     using direct_test::store;
     for(unsigned enabled=0;enabled<2;++enabled) {
@@ -295,5 +316,5 @@ void partial_source() {
     }
 }
 }
-int main(){try{transfer();backpressure();refusal();opaque_payload();opaque_retained_lanes();opaque_tags_refuse();suspension();chain_source();source_tag_irq();late_master_enable();stop_idle_receiver();partial_source();irq_entry();return 0;}
+int main(){try{transfer();backpressure();refusal();opaque_payload();opaque_retained_lanes();opaque_tags_refuse();suspension();chain_source();source_tag_irq();late_master_enable();stop_idle_receiver();partial_source();irq_entry();fpu_provenance_invalidation();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -105,6 +105,18 @@ std::uint32_t ee_fpu_add(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31) {
     const auto significand=top>23u ? magnitude>>(top-23u) : magnitude<<(23u-top);
     return sign|(static_cast<std::uint32_t>(exponent)<<23u)|(significand&0x7FFFFFu);
 }
+std::uint32_t ee_fpu_scaled_integer(std::int64_t units,unsigned exponent,std::uint32_t& fcr31) {
+    fcr31&=~0xC000u;
+    if(!units)return 0;
+    const auto sign=units<0 ? 0x80000000u : 0u;
+    const auto magnitude=units<0 ? 0ull-static_cast<std::uint64_t>(units) : static_cast<std::uint64_t>(units);
+    const auto top=63u-static_cast<unsigned>(std::countl_zero(magnitude));
+    const auto result_exponent=static_cast<int>(exponent)+static_cast<int>(top)-23;
+    if(result_exponent<=0){fcr31|=0x4008u;return sign;}
+    if(result_exponent>255){fcr31|=0x8010u;return sign|0x7FFFFFFFu;}
+    const auto mantissa=top>23u ? magnitude>>(top-23u) : magnitude<<(23u-top);
+    return sign|(static_cast<std::uint32_t>(result_exponent)<<23u)|(static_cast<std::uint32_t>(mantissa)&0x7FFFFFu);
+}
 std::uint32_t ee_fpu_divide(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31) {
     const auto sign=(a^b)&0x80000000u;
     const auto ea=(a>>23u)&255u,eb=(b>>23u)&255u;

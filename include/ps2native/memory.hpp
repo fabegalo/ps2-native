@@ -1,4 +1,5 @@
 #pragma once
+#include "ps2native/fpu_affine.hpp"
 #include "ps2native/ee_registers.hpp"
 #include "ps2native/elf.hpp"
 #include <array>
@@ -116,6 +117,12 @@ public:
     [[nodiscard]] ObservedWord load8_observed(std::uint32_t guest_address) const;
     [[nodiscard]] ObservedWord load16_observed(std::uint32_t guest_address) const;
     [[nodiscard]] ObservedWord load32_observed(std::uint32_t guest_address) const;
+    [[nodiscard]] FpuAffine fpu_relation(std::uint32_t address,ObservedWord word) const;
+    void remember_fpu_relation(std::uint32_t address,ObservedWord word,FpuAffine relation);
+    [[nodiscard]] std::uint64_t allocate_fpu_origin() {
+        if(fpu_origin_==UINT64_MAX)throw std::overflow_error("FPU origin counter exhausted");
+        return ++fpu_origin_;
+    }
     [[nodiscard]] std::uint64_t read64(std::uint32_t guest_address) const;
     [[nodiscard]] ObservedDoubleword load64_observed(std::uint32_t guest_address) const;
     // Host diagnostics only: inspect backing RAM without TLB/cache access,
@@ -264,6 +271,9 @@ private:
     // Physical aligned word -> symbolic bits. Scratchpad keys have bit 31 set;
     // aliases share metadata, ordinary known RAM pays no per-byte allocation.
     mutable std::unordered_map<std::uint32_t, std::uint32_t> unknown_words_;
+    struct StoredFpuRelation {ObservedWord word;FpuAffine relation;std::uint64_t dma_generation;};
+    std::unordered_map<std::uint32_t,StoredFpuRelation> fpu_relations_;
+    std::uint64_t fpu_origin_{};
     // EE register reads can have side effects (timers sample the clock).
     mutable EeRegisters registers_;
     std::vector<std::uint8_t> rom_;

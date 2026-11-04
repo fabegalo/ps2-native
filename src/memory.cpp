@@ -160,7 +160,7 @@ std::size_t Memory::physical_address(std::uint32_t address, std::size_t size) {
 
 void Memory::load(const ElfImage& elf) {
     reset_data_cache();
-    unknown_words_.clear();
+    unknown_words_.clear();fpu_relations_.clear();
     privilege_ = Privilege::Kernel;
     mapping_ = Mapping::ElfProgram;
     rom_.clear();
@@ -181,7 +181,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
         throw std::runtime_error("BIOS ROM0 must be exactly 4 MiB to be mapped at 0x1FC00000");
     mapping_ = Mapping::HardwareReset;
     reset_data_cache();
-    unknown_words_.clear();
+    unknown_words_.clear();fpu_relations_.clear();
     std::fill(ram_.begin(), ram_.end(), std::uint8_t{0});
     rom_.assign(rom0.begin(), rom0.end());
     rom1_.assign(rom1.begin(),rom1.end());
@@ -470,6 +470,10 @@ void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t val
     // The lazy IOP must consume old EE source bytes before this CPU store.
     if (registers_.dma_reads_ram() || registers_.dma_writes_ram()) registers_.sync_iop();
     const auto target = resolve(address, size, true, what);
+    if(!fpu_relations_.empty() && (target.region==BusRegion::MainRam || target.region==BusRegion::Scratchpad)) {
+        const auto prefix=target.region==BusRegion::Scratchpad ? 0x80000000u : 0u;
+        for(auto at=target.offset&~3u;at<=((target.offset+size-1u)&~3u);at+=4u)fpu_relations_.erase(prefix|at);
+    }
     if (unknown && target.region != BusRegion::MainRam && target.region != BusRegion::Scratchpad && target.region!=BusRegion::VuMemory &&
         (size != 4u || target.physical != 0x1000E020u))
         throw device_refusal(BusFault::Device, true, size, address, target.physical, target.region, what,
@@ -569,6 +573,25 @@ void Memory::store_bytes_observed(std::uint32_t address,std::size_t bytes,Observ
     }
     for(std::size_t b=0;b<bytes;++b)
         write_le(address+static_cast<std::uint32_t>(b),1,word.value>>(b*8u),"partial store",(word.unknown>>(b*8u))&0xFFu);
+}
+FpuAffine Memory::fpu_relation(std::uint32_t address,ObservedWord word) const {
+    if(!word.unknown || data_cache_model_)return {};
+    const auto target=resolve(address,4,false,"FPU relation");
+    if(target.region!=BusRegion::MainRam && target.region!=BusRegion::Scratchpad)return {};
+    const auto key=static_cast<std::uint32_t>(target.offset)|(target.region==BusRegion::Scratchpad ? 0x80000000u : 0u);
+    const auto found=fpu_relations_.find(key);
+    if(found==fpu_relations_.end())return {};
+    const auto& stored=found->second;
+    if(stored.word.value!=word.value || stored.word.unknown!=word.unknown ||
+       stored.dma_generation!=registers_.iop().ee_ram_write_generation())return {};
+    return stored.relation;
+}
+void Memory::remember_fpu_relation(std::uint32_t address,ObservedWord word,FpuAffine relation) {
+    if(!word.unknown || !relation.origin || data_cache_model_)return;
+    const auto target=resolve(address,4,true,"FPU relation");
+    if(target.region!=BusRegion::MainRam && target.region!=BusRegion::Scratchpad)return;
+    const auto key=static_cast<std::uint32_t>(target.offset)|(target.region==BusRegion::Scratchpad ? 0x80000000u : 0u);
+    fpu_relations_[key]={word,relation,registers_.iop().ee_ram_write_generation()};
 }
 void Memory::store32_observed(std::uint32_t address, ObservedWord word) {
     write_le(address, 4, word.value, "SW", word.unknown);

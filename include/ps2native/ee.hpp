@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include "ps2native/fpu_affine.hpp"
 namespace ps2native {
 // Full 128-bit GPR storage. Implemented instructions operate on the lower
 // 64 bits and preserve the upper 64 bits, except LQ/SQ which move all 128.
@@ -50,6 +51,7 @@ struct EEState {
     // Numeric uncertainty from certified arithmetic bounds and opaque raw
     // transfers. A numeric consumer must prove its result or refuse.
     std::array<std::uint32_t, 32> unknown_fpr_bits{};
+    std::array<FpuAffine,32> fpr_affine{};
     std::uint32_t fcr31{0x01000001u}; // fixed bits + reset flags (EE Core manual)
     std::uint32_t fpu_acc{}; // same explicit reset hypothesis as raw FPRs
     std::uint32_t pc{};

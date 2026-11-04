@@ -44,5 +44,23 @@ int main() try {
     step(math(0x30,0,6,2));require(!(state.fcr31&(1u<<23u)),"C.F.S proves false without consuming unknown numeric operands in either engine");
     memory.write32(0x80002000,0x40000000);step(0xC4270000);
     require(state.fpr[7]==0x40000000 && !state.unknown_fpr_bits[7],"a known load replaces old FPR uncertainty");
+    state.fpr[4]=0xBF490000u;state.unknown_fpr_bits[4]=0x1FFFu;
+    state.fpr[3]=0x37B54442u;state.unknown_fpr_bits[3]=0;
+    step(math(1,0,4,3));require(state.unknown_fpr_bits[0],"subtraction retains the uncertain source fraction");
+    state.set_reg64(1,0x80002000);step(0xE4200000);step(0xC4210000);step(math(1,0,4,1));
+    require(state.fpr[0]==0x37B50000u && !state.unknown_fpr_bits[0],
+        "correlated x-(x-c) cancels the same uncertain mantissa after a real SWC1/LWC1 round trip, with exact EE guard-column loss: "+hex8(state.fpr[0])+" unknown="+hex8(state.unknown_fpr_bits[0]));
+    for(unsigned n=0;n<8192;++n) {
+        std::uint32_t flags=0;const auto original=0xBF490000u|n;
+        const auto reduced=ee_fpu_add(original,0xB7B54442u,flags);
+        require(ee_fpu_add(original,reduced^0x80000000u,flags)==0x37B50000u,
+            "all 8192 concrete source mantissas independently give the certified cancellation result");
+    }
+    step(math(1,0,4,3));step(0xE4200000);
+    const auto opaque=memory.load32_observed(0x80002000);memory.store32_observed(0xA0002000,opaque);
+    step(0xC4210000);rejects([&]{step(math(1,0,4,1));},"cannot certify");
+    require(state.unknown_fpr_bits[1],"an ordinary aliased RAM overwrite with identical opaque bits cannot retain a false origin relationship");
+    step(math(6,1,4,0));step(math(1,0,4,1));require(!state.fpr[0] && !state.unknown_fpr_bits[0],
+        "MOV.S preserves identity so subtraction of the same opaque value proves exact positive zero");
     std::cout<<"EE floating bounds, dominated addition, raw register/RAM transport, sign operations, consumer refusals and comparison parity passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
