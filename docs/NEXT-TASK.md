@@ -4,9 +4,14 @@ Pedido atual: continuar Super Bust-A-Move do aviso de Memory Card até o
 menu e comprovar resposta aos controles. SIO2 agora aceita press/release;
 Cross chegou aos buffers EE sem escrita host em RAM. O ensaio 104 passou
 ATE/AFAIL e mostrou créditos/logotipo Acclaim; parou em `0x1CD584` /
-7.176.168.746, C.LT.S. Comparações e branches COP1 implementados; sete
-testes focados passaram. Executar `out/game-first/superbust-menu105-run.cmd`
-após build coerente e continuar pelos próximos bloqueios. Só pixels reais.
+7.176.168.746, C.LT.S. Comparações/branches COP1 passaram em testes.
+Rodada 105 ativa; replay matemático parcial revelou VMULbc `0x1CD530`.
+Limite conservador de perda de MUL refinado e validado: 4 milhões de pares,
+zero divergências entre os aceitos; sete testes focados e BIOS original
+passaram. Replay isolado retorna, sem alegação de execução completa.
+Rodada `out/game-first/superbust-menu106-run.cmd` ativa com a correção.
+Acompanhar 105 até a recusa e 106 até o menu, corrigindo novos bloqueios.
+Só pixels reais. Entrada de 106 em `superbust-pad106.txt`, isolada de 105.
 Entrada supervisionada em `out/game-first/superbust-pad.txt`, palavra
 hex ativa baixa; `FFFF` solto, `BFFF` Cross, `FFF7` Start, `DFFF` Circle;
 `10000` encerra voluntariamente no próximo VBLANK conhecido.

@@ -344,6 +344,44 @@ Após ATE/AFAIL, a regressão do modo original manteve 17.690.079 /
 `0x80007D20`, 4.486.087 / `0x80005F00`, IOP 2.210.789 / `0x40B0` e
 RAM `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
 
+### Certificação adicional do multiplicador — continuação do menu
+
+A rotina isolada do bloqueio 104, com FPR/VF/GPR capturados e coeficientes
+do ELF original, passou C.LT.S e encontrou VMULbc em `0x1CD530`.
+Isso é replay matemático parcial, sem restauração de periféricos/IRQ;
+não é avanço comprovado da execução completa. O primeiro auxiliar ficou
+incompatível com cabeçalhos VU alterados em paralelo; o rebuild coerente
+resolveu a falha host, sem correção de jogo ou alteração convidada.
+
+Refinado o intervalo conservador de MUL: a soma dos pesos iniciais abaixo
+da coluna 15 limita a perda de TODOS os cortes. Compressores conservam
+peso; carries para coluna 15 e cortes apenas retiram peso dessas colunas.
+Só oito dígitos radix-4 as alcançam. Para linha negativa, complemento e
+correção separados pesam `2^15-resíduo`, inclusive `2^15` no resíduo zero.
+Aceita apenas quando os extremos do intervalo truncam ao mesmo resultado;
+árvore e casos restantes continuam explicitamente não modelados. O limite
+mais barato anterior permanece primeiro. Sem multiplicação float do host.
+Consulta PS2Recomp FPU/macros da revisão acima mantida como referência de
+comportamento, sem copiar/vincular sua implementação GPL.
+
+Quatro milhões de pares sintéticos reproduzíveis, com sinais/expoentes
+aleatórios e casos próximos de fronteiras, foram comparados em processo
+separado ao modelo externo de circuito: **3.953.261 aceitos, 46.739
+recusados, zero divergências**; flags intactas nas recusas. Regressões
+próprias cobrem a nova certificação, os três produtos da rotina e a fronteira
+que continua ambígua. Sete testes focados passaram. A rotina isolada agora
+retorna em `0x1CD5C4` após 41 instruções, incluindo VSQRT exata/VWAITQ.
+Não se apresenta isso como menu ou frame.
+
+Microbenchmark do caminho já aceito, mesmos 1 milhão de pares/10 repetições
+por amostra, cinco amostras: medianas 7,882 ns/produto antes e 8,147 ns
+depois (3,4% mais lento observado). Carga host concorrente não isolada;
+nenhum ganho de desempenho declarado. Regressão BIOS original repetida:
+mesmos PCs/contagens e RAM canônica `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
+Rodada completa 106 iniciada com a correção, entrada/capturas isoladas e
+limites de 90 minutos/16 bilhões. Rodada 105 permanece acompanhada até
+registrar seu próximo bloqueio real; ainda sem menu comprovado.
+
 BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;
 ELF `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`.
 Seis arquivos IOP/IOPRP202, com hashes locais em `out/game-first/superbust-irx-manifest.json`.

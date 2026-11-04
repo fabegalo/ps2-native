@@ -450,8 +450,19 @@ void divider() {
     require(!ee_fpu_multiply(0x3F800000,0x3F808801,fcr) &&
             !ee_fpu_multiply(0x3F800001,0x3F800003,fcr),
             "other negative digits and non-power multiplicands remain unproven");
-    require(!ee_fpu_multiply(0x3F800001,0x3F800001,fcr) && fcr==flags,
-            "general asymmetric Booth case cannot substitute host multiplication or change flags");
+    require(!ee_fpu_multiply(0x3F800002,0x3F800003,fcr) && fcr==flags,
+            "ambiguous low-column mass cannot substitute host multiplication or change flags");
+    require(ee_fpu_multiply(0x3F800001,0x3F800001,fcr)==0x3F800002,
+            "one unit of initial low-column weight cannot cross the retained boundary");
+    // Independently checked against an external circuit model. These require
+    // the initial-weight bound; the coarser compressor-count bound refused.
+    require(ee_fpu_multiply(0x37292FF7,0x401DE9E6,fcr)==0x37D0B9FE &&
+            ee_fpu_multiply(0xBA493EFB,0x401DE9E6,fcr)==0xBAF846FE &&
+            ee_fpu_multiply(0x3D0449DE,0x401DE9E6,fcr)==0x3DA33456,
+            "initial low-column mass certifies nonsparse products across signs and exponents");
+    fcr=0x0183FFFF;
+    require(ee_fpu_multiply(0x3F800001,0x3F800001,fcr)==0x3F800002 && fcr==0x01833FFF,
+            "certified product clears only overflow/underflow causes");
     // Published physical VU observation: 1 * 129.5 loses one output ULP.
     // The shared multiplier boundary is asymmetric; the operand order matters.
     require(ee_fpu_multiply(0x3F800000,0x43018000,fcr)==0x43017FFF &&

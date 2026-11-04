@@ -18,6 +18,14 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **Continuação do menu em execução:** limite conservador do multiplicador
+  refinado por conservação de peso das colunas baixas. Quatro milhões de
+  pares sintéticos: 3.953.261 aceitos, 46.739 recusados, zero divergências
+  contra modelo externo separado. Sete testes focados e regressão BIOS
+  original passaram. Rotina matemática isolada agora retorna; isso não
+  comprova avanço completo. Rodadas supervisionadas 105/106 acompanhadas;
+  ainda sem menu ou navegação visível demonstrados. Detalhes no relatório
+  [primeiro jogo](docs/FIRST-GAME-STATUS.md#certificação-adicional-do-multiplicador--continuação-do-menu).
 - **Super Bust-A-Move passou do aviso para a abertura real:** ensaio 104
   mostrou créditos e logotipo Acclaim por comandos do jogo após ATE/AFAIL
   do GS. Menu ainda não demonstrado. Novo bloqueio EE `0x1CD584` /

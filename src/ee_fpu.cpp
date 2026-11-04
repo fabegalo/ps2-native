@@ -149,7 +149,26 @@ std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std
         // retained products give the same chopped 24-bit result, the tree
         // cannot affect this instruction. Boundary cases remain explicit.
         const auto precision=(product&(1ull<<47u)) ? 24u : 23u;
-        if((lower>>precision)!=(product>>precision))return std::nullopt;
+        if((lower>>precision)!=(product>>precision)) {
+            // Refine only the formerly ambiguous slow path. Low-column weight
+            // is conserved by a compressor; carries into column 15 and cuts
+            // can only remove it. Therefore ALL cuts together cannot lose more
+            // than the initial weight below column 15, regardless of the tree.
+            // Only the first eight radix-4 digits reach those columns. A
+            // negative row's complement plus its separate correction carries
+            // weight 2^15-residue (also 2^15 when the residue is zero).
+            std::uint64_t low_mass=0;
+            const auto multiplier=(b&0x7FFFFFu)|0x800000u;
+            for(unsigned stage=0;stage<8;++stage) {
+                const auto pattern=((std::uint64_t{multiplier}<<1u)>>(2u*stage))&7u;
+                const int booth=int(pattern&1u)+int((pattern>>1u)&1u)-2*int(pattern>>2u);
+                if(!booth)continue;
+                const auto magnitude=booth<0 ? -booth : booth;
+                const auto residue=((std::uint64_t{significand_a}*magnitude)<<(2u*stage))&0x7FFFu;
+                low_mass+=booth<0 ? 0x8000u-residue : residue;
+            }
+            if(((product-low_mass)>>precision)!=(product>>precision))return std::nullopt;
+        }
     }
     // With at least 16 trailing multiplier zeroes, the first nonzero Booth
     // digit and its sign correction start at column 16 or above. No partial
