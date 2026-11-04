@@ -373,7 +373,8 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         const auto word = m.load32_observed(effective_address(s, w));
         s.set_reg64_observed(t_, word.value, word.unknown);
     } else if constexpr (Op == O::Ld) {
-        s.set_reg64(t_, m.read64(effective_address(s, w)));
+        const auto word=m.load64_observed(effective_address(s,w));
+        s.set_reg64_observed(t_,word.value,word.unknown);
     // LQ/SQ silently clear the low four address bits (no address error).
     } else if constexpr (Op == O::Lq) {
         const auto quad = effective_address(s, w) & ~15u;
@@ -384,9 +385,13 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     } else if constexpr (Op == O::Sh) {
         m.write16(effective_address(s, w), static_cast<std::uint16_t>(s.reg32(t_)));
     } else if constexpr (Op == O::Sw) {
-        m.write32(effective_address(s, w), s.reg32(t_));
+        const auto unknown = static_cast<std::uint32_t>(s.unknown_gpr_bits[t_]);
+        if (unknown) m.store32_observed(effective_address(s, w), {static_cast<std::uint32_t>(raw_gpr64(s,t_)),unknown});
+        else m.write32(effective_address(s, w), s.reg32(t_));
     } else if constexpr (Op == O::Sd) {
-        m.write64(effective_address(s, w), s.reg64(t_));
+        const auto unknown=s.unknown_gpr_bits[t_];
+        if (unknown) m.store64_observed(effective_address(s,w),{raw_gpr64(s,t_),unknown});
+        else m.write64(effective_address(s,w),s.reg64(t_));
     } else if constexpr (Op == O::Sq) {
         const auto quad = effective_address(s, w) & ~15u;
         const auto value = s.reg128(t_);

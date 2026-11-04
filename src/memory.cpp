@@ -145,6 +145,7 @@ std::size_t Memory::physical_address(std::uint32_t address, std::size_t size) {
 }
 
 void Memory::load(const ElfImage& elf) {
+    unknown_words_.clear();
     privilege_ = Privilege::Kernel;
     mapping_ = Mapping::ElfProgram;
     rom_.clear();
@@ -162,6 +163,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
     if (rom0.size() != kBiosRomBytes)
         throw std::runtime_error("BIOS ROM0 must be exactly 4 MiB to be mapped at 0x1FC00000");
     mapping_ = Mapping::HardwareReset;
+    unknown_words_.clear();
     std::fill(ram_.begin(), ram_.end(), std::uint8_t{0});
     rom_.assign(rom0.begin(), rom0.end());
     scratchpad_.assign(kScratchpadBytes, 0);
@@ -171,7 +173,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
     error_level_ = true;
     privilege_ = Privilege::Kernel;
     registers_.reset(hardware, rom_, nvm, assumptions);
-    registers_.attach_ee_ram(ram_);
+    registers_.attach_ee_ram(ram_, &unknown_words_);
 }
 
 void Memory::load_direct_elf(const ElfImage& elf) {
@@ -182,7 +184,7 @@ void Memory::load_direct_elf(const ElfImage& elf) {
     asid_ = 0;
     error_level_ = false;
     registers_.reset(); // No firmware, NVM, kernel services or running IOP.
-    registers_.attach_ee_ram(ram_);
+    registers_.attach_ee_ram(ram_, &unknown_words_);
 }
 
 void Memory::load_iop_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry) {
@@ -332,8 +334,33 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
     }
 }
 
+std::uint64_t Memory::storage_unknown(const Target& target, std::size_t size) const {
+    if (unknown_words_.empty() || target.region == BusRegion::BiosRom) return 0;
+    const auto base = target.offset | (target.region == BusRegion::Scratchpad ? 0x80000000u : 0u);
+    std::uint64_t unknown = 0;
+    for (std::size_t i = 0; i < size; ++i) {
+        const auto key = base + static_cast<std::uint32_t>(i);
+        const auto it = unknown_words_.find(key & ~3u);
+        if (it != unknown_words_.end())
+            unknown |= std::uint64_t{(it->second >> ((key & 3u) * 8u)) & 0xFFu} << (i * 8u);
+    }
+    return unknown;
+}
+void Memory::set_storage_unknown(const Target& target, std::size_t size, std::uint64_t unknown) {
+    if (!unknown && unknown_words_.empty()) return;
+    const auto base = target.offset | (target.region == BusRegion::Scratchpad ? 0x80000000u : 0u);
+    for (std::size_t i = 0; i < size; ++i) {
+        const auto key = base + static_cast<std::uint32_t>(i);
+        const auto shift = (key & 3u) * 8u;
+        const auto bits = static_cast<std::uint32_t>((unknown >> (i * 8u)) & 0xFFu) << shift;
+        const auto it = unknown_words_.find(key & ~3u);
+        const auto next = (it == unknown_words_.end() ? 0u : it->second & ~(0xFFu << shift)) | bits;
+        if (next) unknown_words_[key & ~3u] = next;
+        else if (it != unknown_words_.end()) unknown_words_.erase(it);
+    }
+}
 std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const char* what, bool notify,
-                              std::uint32_t* unknown) const {
+                              std::uint64_t* unknown) const {
     const auto target = resolve(address, size, false, what);
     if (unknown) *unknown = 0;
     std::uint64_t value = 0;
@@ -347,12 +374,21 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
                 const auto observed = registers_.observe_intc();
                 value = observed.value;
                 *unknown = observed.unknown;
+            } else if (unknown != nullptr && size == 4u && target.physical == 0x1000E020u) {
+                const auto observed = registers_.observe_dma_word(target.physical);
+                value = observed.value;
+                *unknown = observed.unknown;
             } else value = registers_.read(target.physical, size);
         } catch (const DeviceRefusal& refusal) {
             throw device_refusal(BusFault::Device, false, size, address, target.physical, target.region, what,
                                  refusal.what());
         }
     } else {
+        const auto symbolic = storage_unknown(target, size);
+        if (symbolic && !unknown)
+            throw device_refusal(BusFault::Device, false, size, address, target.physical, target.region, what,
+                                 "read consumes unknown RAM bits");
+        if (unknown) *unknown = symbolic;
         const auto& storage = target.region == BusRegion::BiosRom ? rom_
                             : target.region == BusRegion::Scratchpad ? scratchpad_ : ram_;
         for (std::size_t i = 0; i < size; ++i)
@@ -363,13 +399,21 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
                                   target.region, value, unknown ? *unknown : 0u});
     return value;
 }
-void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t value, const char* what) {
+void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t value, const char* what,
+                       std::uint64_t unknown) {
     // The lazy IOP must consume old EE source bytes before this CPU store.
     if (registers_.dma_reads_ram()) registers_.sync_iop();
     const auto target = resolve(address, size, true, what);
+    if (unknown && target.region != BusRegion::MainRam && target.region != BusRegion::Scratchpad &&
+        (size != 4u || target.physical != 0x1000E020u))
+        throw device_refusal(BusFault::Device, true, size, address, target.physical, target.region, what,
+                             "unknown MMIO bits cannot be stored in this device");
+    value &= ~std::uint64_t{unknown};
     if (is_ee_register_region(target.region)) {
         try {
-            registers_.write(target.physical, size, value);
+            if (unknown) registers_.write_dma_word(target.physical,
+                {static_cast<std::uint32_t>(value),static_cast<std::uint32_t>(unknown)});
+            else registers_.write(target.physical, size, value);
         } catch (const DeviceRefusal& refusal) {
             throw device_refusal(BusFault::Device, true, size, address, target.physical, target.region, what,
                                  refusal.what());
@@ -378,10 +422,11 @@ void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t val
         auto& storage = target.region == BusRegion::Scratchpad ? scratchpad_ : ram_;
         for (std::size_t i = 0; i < size; ++i)
             storage[target.offset + i] = static_cast<std::uint8_t>(value >> (8u * i));
+        set_storage_unknown(target, size, unknown);
     }
     if (observer_ != nullptr)
         observer_->on_bus_access({true, static_cast<std::uint8_t>(size), address, target.physical,
-                                  target.region, value});
+                                  target.region, value, unknown});
 }
 std::uint32_t Memory::translate(std::uint32_t address, bool write) const {
     return resolve(address & ~3u, 4, write, "CACHE").physical;
@@ -402,18 +447,29 @@ std::uint32_t Memory::read32(std::uint32_t address) const {
     return static_cast<std::uint32_t>(read_le(address, 4, "LW", true));
 }
 ObservedWord Memory::load32_observed(std::uint32_t address) const {
-    ObservedWord word;
-    word.value = static_cast<std::uint32_t>(read_le(address, 4, "LW", true, &word.unknown));
+    std::uint64_t unknown{};
+    const auto value=read_le(address, 4, "LW", true, &unknown);
+    return {static_cast<std::uint32_t>(value),static_cast<std::uint32_t>(unknown)};
+}
+ObservedDoubleword Memory::load64_observed(std::uint32_t address) const {
+    ObservedDoubleword word;
+    word.value=read_le(address,8,"LD",true,&word.unknown);
     return word;
 }
 void Memory::write32(std::uint32_t address, std::uint32_t value) {
     write_le(address, 4, value, "SW");
+}
+void Memory::store32_observed(std::uint32_t address, ObservedWord word) {
+    write_le(address, 4, word.value, "SW", word.unknown);
 }
 std::uint64_t Memory::read64(std::uint32_t address) const {
     return read_le(address, 8, "LD", true);
 }
 void Memory::write64(std::uint32_t address, std::uint64_t value) {
     write_le(address, 8, value, "SD");
+}
+void Memory::store64_observed(std::uint32_t address, ObservedDoubleword word) {
+    write_le(address,8,word.value,"SD",word.unknown);
 }
 void Memory::write128(std::uint32_t address, std::uint64_t low, std::uint64_t high) {
     // The low half resolves exactly as before; a 16-byte aligned quadword never

@@ -24,8 +24,6 @@
 #include <string>
 
 namespace ps2native {
-// Bits marked unknown are symbolic, never a default hardware response.
-struct ObservedWord { std::uint32_t value{}, unknown{}; };
 // DEV9 interface registers 0x1F801470/0x1F801472 (ps2sdk dev9regs.h names
 // them only by address). The RDRAM module pulses them (1472 = 1, 1470 = 0,
 // 1472 = 0, ~555-iteration delay, 1472 = 1); their function is undocumented.
@@ -80,10 +78,15 @@ public:
     // timing is refused only when it can affect the requested source bits.
     [[nodiscard]] bool intc_interrupt_pending();
     [[nodiscard]] ObservedWord observe_intc(std::uint32_t needed = 0x7FFFu);
+    [[nodiscard]] ObservedWord observe_dma_word(std::uint32_t physical);
+    void write_dma_word(std::uint32_t physical, ObservedWord word);
     // Runs the IOP up to the current EE time.
     void sync_iop();
     [[nodiscard]] bool dma_reads_ram() const noexcept { return iop_.reads_ee_ram(); }
-    void attach_ee_ram(std::span<std::uint8_t> ram) { iop_.attach_ee_ram(ram); }
+    void attach_ee_ram(std::span<std::uint8_t> ram,
+                       const std::unordered_map<std::uint32_t,std::uint32_t>* unknown = nullptr) {
+        iop_.attach_ee_ram(ram, unknown);
+    }
     void load_iop_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry) {
         iop_.load_program(bytes, address, entry);
     }

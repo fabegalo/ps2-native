@@ -8,6 +8,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 namespace ps2native {
 // Physical EE bus regions. Main RAM, the BIOS ROM and the scratchpad are
@@ -113,10 +114,13 @@ public:
     // proves them irrelevant. Other reads remain strict.
     [[nodiscard]] ObservedWord load32_observed(std::uint32_t guest_address) const;
     [[nodiscard]] std::uint64_t read64(std::uint32_t guest_address) const;
+    [[nodiscard]] ObservedDoubleword load64_observed(std::uint32_t guest_address) const;
     void write8(std::uint32_t guest_address, std::uint8_t value);
     void write16(std::uint32_t guest_address, std::uint16_t value);
     void write32(std::uint32_t guest_address, std::uint32_t value);
+    void store32_observed(std::uint32_t guest_address, ObservedWord word);
     void write64(std::uint32_t guest_address, std::uint64_t value);
+    void store64_observed(std::uint32_t guest_address, ObservedDoubleword word);
     // SQ: one 128-bit store at a 16-byte aligned address. Memory takes it as
     // two 64-bit halves (traced as such); a device register (the GIF FIFO)
     // receives the whole quadword at once.
@@ -160,9 +164,15 @@ private:
     [[nodiscard]] std::uint32_t translate_tlb(std::uint32_t guest_address, std::size_t size, bool write,
                                               bool& scratchpad) const;
     [[nodiscard]] std::uint64_t read_le(std::uint32_t guest_address, std::size_t size, const char* what,
-                                        bool notify, std::uint32_t* unknown = nullptr) const;
-    void write_le(std::uint32_t guest_address, std::size_t size, std::uint64_t value, const char* what);
+                                        bool notify, std::uint64_t* unknown = nullptr) const;
+    void write_le(std::uint32_t guest_address, std::size_t size, std::uint64_t value, const char* what,
+                  std::uint64_t unknown = 0u);
+    [[nodiscard]] std::uint64_t storage_unknown(const Target& target, std::size_t size) const;
+    void set_storage_unknown(const Target& target, std::size_t size, std::uint64_t unknown);
     std::vector<std::uint8_t> ram_;
+    // Physical aligned word -> symbolic bits. Scratchpad keys have bit 31 set;
+    // aliases share metadata, ordinary known RAM pays no per-byte allocation.
+    std::unordered_map<std::uint32_t, std::uint32_t> unknown_words_;
     // EE register reads can have side effects (timers sample the clock).
     mutable EeRegisters registers_;
     std::vector<std::uint8_t> rom_;

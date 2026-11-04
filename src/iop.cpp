@@ -210,7 +210,12 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     stop_cycle_ = 0;
     events_.clear();
     ee_ram_ = {};
+    ee_ram_unknown_ = nullptr;
     ee_dctrl_ = ee_dstat_ = ee_sif1_chcr_ = ee_sif1_madr_ = ee_sif1_qwc_ = 0;
+    ee_dma_setup_ = {}; ee_dma_global_ = {};
+    // Do not invent PCR reset fields: backing zeros are entirely symbolic.
+    ee_dma_global_[0] = 0u;
+    ee_dma_global_unknown_ = {0x83FF03FFu, 0u, 0u, 0u};
     iop_sif1_ = {};
     sif1_fifo_.clear();
     sif1_have_tag_ = sif1_end_ = false;
@@ -225,8 +230,10 @@ void Iop::load_program(std::span<const std::uint8_t> bytes, std::uint32_t addres
         static_cast<std::uint64_t>(entry) + 4u > address + bytes.size())
         throw std::runtime_error("invalid IOP bare-metal image range or entry");
     const auto ee_ram = ee_ram_;
+    const auto* ee_ram_unknown = ee_ram_unknown_;
     reset({}, nullptr);
     ee_ram_ = ee_ram;
+    ee_ram_unknown_ = ee_ram_unknown;
     std::copy(bytes.begin(), bytes.end(), ram_.begin() + address);
     std::fill_n(ram_written_.begin() + address, bytes.size(), std::uint8_t{1});
     pc_ = entry;
@@ -237,6 +244,37 @@ void Iop::load_program(std::span<const std::uint8_t> bytes, std::uint32_t addres
     hi_ = lo_ = 0u;
 }
 
+namespace {
+constexpr std::array<std::uint32_t, 10> kEeDmaBases{
+    0x10008000u,0x10009000u,0x1000A000u,0x1000B000u,0x1000B400u,
+    0x1000C000u,0x1000C400u,0x1000C800u,0x1000D000u,0x1000D400u};
+std::optional<std::pair<unsigned,unsigned>> ee_dma_field(std::uint32_t address) {
+    for (unsigned i=0;i<kEeDmaBases.size();++i) {
+        if (address>=kEeDmaBases[i] && address<=kEeDmaBases[i]+0x80u && !(address&15u)) {
+            const auto field=(address-kEeDmaBases[i])/16u;
+            if (field<=5u || field==8u) return std::pair{i,field};
+        }
+    }
+    return std::nullopt;
+}
+bool ee_dma_field_exists(unsigned channel,unsigned field) {
+    if(field<=2u)return true;
+    if(field==3u)return channel<=2u || channel==4u || channel==6u || channel==9u;
+    if(field<=5u)return channel<=2u;
+    return channel>=8u;
+}
+std::optional<bool> ee_dma_priority(ObservedWord pcr, unsigned channel) {
+    const auto enabled=1u<<(16u+channel);
+    if (!(pcr.unknown&0x80000000u) && !(pcr.value&0x80000000u)) return true;
+    if (!(pcr.unknown&enabled) && (pcr.value&enabled)) return true;
+    if (!(pcr.unknown&(0x80000000u|enabled))) return false;
+    return std::nullopt;
+}
+}
+bool Iop::ee_dma_address(std::uint32_t address) {
+    return ee_dma_field(address).has_value() ||
+        (address>=0x1000E000u && address<=0x1000E050u && !(address&15u));
+}
 std::uint32_t Iop::ee_dma_read(std::uint32_t address) const {
     switch (address) {
         case 0x1000E000u: return ee_dctrl_;
@@ -244,8 +282,23 @@ std::uint32_t Iop::ee_dma_read(std::uint32_t address) const {
         case 0x1000C400u: return ee_sif1_chcr_;
         case 0x1000C410u: return ee_sif1_madr_;
         case 0x1000C420u: return ee_sif1_qwc_;
-        default: throw DeviceRefusal("EE SIF1 DMA register not modeled");
+        default: break;
     }
+    if(address>=0x1000E020u && address<=0x1000E050u && !(address&15u)) {
+        const auto index=(address-0x1000E020u)/16u;
+        const auto& value=ee_dma_global_[index];
+        if(!value)throw DeviceRefusal("EE DMAC global register read before write");
+        if(ee_dma_global_unknown_[index])throw DeviceRefusal("EE DMAC global read consumes unknown reset bits");
+        return *value;
+    }
+    if(const auto f=ee_dma_field(address)) {
+        const auto [channel,field]=*f;
+        if(!ee_dma_field_exists(channel,field))throw DeviceRefusal("EE DMAC absent channel register read");
+        const auto& value=ee_dma_setup_[channel][field];
+        if(!value)throw DeviceRefusal("EE DMAC channel register read before write");
+        return *value;
+    }
+    throw DeviceRefusal("EE DMAC register not modeled");
 }
 void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
     if (address == 0x1000E000u) {
@@ -253,17 +306,33 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
         ee_dctrl_ = value; return;
     }
     if (address == 0x1000E010u) {
-        // Only channel 6 is implemented. Do not invent flags of other channels.
-        if (value & ~0x00400040u) throw DeviceRefusal("D_STAT: only SIF1 status/mask supported");
-        ee_dstat_ = (ee_dstat_ & ~(value & 0x40u)) ^ (value & 0x00400000u); return;
+        // Other channels cannot start until their engines exist, so they
+        // cannot fabricate completion/stall flags. Masks are independent.
+        ee_dstat_ = (ee_dstat_ & ~(value & 0xE3FFu)) ^ (value & 0x63FF0000u); return;
     }
-    if (ee_sif1_chcr_ & 0x100u) throw DeviceRefusal("EE SIF1 DMA register write while busy");
+    if(address>=0x1000E020u && address<=0x1000E050u && !(address&15u)) {
+        constexpr std::uint32_t masks[]{0x83FF03FFu,0x00FF00FFu,0x7FFFFFF0u,0x7FFFFFF0u};
+        const auto index=(address-0x1000E020u)/16u;
+        ee_dma_global_[index]=value&masks[index]; ee_dma_global_unknown_[index]=0; return;
+    }
+    const auto decoded=ee_dma_field(address);
+    if(!decoded)throw DeviceRefusal("EE DMAC register not modeled");
+    const auto [channel,field]=*decoded;
+    if(channel==6u && (ee_sif1_chcr_ & 0x100u)) throw DeviceRefusal("EE SIF1 DMA register write while busy");
+    if(!ee_dma_field_exists(channel,field)) {
+        // SDK dma_channel_initialize also clears unused channel slots. Only
+        // inert zero stores are accepted; no value for an absent read is made up.
+        if(value)throw DeviceRefusal("EE DMAC nonzero write to absent channel register");
+        return;
+    }
     if (address == 0x1000C400u) {
         if (value != 0u && value != 1u && value != 0x101u)
             throw DeviceRefusal("EE SIF1: only normal source mode supported; chain/interleave/TTE/TIE unsupported");
         const auto size = static_cast<std::size_t>(ee_sif1_qwc_) * 16u;
         if ((value & 0x100u) && (ee_sif1_madr_ > ee_ram_.size() || size > ee_ram_.size() - ee_sif1_madr_))
             throw DeviceRefusal("EE SIF1 DMA source outside main RAM");
+        if ((value&0x100u) && !ee_dma_priority(ee_dma_observe(0x1000E020u),6u).has_value())
+            throw DeviceRefusal("EE SIF1 priority depends on unknown D_PCR reset bits");
         ee_sif1_chcr_ = value; return;
     }
     if (address == 0x1000C410u) {
@@ -271,7 +340,25 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
         ee_sif1_madr_ = value; return;
     }
     if (address == 0x1000C420u) { ee_sif1_qwc_ = value & 0xFFFFu; return; }
-    throw DeviceRefusal("EE SIF1 DMA register not modeled");
+    if(field==0u && (value&0x100u))
+        throw DeviceRefusal("EE DMAC channel "+std::to_string(channel)+" transfer engine is not modeled");
+    constexpr std::uint32_t masks[]{0xFFFF01FDu,0xFFFFFFF0u,0xFFFFu,0xFFFFFFF0u,
+                                   0xFFFFFFF0u,0xFFFFFFF0u,0u,0u,0x3FF0u};
+    if(field!=0u && field!=2u && (value&15u))throw DeviceRefusal("EE DMAC address must be qword aligned");
+    const auto mask=(field==1u && channel>=8u) ? 0x7FFFFFF0u : masks[field];
+    ee_dma_setup_[channel][field]=value&mask;
+}
+ObservedWord Iop::ee_dma_observe(std::uint32_t address) const {
+    if(address==0x1000E020u) return {*ee_dma_global_[0], ee_dma_global_unknown_[0]};
+    return {ee_dma_read(address), 0u};
+}
+void Iop::ee_dma_write_observed(std::uint32_t address, ObservedWord word) {
+    if(!word.unknown) {ee_dma_write(address,word.value); return;}
+    if(address!=0x1000E020u)throw DeviceRefusal("unknown MMIO bits cannot be stored in this DMA register");
+    if((ee_sif1_chcr_&0x100u) && !ee_dma_priority(word,6u).has_value())
+        throw DeviceRefusal("active EE SIF1 priority would become unknown");
+    ee_dma_global_[0]=word.value&~word.unknown&0x83FF03FFu;
+    ee_dma_global_unknown_[0]=word.unknown&0x83FF03FFu;
 }
 std::uint32_t Iop::iop_sif1_read(std::uint32_t address) const {
     return iop_sif1_.at((address - 0x1F801530u) / 4u);
@@ -287,8 +374,19 @@ void Iop::iop_sif1_write(std::uint32_t address, std::uint32_t value) {
 void Iop::pump_sif1() {
     // Experimental throughput: one qword per IOP instruction, bounded at 32
     // words. It preserves backpressure/order, not physical bus latency.
-    if ((ee_dctrl_ & 1u) && (ee_sif1_chcr_ & 0x100u)) {
+    bool source_enabled=(ee_dctrl_&1u) && (ee_sif1_chcr_&0x100u);
+    if(source_enabled) {
+        const auto priority=ee_dma_priority(ee_dma_observe(0x1000E020u),6u);
+        if(!priority)throw IopStop{"EE SIF1 priority is unknown"};
+        source_enabled=*priority;
+    }
+    if (source_enabled) {
         if (ee_sif1_qwc_ && sif1_fifo_.size() <= 28u) {
+            // Refuse the whole qword before enqueuing any placeholder bytes.
+            if (ee_ram_unknown_ && !ee_ram_unknown_->empty())
+                for (unsigned w = 0; w < 4u; ++w)
+                    if (ee_ram_unknown_->contains(ee_sif1_madr_ + w * 4u))
+                        throw IopStop{"EE SIF1 source consumes unknown RAM bits"};
             for (unsigned w = 0; w < 4u; ++w) {
                 std::uint32_t word = 0;
                 for (unsigned b = 0; b < 4u; ++b)

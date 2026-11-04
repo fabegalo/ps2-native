@@ -14,6 +14,9 @@ inline Program program() {
     // must prove the unknown vertical bits disappear, without making them 0.
     a.la(t0, 0xB000F000u); a.lw(t1, 0, t0); a.ori(t2, zero, 1u);
     a.r(t1, t2, t1, 0, 0x24u); a.sw(t1, 0, t0);
+    a.la(t0, 0xB000E020u); a.lw(t1, 0, t0); a.la(t2, 0xFFFFFC00u);
+    a.la(t3, 0x80001800u); a.sw(t1, 0, t3); a.lw(t1, 0, t3); // actual stack spill/reload
+    a.r(t1, t2, t1, 0, 0x24u); a.sw(t1, 0, t0); // retain unknown PCR bits outside CPC
     a.la(t0, 0xB2000010u); a.la(t1, 1u << 17); a.sd(t1, 0, t0); // SINT held
     a.la(t0, 0xB2001000u); a.ori(t1, zero, 31u); a.sw(t1, 0, t0);
     a.la(t0, 0xB000F000u); a.ori(t1, zero, 0x7FFFu); a.sw(t1, 0, t0);

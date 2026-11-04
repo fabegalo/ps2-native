@@ -172,6 +172,14 @@ void EeRegisters::advance_gs_interrupts() {
         intc_unknown_ |= 1u;
     }
 }
+ObservedWord EeRegisters::observe_dma_word(std::uint32_t physical) {
+    sync_iop();
+    return iop_.ee_dma_observe(physical);
+}
+void EeRegisters::write_dma_word(std::uint32_t physical, ObservedWord word) {
+    sync_iop();
+    iop_.ee_dma_write_observed(physical, word);
+}
 
 void EeRegisters::write_timer(unsigned index, unsigned reg, std::uint32_t value) {
     auto& timer = timers_[index];
@@ -234,8 +242,7 @@ std::uint32_t EeRegisters::read_timer(unsigned index, unsigned reg) {
 }
 
 std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
-    if ((physical >= 0x1000C400u && physical < 0x1000C440u) ||
-        physical == 0x1000E000u || physical == 0x1000E010u) {
+    if (Iop::ee_dma_address(physical)) {
         if (bytes != 4u) throw DeviceRefusal("SIF1/DMAC requires 32-bit accesses");
         sync_iop();
         return iop_.ee_dma_read(physical);
@@ -335,8 +342,7 @@ void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint6
 }
 
 void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value) {
-    if ((physical >= 0x1000C400u && physical < 0x1000C440u) ||
-        physical == 0x1000E000u || physical == 0x1000E010u) {
+    if (Iop::ee_dma_address(physical)) {
         if (bytes != 4u) throw DeviceRefusal("SIF1/DMAC requires 32-bit accesses");
         sync_iop();
         iop_.ee_dma_write(physical, static_cast<std::uint32_t>(value));

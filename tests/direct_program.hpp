@@ -68,6 +68,7 @@ inline std::vector<std::uint8_t> iop_receiver(bool program_interrupt_masks=true)
 }
 inline Program dma() {
     Assembler a(text);
+    store(a,0xB000E020u,0); // Establish priority state explicitly, independent of reset bits.
     store(a,0xB000E000u,1); store(a,0xB000C410u,data);
     store(a,0xB000C420u,17); store(a,0xB000C400u,0x101);
     a.la(t0,0xB000F230u);

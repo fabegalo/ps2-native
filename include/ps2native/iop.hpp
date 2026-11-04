@@ -26,6 +26,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace ps2native {
@@ -72,9 +73,15 @@ public:
     void ee_sif_write(unsigned index, std::uint32_t value);
     // Bare-metal development image, not IRX relocation/import linking.
     void load_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry);
-    void attach_ee_ram(std::span<std::uint8_t> ram) { ee_ram_ = ram; }
+    void attach_ee_ram(std::span<std::uint8_t> ram,
+                       const std::unordered_map<std::uint32_t,std::uint32_t>* unknown = nullptr) {
+        ee_ram_ = ram; ee_ram_unknown_ = unknown;
+    }
     [[nodiscard]] std::uint32_t ee_dma_read(std::uint32_t address) const;
     void ee_dma_write(std::uint32_t address, std::uint32_t value);
+    [[nodiscard]] static bool ee_dma_address(std::uint32_t address);
+    [[nodiscard]] ObservedWord ee_dma_observe(std::uint32_t address) const;
+    void ee_dma_write_observed(std::uint32_t address, ObservedWord word);
     [[nodiscard]] bool reads_ee_ram() const noexcept { return (ee_sif1_chcr_ & 0x100u) != 0u; }
     struct SifDmaMetrics {
         std::uint64_t bytes{}, source_full_cycles{}, destination_empty_cycles{};
@@ -96,7 +103,11 @@ private:
     std::uint32_t iop_sif1_read(std::uint32_t address) const;
     void iop_sif1_write(std::uint32_t address, std::uint32_t value);
     std::span<std::uint8_t> ee_ram_;
+    const std::unordered_map<std::uint32_t,std::uint32_t>* ee_ram_unknown_{};
     std::uint32_t ee_dctrl_{}, ee_dstat_{}, ee_sif1_chcr_{}, ee_sif1_madr_{}, ee_sif1_qwc_{};
+    std::array<std::array<std::optional<std::uint32_t>, 9>, 10> ee_dma_setup_{};
+    std::array<std::optional<std::uint32_t>, 4> ee_dma_global_{};
+    std::array<std::uint32_t, 4> ee_dma_global_unknown_{};
     std::array<std::uint32_t, 4> iop_sif1_{};
     std::deque<std::uint32_t> sif1_fifo_;
     bool sif1_have_tag_{}, sif1_end_{};

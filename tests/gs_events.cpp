@@ -169,6 +169,114 @@ void held_counter() {
     device_refused([&] { memory.write32(0xB0001030u, 0); }, "counter hold register does not exist");
 }
 
+void dma_setup() {
+    Iop iop; iop.reset({}, nullptr);
+    require(iop.ee_dma_observe(0x1000E020u).unknown==0x83FF03FFu, "PCR reset fields are symbolic");
+    rejects([&] { iop.ee_dma_write(0x1000C400u,0x101); }, "priority depends on unknown");
+    require(iop.ee_dma_read(0x1000C400u)==0, "unknown priority cannot start a transfer");
+    for (const auto base : {0x10008000u,0x10009000u,0x1000A000u,0x1000B000u,0x1000B400u,
+                           0x1000C000u,0x1000C800u,0x1000D000u,0x1000D400u}) {
+        rejects([&] { (void)iop.ee_dma_read(base); }, "read before write");
+        iop.ee_dma_write(base, 0); iop.ee_dma_write(base+0x10, 0x12340);
+        iop.ee_dma_write(base+0x20, 0x12345);
+        require(iop.ee_dma_read(base)==0 && iop.ee_dma_read(base+0x10)==0x12340 &&
+                iop.ee_dma_read(base+0x20)==0x2345, "inactive DMA channel retains programmed addresses/count");
+        rejects([&] { iop.ee_dma_write(base, 0x100); }, "transfer engine is not modeled");
+        require(iop.ee_dma_read(base)==0, "refused start does not create a running/completed transfer");
+    }
+    iop.ee_dma_write(0x10008080u, 0);
+    rejects([&] { (void)iop.ee_dma_read(0x10008080u); }, "absent channel register read");
+    rejects([&] { iop.ee_dma_write(0x10008080u, 16); }, "nonzero write to absent");
+    iop.ee_dma_write(0x1000D080u, 0xFFFFC120u);
+    require(iop.ee_dma_read(0x1000D080u)==0x120, "SPR SADR width/alignment");
+    iop.ee_dma_write(0x1000E010u, 0xFFFFFFFFu);
+    require(iop.ee_dma_read(0x1000E010u)==0x63FF0000u, "D_STAT toggles masks without fabricating completion flags");
+    iop.ee_dma_write(0x1000E010u, 0xFFFFFFFFu);
+    require(iop.ee_dma_read(0x1000E010u)==0, "D_STAT mask toggles are reversible");
+    const auto fixture=gs_events_test::program();
+    EEState state; Memory memory;
+    prepare_ee_boot(load_bios_rom0(fixture.rom),nullptr,state,memory);
+    state.set_reg64(8,0xB000E020u);
+    ee::exec<MipsOpcode::Lw>(state,memory,0,0x8D090000u);
+    require(state.unknown_gpr_bits[9]==0xFFFFFFFF83FF03FFull, "LW sign-extension preserves unknown sign bit");
+    state.set_reg64(10,~0x3FFull);
+    ee::exec<MipsOpcode::And>(state,memory,0,(9u<<21)|(10u<<16)|(9u<<11)|0x24u);
+    ee::exec<MipsOpcode::Sw>(state,memory,0,0xAD090000u);
+    require(memory.load32_observed(0xB000E020u).unknown==0x83FF0000u,
+            "PCR RMW defines CPC bits and preserves unknown priority bits without guessing");
+    device_refused([&] { (void)memory.read32(0xB000E020u); }, "unknown reset bits");
+    memory.write32(0xB000E020u,0);
+    require(memory.read32(0xB000E020u)==0, "explicit PCR configuration establishes all fields");
+
+    // DMA must never transfer the backing bytes of a symbolic RAM word.
+    std::vector<std::uint8_t> ram(32u);
+    std::unordered_map<std::uint32_t,std::uint32_t> unknown{{4u,1u}};
+    Iop transfer;
+    const std::array<std::uint8_t,4> nop{};
+    transfer.load_program(nop,0,0);
+    transfer.attach_ee_ram(ram,&unknown);
+    transfer.ee_dma_write(0x1000E020u,0);
+    transfer.ee_dma_write(0x1000E000u,1);
+    transfer.ee_dma_write(0x1000C420u,1);
+    transfer.ee_dma_write(0x1000C400u,0x101);
+    transfer.run_until(1);
+    require(transfer.stopped() && transfer.stop_reason()->find("unknown RAM bits")!=std::string::npos,
+            "SIF1 refuses a symbolic qword before placing any bytes in its FIFO");
+    require(transfer.sif1_metrics().peak_fifo_words==0 && transfer.ee_dma_read(0x1000C420u)==1,
+            "refused symbolic DMA does not consume source qword");
+    Iop priority;
+    priority.load_program(nop,0,0);
+    priority.attach_ee_ram(ram);
+    priority.ee_dma_write(0x1000E020u,0x80000000u); // PCE, channel 6 disabled
+    priority.ee_dma_write(0x1000E000u,1);
+    priority.ee_dma_write(0x1000C420u,1);
+    priority.ee_dma_write(0x1000C400u,0x101);
+    priority.run_until(1);
+    require(priority.ee_dma_read(0x1000C420u)==1 && priority.sif1_metrics().peak_fifo_words==0,
+            "PCR can pause a started source without completing it");
+    priority.ee_dma_write(0x1000E020u,0x80400000u);
+    priority.run_until(2);
+    require(priority.ee_dma_read(0x1000C420u)==0 && priority.sif1_metrics().peak_fifo_words==4,
+            "enabling channel 6 resumes true qword transfer");
+}
+
+void ram_knowledge() {
+    const auto fixture=gs_events_test::program();
+    EEState state; Memory memory;
+    const auto bios=load_bios_rom0(fixture.rom);
+    prepare_ee_boot(bios,nullptr,state,memory);
+    memory.tlb_write(0,{0,0x70000000u,0x80000007u,7u});
+    memory.set_translation_context(0,false);
+    for (const auto address : {0x80001800u,0x70000000u}) {
+        memory.store32_observed(address,{0x12345678u,0x0000FF0Fu});
+        const auto observed=memory.load32_observed(address);
+        require(observed.value==0x12340070u && observed.unknown==0xFF0Fu,"RAM retains exact symbolic bits");
+        device_refused([&] { (void)memory.read32(address); },"unknown RAM bits");
+        device_refused([&] { (void)memory.fetch32(address); },"unknown RAM bits");
+        require(memory.read16(address+2u)==0x1234u,"known bytes of symbolic word remain readable");
+        memory.write8(address+1u,0xABu);
+        require(memory.load32_observed(address).unknown==0xFu,"byte overwrite clears only its own uncertainty");
+        memory.write8(address,0x78u);
+        require(memory.read32(address)==0x1234AB78u,"known byte overwrite resolves word");
+        memory.store32_observed(address+4u,{0,~0u});
+        memory.write128(address,0x1122334455667788ull,0x99AABBCCDDEEFF00ull);
+        require(memory.read64(address)==0x1122334455667788ull,"SQ clears symbolic words covered by store");
+        state.set_reg64(8,address);
+        state.set_reg64_observed(9,0x123456789ABCDEF0ull,0xFFFF000000001000ull);
+        ee::exec<MipsOpcode::Sd>(state,memory,0,0xFD090000u);
+        device_refused([&] { (void)memory.read64(address); },"unknown RAM bits");
+        ee::exec<MipsOpcode::Ld>(state,memory,0,0xDD0A0000u);
+        require(state.unknown_gpr_bits[10]==0xFFFF000000001000ull,"SD/LD preserve symbolic upper bits");
+    }
+    memory.store32_observed(0x80001800u,{0,1});
+    require(memory.load32_observed(0xA0001800u).unknown==1,"KSEG aliases share symbolic RAM metadata");
+    memory.write16(0xA0001800u,0xABCDu);
+    require(memory.read32(0x80001800u)==0xABCDu,"aliased halfword overwrite clears symbolic bits");
+    memory.store32_observed(0x80001800u,{0,1});
+    prepare_ee_boot(bios,nullptr,state,memory);
+    require(memory.read32(0x80001800u)==0,"reset clears symbolic memory with RAM");
+}
+
 void guest(const std::filesystem::path& rom_path) {
     const auto fixture = gs_events_test::program();
     const auto bios = load_bios_rom0(read_file(rom_path));
@@ -205,7 +313,7 @@ void knowledge() {
     ee::exec<MipsOpcode::And>(state, memory, 0, (9u<<21)|(10u<<16)|(9u<<11)|0x24u);
     require(state.unknown_gprs == 0 && state.reg64(9) == 0, "AND proves that the GS-only result is known");
     state.set_reg64_observed(9, 0, 0xCu);
-    rejects([&] { ee::exec<MipsOpcode::Sw>(state, memory, 0, 0xAD090000u); }, "consumes unknown MMIO bits");
+    device_refused([&] { ee::exec<MipsOpcode::Sw>(state, memory, 0, 0xAD090000u); }, "unknown MMIO bits cannot be stored");
     rejects([&] { ee::exec<MipsOpcode::Addiu>(state, memory, 0, 0x252A0001u); }, "consumes unknown MMIO bits");
     state.set_reg64(10, 0xCu);
     ee::exec<MipsOpcode::Or>(state, memory, 0, (9u<<21)|(10u<<16)|(9u<<11)|0x25u);
@@ -233,7 +341,9 @@ int main(int argc, char** argv) {
         if (mode == "events") events(); else if (mode == "timing") timing();
         else if (mode == "reset") reset(); else if (mode == "irq") irq();
         else if (mode == "knowledge") knowledge();
+        else if (mode == "ram-knowledge") ram_knowledge();
         else if (mode == "held-counter") held_counter();
+        else if (mode == "dma-setup") dma_setup();
         else if (mode == "guest") guest(argv[2]); else throw std::runtime_error("unknown GS events test");
 #endif
         return 0;

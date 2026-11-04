@@ -4,6 +4,9 @@
 #include <stdexcept>
 
 namespace ps2native {
+// Unknown bits are symbolic, never a default hardware response.
+struct ObservedWord { std::uint32_t value{}, unknown{}; };
+struct ObservedDoubleword { std::uint64_t value{}, unknown{}; };
 // A modeled register refused this access: the reason names the register and
 // what is missing. Memory turns it into a BusError with the full address.
 class DeviceRefusal : public std::runtime_error {
