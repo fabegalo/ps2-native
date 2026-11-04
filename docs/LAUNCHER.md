@@ -69,3 +69,15 @@ Automação para testes e validação visual: `ps2-native --automate --data-dir 
 - Catálogo UTF-8 `launcher/i18n/pt_BR.json` embutido por Qt Resources, com 334 textos compartilhados por `QTranslator`; inglês é o texto-fonte. Troca imediata por `QQmlEngine::retranslate`, apenas quando o idioma muda. Firmware, nomes de arquivos e saída técnica do núcleo/diagnóstico permanecem originais.
 - Windows x64 Release/Qt 6.8.3: `launcher-core`, `launcher-ui-clean`, `launcher-ui-import` e `launcher-ui-restore` aprovados; automação verifica alternância PT-BR/EN, importação, diagnóstico e restauração. Persistência e recusa de idioma inválido testadas no núcleo. Placeholders do catálogo conferidos. Ícone extraído do PE por API Windows.
 - CI desta alteração ainda não executada (commit local). CI anterior `701e6ac`: núcleo aprovado nos seis alvos; launcher aprovado nos dois Linux, com falhas preexistentes nos dois Windows e dois macOS. Não houve validação visual por Computer Use.
+
+## Correção da CI do launcher
+
+Causas comprovadas nos logs das execuções `41751116240` e `41758516457`:
+
+- Windows x64/ARM64: o servidor Qt entrega `.sha1` como `application/octet-stream`. O cast PowerShell de `byte[]` para string produzia números decimais, gerando falso mismatch. O workflow agora grava e lê o checksum como texto, valida seus 40 dígitos hexadecimais e mantém a comparação com o arquivo baixado. O qtbase oficial também foi baixado e conferido localmente.
+- Após destravar o checksum, a configuração Windows revelou um segundo problema: os arquivos Qt têm prefixo plano (`bin/`, `lib/`, `include/`), sem `6.8.3/msvc2022_64`. A extração agora usa destinos explícitos e separados para host x64 e alvo ARM64.
+- macOS Intel/ARM64: `StandardKey.Open` representa várias combinações. A propriedade `sequences: [StandardKey.Open]` registra todas, eliminando o aviso que corretamente reprovava a automação. `CoverArt.palette` foi renomeada para `coverPalette` para não sombrear a propriedade introduzida no Qt recente. Os critérios de falha por avisos QML foram preservados.
+
+Correções: `bfa70f2` e `67aed98`. A validação dos seis alvos do commit `67aed98` está na [execução do launcher](https://github.com/fabegalo/ps2-native/actions/runs/41758760249). Nenhum firmware ou jogo foi necessário para esses testes.
+
+Resultado confirmado: **seis de seis jobs do launcher aprovados** em `67aed98` (Windows x64/ARM64, Linux x64/ARM64, macOS Intel/Apple Silicon), com build e testes de núcleo da interface, importação, diagnóstico e restauração. A [CI do núcleo](https://github.com/fabegalo/ps2-native/actions/runs/41758760050) também aprovou seus seis alvos no mesmo commit. Isso comprova os contratos sintéticos do launcher; não comprova Browser ou gameplay.

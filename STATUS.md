@@ -108,3 +108,7 @@ Revisar a evidência original e os limites de cada etapa nos relatórios [docs](
 ## Launcher — ícone Windows e idiomas
 
 Ícone Windows embutido no executável; seleção Automático/English/Português (Brasil), persistente e com troca imediata. Catálogo com 334 textos da interface; saída técnica original preservada. Quatro testes focados do launcher aprovados no Windows x64, incluindo alternância de idioma e persistência. CI do novo commit local pendente; detalhes e limites em [LAUNCHER](docs/LAUNCHER.md).
+
+## CI do launcher corrigida
+
+`bfa70f2`/`67aed98`: leitura textual do checksum oficial Qt, extração em prefixos separados x64/ARM64 e atalho QML com todas as combinações padrão. **Launcher e núcleo aprovados nos seis alvos para `67aed98`**. [Execução do launcher](https://github.com/fabegalo/ps2-native/actions/runs/41758760249); causas e evidência em [LAUNCHER](docs/LAUNCHER.md). Sem alteração nas capacidades de Browser/jogos.
