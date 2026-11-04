@@ -1097,6 +1097,14 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         return iop_sif1_read(physical);
     }
     const auto name = std::string("load ") + what + " of IOP register " + hex(physical);
+    if(physical==0x1F9007C6u || physical==0x1F9007C8u) {
+        // PS2SDK spu2regs.h: SPDIF_MODE/MEDIA are halfword configuration.
+        // This does not establish core state, IRQ status or audio samples.
+        if(bytes!=2u)throw IopStop{"SPU2 SPDIF configuration requires halfword reads"};
+        const auto value=latch(physical);
+        if(!value || !*value)throw IopStop{"SPU2 SPDIF configuration before a known halfword write"};
+        return **value;
+    }
     if(physical==0x1F808268u) {
         if(bytes!=4u)throw IopStop{"SIO2 control requires a 32-bit read"};
         const bool configured=latch(physical)!=nullptr && sio2_control_epoch_!=0;
@@ -1271,6 +1279,11 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         return;
     }
     const auto name = std::string("store ") + what + " of IOP register " + hex(physical);
+    if(physical==0x1F9007C6u || physical==0x1F9007C8u) {
+        if(bytes!=2u || !value)throw IopStop{"SPU2 SPDIF configuration requires a known halfword write"};
+        for(auto& [address,stored]:latches_)if(address==physical){stored=*value&0xFFFFu;return;}
+        latches_.push_back({physical,*value&0xFFFFu});return;
+    }
     if(physical==0x1F402008u) {
         if(bytes!=1u || !value) throw IopStop{name+": CDVD I_STAT requires a known byte"};
         cdvd_irq_&=static_cast<std::uint8_t>(~*value);
