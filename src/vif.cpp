@@ -1,5 +1,6 @@
 #include "ps2native/vif.hpp"
 #include "ps2native/vu_control.hpp"
+#include <algorithm>
 #include <string>
 
 namespace ps2native {
@@ -11,7 +12,7 @@ std::uint32_t Vif::read_register(std::uint32_t offset) const {
     if(unit_==Unit::Vu0 && (offset==0xA0u || offset==0xB0u || offset==0xC0u || offset==0xE0u))
         refuse(" register is reserved (double buffering exists only on VIF1)");
     if(offset==0x10u) refuse("_FBRST is write-only");
-    if(offset==0x60u) return (mpg_left_ ? mpg_left_ : direct_left_)&0xFFu; // VIFn_NUM, EE manual pp.137-138.
+    if(offset==0x60u) return (mpg_left_ ? mpg_left_ : unpack_left_ ? unpack_left_ : direct_left_)&0xFFu; // VIFn_NUM, EE manual pp.137-138.
     const auto* value=offset==0x20u ? &error_mask_ : offset==0x30u ? &mark_ : offset==0x80u ? &code_ :
         (offset==0x40u || offset==0x50u || offset==0x70u || (offset>=0x90u && offset<=0xE0u) ||
          (offset>=0x100u && offset<=0x170u)) ? &programmed_.at(offset/16u) : nullptr;
@@ -42,6 +43,53 @@ void Vif::write_register(std::uint32_t offset,std::uint32_t value,Gif& gif) {
     }
     if(offset==0x30u) {mark_=value&0xFFFFu;mark_detected_=false;return;}
     refuse(" register write is not modeled");
+}
+void Vif::start_unpack(std::uint32_t command,VuControl* vu) {
+    if(!vu)refuse(" UNPACK requires the shared VU data memory");
+    if(command&0x03000000u)refuse(" UNPACK packed 8/16/5-bit formats are not modeled");
+    if(!programmed_[4] || !programmed_[5])refuse(" UNPACK requires known CYCLE and MODE settings");
+    const auto cycle=*programmed_[4],cl=cycle&255u,wl=(cycle>>8u)&255u;
+    if(!cl || !wl || cl<wl)refuse(" UNPACK filling/zero write cycles are not modeled");
+    if((command&0x10000000u) && !programmed_[7])refuse(" masked UNPACK requires a known MASK register");
+    unsigned address=command&0x3FFu;
+    if(unit_==Unit::Vu1 && (command&0x8000u)) {
+        if(!programmed_[12])refuse(" UNPACK relative address requires known TOPS");
+        address+=*programmed_[12];
+    }
+    unpack_components_=((command>>26u)&3u)+1u;
+    unpack_left_=(command>>16u)&255u;if(!unpack_left_)unpack_left_=256u;
+    unpack_address_=address;unpack_cl_=cl;unpack_wl_=wl;unpack_mode_=*programmed_[5];
+    unpack_mask_=command&0x10000000u ? *programmed_[7] : 0u;
+    unpack_index_=unpack_cycle_=0;
+}
+void Vif::unpack_word(std::uint32_t word,VuControl& vu) {
+    unpack_data_[unpack_index_++]=word;
+    if(unpack_index_!=unpack_components_)return;
+    const auto base=unit_==Unit::Vu0 ? 0x11004000u : 0x1100C000u;
+    const auto address=(unpack_address_&(unit_==Unit::Vu0 ? 255u : 1023u))*16u;
+    const auto row=std::min(unpack_cycle_,3u);
+    for(unsigned lane=0;lane<4u;++lane) {
+        const auto select=(unpack_mask_>>(row*8u+lane*2u))&3u;
+        if(select==3u)continue; // write protect retains the actual old bits
+        ObservedWord data{0,~0u};
+        if(select==1u || select==2u) {
+            const auto& reg=programmed_[(select==1u ? 16u+lane : 20u+row)];
+            if(reg)data={*reg,0};
+        } else {
+            // EE manual 6.3.4: S is broadcast. V2 Z/W and V3 W are
+            // indeterminate, not duplicated input or an invented zero.
+            if(unpack_components_==1u)data={unpack_data_[0],0};
+            else if(lane<unpack_components_)data={unpack_data_[lane],0};
+            if(unpack_mode_) {
+                auto& reg=programmed_[16u+lane];
+                data=reg && !data.unknown ? ObservedWord{data.value+*reg,0} : ObservedWord{0,~0u};
+                if(unpack_mode_==2u)reg=data.unknown ? std::nullopt : std::optional<std::uint32_t>{data.value};
+            }
+        }
+        vu.write_memory(base+address+lane*4u,4,{data.value,data.unknown});
+    }
+    unpack_index_=0;--unpack_left_;++unpack_address_;
+    if(++unpack_cycle_==unpack_wl_){unpack_address_+=unpack_cl_-unpack_wl_;unpack_cycle_=0;}
 }
 void Vif::write_fifo(std::uint64_t low, std::uint64_t high, Gif& gif, GsRegisters& gs,VuControl* vu) {
     const std::array<std::uint32_t,4> words{static_cast<std::uint32_t>(low), static_cast<std::uint32_t>(low >> 32),
@@ -75,6 +123,10 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
             }
             continue;
         }
+        if(unpack_left_) {
+            if(!vu)refuse(" UNPACK requires the shared VU data memory");
+            unpack_word(command,*vu);continue;
+        }
         if(pending_!=Pending::None) {
             const auto base=pending_==Pending::Mask ? 7u : pending_==Pending::Row ? 16u : 20u;
             programmed_[base+pending_index_]=command;
@@ -83,6 +135,7 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
         }
         const auto opcode=command>>24u,immediate=command&0xFFFFu;
         if(command&0x80000000u) refuse(" interrupt-bearing command is not modeled");
+        if((opcode&0x60u)==0x60u){start_unpack(command,vu);code_=command;continue;}
         if(unit_==Unit::Vu0 && (opcode==2u || opcode==3u || opcode==6u || opcode==0x11u || opcode==0x50u || opcode==0x51u))
             refuse(" received a VIF1-only command: "+std::to_string(opcode));
         switch(opcode) {
@@ -134,7 +187,8 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
             default: {
                 constexpr char hex[]="0123456789ABCDEF";
                 auto reason=std::string(" command unsupported: 0x");
-                reason+=hex[(opcode>>4u)&15u];reason+=hex[opcode&15u];refuse(reason);
+                reason+=hex[(opcode>>4u)&15u];reason+=hex[opcode&15u];
+                refuse(reason+" (immediate="+std::to_string(immediate)+")");
             }
         }
         code_=command;

@@ -10,7 +10,7 @@ namespace ps2native {
 class VuControl;
 // Shared VIF0/VIF1 configuration parser. Command words arrive in little-endian
 // order; VIF1 DIRECT data starts on the next qword boundary. Unsupported commands
-// (including MSCAL/UNPACK) fail explicitly; MPG writes real shared micro RAM,
+// (including MSCAL) fail explicitly; MPG and 32-bit UNPACK write shared VU RAM,
 // and never starts or pretends to execute the uploaded instructions.
 class Vif {
 public:
@@ -21,6 +21,7 @@ public:
         programmed_={}; pending_=Pending::None; pending_index_=0; mark_detected_=false;
         direct_words_=0;direct_buffer_={};
         mpg_left_=mpg_address_=0;mpg_low_.reset();
+        unpack_left_=unpack_address_=unpack_index_=unpack_cycle_=0;
     }
     [[nodiscard]] std::uint32_t read_register(std::uint32_t offset) const;
     void write_register(std::uint32_t offset,std::uint32_t value,Gif& gif);
@@ -28,9 +29,11 @@ public:
     // TTE sends only the upper 64 bits, in lanes 2/3 of a DMA tag.
     void write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr);
     [[nodiscard]] std::uint32_t direct_remaining() const noexcept { return direct_left_; }
-    [[nodiscard]] bool processing() const noexcept {return direct_left_ || mpg_left_ || pending_!=Pending::None;}
+    [[nodiscard]] bool processing() const noexcept {return direct_left_ || mpg_left_ || unpack_left_ || pending_!=Pending::None;}
 private:
     void write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters& gs,VuControl* vu);
+    void start_unpack(std::uint32_t command,VuControl* vu);
+    void unpack_word(std::uint32_t word,VuControl& vu);
     [[noreturn]] void refuse(const std::string& reason) const {
         throw DeviceRefusal(std::string(unit_==Unit::Vu0 ? "VIF0" : "VIF1")+reason);
     }
@@ -40,6 +43,10 @@ private:
     unsigned direct_words_{};
     unsigned mpg_left_{},mpg_address_{};
     std::optional<std::uint32_t> mpg_low_;
+    unsigned unpack_left_{},unpack_address_{},unpack_index_{},unpack_cycle_{};
+    unsigned unpack_components_{},unpack_cl_{},unpack_wl_{},unpack_mode_{};
+    std::uint32_t unpack_mask_{};
+    std::array<std::uint32_t,4> unpack_data_{};
     std::optional<std::uint32_t> error_mask_,mark_,code_;
     enum class Pending { None, Mask, Row, Col };
     Pending pending_{Pending::None};

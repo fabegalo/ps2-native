@@ -196,6 +196,12 @@ public:
     }
     void vu_integer_store(unsigned source,unsigned base,unsigned mask) {registers_.vu_integer_store(source,base,mask);}
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return registers_.observe_vu_data(address);}
+    // Host diagnostic snapshot at the current device time, without a CPU bus
+    // access or clock advance. Unknown micro/data bits remain explicit.
+    [[nodiscard]] ObservedDoubleword diagnostic_vu_memory(std::uint32_t physical,std::size_t bytes) const {
+        if(bytes!=1u && bytes!=2u && bytes!=4u && bytes!=8u)throw DeviceRefusal("VU snapshot width must be 1, 2, 4 or 8 bytes");
+        return registers_.read_vu_memory(physical,bytes);
+    }
     [[nodiscard]] ObservedQuadword observe_vu_vector(unsigned index) const {return registers_.observe_vu_vector(index);}
     void write_vu_vector(unsigned index,ObservedQuadword word) {registers_.write_vu_vector(index,word);}
     void vu_subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {
