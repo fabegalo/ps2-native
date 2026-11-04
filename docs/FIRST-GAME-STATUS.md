@@ -1068,3 +1068,17 @@ e coeficientes com efeito ativo de saída zero. Toda a área circular continua
 com conteúdo desconhecido; mudar offsets/coeficientes não revalida RAM ou
 inventa DSP. Leituras de offset e larguras não estabelecidas recusam. PS2Recomp
 áudio e referência comportamental da área circular SPU2 consultados novamente.
+
+Ensaio 76: taps/coeficientes passaram; IOP `0x60388` / 46.740.752,
+EE `0x81FCC` / 360.000.000, 113,543 s. Escrita EEA=E do core 1 acontece
+antes de ESA ser movido da área F; validação síncrona da escrita recusou a
+configuração intermediária. RAM `4e1f70666b406d3b3118d1c61f0951af5b616aed3cb5621db7bc9b93b0f41066`.
+Ainda 16 pacotes/limpeza, sem PMODE.
+
+A configuração ativa de ESA/EEA agora marca a área pendente; a próxima borda
+modelada de síntese valida e invalida RAM antes de consumir estado de áudio.
+Isso substitui a validação imediata descrita no ensaio 72. Stores separados
+podem atravessar um estado intermediário inválido entre bordas; se tal estado
+alcançar a borda, recusa. Testes diferenciam correção antes/depois da borda,
+sem permitir workspace circular desconhecido ou áudio fabricado. A fase
+reset-alinhada permanece hipótese já explícita do relógio SPU2.

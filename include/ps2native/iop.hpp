@@ -261,8 +261,7 @@ private:
     void reset_sio2_observed(ObservedWord word,std::uint64_t epoch);
     void write_spu2_control(std::uint32_t physical,ObservedWord word);
     [[nodiscard]] bool spu2_effects_active(unsigned core) const;
-    [[nodiscard]] std::pair<std::uint32_t,std::uint32_t> spu2_effect_area(unsigned core,
-        std::uint32_t write_address=0u,std::uint32_t write_value=0u) const;
+    [[nodiscard]] std::pair<std::uint32_t,std::uint32_t> spu2_effect_area(unsigned core) const;
     void tick_spu2_quiet();
     void validate_spu2_pio(unsigned core,const ObservedWord& control) const;
     void validate_spu2_adma(unsigned core) const;
@@ -347,6 +346,7 @@ private:
     std::optional<std::array<std::uint16_t,2>> diagnostic_spu2_effect_end_;
     std::optional<std::array<std::uint32_t,2>> diagnostic_spu2_effect_start_;
     bool diagnostic_spu2_effect_address_reserved_zero_{};
+    std::array<bool,2> spu2_effect_area_dirty_{};
     // Quiet clocks are available only under the explicit cold-state
     // experiment: no active voices, inputs, effects or transfers.
     std::array<std::optional<std::uint64_t>,2> spu2_next_sample_;

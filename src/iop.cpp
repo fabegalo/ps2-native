@@ -238,6 +238,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     diagnostic_spu2_effect_end_.reset();
     diagnostic_spu2_effect_start_.reset();
     diagnostic_spu2_effect_address_reserved_zero_=false;
+    spu2_effect_area_dirty_={};
     spu2_next_sample_={};spu2_last_sample_={};spu2_sample_count_={};spu2_clock_active_=false;
     spu2_transfer_={};spu2_ram_.clear();spu2_ram_written_.clear();diagnostic_spu2_pio_cycles_=0;
     spu2_adma_={};diagnostic_spu2_adma_cycles_=0;diagnostic_spu2_admas_control_latch_=false;
@@ -1311,11 +1312,9 @@ void Iop::diagnostic_spu2_effect_address_reserved_zero() {
 bool Iop::spu2_effects_active(unsigned core) const {
     return spu2_control_[core] && (spu2_control_[core]->value&0x8080u)==0x8080u;
 }
-std::pair<std::uint32_t,std::uint32_t> Iop::spu2_effect_area(unsigned core,
-    std::uint32_t write_address,std::uint32_t write_value) const {
+std::pair<std::uint32_t,std::uint32_t> Iop::spu2_effect_area(unsigned core) const {
     const auto base=0x1F900000u+core*0x400u;
     const auto field=[&](std::uint32_t address)->std::optional<std::uint32_t> {
-        if(address==write_address)return write_value;
         const auto value=latch(address);return value ? *value : std::nullopt;
     };
     const auto high=field(base+0x2E0u),low=field(base+0x2E2u),end=field(base+0x33Cu);
@@ -1373,6 +1372,7 @@ void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
         std::fill(spu2_ram_written_.begin()+invalidate_effects->first,
                   spu2_ram_written_.begin()+invalidate_effects->second+1u,std::uint8_t{0});
     }
+    spu2_effect_area_dirty_[core]=false;
     if(word.value&0x8000u) {
         // 36.864 MHz / 48 kHz = 768 IOP cycles; reset-aligned phase is modeled.
         if(!spu2_next_sample_[core])spu2_next_sample_[core]=(cycle_/768u+1u)*768u;
@@ -1385,6 +1385,15 @@ void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
 void Iop::tick_spu2_quiet() {
     for(unsigned core=0;core<2;++core) {
         if(spu2_next_sample_[core] && cycle_>=*spu2_next_sample_[core]) {
+            if(spu2_effect_area_dirty_[core] && spu2_effects_active(core)) {
+                // ESA/EEA halfword writes are not atomic as a group. Consume
+                // their final configuration at the next synthesis boundary,
+                // before any RAM-dependent audio state can be observed.
+                const auto area=spu2_effect_area(core);
+                if(!spu2_ram_written_.empty())std::fill(spu2_ram_written_.begin()+area.first,
+                    spu2_ram_written_.begin()+area.second+1u,std::uint8_t{0});
+                spu2_effect_area_dirty_[core]=false;
+            }
             const auto off=std::uint32_t{spu2_keys_[core][2].value_or(0)}|
                 (std::uint32_t{spu2_keys_[core][3].value_or(0)}<<16u);
             const auto on=std::uint32_t{spu2_keys_[core][0].value_or(0)}|
@@ -1970,11 +1979,9 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
             if(!control || (control->unknown&0x80u))
                 throw IopStop{"SPU2 effect workspace configuration requires a known effect-enable state"};
             if(spu2_effects_active(core)) {
-                // Validate the prospective area without changing latches. Both
-                // the prior area and every newly reachable byte stay unknown.
-                const auto area=spu2_effect_area(core,physical,*value);
-                if(!spu2_ram_written_.empty())std::fill(spu2_ram_written_.begin()+area.first,
-                    spu2_ram_written_.begin()+area.second+1u,std::uint8_t{0});
+                // The DSP consumes the area on a synthesis edge, not between
+                // consecutive CPU stores of its independently addressed halves.
+                spu2_effect_area_dirty_[core]=true;
             }
         }
         if((physical==0x1F900198u || physical==0x1F900598u) &&
