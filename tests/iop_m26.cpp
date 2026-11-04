@@ -113,7 +113,7 @@ void check_devices() {
     require_stop(iop, "NodeID bits 1-31 after a bus reset are not established");
 
     refuses([](Assembler& p) { p.lbu(a1, 0x146E, t1); }, kNoDev9, "no console profile with the SSBUS revision");
-    refuses([](Assembler& p) { p.lhu(a1, 0x146E, t1); }, kProfile, "only 8-bit reads are modeled");
+    refuses([](Assembler& p) { p.lhu(a1,0x146E,t1);p.nop();p.addiu(a1,a1,1); },kProfile,"DEV9_R_REV bits 8..15");
     refuses([](Assembler& p) { p.lw(a1, 0x3204, t1); }, kProfile, "only 8-bit reads are modeled");
     refuses([](Assembler& p) { p.lw(a1, 0, t3); }, kProfile, "before any bus reset");
     refuses([](Assembler& p) { p.lui(a3, 0x8100u); p.sw(a3, 0x14, t3); }, kProfile, "only PHY register writes");
@@ -122,6 +122,16 @@ void check_devices() {
     refuses([](Assembler& p) { p.lui(t4, 0xB600u); p.lhu(a1, 0xA, t4); }, kProfile, "device not implemented");
 }
 
+void check_dev9_halfword() {
+    Assembler a(0xBFC00000u);a.lui(t1,0xBF80);a.lui(t2,0xA000);
+    a.lhu(a1,0x146E,t1);a.nop();a.andi(a1,a1,0xFF);a.sw(a1,0x100,t2);
+    a.lhu(a1,0x146E,t1);a.nop();a.r(0,a1,a1,16,0x02);a.sw(a1,0x104,t2);
+    a.raw((0x21u<<26)|(t1<<21)|(a1<<16)|0x146Eu);a.nop();a.andi(a1,a1,0xF0);a.sw(a1,0x108,t2);
+    a.label("idle");a.beq(0,0,"idle");a.nop();Iop iop;iop.reset(rom_of(a),&kProfile);iop.run_until(100);
+    require(!iop.stopped() && iop.ee_read(0x100,4)==0x35 && !iop.ee_read(0x104,4) && iop.ee_read(0x108,4)==0x30,
+            "DEV9 byte/halfword aliases retain the measured lane, LHU upper zeros, and masked signed loads without inventing bits 8..15");
+    refuses([](Assembler& p){p.lhu(a1,0x146E,t1);},kNoDev9,"no console profile with the SSBUS revision");
+}
 void check_timers() {
     Assembler a(0xBFC00000u);
     a.lui(t1, 0xBF80u);
@@ -277,7 +287,7 @@ void check_exceptions() {
 
 int main() {
     try {
-        check_devices();
+        check_devices();check_dev9_halfword();
         check_timers();
         check_exceptions();
         std::cout << "M2.6 IOP checks passed\n";

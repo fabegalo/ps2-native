@@ -2002,9 +2002,15 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         return 1u;
     }
     if (physical == kDev9Revision) {
-        if (bytes != 1u) throw IopStop{name + ": only 8-bit reads are modeled"};
-        if (hardware_ == nullptr || !hardware_->dev9_revision)
-            throw IopStop{name + " (DEV9_R_REV): no console profile with the SSBUS revision"};
+        // ps2sdk dev9regs.h defines a 16-bit register. The profile records
+        // only its measured revision byte; preserve the unmeasured lane.
+        if(bytes!=1u && bytes!=2u)throw IopStop{name+": only byte and halfword reads are modeled"};
+        if(hardware_==nullptr || !hardware_->dev9_revision)
+            throw IopStop{name+" (DEV9_R_REV): no console profile with the SSBUS revision"};
+        if(bytes==2u) {
+            undefined_load_="DEV9_R_REV bits 8..15 have not been measured for this profile";
+            undefined_known_=0xFFu|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
+        }
         return *hardware_->dev9_revision;
     }
     if (physical == kCdvdNStatus) {
