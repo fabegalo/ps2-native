@@ -100,6 +100,9 @@ int main() try {
     require(staged.vram().read(0,64,0,0,0)==0x80000101u,"separable-filter experiment exposes both truncation stages rather than rounding a host bilinear sample");
     rejects([&]{fractional(staged);},"fractional UV DDA");
     setup(staged);rejects([&]{pixel(staged,0,0,9,9);},"bilinear truncation");
-    GsRegisters invalid;invalid.reset(0);rejects([&]{invalid.diagnostic_texture_precision(4);},"valid modes");
+    GsRegisters triangle_only;setup(triangle_only,true,false,true,4);
+    rejects([&]{fractional(triangle_only);},"fractional UV DDA");
+    triangle_only.general_write(0x14,0x60);rejects([&]{pixel(triangle_only,0,0,9,9);},"bilinear truncation");
+    GsRegisters invalid;invalid.reset(0);rejects([&]{invalid.diagnostic_texture_precision(8);},"valid modes");
     std::cout<<"Exact level-zero bilinear/nearest, subtexel centers, independent edge wrapping, fixed LOD and explicit rounding boundaries passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

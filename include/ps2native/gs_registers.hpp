@@ -94,8 +94,10 @@ public:
     // cache tags. This defines no VRAM data and fabricates no TEXFLUSH write.
     void diagnostic_texture_cache_reset_invalid();
     // Independent diagnostic arithmetic assumptions: bit0 nominal rational
-    // UV interpolation floored to 10.4; bit1 horizontal then vertical
-    // bilinear truncation. Neither claims measured GS DDA/filter precision.
+    // sprite UV floored to 10.4; bit1 horizontal then vertical bilinear
+    // truncation; bit2 nominal rational triangle UV floored to 10.4.
+    // These do not establish physical GS DDA/filter precision. Color/depth
+    // interpolation retains its strict precision checks in every mode.
     void diagnostic_texture_precision(unsigned modes);
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes) const;
     [[nodiscard]] ObservedDoubleword observe_csr() const noexcept {

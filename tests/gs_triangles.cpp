@@ -5,8 +5,9 @@
 using namespace ps2native;
 using namespace boot_checks;
 namespace {
-void setup(GsRegisters& gs,unsigned type=3) {
-    gs.reset(0);gs.general_write(0,type);gs.general_write(1,0x80201008);
+void setup(GsRegisters& gs,unsigned type=3,unsigned precision=0) {
+    gs.reset(0);if(precision)gs.diagnostic_texture_precision(precision);
+    gs.general_write(0,type);gs.general_write(1,0x80201008);
     gs.general_write(0x18,0);gs.general_write(0x1A,1);gs.general_write(0x4C,1u<<16u);
     gs.general_write(0x40,(7ull<<16u)|(7ull<<48u));gs.general_write(0x47,3u<<16u);
     gs.general_write(0x4E,1ull<<32u);gs.general_write(0x22,0);gs.general_write(0x4A,0);
@@ -95,6 +96,37 @@ int main() try {
         const auto before=gs.vram().pixel_writes();
         rejects([&]{vertex(gs,0,3);},"fractional triangle attribute DDA precision");
         require(gs.vram().pixel_writes()==before,"a fractional gradient is refused even where its first barycentric sample happens to be integral");
+    }
+    for(const auto precision:{0u,4u}) {
+        GsRegisters gs;setup(gs,3u|16u|256u,precision);
+        gs.general_write(0x50,(32ull|(1ull<<16u))<<32u);gs.general_write(0x51,0);
+        gs.general_write(0x52,(8ull<<32u)|8u);gs.general_write(0x53,0);
+        for(unsigned n=0;n<16;++n) {
+            const auto a=0x80000000u|((n*4u)<<8u),b=a+0x100u,c=a+0x200u,d=a+0x300u;
+            gs.image_write(a|(std::uint64_t{b}<<32u),c|(std::uint64_t{d}<<32u));
+        }
+        gs.general_write(0x3F,0);gs.general_write(6,32ull|(1ull<<14u)|(3ull<<26u)|(3ull<<30u)|(1ull<<34u)|(1ull<<35u));
+        gs.general_write(8,0);gs.general_write(0x14,0);
+        gs.general_write(3,0);vertex(gs,0,0);gs.general_write(3,64);vertex(gs,3,0);gs.general_write(3,64ull<<16u);
+        const auto before=gs.vram().pixel_writes();
+        if(!precision) {
+            rejects([&]{vertex(gs,0,3);},"fractional triangle attribute DDA precision");
+            require(gs.vram().pixel_writes()==before,"default UV precision refuses before writing the first fragment");
+        } else {
+            vertex(gs,0,3);
+            require(gs.vram().read(0,64,0,1,1)==0x80000900u && gs.vram().read(0,64,0,2,0)==0x80000200u,
+                "explicit triangle UV experiment floors rational coordinates and samples actual uploaded texels");
+            rejects([&]{gs.diagnostic_texture_precision(4);},"before guest activity");
+        }
+    }
+    for(const bool depth:{false,true}) {
+        GsRegisters gs;setup(gs,depth ? 3u : 3u|8u,4);
+        if(depth)gs.general_write(0x4E,1);
+        gs.general_write(1,0x80000000);vertex(gs,0,0);
+        gs.general_write(1,0x80000001);vertex(gs,3,0,depth ? 1u : 0u);gs.general_write(1,0x80000000);
+        const auto before=gs.vram().pixel_writes();
+        rejects([&]{vertex(gs,0,3);},"fractional triangle attribute DDA precision");
+        require(gs.vram().pixel_writes()==before,"UV experiment cannot select undocumented color or depth precision");
     }
     std::cout<<"Triangle/strip/fan queues, winding, top-left coverage, ADC, PRIM reset, exact Gouraud/depth and explicit precision limits passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

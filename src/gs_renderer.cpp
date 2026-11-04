@@ -333,14 +333,15 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         return color;
     };
     const auto inclusive=[](const Vertex& a,const Vertex& b){return b.y<a.y || (b.y==a.y && b.x>a.x);};
-    const auto interpolate=[&](const std::array<std::int64_t,3>& weights,const std::array<std::uint32_t,3>& attribute) {
+    const auto interpolate=[&](const std::array<std::int64_t,3>& weights,const std::array<std::uint32_t,3>& attribute,bool uv_coordinate=false) {
         const auto ab=std::int64_t{attribute[1]}-attribute[0],ac=std::int64_t{attribute[2]}-attribute[0];
         const auto dx=(ab*(vertices[2].y-vertices[0].y)-ac*(vertices[1].y-vertices[0].y))*16;
         const auto dy=((vertices[1].x-vertices[0].x)*ac-(vertices[2].x-vertices[0].x)*ab)*16;
         // Whole-number per-pixel gradients need no fractional DDA rounding.
         // An isolated integral barycentric result is insufficient proof when
         // either plane gradient itself would have been rounded by hardware.
-        if(dx%area || dy%area)throw DeviceRefusal("GS fractional triangle attribute DDA precision is not established");
+        const bool nominal_uv=uv_coordinate && (diagnostic_texture_precision_&4u);
+        if((dx%area || dy%area) && !nominal_uv)throw DeviceRefusal("GS fractional triangle attribute DDA precision is not established");
         std::uint64_t sum=0;
         for(unsigned n=0;n<3u;++n) {
             const auto weight=static_cast<std::uint64_t>(weights[n]);
@@ -349,7 +350,10 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         }
         // Exact attribute results are independent of undocumented fractional
         // DDA precision. Keep fractional cases explicit until established.
-        if(sum%static_cast<std::uint64_t>(area))throw DeviceRefusal("GS fractional triangle attribute DDA precision is not established");
+        if(sum%static_cast<std::uint64_t>(area) && !nominal_uv)throw DeviceRefusal("GS fractional triangle attribute DDA precision is not established");
+        // Explicit UV-only experiment: exact rational barycentrics, floored
+        // to the input 10.4 coordinate grid. This is not a certified model
+        // of the physical setup reciprocal or accumulated DDA truncation.
         return static_cast<std::uint32_t>(sum/static_cast<std::uint64_t>(area));
     };
     for (int y = top; y < bottom; ++y) {
@@ -381,8 +385,8 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
                 int u=0,tv=0;
                 if(triangle) {
                     for(unsigned n=0;n<3u;++n)if(!vertices[n].uv)throw DeviceRefusal("GS triangle consumes unwritten UV coordinates");
-                    u=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].u),static_cast<std::uint32_t>(vertices[1].u),static_cast<std::uint32_t>(vertices[2].u)}));
-                    tv=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].v),static_cast<std::uint32_t>(vertices[1].v),static_cast<std::uint32_t>(vertices[2].v)}));
+                    u=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].u),static_cast<std::uint32_t>(vertices[1].u),static_cast<std::uint32_t>(vertices[2].u)},true));
+                    tv=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].v),static_cast<std::uint32_t>(vertices[1].v),static_cast<std::uint32_t>(vertices[2].v)},true));
                 } else {u=uv_at(x,first_vertex_->x,v.x,first_vertex_->u,v.u);tv=uv_at(y,first_vertex_->y,v.y,first_vertex_->v,v.v);}
                 const auto sampled=filtered_texture(u,tv);
                 const auto shaded=color;

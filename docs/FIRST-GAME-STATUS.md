@@ -597,7 +597,68 @@ Manifesto local `superbust-menu110-build-provenance.json`; log
 bilhões e lista final repetitiva de GIF substituída por contagem; nenhum
 efeito convidado ou ciclo é omitido. Sem ganho de desempenho afirmado.
 Limites supervisionados de 90 minutos/16 bilhões; mesmas identidades e
-hipóteses experimentais do 109. Continuar até menu, controles e partida.
+hipóteses experimentais do 109. Resultado abaixo.
+
+### Triângulos UV no GS — ensaio 110 e continuação 111
+
+110 superou as recusas numéricas dos ensaios 108 e 109. Terminou em
+**7.284.393.384** instruções do jogo, EE **`0x1CE45C`**, por
+`GS fractional triangle attribute DDA precision is not established`.
+O EE consultava o DMA VIF1; a recusa veio do processamento gráfico real.
+IOP **ativo `0xAE98` / 914.601.294**, sem recusa. 8.405 pacotes GIF novos,
+382.818.208 escritas GS, SIF1/SIF0 2.821.232/1.794.256 bytes.
+298 ciclos de stall modelados, 7.316.810.358 ciclos EE totais;
+2.991,59 s em host compartilhado, sem comparação equivalente de desempenho.
+Backing RAM `40f4f6300808fec2ab552241c4a817b9a51dedd59ca905d5cf796282a53490de`,
+três doublewords com incerteza registrada. Isso não inclui cache/dispositivos
+e não constitui um save-state restaurável.
+
+As capturas confirmaram apenas aviso de Memory Card, créditos e Acclaim.
+O pulso Start foi liberado no mesmo VBLANK 1134 do 109, com os mesmos
+hashes de campo. O scanout final era **preto**, 640x224, hash RGBA
+`6cf79e2ea48074d85c3879b2e34cd92246b816be78aa13de39d9743ab0f880e9`.
+Nem a passagem das recusas VU nem um hash alternado do Acclaim comprovam menu.
+
+O pacote pendente usa um TriangleStrip texturizado UV com vértices
+fracionários. Consultados [PS2Recomp GS CPU](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp)
+e [GS User's Manual v6](https://www.scribd.com/document/784545197/GS-Users-Manual),
+seções 3.1 e UV. Eles descrevem a interpolação e o formato 10.4, mas não
+estabelecem toda a precisão física do setup/DDA. Nenhum código GPL foi
+copiado, adaptado ou vinculado.
+
+A API diagnóstica compartilhada acrescentou o bit **4**, exclusivamente
+para UV de triângulos: barycentrics racionais inteiros, truncados por piso
+ao formato 10.4 e enviados ao sampler real. **Hipótese funcional, não
+conformidade física demonstrada.** O modo de referência continua recusando
+gradientes/amostras fracionários. A opção não altera cor, profundidade,
+UV de sprites, filtros, geometria, lógica convidada ou dados de textura.
+Testes verificam o opt-in, amostras da textura efetivamente carregada,
+ausência de escritas na recusa padrão e manutenção das recusas de cor,
+profundidade, sprites e bilinear. Seis testes focados passaram, incluindo
+análise/diagnóstico, GS e frames. BIOS original preservou PCs/contagens e
+RAM canônica `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
+
+**111 iniciada com as novas ferramentas.** `ps2n-debug log` identificou a
+primeira recusa explícita na linha 357 do log 110. `ps2n-analyze` analisou
+o ELF e o trecho `0x1CE450`; `ps2n-dev init` registrou o perfil local.
+O harness usa o novo `DiagnosticRecorder` do núcleo, 512 eventos sem
+streaming contínuo, ativado a partir de 7,28 bilhões. Relatórios JSON,
+estado, eventos e frame final vão para `superbust-menu111-diagnostic` e
+são lidos por `ps2n-debug report`. Históricos limitados não são contagens
+cumulativas de pacotes; o prefixo e o relatório indicam a cobertura.
+O runner experimental continua necessário para a injeção de ELF no kernel
+parcial; o `replay` das ferramentas reexecuta desde o reset e não restaura RAM.
+
+Núcleo, cabeçalhos, AOT e harness foram recompilados juntos. O manifesto
+local `superbust-menu111-build-provenance.json` registra Git, alterações
+locais das novas ferramentas e hashes das fontes/binários; o hash de fonte
+foi preservado durante a compilação. Log `superbust-menu-111.log`, entrada
+`superbust-pad111.txt`, captura `superbust-capture111.txt`. AOT do ELF e idle
+verificado permanecem ativos após o prefixo inicial, com guarda por
+instrução e fallback explícito. A hipótese UV é selecionada antes da
+atividade convidada. Limites supervisionados de 90 minutos/16 bilhões,
+mesmas identidades de firmware/disco e demais hipóteses do 110. Continuar
+até comprovar menu, Start/Cross/Up/Down e início de partida.
 
 BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;
 ELF `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`.
