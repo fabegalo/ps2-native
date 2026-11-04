@@ -163,6 +163,10 @@ public:
     void vu_subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {
         registers_.vu_subtract(destination,left,right,mask);
     }
+    void vu_add(unsigned destination,unsigned left,unsigned right,unsigned mask) {
+        registers_.vu_add(destination,left,right,mask);
+    }
+    void vu_rotate(unsigned destination,unsigned source,unsigned mask) {registers_.vu_rotate(destination,source,mask);}
     void vu_vector_store_increment(unsigned source,unsigned base,unsigned mask) {
         registers_.vu_vector_store_increment(source,base,mask);
     }

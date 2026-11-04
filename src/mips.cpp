@@ -270,6 +270,8 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
     } else if (op == 0x12) {
         if (rs==16u && funct==0x30u && rt<16u && rd<16u && sa<16u) return make(MipsOpcode::Viadd);
         if (rs>=16u && funct==0x2Cu) return make(MipsOpcode::Vsub);
+        if (rs>=16u && funct==0x28u) return make(MipsOpcode::Vadd);
+        if (rs>=16u && (word&0x7FFu)==0x33Du) return make(MipsOpcode::Vmr32);
         if (rs>=16u && (word&0x7FFu)==0x37Du && rt<16u) return make(MipsOpcode::Vsqi);
         if (rs>=16u && (word&0x7FFu)==0x3FFu && rt<16u && rd<16u) return make(MipsOpcode::Viswr);
         if (word & 0x7FEu) return std::nullopt;
@@ -343,6 +345,8 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
             case 0x33: return make(MipsOpcode::Pref);
             case 0x37: return make(MipsOpcode::Ld);
             case 0x39: return make(MipsOpcode::Swc1);
+            case 0x36: return make(MipsOpcode::Lqc2);
+            case 0x3e: return make(MipsOpcode::Sqc2);
             case 0x3f: return make(MipsOpcode::Sd);
             default: break;
         }

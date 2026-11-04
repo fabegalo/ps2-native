@@ -693,3 +693,23 @@ intervalo não decide. Mantissas de `1 * CF_MAX_MANTISSA`, ordem inversa e
 Regressões também cobrem posições diferentes do dígito e expoentes. Testes
 `native-ee-context` e `native-m20-boot` aprovados. A implementação permanece
 inteira e independente; não foi incorporada uma árvore de código externo.
+
+Ensaio 51: multiplicador passou; EE `0x1CD4E4` / 339.416.913 instruções,
+IOP `0xAE98` / 46.479.198. Opcode `4A202128` é **VADD.w**, não VMUL
+(tabela COP2 Special1, função 0x28). 94,3292 s; RAM SHA-256
+`619a09cb251c2e004f3696a0f8d2f0a3386bfeee64e0b8e03aac0e7d1a5bd718`.
+Continua sem PMODE e só a limpeza inicial. A sequência convidada monta matriz
+identidade com VSUB, VADD.w, VMR32 e SQC2.
+
+Consultados PS2Recomp `vu_translator.cpp`/`ps2_vu1_upper.cpp`, tabela COP2 do
+[ps2tek](https://psi-rockin.github.io/ps2tek/index.html) e
+[manual VU 6.0](https://docs.alexrp.com/mips/ee_vu.pdf), VADD/VMR32/LQC2/SQC2.
+Implementação independente: VADD somente na classe exata com pelo menos um
+addend zero (denormal tratado como zero); demais operandos recusados, sem
+assumir precisão geral de VU. Máscara, sinais e flags MAC/status/sticky calculados
+antes de commit atômico. VMR32 preserva bits desconhecidos, máscara e alias.
+LQC2/SQC2 transportam 128 bits observados, mantêm VF00 e recusam desalinhamento
+conforme manual, diferentemente de LQ/SQ. Semântica compartilhada AOT/intérprete.
+Mantém o modelo síncrono explícito existente de macros; não declara pipeline
+VU de quatro ciclos nem microprogramas completos. Nenhuma lógica de jogo
+substituída, nenhum dado proprietário incluído no código/testes.

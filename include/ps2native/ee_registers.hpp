@@ -97,6 +97,10 @@ public:
     void vu_subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {
         vu_control_.subtract(destination,left,right,mask);
     }
+    void vu_add(unsigned destination,unsigned left,unsigned right,unsigned mask) {
+        vu_control_.add(destination,left,right,mask);
+    }
+    void vu_rotate(unsigned destination,unsigned source,unsigned mask) {vu_control_.rotate(destination,source,mask);}
     void vu_vector_store_increment(unsigned source,unsigned base,unsigned mask) {
         vu_control_.vector_store_increment(source,base,mask);
     }

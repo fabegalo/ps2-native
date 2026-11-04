@@ -429,6 +429,53 @@ void divider() {
     require(ee_fpu_multiply(0xBC23D70A,0x3C23D70A,fcr)==0xB8D1B716,
             "certified multiply preserves sign xor");
 }
+void vector_setup() {
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    EEState s;s.pc=0x80001000;s.set_cp0(Cop0::Status,1u<<30);
+    memory.write_vu_vector(1,{});
+    constexpr auto add=0x4A200868u; // VADD.w VF01,VF01,VF00
+    require(try_decode_r5900(0,add)->opcode==MipsOpcode::Vadd,"VADD decodes independently of VMUL");
+    memory.write32(s.pc,add);
+    std::uint64_t executed=0;ExecutionContext ctx{s,memory,executed,100,~0u};
+    interpret_instruction(ctx);
+    const auto one=memory.observe_vu_vector(1);
+    require(one.low.value==0 && one.high.value==0x3F80000000000000ull &&
+            !one.high.unknown && memory.read_vu_control(17)==0,"masked zero addend constructs vector one");
+    constexpr auto rotate=0x4BE10B3Du; // VMR32.xyzw VF01,VF01
+    require(try_decode_r5900(0,rotate)->opcode==MipsOpcode::Vmr32,"VMR32 has the special2 encoding");
+    ee::exec<MipsOpcode::Vmr32>(s,memory,0,rotate);
+    require(memory.observe_vu_vector(1).high.value==0x3F800000u,"aliased rotation snapshots all source fields");
+    memory.write_vu_vector(2,{{0xC0400000u,0},{0,0}});
+    memory.vu_add(2,2,0,8);
+    require(memory.read_vu_control(17)==0x80u && (memory.read_vu_control(16)&0xCFu)==0x82u,
+            "negative nonzero result sets component sign and sticky sign");
+    const auto flags=memory.read_vu_control(16);
+    memory.write_vu_vector(3,{{0,0},{0,0xFFFFFFFF00000000ull}});
+    rejects([&]{memory.vu_add(2,1,3,15);},"zero-addend");
+    require(memory.observe_vu_vector(2).low.value==0xC0400000u && memory.read_vu_control(16)==flags,
+            "unknown later component cannot partially change vector or flags");
+    memory.write_vu_vector(2,{{0x1122334455667700ull,0xFFu},{0xAABBCCDDEEFF0000ull,0xFFFFu}});
+    s.set_reg32(8,0x80002010u);
+    constexpr auto store=0xF902FFF0u,load=0xD903FFF0u; // offset -16, VF02/VF03
+    require(try_decode_r5900(0,store)->opcode==MipsOpcode::Sqc2 &&
+            try_decode_r5900(0,load)->opcode==MipsOpcode::Lqc2,"COP2 quadword load/store decode");
+    ee::exec<MipsOpcode::Sqc2>(s,memory,0,store);
+    ee::exec<MipsOpcode::Lqc2>(s,memory,0,load);
+    const auto copied=memory.observe_vu_vector(3);
+    require(copied.low.value==0x1122334455667700ull && copied.low.unknown==0xFFu &&
+            copied.high.value==0xAABBCCDDEEFF0000ull && copied.high.unknown==0xFFFFu,
+            "COP2 quadword memory roundtrip preserves all known and unknown bits");
+    memory.vu_rotate(3,3,8);
+    require(memory.observe_vu_vector(3).low.value==0x1122334411223344ull &&
+            memory.observe_vu_vector(3).low.unknown==0,"rotation mask selects destination lanes");
+    s.set_reg32(8,0x80002018u);
+    bus_fault([&]{ee::exec<MipsOpcode::Lqc2>(s,memory,0,load);},BusFault::Unaligned,"16-byte");
+    bus_fault([&]{ee::exec<MipsOpcode::Sqc2>(s,memory,0,store);},BusFault::Unaligned,"16-byte");
+    s.set_reg32(8,0x80002010u);s.set_cp0(Cop0::Status,0);
+    rejects([&]{ee::exec<MipsOpcode::Sqc2>(s,memory,0,store);},"Status.CU2 = 0");
+    memory.vu_rotate(0,3,15);
+    require(memory.observe_vu_vector(0).high.value==0x3F80000000000000ull,"VF00 stays constant");
+}
 void dma_idle_knowledge() {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_reg32(8,0xB000C000u);
@@ -491,6 +538,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();adder();divider();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();adder();divider();vector_setup();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

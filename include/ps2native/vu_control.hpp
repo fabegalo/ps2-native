@@ -121,6 +121,32 @@ public:
                      static_cast<std::uint32_t>(half.unknown>>shift)};
         }
     }
+    void add(unsigned destination,unsigned left,unsigned right,unsigned mask) {
+        auto result=vectors_.at(destination);
+        std::uint32_t mac=0,status=0;
+        for(unsigned lane=0;lane<4;++lane) {
+            const auto bit=8u>>lane;
+            if(!(mask&bit))continue;
+            const auto a=vectors_.at(left)[lane],b=vectors_.at(right)[lane];
+            const auto ea=(a.value>>23u)&255u,eb=(b.value>>23u)&255u;
+            if(a.unknown || b.unknown || (ea && eb) || ea==255u || eb==255u)
+                throw DeviceRefusal("VU ADD outside proven zero-addend operands");
+            const auto value=ea ? a.value : eb ? b.value : (a.value&b.value&0x80000000u);
+            result[lane]={value,0};
+            if(!(value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
+            if(value&0x80000000u){mac|=bit<<4u;status|=2u;}
+        }
+        // Commit only after all selected operands have been validated.
+        if(destination)vectors_.at(destination)=result;
+        registers_[17]=mac;unknown_[17]=0;
+        registers_[16]=(*registers_[16]&~0xFu)|status|(status<<6u);
+        unknown_[16]&=~(0xFu|(status<<6u));
+    }
+    void rotate(unsigned destination,unsigned source,unsigned mask) {
+        const auto input=vectors_.at(source); // alias-safe, including unknown bits
+        if(destination)for(unsigned lane=0;lane<4;++lane)
+            if(mask&(8u>>lane))vectors_.at(destination)[lane]=input[(lane+1u)&3u];
+    }
     void subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {
         // Exact cancellation needs neither an alignment/rounding hypothesis nor
         // a host float. Other arithmetic remains refused until independently
