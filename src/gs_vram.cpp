@@ -9,13 +9,25 @@ void GsVram::invalidate() {
     std::fill(known_.begin(), known_.end(), 0u); ++revision_; pixel_writes_ = 0u;
 }
 void GsVram::validate_format(unsigned psm) {
-    if (psm > 1u) throw DeviceRefusal("GS pixel format " + std::to_string(psm) +
-                                     " is not modeled (PSMCT32/PSMCT24 only)");
+    if (psm > 1u && psm != 19u) throw DeviceRefusal("GS pixel format " + std::to_string(psm) +
+                                     " is not modeled (PSMCT32/PSMCT24/PSMT8 only)");
 }
 std::uint32_t GsVram::address(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y) {
     validate_format(psm);
     if (!width || width > 4032u || width % 64u || base % 256u || x > 2047u || y > 2047u)
         throw DeviceRefusal("GS VRAM address: invalid base, buffer width or coordinate");
+    if (psm == 19u) {
+        if (width % 128u) throw DeviceRefusal("GS PSMT8 buffer width must be a multiple of 128");
+        const auto page = (y / 64u) * (width / 128u) + x / 128u;
+        const auto block = ((x >> 4) & 1u) | ((y >> 3) & 2u) | ((x >> 3) & 4u) |
+                           ((y >> 2) & 8u) | ((x >> 2) & 16u);
+        // GS column diagrams: odd columns exchange the low/high word groups;
+        // rows 2/3 select the other byte and exchange those groups again.
+        const auto word = (x & 1u) | ((y & 1u) << 1) | ((x & 2u) << 1) |
+                          (((x >> 2) ^ (y >> 1) ^ (y >> 2)) & 1u) << 3;
+        const auto byte = ((x >> 2) & 2u) | ((y >> 1) & 1u);
+        return (base + page * 8192u + block * 256u + ((y >> 2) & 3u) * 64u + word * 4u + byte) & (kBytes - 1u);
+    }
     const auto page = (y / 32u) * (width / 64u) + x / 64u;
     const auto block = ((x >> 3) & 1u) | ((y >> 2) & 2u) | ((x >> 2) & 4u) |
                        ((y >> 1) & 8u) | ((x >> 1) & 16u);
@@ -23,16 +35,19 @@ std::uint32_t GsVram::address(std::uint32_t base, unsigned width, unsigned psm, 
     return (base + page * 8192u + block * 256u + word * 4u) & (kBytes - 1u);
 }
 std::uint32_t GsVram::read(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y) const {
-    const auto at = address(base, width, psm, x, y) / 4u;
-    const auto bits = psm == 1u ? 0xFFFFFFu : 0xFFFFFFFFu;
-    if ((known_[at] & bits) != bits) throw DeviceRefusal("GS VRAM read: pixel contains unwritten bits");
-    return words_[at] & bits;
+    const auto addr = address(base, width, psm, x, y);
+    const auto at = addr / 4u, shift = (addr & 3u) * 8u;
+    const auto bits = psm == 19u ? 255u : psm == 1u ? 0xFFFFFFu : 0xFFFFFFFFu;
+    if (((known_[at] >> shift) & bits) != bits) throw DeviceRefusal("GS VRAM read: pixel contains unwritten bits");
+    return (words_[at] >> shift) & bits;
 }
 void GsVram::write(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y,
                    std::uint32_t value, std::uint32_t preserve, std::uint32_t unknown, bool conditional) {
-    const auto at = address(base, width, psm, x, y) / 4u;
+    const auto addr = address(base, width, psm, x, y);
+    const auto at = addr / 4u, shift = (addr & 3u) * 8u;
     if (psm == 1u) preserve |= 0xFF000000u;
-    write_word(at, value, ~preserve, unknown, conditional);
+    if (psm == 19u) preserve |= 0xFFFFFF00u;
+    write_word(at, value << shift, ~preserve << shift, unknown << shift, conditional);
     if (!conditional) ++pixel_writes_; // possible writes are not claimed as proven pixels
 }
 void GsVram::write_word(unsigned at, std::uint32_t value, std::uint32_t mask,

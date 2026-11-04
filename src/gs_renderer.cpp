@@ -32,8 +32,8 @@ void GsRegisters::start_transfer(std::uint64_t value) {
     const auto x = static_cast<unsigned>((pos >> 32) & 2047u);
     const auto y = static_cast<unsigned>((pos >> 48) & 2047u);
     (void)GsVram::address(base, bw, psm, x, y);
-    if (width % (psm == 1u ? 8u : 2u))
-        throw DeviceRefusal("GS transfer width violates the PSMCT32/24 hardware alignment");
+    if (width % (psm == 0u ? 2u : 8u) || (psm == 19u && (x & 1u)))
+        throw DeviceRefusal("GS transfer rectangle violates the hardware alignment");
     const auto order = static_cast<unsigned>((pos >> 59) & 3u);
     if (direction == 0u) {
         // TRXPOS.DIR applies only to local copies; uploads always run left to
@@ -45,6 +45,7 @@ void GsRegisters::start_transfer(std::uint64_t value) {
     const auto sw = static_cast<unsigned>((buf >> 16) & 63u) * 64u;
     const auto sp = static_cast<unsigned>((buf >> 24) & 63u);
     const auto sx = static_cast<unsigned>(pos & 2047u), sy = static_cast<unsigned>((pos >> 16) & 2047u);
+    if (sp == 19u && (sx & 1u)) throw DeviceRefusal("GS PSMT8 source violates hardware alignment");
     (void)GsVram::address(sb, sw, sp, sx, sy);
     if (sp != psm) throw DeviceRefusal("GS local-to-local mixed formats are not modeled");
     // DIR selects traversal, including overlapping source/destination regions.
@@ -61,7 +62,7 @@ void GsRegisters::transfer_data(std::uint64_t data) {
     auto& t = transfer_;
     // GS manual HWREG: outside an active host-to-local transfer, no operation.
     if (!t.active) return;
-    const unsigned bytes = t.psm == 1u ? 3u : 4u;
+    const unsigned bytes = t.psm == 19u ? 1u : t.psm == 1u ? 3u : 4u;
     for (unsigned i = 0; i < 8u && t.active; ++i) {
         t.pending |= static_cast<std::uint32_t>((data >> (8u * i)) & 255u) << (8u * t.pending_bytes++);
         if (t.pending_bytes != bytes) continue;
@@ -108,6 +109,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     const auto base = static_cast<unsigned>(frame & 511u) * 8192u;
     const auto bw = static_cast<unsigned>((frame >> 16) & 63u) * 64u;
     const auto psm = static_cast<unsigned>((frame >> 24) & 63u);
+    if (psm > 1u) throw DeviceRefusal("GS drawing framebuffer format is not modeled");
     (void)GsVram::address(base, bw, psm, 0u, 0u);
     const auto zbase = static_cast<unsigned>(zbuf & 511u) * 8192u;
     const auto zpsm = static_cast<unsigned>((zbuf >> 24) & 15u);
@@ -184,6 +186,7 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     const auto base = static_cast<unsigned>(fb & 511u) * 8192u;
     const auto bw = static_cast<unsigned>((fb >> 9) & 63u) * 64u;
     const auto psm = static_cast<unsigned>((fb >> 15) & 31u);
+    if (psm > 1u) throw DeviceRefusal("GS scanout pixel format is not modeled");
     GsVram::validate_format(psm);
     const auto x0 = static_cast<unsigned>((fb >> 32) & 2047u), y0 = static_cast<unsigned>((fb >> 43) & 2047u);
     if (x0 + f.width > 2048u || y0 + f.height > 2048u)

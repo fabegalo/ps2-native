@@ -1321,3 +1321,15 @@ escritas condicionais não incrementam o contador de pixels comprovados.
 Uma escrita posterior do convidado resolve a incerteza. Nenhuma hipótese de
 reset adicional, pacote host ou comando externo foi inserido no jogo.
 CI 0570023: os seis jobs do núcleo também terminaram com sucesso.
+Ensaio 92 com incerteza preservada: EE `0x1CECA0` / 387.565.264,
+IOP `0xD628` / 52.497.745 sem parada; 130,654 s. 24 novos pacotes GIF,
+1.048.832 escritas comprovadas (256 entradas adicionais transferidas),
+scanout 640x224 ainda preto com o mesmo digest. Próximo bloqueio: upload
+PSMT8 208x128, DBP=1680, DBW=4. O erro persistente de DMA impede o dump
+secundário de RAM; nenhuma nova identidade de RAM alegada.
+Modo original repetido após f6344e4: PCs/contagens/hash canônicos preservados.
+Continuação PSMT8: consultado PS2Recomp GS memory e os diagramas GS
+8.3.3; implementação independente com permutação de bits, byte lanes,
+colunas pares/ímpares e páginas 128x64. Upload IMAGE/HWREG e cópia local
+preservam bytes vizinhos e recusam alinhamento inválido. PSMT8 não é
+aceito como framebuffer de desenho ou formato de scanout.

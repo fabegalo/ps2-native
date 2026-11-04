@@ -4,9 +4,9 @@ O checkpoint experimental já produziu 16 pacotes GIF PATH3 e 1.048.576 escritas
 de pixels por IMAGE: limpeza real da VRAM comandada pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução concluída: ensaio 91, EE `0x1024C0`, 358.037.955 instruções,
-GS: SCANMSK ainda não escrito no primeiro sprite. IOP `0x4AAC` / 48.806.831,
-sem parada registrada. DMA VIF passou. Profundidade e scanout INT+FFMD implementados; repetir com propagação conservadora dos bits SCANMSK/FBA desconhecidos.
+Última execução concluída: ensaio 92, EE `0x1CECA0`, 387.565.264 instruções,
+GS: upload PSMT8 208x128 ainda não suportado nessa execução. IOP `0xD628` / 52.497.745,
+sem parada registrada. DMA VIF passou. Profundidade, scanout INT+FFMD e propagação de incerteza passaram. PSMT8 implementado e seis testes focados aprovados; repetir até o próximo bloqueio.
 D-cache funcional explícito desde reset passou por DXLTG: conteúdo separado
 da RAM, LRF e writeback reais; sem latência adicional, I-cache não modelado.
 Hipótese separada permite operações hit usando alias uncached da RAM.

@@ -171,3 +171,9 @@ Revisar a evidência original e os limites de cada etapa nos relatórios [docs](
 `bfa70f2`/`67aed98`: leitura textual do checksum oficial Qt, extração em prefixos separados x64/ARM64 e atalho QML com todas as combinações padrão. **Launcher e núcleo aprovados nos seis alvos para `67aed98`**. [Execução do launcher](https://github.com/fabegalo/ps2-native/actions/runs/41758760249); causas e evidência em [LAUNCHER](docs/LAUNCHER.md). Sem alteração nas capacidades de Browser/jogos.
 
 - **Super Bust-A-Move (SLUS-20115):** ELF em diagnóstico com kernel Sony parcial até 4.486.087 passos (4.483.572 AOT), PC `0x80005F00`; SIF0/IRQ IP3 implementados e regressão com transferência real. Zero frames/menu/gameplay; IOP sem timing GS conhecido impede inicialização. Evidência em [FIRST-GAME-STATUS](docs/FIRST-GAME-STATUS.md).
+
+- Continuação GS, ensaio 92: EE `0x1CECA0` / 387.565.264, IOP `0xD628` /
+  52.497.745 ativo. 24 pacotes GIF novos, 1.048.832 escritas comprovadas;
+  scanout ainda preto. PSMT8 208x128 é o próximo upload; transferência e
+  swizzle de 8 bits implementados com seis testes focados aprovados.
+  Modo original repetido após GS conserva PCs/contagens/hash canônicos.

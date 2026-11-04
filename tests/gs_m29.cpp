@@ -64,6 +64,21 @@ void check_vram() {
     rejects([&]{(void)vram.read(0,64,1,0,0);},"unwritten bits");
     vram.write(0,64,0,0,0,0x12345678);
     require(vram.read(0,64,0,0,0)==0x12345678,"unconditional write resolves uncertainty");
+    constexpr std::array<std::array<unsigned,3>,15> indexed_vectors{{
+        {0,0,0},{1,0,4},{2,0,16},{4,0,32},{8,0,2},{0,1,8},{0,2,33},
+        {0,3,41},{0,4,96},{0,6,65},{0,8,128},{16,0,256},{0,16,512},
+        {128,0,8192},{0,64,16384}
+    }};
+    for (const auto& v : indexed_vectors)
+        require(GsVram::address(0,256,19,v[0],v[1])==v[2],"PSMT8 diagram address");
+    vram.invalidate(); addresses.clear();
+    for(unsigned y=0;y<128;++y)for(unsigned x=0;x<256;++x) {
+        require(addresses.insert(GsVram::address(0,256,19,x,y)).second,"PSMT8 four-page bijection");
+        vram.write(0,256,19,x,y,(x+3*y)&255u);
+    }
+    for(unsigned y=0;y<128;++y)for(unsigned x=0;x<256;++x)
+        require(vram.read(0,256,19,x,y)==((x+3*y)&255u),"PSMT8 adjacent byte preservation");
+    rejects([&]{(void)GsVram::address(0,64,19,0,0);},"multiple of 128");
 }
 void setup_transfer(GsRegisters& gs, unsigned psm, unsigned w, unsigned h, unsigned x=0, unsigned y=0) {
     gs.general_write(0x50, (1ull<<48) | (std::uint64_t{psm}<<56));
@@ -71,6 +86,20 @@ void setup_transfer(GsRegisters& gs, unsigned psm, unsigned w, unsigned h, unsig
     gs.general_write(0x52, w | (std::uint64_t{h}<<32)); gs.general_write(0x53,0);
 }
 void check_transfer_gif() {
+    {
+        GsRegisters indexed; indexed.reset(0); Gif stream; stream.reset();
+        indexed.general_write(0x50,(2ull<<48)|(19ull<<56));
+        indexed.general_write(0x51,(14ull<<32)|(3ull<<48));
+        indexed.general_write(0x52,8ull|(3ull<<32)); indexed.general_write(0x53,0);
+        stream.write_fifo(tag(2,0,2),0,indexed);
+        stream.write_fifo(0x0807060504030201ull,0x100F0E0D0C0B0A09ull,indexed);
+        stream.write_fifo(0x1817161514131211ull,~0ull,indexed);
+        for(unsigned p=0;p<24;++p)
+            require(indexed.vram().read(0,128,19,14+p%8,3+p/8)==p+1,"IMAGE8 rows/columns/blocks and qword padding");
+        rejects([&]{(void)indexed.vram().read(0,128,19,14,6);},"unwritten bits");
+        indexed.general_write(0x51,15ull<<32);
+        rejects([&]{indexed.general_write(0x53,0);},"hardware alignment");
+    }
     GsRegisters gs; gs.reset(0);
     Gif gif; gif.reset();
     setup_transfer(gs,0,2,3,7,7); // block boundaries and final qword padding
@@ -98,7 +127,7 @@ void check_transfer_gif() {
     require(gs.vram().read(0,64,0,1,2)==0x77665544u && gs.vram().read(0,64,0,2,2)==0xBBAA9988u,
             "local copy preserves overlap with DIR");
     rejects([&] { gs.general_write(0x53,1u); }, "local-to-host");
-    rejects([&] { setup_transfer(gs,0x13,1,1); }, "pixel format 19");
+    rejects([&] { setup_transfer(gs,0x14,1,1); }, "pixel format 20");
     rejects([&] { setup_transfer(gs,0,3,1); }, "hardware alignment");
     rejects([&] { setup_transfer(gs,1,6,1); }, "hardware alignment");
     setup_transfer(gs,0,2,1); gs.general_write(0x53,3u);
