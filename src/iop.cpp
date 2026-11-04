@@ -225,7 +225,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     sif1_words_ = 0;
     sif1_metrics_ = {};
     iop_sif0_ = {}; iop_sif0_written_=0; sif0_fifo_.clear(); sif0_source_words_=0;
-    sif0_source_tag_=sif0_source_end_=sif0_dest_end_=false; sif0_metrics_={};
+    sif0_source_tag_=sif0_source_end_=sif0_dest_end_=false; sif0_metrics_={};sif0_last_qword_={};
     if (rom_.size() != kRomBytes) stop_ = "no ROM0 mapped for the IOP";
 }
 
@@ -554,15 +554,19 @@ void Iop::pump_sif0() {
         const auto* value=latch(address);
         return value && *value && ((**value&mask)==mask);
     };
-    const auto source_word=[&](std::uint32_t address) {
-        if(address>ram_.size() || 4u>ram_.size()-address)
-            throw IopStop{"SIF0 source exceeds IOP RAM"};
+    const auto observed_source=[&](std::uint32_t address)->std::optional<std::uint32_t> {
+        if(address>ram_.size() || 4u>ram_.size()-address)return std::nullopt;
         std::uint32_t value=0;
         for(unsigned b=0;b<4;++b) {
-            if(!ram_written_[address+b])throw IopStop{"SIF0 source consumes undefined IOP RAM"};
+            if(!ram_written_[address+b])return std::nullopt;
             value|=std::uint32_t{ram_[address+b]}<<(b*8u);
         }
         return value;
+    };
+    const auto source_word=[&](std::uint32_t address) {
+        const auto value=observed_source(address);
+        if(!value)throw IopStop{"SIF0 source consumes undefined IOP RAM or exceeds its bounds"};
+        return *value;
     };
     if((iop_sif0_[2]&kChcrStart) && enabled(0x1F801578u,1u) && enabled(0x1F801570u,0x800u)) {
         if(!sif0_source_tag_) {
@@ -572,14 +576,18 @@ void Iop::pump_sif0() {
                 const auto tag=source_word(at),words=source_word(at+4u);
                 const auto low=source_word(at+8u),high=source_word(at+12u);
                 const auto source=tag&0xFFFFFFu;
-                if((tag&0x7F000003u) || (words&0xFF000003u))
-                    throw IopStop{"SIF0 source tag: IRQ/reserved bits or non-qword word count not modeled"};
+                if((tag&0x7F000003u) || (words&0xFF000000u))
+                    throw IopStop{"SIF0 source tag: IRQ/reserved bits not modeled"};
                 if(source>ram_.size() || std::uint64_t{words}*4u>ram_.size()-source)
                     throw IopStop{"SIF0 source tag payload outside IOP RAM"};
                 sif0_fifo_.push_back(low);sif0_fifo_.push_back(high);
                 // Upper half of an EE destination tag is unused: occupancy
                 // padding only, never returned to the guest or copied to RAM.
                 sif0_fifo_.push_back(0);sif0_fifo_.push_back(0);
+                // The real bus qword contains the EE tag and the following
+                // IOP tag. Unknown following bytes may be ignored by the EE
+                // tag parser, but must never become invented payload padding.
+                sif0_last_qword_={low,high,observed_source(at+16u),observed_source(at+20u)};
                 iop_sif0_[0]=source;iop_sif0_[3]+=16u;iop_sif0_written_|=1u;
                 sif0_source_words_=words;sif0_source_end_=(tag&0x80000000u)!=0;
                 sif0_source_tag_=true;
@@ -588,9 +596,17 @@ void Iop::pump_sif0() {
             if(sif0_fifo_.size()>28u)++sif0_metrics_.source_full_cycles;
             else {
                 std::array<std::uint32_t,4> qword{};
-                for(unsigned w=0;w<4;++w)qword[w]=source_word(iop_sif0_[0]+w*4u);
+                const auto count=std::min(4u,sif0_source_words_);
+                for(unsigned w=0;w<4;++w) {
+                    if(w<count)qword[w]=source_word(iop_sif0_[0]+w*4u);
+                    else {
+                        if(!sif0_last_qword_[w])throw IopStop{"SIF0 partial qword would expose unknown retained bus data"};
+                        qword[w]=*sif0_last_qword_[w];
+                    }
+                }
                 for(const auto word:qword)sif0_fifo_.push_back(word);
-                iop_sif0_[0]+=16u;sif0_source_words_-=4u;
+                for(unsigned w=0;w<4;++w)sif0_last_qword_[w]=qword[w];
+                iop_sif0_[0]+=count*4u;sif0_source_words_-=count;
             }
         }
         sif0_metrics_.peak_fifo_words=std::max(sif0_metrics_.peak_fifo_words,sif0_fifo_.size());

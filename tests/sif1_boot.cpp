@@ -129,8 +129,49 @@ void block_control_halfwords() {
     std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);iop.run_until(150);
     require(!iop.stopped() && iop.ee_read(0x100u,4)==0xCAFEBBBBu,"SH after a full BCR write preserves the opposite halfword");
 }
+std::vector<std::uint8_t> partial_sender(unsigned words,bool next_known,std::uint32_t source) {
+    m20::Assembler a(0xBFC00000u);
+    store(a,0xBF801570u,0x800u);store(a,0xBF801578u,1);store(a,0xBF80157Cu,1);
+    store(a,0xBF8010F4u,1u<<23);store(a,0xBF801574u,1u<<18);
+    store(a,0xA0000400u,0x80000000u|source);store(a,0xA0000404u,words);
+    store(a,0xA0000408u,0x70000000u|((words+3u)/4u));store(a,0xA000040Cu,0x400u);
+    if(next_known){store(a,0xA0000410u,0xCAFEBABEu);store(a,0xA0000414u,0x13579BDFu);}
+    for(unsigned w=0;w<words;++w)store(a,0xA0000000u|(source+w*4u),0xCA000000u+w);
+    store(a,0xBF80152Cu,0x400u);store(a,0xBF801528u,0x01000701u);
+    a.label("poll");a.la(8,0xBF801520u);a.lw(9,0,8);a.nop();a.la(10,0xA0000080u);a.sw(9,0,10);
+    a.beq(0,0,"poll");a.nop();
+    const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> rom(4u*1024u*1024u);
+    std::copy(code.begin(),code.end(),rom.begin());return rom;
+}
+void partial_sif0_packets() {
+    for(const unsigned words : {1u,2u,3u,5u,6u,7u})for(const bool boundary : {false,true}) {
+        const auto source=boundary ? kIopRamBytes-words*4u : 0x500u;
+        std::vector<std::uint8_t> ram(0x800u,0xAAu);Iop iop;iop.reset(partial_sender(words,true,source),nullptr);
+        iop.attach_ee_ram(ram);iop.ee_dma_write(0x1000E000u,1);iop.ee_dma_write(0x1000C020u,0);iop.ee_dma_write(0x1000C000u,0x184u);
+        iop.run_until(600);
+        require(!iop.stopped(),iop.stop_reason().value_or("running"));
+        const auto rounded=(words+3u)/4u*4u;
+        for(unsigned w=0;w<rounded;++w) {
+            const auto at=0x400u+w*4u;std::uint32_t actual=0;
+            for(unsigned b=0;b<4;++b)actual|=std::uint32_t{ram[at+b]}<<(b*8u);
+            const auto expected=w<words ? 0xCA000000u+w : words>4 ? 0xCA000000u+w%4u :
+                                w==1 ? 0x400u : w==2 ? 0xCAFEBABEu : 0x13579BDFu;
+            require(actual==expected,"partial packet uses measured bus lanes, without reading past its actual source");
+        }
+        require(ram[0x3FFu]==0xAAu && ram[0x400u+rounded*4u]==0xAAu,"partial packet leaves adjacent EE bytes intact");
+        require(iop.ee_read(0x80u,4)==source+words*4u,"IOP MADR advances by actual words, without padding");
+        require(iop.sif0_metrics().bytes==rounded*4u && (iop.ee_dma_read(0x1000E010u)&0x20u),"EE completion follows the actual rounded bus transfer");
+    }
+    std::vector<std::uint8_t> ram(0x800u,0xAAu);Iop unknown;unknown.reset(partial_sender(1,false,0x500u),nullptr);
+    unknown.attach_ee_ram(ram);unknown.ee_dma_write(0x1000E000u,1);unknown.ee_dma_write(0x1000C020u,0);unknown.ee_dma_write(0x1000C000u,0x184u);
+    unknown.run_until(600);
+    require(unknown.stopped() && unknown.stop_reason()->find("unknown retained bus data")!=std::string::npos,
+            "undefined following IOP tag cannot become fake zero payload padding");
+    require(!unknown.sif0_metrics().bytes && ram[0x400u]==0xAAu && !(unknown.ee_dma_read(0x1000E010u)&0x20u),
+            "unknown retained lanes fail before exposing payload or a completion IRQ");
+}
 }
 int main() try {
-    transfer_masks();incomplete_packet();source_chain();refused_packets();block_control_halfwords();
+    transfer_masks();incomplete_packet();source_chain();refused_packets();block_control_halfwords();partial_sif0_packets();
     std::cout<<"SIF1 source chains, exact payload, END/IRQ masks and incomplete packets passed\n";
 } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

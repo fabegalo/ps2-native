@@ -59,9 +59,9 @@ void backpressure() {
 void refusal() {
     for(unsigned bad=0;bad<3;++bad) {
         std::vector<std::uint8_t> ram(0x20000,0xAA);Iop iop;iop.reset({},nullptr);
-        iop.load_program(sender(bad==0?6u:64u,bad==1?0x30000u:0x10000u,bad==2),0x1000,0x1000);
+        iop.load_program(sender(bad==0?1u:64u,bad==1?0x30000u:0x10000u,bad==2),0x1000,0x1000);
         iop.attach_ee_ram(ram);arm(iop);iop.run_until(1800);
-        require(iop.stopped() && iop.sif0_metrics().bytes==0,"malformed/outside/undefined source fails before payload");
+        require(iop.stopped() && iop.sif0_metrics().bytes==0,"unknown retained lanes/outside/undefined source fails before payload");
         require(iop.ee_dma_read(0x1000C000u)&0x100u,"failure cannot manufacture successful EE completion");
     }
 }

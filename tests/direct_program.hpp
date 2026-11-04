@@ -86,7 +86,7 @@ inline std::vector<std::uint8_t> iop_sender(unsigned words=64,unsigned destinati
     store(a,0xBF801570u,0x800u);store(a,0xBF801578u,1);store(a,0xBF80157Cu,1);
     store(a,0xBF8010F4u,1u<<23u);store(a,0xBF801574u,1u<<18u);
     store(a,0x4000u,0x80005000u);store(a,0x4004u,words);
-    store(a,0x4008u,0x70000000u|(words/4u));store(a,0x400Cu,destination);
+    store(a,0x4008u,0x70000000u|((words+3u)/4u));store(a,0x400Cu,destination);
     if(!undefined)for(unsigned w=0;w<words;++w)store(a,0x5000u+w*4u,0xCA000000u+w);
     store(a,0xBF80152Cu,0x4000u);store(a,0xBF801528u,0x01000701u);
     a.label("idle");a.beq(zero,zero,"idle");a.nop();

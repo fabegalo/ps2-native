@@ -132,6 +132,9 @@ private:
     std::deque<std::uint32_t> sif0_fifo_;
     std::uint32_t sif0_source_words_{};
     bool sif0_source_tag_{},sif0_source_end_{},sif0_dest_end_{};
+    // Incomplete SIF bus qwords retain the previous full qword lanes.
+    // Reported console measurements: PCSX2 Sif.h, "PS2 test results".
+    std::array<std::optional<std::uint32_t>,4> sif0_last_qword_{};
     SifDmaMetrics sif0_metrics_;
     struct PendingLoad {
         unsigned reg;
