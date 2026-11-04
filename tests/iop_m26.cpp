@@ -159,7 +159,7 @@ void check_timers() {
     a.ori(t4, t4, 0xFFFFu);       // acknowledge bit 16 (write 0)
     a.sw(t4, 0x1070, t1);
     a.label("checkpoint");
-    a.addu(v0, t5, zero);         // the whole I_STAT is unknown
+    a.addiu(v0, t5, 1);          // arithmetic consumes the unknown I_STAT bits
     a.nop();
     const auto rom = rom_of(a);
     Iop iop;
@@ -177,7 +177,7 @@ void check_timers() {
     refuses([](Assembler& p) { p.ori(a0, zero, 1u); p.sw(a0, 0x1484, t1); }, kProfile, "timer gates are not modeled");
     refuses([](Assembler& p) { p.ori(a0, zero, 0x100u); p.sw(a0, 0x1114, t1); }, kProfile, "HBLANK timer sources");
     refuses([](Assembler& p) { p.ori(a0, zero, 0x10u); p.sw(a0, 0x1104, t1); }, kProfile, "target never written");
-    refuses([](Assembler& p) { p.lw(a0, 0x1100, t1); p.nop(); p.addu(v0, a0, zero); }, kProfile,
+    refuses([](Assembler& p) { p.lw(a0, 0x1100, t1); p.nop(); p.addiu(v0, a0, 1); }, kProfile,
             "timer count before any write");
 }
 
