@@ -91,6 +91,7 @@ public:
     // Records only the request; neither acknowledgement nor DVD permissions
     // are inferred from an unmeasured MECHACON reply.
     [[nodiscard]] bool dvd_playback_forbid_requested() const noexcept {return dvd_playback_forbid_requested_;}
+    [[nodiscard]] std::optional<bool> remote_bypass_enabled() const noexcept {return sio2_remote_bypass_;}
     // Explicit behavioral-reference experiment only: SCMD 15 reply bit 7=0.
     // The other seven bits and resulting DVD permission state stay unknown.
     void diagnostic_forbid_dvdp_error_bit_clear() {
@@ -315,7 +316,7 @@ private:
     // when known in both, or known 0 in one of them.
     void and_regs(unsigned rd, unsigned rs, unsigned rt);
     void and_immediate(unsigned destination, unsigned source, std::uint32_t mask);
-    void or_value(unsigned rd,unsigned rs,std::uint32_t value,std::uint32_t known,const std::string& origin);
+    void or_value(unsigned rd,unsigned rs,std::uint32_t value,std::uint32_t known,const std::string& origin,std::uint64_t epoch=0);
     // rs == rt, decided when the known bits already differ even if some
     // bits are unknown; otherwise both must be known.
     [[nodiscard]] bool regs_equal(unsigned rs, unsigned rt) const;
@@ -333,6 +334,8 @@ private:
     void store(std::uint32_t address, std::size_t bytes, std::optional<std::uint32_t> value, const char* what,
                const ObservedWord* observed=nullptr,std::uint64_t sio2_epoch=0);
     void reset_sio2_observed(ObservedWord word,std::uint64_t epoch);
+    void write_sio2_remote_bypass(ObservedWord word,std::uint64_t epoch);
+    void require_sio2_remote_bypass() const;
     void write_sio2_dma(unsigned channel,unsigned field,std::size_t bytes,std::uint32_t value);
     [[nodiscard]] std::uint32_t read_sio2_dma(unsigned channel,unsigned field,std::size_t bytes) const;
     void pump_sio2_dma();
@@ -387,6 +390,8 @@ private:
     std::uint32_t undefined_known_{};            // bits of that value that are known
     std::array<std::uint64_t,32> gpr_sio2_epoch_{};
     std::uint64_t sio2_control_epoch_{},undefined_sio2_epoch_{};
+    std::uint64_t sio2_remote_epoch_{}; // high token bit distinguishes the remote register from CTRL
+    std::optional<bool> sio2_remote_bypass_; // bit 0 only; no cold value or upper bits inferred
     std::optional<unsigned> diagnostic_sio2_port_timing_;
     std::array<std::optional<std::uint16_t>,2> sio2_digital_pads_;
     std::uint32_t sio2_response_status_{};

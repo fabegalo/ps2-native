@@ -210,6 +210,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     diagnostic_dev9_controls_=dev9_initial_power_ready_=false;dev9_controls_={};
     diagnostic_dev9_settle_cycles_=0;dev9_power_ready_at_.reset();
     gpr_sio2_epoch_={};sio2_control_epoch_=undefined_sio2_epoch_=0;
+    sio2_remote_epoch_=0;sio2_remote_bypass_.reset();
     diagnostic_sio2_port_timing_.reset();
     sio2_digital_pads_={};sio2_response_status_=0;
     sio2_input_.clear();sio2_output_.clear();sio2_complete_at_.reset();
@@ -1051,9 +1052,14 @@ void Iop::and_regs(unsigned rd, unsigned rs, unsigned rt) {
     if (k == ~0u) return set_reg(rd, a & b);
     if (rd == 0u) return;
     const auto& origin = (ka != ~0u ? gpr_origin_[rs] : gpr_origin_[rt]);
-    write_ = PendingLoad{rd, a & b & k, false, origin, k};
+    // Only a known identity/bit-0 clear mask can preserve a remote-control
+    // sample. Other MMIO samples retain their existing stricter rules.
+    constexpr auto remote=std::uint64_t{1}<<63u;
+    const auto epoch=kb==~0u && (b|1u)==~0u && (gpr_sio2_epoch_[rs]&remote) ? gpr_sio2_epoch_[rs] :
+                     ka==~0u && (a|1u)==~0u && (gpr_sio2_epoch_[rt]&remote) ? gpr_sio2_epoch_[rt] : 0u;
+    write_ = PendingLoad{rd, a & b & k, false, origin, k,epoch};
 }
-void Iop::or_value(unsigned rd,unsigned rs,std::uint32_t b,std::uint32_t kb,const std::string& b_origin) {
+void Iop::or_value(unsigned rd,unsigned rs,std::uint32_t b,std::uint32_t kb,const std::string& b_origin,std::uint64_t b_epoch) {
     const auto a=gpr_[rs],ka=(gpr_defined_&(1u<<rs)) ? ~0u : gpr_known_[rs];
     // A known one fixes an OR result even if the other operand is unknown.
     const auto known=(ka&kb)|(ka&a)|(kb&b);
@@ -1062,7 +1068,9 @@ void Iop::or_value(unsigned rd,unsigned rs,std::uint32_t b,std::uint32_t kb,cons
     const auto& origin=ka!=~0u ? gpr_origin_[rs] : b_origin;
     // Only OR with known reset/start bits preserves the opaque sample. Mixing
     // another unknown value or changing configuration discards the proof.
-    const auto epoch=kb==~0u && !(b&~0xDu) ? gpr_sio2_epoch_[rs] : 0u;
+    constexpr auto remote=std::uint64_t{1}<<63u;
+    const auto epoch=kb==~0u && !(b&~((gpr_sio2_epoch_[rs]&remote) ? 1u : 0xDu)) ? gpr_sio2_epoch_[rs] :
+                     ka==~0u && !(a&~((b_epoch&remote) ? 1u : 0xDu)) ? b_epoch : 0u;
     write_=PendingLoad{rd,(a|b)&known,false,origin,known,epoch};
 }
 bool Iop::regs_equal(unsigned rs, unsigned rt) const {
@@ -1882,6 +1890,24 @@ void Iop::tick_spu2_quiet() {
         }
     }
 }
+void Iop::require_sio2_remote_bypass() const {
+    // ps2sdk sceCdRcBypassCtl / cdrom_ioctl 6311/6312 use this register
+    // only for IOP revisions >=23. Older boards send MECHACON SCMD 24.
+    if(!hardware_ || !hardware_->iop_prid || *hardware_->iop_prid<0x23u)
+        throw IopStop{"SIO2 remote bypass requires a selected IOP PRId >= 0x23"};
+}
+void Iop::write_sio2_remote_bypass(ObservedWord word,std::uint64_t epoch) {
+    require_sio2_remote_bypass();
+    if(word.unknown&1u)throw IopStop{"SIO2 remote bypass bit 0 is unknown"};
+    // SDK documents a bit-0 RMW, not values or semantics for the other
+    // 31 bits. Accept only an exact, current sample with bit 0 changed.
+    // Never replace the unmeasured upper fields with numeric zero.
+    const auto current=(std::uint64_t{1}<<63u)|sio2_remote_epoch_;
+    if(epoch!=current || word.unknown!=0xFFFFFFFEu)
+        throw IopStop{"SIO2 remote bypass write does not preserve the current opaque register sample"};
+    sio2_remote_bypass_=(word.value&1u)!=0;++sio2_remote_epoch_;
+    events_.push_back({cycle_,std::string("SIO2 remote bypass ")+(*sio2_remote_bypass_ ? "enabled" : "disabled")});
+}
 void Iop::reset_sio2_observed(ObservedWord word,std::uint64_t epoch) {
     if(word.unknown&1u)throw IopStop{"SIO2 control start bit is unknown"};
     if(word.value&1u) {
@@ -1926,6 +1952,10 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
     if(a.physical==0x1F80146Cu) {
         if(bytes!=2u)throw IopStop{"DEV9 POWER requires a halfword write"};
         write_dev9_power(value ? ObservedWord{*value,0} : observed ? *observed : ObservedWord{0,0xFFFFu});return;
+    }
+    if(a.physical==0x1F808284u) {
+        if(bytes!=4u)throw IopStop{"SIO2 remote bypass requires word writes"};
+        write_sio2_remote_bypass(value ? ObservedWord{*value,0u} : observed ? *observed : ObservedWord{0u,~0u},sio2_epoch);return;
     }
     if(a.physical>=0x1E000000u && a.physical<0x1E400000u)
         throw IopStop{std::string("store ")+what+" to read-only ROM1 at "+hex(address)};
@@ -2132,6 +2162,14 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
             undefined_known_=0x30u;return *diagnostic_sio2_port_timing_<<4u;
         }
         undefined_known_=0;return 0;
+    }
+    if(physical==0x1F808284u) {
+        if(bytes!=4u)throw IopStop{"SIO2 remote bypass requires word reads"};
+        require_sio2_remote_bypass();
+        undefined_load_="SIO2 remote bypass upper bits and cold bit 0 are unmeasured";
+        undefined_known_=sio2_remote_bypass_ ? 1u : 0u;
+        undefined_sio2_epoch_=std::string_view(what)=="LW" ? (std::uint64_t{1}<<63u)|sio2_remote_epoch_ : 0u;
+        return sio2_remote_bypass_.value_or(false) ? 1u : 0u;
     }
     if(physical==0x1F808280u) {
         if(bytes!=4u || !diagnostic_sio2_timeout_cycles_)
@@ -3345,7 +3383,7 @@ void Iop::step() {
                 }
                 case 0x23: add_sub_unsigned(rd,rs,rt,true); break;                              // SUBU
                 case 0x24: and_regs(rd, rs, rt); break;                                          // AND
-                case 0x25: or_value(rd,rs,gpr_[rt],(gpr_defined_&(1u<<rt)) ? ~0u : gpr_known_[rt],gpr_origin_[rt]); break;
+                case 0x25: or_value(rd,rs,gpr_[rt],(gpr_defined_&(1u<<rt)) ? ~0u : gpr_known_[rt],gpr_origin_[rt],gpr_sio2_epoch_[rt]); break;
                 case 0x26: set_reg(rd, reg(rs) ^ reg(rt)); break;
                 case 0x27: set_reg(rd, ~(reg(rs) | reg(rt))); break;
                 case 0x2A: set_reg(rd, static_cast<std::int32_t>(reg(rs)) < static_cast<std::int32_t>(reg(rt)) ? 1u : 0u); break;

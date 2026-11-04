@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-sio2-remote-bypass tests/sio2_remote_bypass.cpp)
+    target_link_libraries(ps2n-sio2-remote-bypass PRIVATE ps2n_core)
+    add_test(NAME native-sio2-remote-bypass COMMAND ps2n-sio2-remote-bypass)
+    set_tests_properties(native-sio2-remote-bypass PROPERTIES TIMEOUT 30)
     add_executable(ps2n-mechacon-wakeup tests/mechacon_wakeup.cpp)
     target_link_libraries(ps2n-mechacon-wakeup PRIVATE ps2n_core)
     add_test(NAME native-mechacon-wakeup COMMAND ps2n-mechacon-wakeup)
