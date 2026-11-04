@@ -368,6 +368,39 @@ void vu_control() {
     }
     require(memory.read32(0x11004000u)==memory.observe_vu_data(0).value,"EE and VU use the same VU0 data storage");
     device_refused([&] {memory.write32(0x11001000u,0);},"unimplemented VU memory aperture");
+    memory.write_vu_control(1,0xFFFFu);memory.write_vu_control(2,2);
+    constexpr auto viadd=0x4A000030u|(2u<<16)|(1u<<11)|(1u<<6);
+    require(decode_mips(0,viadd).opcode==MipsOpcode::Viadd,"VIADD decodes the integer register fields");
+    ee::exec<MipsOpcode::Viadd>(state,memory,0,viadd);
+    require(memory.read_vu_control(1)==1 && memory.read_vu_control(17)==15 && memory.read_vu_control(16)==0x41u,
+            "VIADD wraps to 16 bits, supports source/destination alias and preserves flags");
+    ee::exec<MipsOpcode::Viadd>(state,memory,0,viadd&~(31u<<6));
+    require(memory.read_vu_control(0)==0,"VIADD cannot change constant VI00");
+    rejects([&] {(void)decode_mips(0,viadd|(16u<<16));},"unsupported");
+    memory.write_vu_control_observed(2,{0,0xFFFFu});
+    rejects([&] {ee::exec<MipsOpcode::Viadd>(state,memory,0,viadd);},"unknown initial bits");
+    require(memory.read_vu_control(1)==1,"refused VIADD does not change its destination");
+    memory.write_vu_control_observed(16,{0xFC0u,0xFFFFF03Fu});
+    require(memory.read_vu_control(16)==0xFC1u,"STATUS ignores writes and uncertainty outside sticky flags");
+    memory.write_vu_control(16,0);
+    require(memory.read_vu_control(16)==1,"clearing sticky flags preserves current arithmetic flags");
+    memory.write_vu_control(18,0xFEDCBA98u);
+    require(memory.read_vu_control(18)==0xDCBA98u,"CLIP accepts only 24 bits");
+    memory.write_vu_control_observed(16,{0,0xFC0u});
+    memory.write_vu_control_observed(18,{0,0xFFFFFFu});
+    rejects([&] {(void)memory.read_vu_control(16);},"unknown initial bits");
+    memory.write_vu_control(28,2);
+    require(memory.read_vu_control(16)==0 && memory.read_vu_control(18)==0,"VU reset clears symbolic flag history");
+    require(memory.observe_vu_control(20).unknown==0x7FFFFFu && memory.observe_vu_control(21).unknown==~0u &&
+            memory.observe_vu_control(22).unknown==~0u && memory.observe_vu_control(27).unknown==0xFFFFu,
+            "VU scalar/control initial contents remain indeterminate");
+    for(const auto index : {20u,21u,22u,27u}) memory.write_vu_control(index,0xFEDCBA98u);
+    require(memory.read_vu_control(20)==0x5CBA98u && memory.read_vu_control(21)==0xFEDCBA98u &&
+            memory.read_vu_control(22)==0xFEDCBA98u && memory.read_vu_control(27)==0xBA98u,
+            "CTC2 preserves raw I/Q values and applies R/CMSAR0 register widths");
+    memory.write_vu_control(28,2);
+    require(memory.read_vu_control(20)==0x5CBA98u && memory.read_vu_control(27)==0xBA98u,
+            "VU flag reset does not fabricate scalar/control reinitialization");
 }
 
 void vif_control() {
@@ -452,6 +485,12 @@ void guest(const std::filesystem::path& rom_path) {
         require(state.unknown_gpr_bits[5]==~0ull && state.unknown_gpr_high_bits[5]==~0ull &&
                 !memory.observe_vu_data(0x4020u).unknown && memory.observe_vu_data(0x4020u).value==0 &&
                 memory.read_vu_control(17)==15,"guest vector spill, exact subtraction and VSQI agree in both engines");
+        require(memory.read_vu_control(4)==0x806u,"guest VIADD uses actual VI operands in both engines");
+        require(memory.read_vu_control(16)==1 && memory.read_vu_control(18)==0x1234u,
+                "guest CTC2 updates sticky STATUS and CLIP in both engines");
+        require(memory.read_vu_control(20)==0x4DEF21u && memory.read_vu_control(21)==0xABCDEF21u &&
+                memory.read_vu_control(22)==0xABCDEF21u && memory.read_vu_control(27)==0xEF21u,
+                "guest initializes scalar and microprogram address registers in both engines");
         require(memory.read32(0x80001010u)==0xDDEEFF00u && memory.read32(0xB0003C40u)==0x101u &&
                 memory.read32(0xB0003C70u)==0xFFFFFFFFu,"guest VIF configuration transfers actual payload in both engines");
         require(state.cp0(Cop0::Epc) != 0 && !(state.cp0(Cop0::Status) & kStatusEXL), "IRQ delivered and ERET restored state");

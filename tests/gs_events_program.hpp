@@ -31,6 +31,11 @@ inline Program program() {
     a.raw(0x4BE000ECu); // VSUB.xyzw VF03,VF00,VF00, exact zero
     a.ori(t1,zero,0x402u); a.raw((0x12u<<26)|(6u<<21)|(t1<<16)|(2u<<11));
     a.raw(0x4BE21B7Du); // VSQI.xyzw VF03,(VI02++) -> VU1 VF02
+    a.raw(0x4A000030u|(2u<<16)|(2u<<11)|(4u<<6)); // VIADD VI04,VI02,VI02
+    a.raw(0x48C08000u); // CTC2 zero,STATUS: clear sticky flags, retain current Z
+    a.ori(t1,zero,0x1234u); a.raw((0x12u<<26)|(6u<<21)|(t1<<16)|(18u<<11));
+    a.la(t1,0xABCDEF21u);
+    for(const auto index : {20u,21u,22u,27u}) a.raw((0x12u<<26)|(6u<<21)|(t1<<16)|(index<<11));
     a.la(t0, 0xB2000010u); a.la(t1, 1u << 17); a.sd(t1, 0, t0); // SINT held
     a.la(t0, 0xB2001000u); a.ori(t1, zero, 31u); a.sw(t1, 0, t0);
     a.la(t0, 0xB000F000u); a.ori(t1, zero, 0x7FFFu); a.sw(t1, 0, t0);

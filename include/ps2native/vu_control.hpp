@@ -16,6 +16,10 @@ public:
         registers_[0] = 0;
         for (unsigned index=1;index<16;++index) {registers_[index]=0;unknown_[index]=0xFFFFu;}
         for (const auto index : {16u,17u,18u,28u,29u}) registers_[index] = 0;
+        for(const auto index : {20u,21u,22u,27u}) {
+            registers_[index]=0;
+            unknown_[index]=index==20u ? 0x7FFFFFu : index==27u ? 0xFFFFu : ~0u;
+        }
         vu1_integers_.fill({0,0xFFFFu}); vu1_integers_[0]={};
         vu1_controls_.fill({0,~0u});
         for(unsigned index=0;index<3;++index) vu1_controls_[index]={};
@@ -42,6 +46,21 @@ public:
         const auto value=word.value&~word.unknown;
         if (index == 0) return; // VI00 is the constant zero register.
         if (index < 16) { registers_[index] = value & 0xFFFFu; unknown_[index]=word.unknown&0xFFFFu; return; }
+        // VU manual 5.1.3: STATUS writes affect only the six sticky flags;
+        // CLIP holds 24 bits. Reserved/input-only bits consume no uncertainty.
+        if (index == 16) {
+            registers_[16]=(*registers_[16]&0x3Fu)|(value&0xFC0u);
+            unknown_[16]=(unknown_[16]&0x3Fu)|(word.unknown&0xFC0u);
+            return;
+        }
+        if (index == 18) {registers_[18]=value&0xFFFFFFu;unknown_[18]=word.unknown&0xFFFFFFu;return;}
+        if (index==20u || index==21u || index==22u || index==27u) {
+            // R is 23 bits; I/Q hold raw 32-bit floating-point encodings.
+            // CMSAR0 stores a 16-bit start address and does not start execution.
+            const auto mask=index==20u ? 0x7FFFFFu : index==27u ? 0xFFFFu : ~0u;
+            registers_[index]=value&mask;unknown_[index]=word.unknown&mask;
+            return;
+        }
         if (word.unknown) throw DeviceRefusal("VU control write consumes unknown bits");
         if (index != 28)
             throw DeviceRefusal("VU control register write is not modeled");
@@ -52,7 +71,7 @@ public:
         // FB/RS are commands that always read zero; DE/TE retain settings.
         // VU0 reset initializes its flag registers, not the integer registers.
         if (value & 2u)
-            for (const auto flag : {16u,17u,18u}) registers_[flag] = 0;
+            for (const auto flag : {16u,17u,18u}) {registers_[flag] = 0;unknown_[flag]=0;}
         if (value & 0x200u)
             for(unsigned index=0;index<3;++index) vu1_controls_[index]={};
         registers_[28] = value & 0x0C0Cu;
@@ -119,6 +138,7 @@ public:
                 if(mask&(8u>>lane)) vectors_.at(destination)[lane]={};
         registers_[17]=mask; // Selected zero flags, all inactive ALU flags clear.
         registers_[16]=(*registers_[16]&~0xFu)|(mask ? 0x41u : 0u); // Z + sticky ZS
+        unknown_[16]&=~(mask ? 0x4Fu : 0xFu);
     }
     void vector_store_increment(unsigned source,unsigned base,unsigned mask) {
         if(base>=16u) throw DeviceRefusal("VSQI base must be VI00..VI15");
@@ -129,6 +149,14 @@ public:
         for(unsigned lane=0;lane<4;++lane)
             if(mask&(8u>>lane)) store_data(address+lane*4u,value[lane]);
         write(base,(qword+1u)&0xFFFFu);
+    }
+    void add_integer(unsigned destination,unsigned left,unsigned right) {
+        if(destination>=16u || left>=16u || right>=16u)
+            throw DeviceRefusal("VIADD requires integer registers VI00..VI15");
+        // VU manual 6.0, IADD/VIADD: 16-bit wrapping result, no flag changes.
+        // Read both operands before changing a possibly aliased destination.
+        const auto result=read(left)+read(right);
+        write(destination,result);
     }
     [[nodiscard]] ObservedDoubleword read_memory(std::uint32_t physical,std::size_t bytes) const {
         ObservedDoubleword result;

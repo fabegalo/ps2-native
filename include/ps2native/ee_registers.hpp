@@ -94,6 +94,7 @@ public:
     void vu_vector_store_increment(unsigned source,unsigned base,unsigned mask) {
         vu_control_.vector_store_increment(source,base,mask);
     }
+    void vu_add_integer(unsigned destination,unsigned left,unsigned right) {vu_control_.add_integer(destination,left,right);}
     [[nodiscard]] ObservedDoubleword read_vu_memory(std::uint32_t physical,std::size_t bytes) const {
         return vu_control_.read_memory(physical,bytes);
     }

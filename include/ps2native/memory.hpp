@@ -162,6 +162,7 @@ public:
     void vu_vector_store_increment(unsigned source,unsigned base,unsigned mask) {
         registers_.vu_vector_store_increment(source,base,mask);
     }
+    void vu_add_integer(unsigned destination,unsigned left,unsigned right) {registers_.vu_add_integer(destination,left,right);}
     // Runs the IOP up to the current EE time (boot mapping, clock attached).
     void sync_iop() { registers_.sync_iop(); }
     [[nodiscard]] bool intc_interrupt_pending() const;

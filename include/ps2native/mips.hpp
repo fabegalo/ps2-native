@@ -10,7 +10,7 @@ namespace ps2native {
 // instructions the AOT translates; their semantics live in ee_semantics.hpp
 // and are shared with the interpreter.
 #define PS2N_R5900_AOT_OPCODES(X) \
-    X(Nop) X(Sync) X(Cfc2) X(Ctc2) X(Qmfc2) X(Qmtc2) X(Viswr) X(Vsub) X(Vsqi) \
+    X(Nop) X(Sync) X(Cfc2) X(Ctc2) X(Qmfc2) X(Qmtc2) X(Viswr) X(Vsub) X(Vsqi) X(Viadd) \
     X(Sll) X(Srl) X(Sra) X(Sllv) X(Srlv) X(Srav) \
     X(Dsll) X(Dsrl) X(Dsra) X(Dsll32) X(Dsrl32) X(Dsra32) X(Dsllv) X(Dsrlv) X(Dsrav) \
     X(Addu) X(Subu) X(Daddu) X(Dsubu) X(And) X(Or) X(Xor) X(Nor) X(Slt) X(Sltu) X(Movz) X(Movn) \
