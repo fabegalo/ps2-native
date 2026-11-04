@@ -17,7 +17,11 @@ serviços. ReadCd/DMA3 leu IOPRP202 e módulos até o fim de RSPU2DRV.IRX (LBA 1
 Com hipótese explícita de SPU2 inativo no reset, o ensaio 42 alcançou 5.264 bytes
 SIF1 / 2.592 SIF0; IOP ativo `0xAE98`, 46.323.687 instruções. EE `0x1CDF74`,
 338.172.827 instruções: LD do GS CSR para ler REV. A observação parcial agora
-usa revisão/ID medidos no perfil e preserva FIELD/NFIELD desconhecidos; reexecutar.
+usa revisão/ID medidos no perfil e preserva FIELD/NFIELD desconhecidos.
+Ensaio 43 passou CSR e encontrou IMR `0xFF00`; o bit 15 agora é descartado.
+Ensaio 44 chegou a EE `0x1092CC`, 339.407.163 instruções, ADDI não implementada.
+A instrução agora executa no interpretador com exceção de overflow real;
+ensaio 45 em andamento. IOP ativo `0x4698` / 46.477.979 no ensaio 44.
 Contexto COP0, IRQ DMA pendente, ROM1, CDVD, NEXT e versão MECHACON foram superados.
 Continuar os próximos comandos gráficos e de dispositivos pelo código convidado.
 

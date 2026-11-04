@@ -34,6 +34,11 @@
   `0x1CDF74`, leitura GS CSR, após 338.172.827 instruções. O ensaio usa injeção
   de ELF e hipóteses explícitas, incluindo SPU2 inativo no reset; não comprova
   boot original. O modo original mantém PCs/contagens/hash anteriores.
+- Continuação após CSR/IMR: ensaio 44 alcançou EE `0x1092CC` /
+  339.407.163 instruções, IOP ativo `0x4698` / 46.477.979. Próximo bloqueio
+  era ADDI; sem novos pixels além da limpeza. IMR e ADDI foram implementados
+  com testes focados; nova execução em andamento. Commit gráfico `d4d98a1`
+  aprovado na CI dos seis alvos (núcleo e launcher).
 - Sequência, hipóteses, testes e referências:
   [primeiro jogo](docs/FIRST-GAME-STATUS.md#continuação-experimental--subsistemas-exercitados-pelo-jogo).
 

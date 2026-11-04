@@ -503,3 +503,41 @@ SCPH-70004 GH-032-11/GH-032-32 e ROMVER 0200EC20040614.
 FIELD/NFIELD, FIFO e bits não comprovados permanecem simbolicamente desconhecidos.
 Não há fallback por região ou por nome semelhante. PS2Recomp memory/GS foi
 consultado antes da implementação; os valores vêm das medições PS2Ident.
+
+### CSR e máscara de interrupções — ensaio 43
+
+A leitura da revisão passou sem tornar conhecidos FIELD/NFIELD/FIFO. O próximo
+bloqueio foi EE `0x80000D4C`, 338.172.879 instruções, SD de `0xFF00` ao IMR;
+IOP ativo `0x80000094` / 46.323.694. Foram mantidos os 16 pacotes e 1.048.576
+pixels da limpeza (102,145 s). O dump posterior do harness tentou ler RAM IOP
+não escrita; isso encerrou a coleta, sem alterar o bloqueio do runtime.
+
+O bit 15 do IMR é descartado na escrita, preservando as cinco máscaras e os
+bits 13/14 em um. A correção cobre stores de 32/64 bits e testa um evento
+pendente para impedir reconhecimento ou IRQ indevido. Outros campos reservados
+continuam recusados. Consultados previamente
+[PS2Recomp GS](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp)
+(helpers HLE, sem contrato IMR aproveitável) e comportamento de
+[PCSX2 GS](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/GS.cpp).
+Implementação BSD própria; não há alegação de nova medição física do IMR.
+
+Commit `d4d98a1`: núcleo e launcher aprovados nos seis alvos, runs
+[41785878199](https://github.com/fabegalo/ps2-native/actions/runs/41785878199) e
+[41785878204](https://github.com/fabegalo/ps2-native/actions/runs/41785878204).
+A correção posterior do IMR passou em cinco testes locais focados (eventos,
+IRQ, reset, conhecimento parcial e DMA GIF); ainda não coberta por esses runs.
+
+### Após IMR — ensaio 44
+
+IMR foi superado. EE `0x1092CC`, 339.407.163 instruções (94,3134 s), encontrou
+ADDI ainda não decodificada. IOP ativo `0x4698` / 46.477.979, 16 pacotes GIF e
+1.048.576 escritas de pixels, ainda apenas limpeza da VRAM. RAM canônica
+`f25c267cb6c290a08d3575bf94310ec3ce26cb8d55584cc6f7185a123016f5a7`.
+O modo original repetido após IMR manteve contagens/PCs/hash anteriores.
+
+ADDI passa a ser uma fronteira explícita do interpretador: soma de palavra,
+extensão de sinal, preservação da metade alta do GPR e exceção 12 em overflow,
+sem alterar o destino. O handler convidado recebe EPC/BD corretos e o branch
+pendente é cancelado no trap. Testes próprios incluem limites positivo/negativo,
+destino zero, alias, delay slot e origem desconhecida. Consultados PS2Recomp
+decoder/translator e EE Core User's Manual, seção 4.2.16; código próprio BSD.

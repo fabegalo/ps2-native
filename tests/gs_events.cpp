@@ -31,11 +31,16 @@ void events() {
     require(gs.read(kGsSiglblid, 8) == 0x12345678A5A55A5Aull && gs.read(kGsCsr, 1) == 1,
             "SIGNAL updates ID and status while masked");
     require(!gs.take_interrupt_request(0).pending, "masked events do not request INTC");
+    gs.write(kGsImr, 8, 0xFF00, 0, {});
+    require(gs.latched(kGsImr) == 0x7F00 && gs.read(kGsCsr, 1) == 1 &&
+            !gs.take_interrupt_request(0).pending,
+            "IMR bit 15 is discarded without acknowledging or unmasking events");
     rejects([&] { gs.general_write(0x60, ~0ull); }, "second SIGNAL requires GIF backpressure");
     require(gs.read(kGsSiglblid, 4) == 0xA5A55A5Au, "refused second SIGNAL does not alter ID");
     gs.general_write(0x61, ~0ull);
     require(gs.read(kGsCsr, 1) == 3, "FINISH reports completed synchronous work");
-    gs.write(kGsImr, 8, 0x7C00, 0, {});
+    gs.write(kGsImr, 4, 0xFC00, 0, {});
+    require(gs.latched(kGsImr) == 0x7C00, "32-bit IMR writes also discard bit 15");
     require(gs.take_interrupt_request(0).pending && !gs.take_interrupt_request(0).pending,
             "unmask latched events exactly once");
     gs.write(kGsCsr, 4, 0, 0, {});

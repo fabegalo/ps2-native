@@ -80,7 +80,7 @@ std::optional<unsigned> MipsInstruction::written_gpr() const noexcept {
         case MipsOpcode::Psubb: case MipsOpcode::Plzcw:
             target = rd;
             break;
-        case MipsOpcode::Addiu: case MipsOpcode::Daddiu: case MipsOpcode::Slti:
+        case MipsOpcode::Addi: case MipsOpcode::Addiu: case MipsOpcode::Daddiu: case MipsOpcode::Slti:
         case MipsOpcode::Sltiu: case MipsOpcode::Andi: case MipsOpcode::Ori:
         case MipsOpcode::Xori: case MipsOpcode::Lui:
         case MipsOpcode::Lb: case MipsOpcode::Lbu: case MipsOpcode::Lh:
@@ -296,6 +296,7 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
             case 0x05: return make(MipsOpcode::Bne);
             case 0x06: if (rt == 0) return make(MipsOpcode::Blez); break;
             case 0x07: if (rt == 0) return make(MipsOpcode::Bgtz); break;
+            case 0x08: return make(MipsOpcode::Addi);
             case 0x09: return make(MipsOpcode::Addiu);
             case 0x0a: return make(MipsOpcode::Slti);
             case 0x0b: return make(MipsOpcode::Sltiu);

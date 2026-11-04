@@ -299,6 +299,24 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         !(status & (kStatusEXL | kStatusERL | (1u << 28u))) && (status & kStatusKSU))
         cpu.stop(StopKind::GuestException, "COP0 unusable in supervisor/user mode with Status.CU0 = 0; vectoring is not modeled");
     switch (instruction.opcode) {
+        case MipsOpcode::Addi: {
+            // Use a widened sum: signed host overflow is never evaluated.
+            const auto sum = static_cast<std::int64_t>(static_cast<std::int32_t>(state.reg32(instruction.rs))) +
+                             static_cast<std::int16_t>(word & 0xFFFFu);
+            if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Interpreter);
+            if (sum < INT32_MIN || sum > INT32_MAX) {
+                enter_ee_exception(state, 12u, pc, state.delay_pending);
+                memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi));
+                cpu.event("ADDI overflow exception -> " + hex32(state.pc));
+                ++ctx.executed;
+                ++state.retired_instructions;
+            } else {
+                const auto frame = ee::begin(state, pc);
+                state.set_reg32_sign_extended(instruction.rt, static_cast<std::uint32_t>(sum));
+                (void)ee::retire(ctx, frame);
+            }
+            return;
+        }
         case MipsOpcode::Syscall: case MipsOpcode::Break: {
             if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Interpreter);
             enter_ee_exception(state, instruction.opcode == MipsOpcode::Syscall ? 8u : 9u, pc, state.delay_pending);
@@ -379,7 +397,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         }
         case MipsOpcode::MaddS: cpu.madd(word);break;
         case MipsOpcode::AddaS: cpu.adda(word);break;
-        case MipsOpcode::Syscall: case MipsOpcode::Break: break; // Stopped above.
+        case MipsOpcode::Addi: case MipsOpcode::Syscall: case MipsOpcode::Break: break; // Handled above.
     }
     (void)ee::retire(ctx, frame);
 }

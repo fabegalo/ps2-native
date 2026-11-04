@@ -175,10 +175,12 @@ void GsRegisters::write_impl(std::uint32_t physical, std::size_t bytes, std::uin
     }
     if (physical == kGsImr) {
         if (bytes != 8u && bytes != 4u) throw DeviceRefusal("GS IMR requires a 32/64-bit store");
-        if ((value & ~0x7F00ull) || (value & 0x6000u) != 0x6000u)
+        // Bit 15 is not an interrupt mask and is discarded on write. Keep
+        // rejecting the other reserved fields until their behavior is covered.
+        if ((value & ~0xFF00ull) || (value & 0x6000u) != 0x6000u)
             throw DeviceRefusal("GS IMR reserved bits (13/14 must be one)");
         const auto previous = imr_;
-        imr_ = static_cast<std::uint32_t>(value);
+        imr_ = static_cast<std::uint32_t>(value & 0x7F00u);
         // An event already latched while masked becomes observable on unmask.
         const auto newly_unmasked = static_cast<std::uint32_t>((~value & previous) >> 8) & 0x1Fu;
         if (events_ & newly_unmasked) irq_pending_ = true;

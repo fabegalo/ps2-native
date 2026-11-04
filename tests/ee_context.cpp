@@ -72,6 +72,43 @@ void nested_exception() {
     require(state.pc==0x80000180u && state.cp0(Cop0::Epc)==0x200000u &&
             state.cp0(Cop0::Cause)==0x8020u,"fresh exception clears BD and preserves IP");
 }
+void addi_exception() {
+    Memory memory; memory.reset_for_boot(m20::build_firmware().rom);
+    EEState state; std::uint64_t executed=0;
+    constexpr std::uint32_t pc=0x80001004u;
+    const auto run=[&](std::uint32_t source,std::uint16_t immediate,unsigned target,bool delay,bool bev) {
+        state={};state.pc=pc;state.set_cp0(Cop0::Status,bev?kStatusBEV:0u);
+        state.set_reg128(8,source,0x1122334455667788ull);
+        state.set_reg128(9,0x12345678u,0x8877665544332211ull);
+        state.delay_pending=delay;state.delay_indirect=delay;state.delay_target=0x80002000u;
+        memory.set_cpu_context(0,0);
+        const auto word=0x21000000u|(target<<16u)|immediate;
+        memory.write32(pc,word);
+        require(decode_r5900(pc,word).opcode==MipsOpcode::Addi && !mips_aot_supported(MipsOpcode::Addi),
+                "ADDI is an explicit interpreter boundary until AOT exception exits are supported");
+        ExecutionContext ctx{state,memory,executed,100,0xFFFFFFFFu};
+        interpret_instruction(ctx);
+    };
+    run(16,0xFFE0u,8,false,false);
+    require(state.reg64(8)==0xFFFFFFFFFFFFFFF0ull && state.gpr[8].high==0x1122334455667788ull &&
+            state.pc==pc+4 && state.retired_instructions==1,"ADDI sign extends a word and preserves the upper 64 bits");
+    run(0x7FFFFFFFu,1,9,false,false);
+    require(state.pc==0x80000180u && state.cp0(Cop0::Epc)==pc && state.cp0(Cop0::Cause)==48 &&
+            state.reg64(9)==0x12345678u && state.gpr[9].high==0x8877665544332211ull,
+            "positive ADDI overflow vectors without modifying the destination");
+    run(0x80000000u,0xFFFFu,0,true,true);
+    require(state.pc==0xBFC00380u && state.cp0(Cop0::Epc)==pc-4 && state.cp0(Cop0::Cause)==0x80000030u &&
+            !state.delay_pending && !state.indirect_entry_pending && state.reg64(0)==0,
+            "negative overflow traps even for zero destination and cancels the pending branch");
+    run(0x80000000u,1,9,true,false);
+    require(state.reg64(9)==0xFFFFFFFF80000001ull && state.pc==0x80002000u &&
+            state.indirect_entry_pending,"non-overflow ADDI retires a real delay slot");
+    state={};state.pc=pc;state.set_reg64_observed(8,0,1);
+    memory.set_cpu_context(0,0);memory.write32(pc,0x21090001u);
+    ExecutionContext ctx{state,memory,executed,100,0xFFFFFFFFu};
+    rejects([&]{interpret_instruction(ctx);},"consumes unknown MMIO bits");
+    require(state.pc==pc && state.retired_instructions==0,"unknown arithmetic does not fabricate a sum or exception");
+}
 void packed_copy() {
     require(decode_mips(0,0x700006E9u).opcode==MipsOpcode::Pcpyh,"PCPYH is AOT-capable");
     require(!try_decode_r5900(0,0x702006E9u),"PCPYH rejects reserved rs");
@@ -344,6 +381,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();nested_exception();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();divider();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();nested_exception();addi_exception();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();divider();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }
