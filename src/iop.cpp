@@ -305,6 +305,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     stop_cycle_ = 0;
     events_.clear();
     ee_ram_ = {};
+    ee_scratchpad_ = {};
     ee_ram_unknown_ = nullptr;
     ee_dctrl_ = ee_dstat_ = ee_sif1_chcr_ = ee_sif1_madr_ = ee_sif1_qwc_ = 0;
     ee_dma_setup_ = {}; ee_dma_global_ = {};
@@ -330,9 +331,11 @@ void Iop::load_program(std::span<const std::uint8_t> bytes, std::uint32_t addres
         static_cast<std::uint64_t>(entry) + 4u > address + bytes.size())
         throw std::runtime_error("invalid IOP bare-metal image range or entry");
     const auto ee_ram = ee_ram_;
+    const auto ee_scratchpad = ee_scratchpad_;
     auto* ee_ram_unknown = ee_ram_unknown_;
     reset({}, nullptr);
     ee_ram_ = ee_ram;
+    ee_scratchpad_ = ee_scratchpad;
     ee_ram_unknown_ = ee_ram_unknown;
     std::copy(bytes.begin(), bytes.end(), ram_.begin() + address);
     std::fill_n(ram_known_.begin() + address, bytes.size(), std::uint8_t{0xFF});
@@ -369,6 +372,18 @@ std::optional<bool> ee_dma_priority(ObservedWord pcr, unsigned channel) {
     if (!(pcr.unknown&enabled) && (pcr.value&enabled)) return true;
     if (!(pcr.unknown&(0x80000000u|enabled))) return false;
     return std::nullopt;
+}
+// EE User's Manual v6, pp.59-60 and 75-76: bit 31 of MADR,
+// TADR and tag ADDR selects SPR independently for data and tag fetches.
+// This implements transfers wholly inside the documented 16 KiB storage;
+// crossing its edge or using other SPR address bits remains unmodeled.
+bool graphics_source_fits(std::uint32_t address,std::uint64_t bytes,
+                          std::span<const std::uint8_t> ram,
+                          std::span<const std::uint8_t> scratchpad) {
+    const bool spr=(address&0x80000000u)!=0;
+    const auto offset=address&0x7FFFFFFFu;
+    const auto size=spr ? std::min<std::size_t>(scratchpad.size(),16384u) : ram.size();
+    return !(address&15u) && offset<=size && bytes<=size-offset;
 }
 }
 bool Iop::ee_dma_address(std::uint32_t address) {
@@ -473,8 +488,8 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
         if(channel==2u && (value&0x40u)) throw DeviceRefusal("EE GIF DMA tag transfer is not modeled");
         const auto madr=ee_dma_setup_[channel][1],qwc=ee_dma_setup_[channel][2],tadr=ee_dma_setup_[channel][3];
         if(!qwc || (chain && (!tadr || *qwc))) throw DeviceRefusal("EE VIF chain requires TADR and zero QWC; resume is not modeled");
-        if(!chain && (!madr || *madr>ee_ram_.size() || std::uint64_t{*qwc}*16u>ee_ram_.size()-*madr))
-            throw DeviceRefusal("EE VIF normal DMA requires source inside main RAM");
+        if(!chain && (!madr || !graphics_source_fits(*madr,std::uint64_t{*qwc}*16u,ee_ram_,ee_scratchpad_)))
+            throw DeviceRefusal("EE VIF normal DMA source outside main RAM or modeled scratchpad range");
         if(!ee_dma_priority(ee_dma_observe(0x1000E020u),channel).has_value()) throw DeviceRefusal("EE VIF DMA priority is unknown");
         if(graphics_dma_[channel].stop) throw DeviceRefusal(*graphics_dma_[channel].stop);
         graphics_dma_[channel].end=!chain;graphics_dma_[channel].inline_data=false;ee_dma_setup_[channel][0]=value;return;
@@ -554,13 +569,15 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
     if(!priority) throw DeviceRefusal("EE graphics DMA priority is unknown");
     if(!*priority) {transfer.cycle=ee_cycle;return;}
     const auto read=[&](std::uint32_t at,unsigned words) {
-        if((at&3u) || at>ee_ram_.size() || words*4u>ee_ram_.size()-at)
-            throw DeviceRefusal("EE graphics DMA source outside aligned main RAM");
+        if(!graphics_source_fits(at,words*4u,ee_ram_,ee_scratchpad_))
+            throw DeviceRefusal("EE graphics DMA source outside aligned main RAM or modeled scratchpad range");
+        const auto storage=(at&0x80000000u) ? ee_scratchpad_ : ee_ram_;
+        const auto offset=at&0x7FFFFFFFu;
         std::array<std::uint32_t,4> data{};
         for(unsigned w=0;w<words;++w) {
             if(ee_ram_unknown_ && ee_ram_unknown_->contains(at+4u*w))
                 throw DeviceRefusal("EE graphics DMA consumes unknown source bits (unknown RAM bits)");
-            for(unsigned b=0;b<4;++b) data[w]|=std::uint32_t{ee_ram_[at+w*4u+b]}<<(8u*b);
+            for(unsigned b=0;b<4;++b) data[w]|=std::uint32_t{storage[offset+w*4u+b]}<<(8u*b);
         }
         return data;
     };
@@ -578,15 +595,15 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
                 if((tag[0]&0x0C000000u) || (id>=4u && id<=6u))
                     throw DeviceRefusal("EE graphics source chain supports REFE/CNT/NEXT/REF/END without PCE changes");
                 const auto source=(id==0u || id==3u) ? tag[1] : *tadr+16u;
-                if((source&15u) || source>ee_ram_.size() || std::uint64_t{count}*16u>ee_ram_.size()-source)
-                    throw DeviceRefusal("EE graphics DMA tag payload outside aligned main RAM");
+                if(!graphics_source_fits(source,std::uint64_t{count}*16u,ee_ram_,ee_scratchpad_))
+                    throw DeviceRefusal("EE graphics DMA tag payload outside aligned main RAM or modeled scratchpad range");
                 auto next=*tadr;
                 if(id==0u || id==3u) next+=16u;
                 else if(id==1u) next=source;
                 else if(id==2u) {
                     next=tag[1];
-                    if((next&15u) || next>ee_ram_.size() || ee_ram_.size()-next<16u)
-                        throw DeviceRefusal("EE graphics NEXT target outside aligned main RAM");
+                    if(!graphics_source_fits(next,16u,ee_ram_,ee_scratchpad_))
+                        throw DeviceRefusal("EE graphics NEXT target outside aligned main RAM or modeled scratchpad range");
                 }
                 if(*chcr&0x40u) vif->write_dma_tag(std::uint64_t{tag[2]}|(std::uint64_t{tag[3]}<<32),gif,gs,vu,transfer.cycle+kEeCyclesPerBusCycle);
                 transfer.end=id==0u || id==7u || ((tag[0]&0x80000000u) && (*chcr&0x80u));

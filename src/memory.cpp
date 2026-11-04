@@ -192,7 +192,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
     error_level_ = true;
     privilege_ = Privilege::Kernel;
     registers_.reset(hardware, rom_, nvm, assumptions, rom1_);
-    registers_.attach_ee_ram(ram_, &unknown_words_);
+    registers_.attach_ee_ram(ram_, &unknown_words_, scratchpad_);
 }
 
 void Memory::load_direct_elf(const ElfImage& elf) {
@@ -203,7 +203,7 @@ void Memory::load_direct_elf(const ElfImage& elf) {
     asid_ = 0;
     error_level_ = false;
     registers_.reset(); // No firmware, NVM, kernel services or running IOP.
-    registers_.attach_ee_ram(ram_, &unknown_words_);
+    registers_.attach_ee_ram(ram_, &unknown_words_, scratchpad_);
 }
 
 void Memory::load_iop_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry) {

@@ -125,8 +125,9 @@ public:
     // Bare-metal development image, not IRX relocation/import linking.
     void load_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry);
     void attach_ee_ram(std::span<std::uint8_t> ram,
-                       std::unordered_map<std::uint32_t,std::uint32_t>* unknown = nullptr) {
-        ee_ram_ = ram; ee_ram_unknown_ = unknown;
+                       std::unordered_map<std::uint32_t,std::uint32_t>* unknown = nullptr,
+                       std::span<std::uint8_t> scratchpad = {}) {
+        ee_ram_ = ram; ee_ram_unknown_ = unknown; ee_scratchpad_ = scratchpad;
     }
     [[nodiscard]] std::uint32_t ee_dma_read(std::uint32_t address) const;
     void ee_dma_write(std::uint32_t address, std::uint32_t value);
@@ -253,6 +254,7 @@ private:
     std::uint32_t iop_sif1_read(std::uint32_t address) const;
     void iop_sif1_write(std::uint32_t address, std::uint32_t value);
     std::span<std::uint8_t> ee_ram_;
+    std::span<std::uint8_t> ee_scratchpad_;
     std::unordered_map<std::uint32_t,std::uint32_t>* ee_ram_unknown_{};
     std::uint32_t ee_dctrl_{}, ee_dstat_{}, ee_sif1_chcr_{}, ee_sif1_madr_{}, ee_sif1_qwc_{};
     std::array<std::array<std::optional<std::uint32_t>, 9>, 10> ee_dma_setup_{};
