@@ -1034,3 +1034,26 @@ mesmos PCs/contagens/hash canônico. Configuração ativa de ESA/EEA agora valid
 primeiro a área prospectiva e invalida conhecimento de toda a área alcançável;
 não recupera bytes anteriores, não executa DSP nem altera amostras com ganho zero.
 Sobreposição com buffers dinâmicos, wrap e desalinhamento continuam recusados.
+
+Ensaio 73: EEA ativo passou; IOP `0x8B78` / 46.735.070, BNE de argumento
+carregado da pilha `0x1F4A24` por LW em `0x8B44`, ainda desconhecido.
+EE `0x81FD4` / 360.000.000, 96,7716 s;
+RAM `1acb50614373c149ee1880529660193dba9aaf9379e0a7294a7846cc6cd2bf5a`.
+16 pacotes e limpeza, sem PMODE. Próximo ensaio rastreia a proveniência da
+pilha com passos pequenos somente na janela relevante; o trace fica local.
+CI de `6693ca7`: núcleo e launcher aprovados nos seis alvos.
+
+Ensaio 74 com cópias IOP preservando bytes conhecidos: BNE passou; DIVU em
+`0x8B94` / 46.735.073 recusou o argumento parcial. EE `0x81FD4` / 341.463.896; 100,673 s, mesmos RAM/GIF.
+Trace local confirmou EEA lido em `0x603A8`, convertido em endereço, usado
+pelo driver e salvo para formatação em `0x1F4A24`. A parte desconhecida vem
+dos bits reservados de EEA, não de um número arbitrário na pilha. Nenhuma
+mensagem foi pulada ou resposta printf fabricada.
+
+Ensaio seguinte isola outra hipótese: doze bits não usados de ESA-high/EEA
+lidos como zero, conforme referência comportamental, sem medição física.
+Opção própria antes da execução, desativada/removida no reset; só vale após
+escrita conhecida do endereço. Não fornece reset de ESA, não se estende a
+SSA, não muda IRQ/DMA/RAM/áudio. Testes mantêm recusas por padrão e após reset.
+PS2Recomp IOP/áudio e mapa SPU2 consultados; implementação independente BSD.
+`e116c8a`: núcleo e launcher aprovados nos seis alvos.

@@ -233,6 +233,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     spu2_release_upper_={};spu2_release_pending_={};
     diagnostic_spu2_effect_end_.reset();
     diagnostic_spu2_effect_start_.reset();
+    diagnostic_spu2_effect_address_reserved_zero_=false;
     spu2_next_sample_={};spu2_last_sample_={};spu2_sample_count_={};spu2_clock_active_=false;
     spu2_transfer_={};spu2_ram_.clear();spu2_ram_written_.clear();diagnostic_spu2_pio_cycles_=0;
     spu2_adma_={};diagnostic_spu2_adma_cycles_=0;diagnostic_spu2_admas_control_latch_=false;
@@ -1279,6 +1280,10 @@ void Iop::diagnostic_spu2_effect_start_reset(std::array<std::uint32_t,2> values)
         throw DeviceRefusal("SPU2 initial ESA experiment requires aligned 20-bit addresses before execution");
     diagnostic_spu2_effect_start_=values;
 }
+void Iop::diagnostic_spu2_effect_address_reserved_zero() {
+    if(cycle_)throw DeviceRefusal("SPU2 effect-address readback experiment must be selected before execution");
+    diagnostic_spu2_effect_address_reserved_zero_=true;
+}
 bool Iop::spu2_effects_active(unsigned core) const {
     return spu2_control_[core] && (spu2_control_[core]->value&0x8080u)==0x8080u;
 }
@@ -1599,6 +1604,7 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         if(is_spu2_effect_address(physical) && !(physical&2u)) {
             // ESA high and EEA identify the high four bits of a 20-bit
             // word address. Reserved readback bits have not been measured.
+            if(diagnostic_spu2_effect_address_reserved_zero_)return **value&0xFu;
             undefined_load_="SPU2 effect-address reserved readback bits are unknown";
             undefined_known_=0xFu|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
             return **value&0xFu;

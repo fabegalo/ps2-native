@@ -417,5 +417,21 @@ int main() try {
         bool rejected=false;try{iop.diagnostic_spu2_effect_start_reset({bad,0u});}catch(const DeviceRefusal&){rejected=true;}
         require(rejected,"initial ESA experiment rejects out-of-range or unaligned addresses");
     }
+    for(unsigned core=0;core<2u;++core)for(const auto reg:{0x2E0u,0x33Cu})for(unsigned mode=0;mode<5u;++mode) {
+        m20::Assembler a(kEeResetVector);const auto base=0xBF900000u+core*0x400u;
+        a.la(8,base+0x19Au);a.sh(0,0,8);a.la(8,base+(mode==4u ? 0x1C0u : reg));
+        a.la(9,0xABCDu);if(mode!=3u)a.sh(9,0,8);a.lhu(9,0,8);a.nop();a.addiu(9,9,1);
+        a.la(10,0xA0000100u);a.sw(9,0,10);a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,true);
+        if(mode)iop.diagnostic_spu2_effect_address_reserved_zero();
+        if(mode==2u)iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,true);
+        iop.run_until(100u);
+        if(mode==1u)require(!iop.stopped() && iop.ee_read(0x100u,4)==14u,
+            "explicit reserved-zero effect readback hypothesis retains the written address field on either core");
+        else require(iop.stopped(),"default/reset, absent address writes and unrelated voice addresses remain unknown");
+        bool late=false;try{iop.diagnostic_spu2_effect_address_reserved_zero();}catch(const DeviceRefusal&){late=true;}
+        require(late,"readback experiment cannot be enabled after guest execution");
+    }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
