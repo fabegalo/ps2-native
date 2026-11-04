@@ -154,6 +154,7 @@ private:
         bool defined{true};
         std::string origin; // why the value is unknown (when !defined)
         std::uint32_t known; // bits known even when !defined
+        std::uint64_t sio2_epoch{}; // unmodified opaque CTRL sample, not a numeric guess
     };
     struct Access {
         std::uint32_t physical;
@@ -202,7 +203,9 @@ private:
     [[nodiscard]] Access translate(std::uint32_t address, std::size_t bytes, bool write, const char* what) const;
     [[nodiscard]] std::uint32_t fetch(std::uint32_t address) const;
     [[nodiscard]] std::uint32_t load(std::uint32_t address, std::size_t bytes, const char* what);
-    void store(std::uint32_t address, std::size_t bytes, std::optional<std::uint32_t> value, const char* what);
+    void store(std::uint32_t address, std::size_t bytes, std::optional<std::uint32_t> value, const char* what,
+               const ObservedWord* observed=nullptr,std::uint64_t sio2_epoch=0);
+    void reset_sio2_observed(ObservedWord word,std::uint64_t epoch);
     [[nodiscard]] std::uint32_t io_read(std::uint32_t physical, std::size_t bytes, const char* what);
     void io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what);
     void mechacon_command(std::uint8_t command, const char* what);
@@ -225,6 +228,8 @@ private:
     std::optional<PendingLoad> write_;           // this instruction's ALU result
     std::optional<std::string> undefined_load_;  // this instruction loaded an unknown value: why
     std::uint32_t undefined_known_{};            // bits of that value that are known
+    std::array<std::uint64_t,32> gpr_sio2_epoch_{};
+    std::uint64_t sio2_control_epoch_{},undefined_sio2_epoch_{};
     std::array<std::optional<std::uint32_t>, 16> cop0_{};
     const ConsoleHardware* hardware_{};
     // Bus configuration as written; empty value: unknown (reset value never

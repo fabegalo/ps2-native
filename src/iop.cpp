@@ -163,6 +163,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     std::fill(ram_.begin(), ram_.end(), std::uint8_t{0});
     std::fill(ram_written_.begin(), ram_written_.end(), std::uint8_t{0});
     gpr_ = {};
+    gpr_sio2_epoch_={};sio2_control_epoch_=undefined_sio2_epoch_=0;
     gpr_defined_ = 1u;
     gpr_origin_.fill("undefined since reset");
     hi_.reset();
@@ -822,7 +823,10 @@ void Iop::or_value(unsigned rd,unsigned rs,std::uint32_t b,std::uint32_t kb,cons
     if(known==~0u)return set_reg(rd,a|b);
     if(!rd)return;
     const auto& origin=ka!=~0u ? gpr_origin_[rs] : b_origin;
-    write_=PendingLoad{rd,(a|b)&known,false,origin,known};
+    // Only OR with known reset bits preserves the opaque sample. Mixing
+    // another unknown value or changing configuration discards the proof.
+    const auto epoch=kb==~0u && !(b&~0xCu) ? gpr_sio2_epoch_[rs] : 0u;
+    write_=PendingLoad{rd,(a|b)&known,false,origin,known,epoch};
 }
 bool Iop::regs_equal(unsigned rs, unsigned rt) const {
     const auto known = [&](unsigned r) { return (gpr_defined_ & (1u << r)) != 0u ? ~0u : gpr_known_[r]; };
@@ -841,7 +845,7 @@ void Iop::set_reg(unsigned index, std::uint32_t value) {
 void Iop::load_reg(unsigned index, std::uint32_t value) {
     if (index != 0u)
         pending_load_ = PendingLoad{index, value, !undefined_load_, undefined_load_.value_or(std::string()),
-                                    undefined_load_ ? undefined_known_ : ~0u};
+                                    undefined_load_ ? undefined_known_ : ~0u,undefined_sio2_epoch_};
 }
 
 Iop::Access Iop::translate(std::uint32_t address, std::size_t bytes, bool write, const char* what) const {
@@ -916,7 +920,22 @@ std::uint32_t Iop::load(std::uint32_t address, std::size_t bytes, const char* wh
     return io_read(a.physical, bytes, what);
 }
 
-void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uint32_t> value, const char* what) {
+void Iop::reset_sio2_observed(ObservedWord word,std::uint64_t epoch) {
+    if(word.unknown&1u)throw IopStop{"SIO2 control start bit is unknown"};
+    if(word.value&1u)throw IopStop{"SIO2 transfer is not modeled"};
+    if((word.unknown&0xCu) || (word.value&0xCu)!=0xCu)
+        throw IopStop{"SIO2 symbolic write does not establish both reset bits"};
+    if(!epoch || epoch!=sio2_control_epoch_)
+        throw IopStop{"SIO2 symbolic reset does not preserve the current opaque control sample"};
+    // The guest read this exact sample and only ORed the reset command.
+    // Preserve its unresolved configuration; do not invent readback bits.
+    ++sio2_control_epoch_;
+    for(auto& [address,value]:latches_)if(address==0x1F808268u){value.reset();return;}
+    throw IopStop{"SIO2 control sample has no matching configured register"};
+}
+
+void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uint32_t> value, const char* what,
+                const ObservedWord* observed,std::uint64_t sio2_epoch) {
     const auto a = translate(address, bytes, true, what);
     const auto sr = *cop0_[Sr];
     if ((sr & kSrSwc) != 0u) throw IopStop{std::string("store ") + what + " with Status.SwC: not modeled"};
@@ -938,6 +957,9 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
         throw IopStop{std::string("store ")+what+" to read-only ROM1 at "+hex(address)};
     if (a.physical >= kRomPhysical && a.physical - kRomPhysical < kRomBytes)
         throw IopStop{std::string("store ") + what + " to ROM0 at " + hex(address)};
+    if(a.physical==0x1F808268u && bytes==4u && observed) {
+        reset_sio2_observed(*observed,sio2_epoch);return;
+    }
     io_write(a.physical, bytes, value, what);
 }
 
@@ -957,7 +979,14 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         return iop_sif1_read(physical);
     }
     const auto name = std::string("load ") + what + " of IOP register " + hex(physical);
-    if(physical==0x1F808268u)throw IopStop{"SIO2 control reset/status readback is not verified"};
+    if(physical==0x1F808268u) {
+        if(bytes!=4u)throw IopStop{"SIO2 control requires a 32-bit read"};
+        const bool configured=latch(physical)!=nullptr && sio2_control_epoch_!=0;
+        undefined_load_="SIO2 control reset/status readback is not verified";
+        undefined_known_=configured ? 1u : 0u; // no accepted transfer can be busy
+        undefined_sio2_epoch_=configured && std::string_view(what)=="LW" ? sio2_control_epoch_ : 0u;
+        return 0; // unknown backing bits, never a numeric register response
+    }
     if(physical==0x1D000040u) {
         if(bytes!=4u) throw IopStop{name+": only 32-bit control reads modeled"};
         // Only the experimental SIF0/1 ready bits have a value. In
@@ -1211,6 +1240,7 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
             throw IopStop{name+": SIO2 transfer is not modeled"};
         if(physical==0x1F808268u && *value!=0u && *value!=0xCu && *value!=0x3BCu)
             throw IopStop{"SIO2 control configuration is not verified"};
+        if(physical==0x1F808268u)++sio2_control_epoch_;
         if (dma_channel_field(physical) == 2u && (!value || (*value & kChcrStart) != 0u))
             throw IopStop{name + " = " + (value ? hex(*value) : std::string("(unknown)")) +
                           ": DMA transfers are not modeled"};
@@ -1352,6 +1382,7 @@ void Iop::cop0_write(unsigned index, std::uint32_t value) {
 
 void Iop::commit(const PendingLoad& load) {
     gpr_[load.reg] = load.value;
+    gpr_sio2_epoch_[load.reg]=load.sio2_epoch;
     if (load.defined) gpr_defined_ |= 1u << load.reg;
     else {
         gpr_defined_ &= ~(1u << load.reg);
@@ -1586,6 +1617,7 @@ void Iop::step() {
     write_.reset();
     undefined_load_.reset();
     undefined_known_ = 0u;
+    undefined_sio2_epoch_=0;
     const auto delayed = pending_load_; // becomes visible after this instruction reads its operands
     pending_load_.reset();
 
@@ -1740,7 +1772,15 @@ void Iop::step() {
         }
         case 0x28: { const auto v = stored_reg(rt); store(reg(rs) + imm, 1u, v ? std::optional<std::uint32_t>(*v & 0xFFu) : v, "SB"); break; }
         case 0x29: { const auto v = stored_reg(rt); store(reg(rs) + imm, 2u, v ? std::optional<std::uint32_t>(*v & 0xFFFFu) : v, "SH"); break; }
-        case 0x2B: store(reg(rs) + imm, 4u, stored_reg(rt), "SW"); break;
+        case 0x2B: {
+            const auto value=stored_reg(rt);
+            if(value)store(reg(rs)+imm,4u,value,"SW");
+            else {
+                const ObservedWord observed{gpr_[rt],~gpr_known_[rt]};
+                store(reg(rs)+imm,4u,value,"SW",&observed,gpr_sio2_epoch_[rt]);
+            }
+            break;
+        }
         case 0x2A: case 0x2E: {                                                                 // SWL / SWR
             const auto address = reg(rs) + imm;
             const auto shift = address & 3u;
