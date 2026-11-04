@@ -463,6 +463,32 @@ void vif_control() {
     memory.write32(0xB0003C10u,1);
     require((memory.read32(0xB0003020u)&2u)==0,"VIF reset cancels its PATH3 mask");
     memory.write128(0xB0006000u,1ull<<15,0);
+    const auto words0=[&](std::uint32_t a,std::uint32_t b,std::uint32_t c,std::uint32_t d) {
+        memory.write128(0xB0004000u,std::uint64_t{a}|(std::uint64_t{b}<<32),std::uint64_t{c}|(std::uint64_t{d}<<32));
+    };
+    device_refused([&] {(void)memory.read32(0xB0003820u);},"before write/command");
+    memory.write32(0xB0003820u,2);
+    memory.write32(0xB0003830u,0x12345678u);
+    require(memory.read32(0xB0003820u)==2 && memory.read32(0xB0003830u)==0x5678u,
+            "VIF0 has its own ERR and low16 MARK settings");
+    device_refused([&] {memory.write32(0xB0003800u,0);},"read-only");
+    device_refused([&] {memory.write16(0xB0003820u,0);},"32-bit");
+    device_refused([&] {(void)memory.read32(0xB00038A0u);},"reserved");
+    words0(0x01000203u,0x0400FFFFu,0x05000002u,0x07004321u);
+    require(memory.read32(0xB0003840u)==0x203u && memory.read32(0xB0003890u)==0x3FFu &&
+            memory.read32(0xB0003850u)==2 && memory.read32(0xB0003830u)==0x4321u &&
+            memory.read32(0xB0003800u)==0x40u,"VIF0 parses actual configuration commands independently");
+    for(const auto command : {0x02000000u,0x03000000u,0x06008000u,0x50000001u})
+        device_refused([&] {words0(command,0,0,0);},"VIF1-only");
+    words0(0x30000000u,1,2,3);
+    rejects([&] {(void)memory.read_vu_control(29);},"active VIF processing");
+    words0(0xFEDCBA98u,0,0,0);
+    require(memory.read32(0xB0003900u)==1 && memory.read32(0xB0003930u)==0xFEDCBA98u,
+            "VIF0 STROW consumes real data across FIFO writes");
+    words(0x01000405u,0x06008000u,0,0);
+    memory.write32(0xB0003810u,1);
+    require(memory.read32(0xB0003800u)==0 && memory.read32(0xB0003C40u)==0x405u &&
+            (memory.read32(0xB0003020u)&2u),"VIF0 reset preserves VIF1 configuration and its GIF PATH3 mask");
 }
 
 void guest(const std::filesystem::path& rom_path) {
@@ -493,6 +519,9 @@ void guest(const std::filesystem::path& rom_path) {
                 "guest initializes scalar and microprogram address registers in both engines");
         require(memory.read32(0x80001010u)==0xDDEEFF00u && memory.read32(0xB0003C40u)==0x101u &&
                 memory.read32(0xB0003C70u)==0xFFFFFFFFu,"guest VIF configuration transfers actual payload in both engines");
+        require(memory.read32(0xB0003820u)==2 && memory.read32(0xB0003840u)==0x402u &&
+                memory.read32(0xB0003890u)==0x3FFu && memory.read32(0xB0003830u)==0x4321u,
+                "guest initializes VIF0 from actual MMIO and FIFO transfers in both engines");
         require(state.cp0(Cop0::Epc) != 0 && !(state.cp0(Cop0::Status) & kStatusEXL), "IRQ delivered and ERET restored state");
         if (run) require(report.aot_instructions > 0 && report.retired == retired, "AOT executed with identical instruction count");
         else retired = report.retired;

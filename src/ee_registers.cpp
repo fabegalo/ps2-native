@@ -68,6 +68,7 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
     vertical_sample_ = 0;
     // Hypothesis: GIF not stopped, PATH3 unmasked, continuous mode at power-on.
     gif_.reset();
+    vif0_.reset();
     vif1_.reset();
     vu_control_.reset();
     video_encoder_.reset(assumptions);
@@ -243,9 +244,10 @@ std::uint32_t EeRegisters::read_timer(unsigned index, unsigned reg) {
 }
 
 std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
-    if(physical>=0x10003C00u && physical<0x10003E00u) {
-        if(bytes!=4u || (physical&15u)) throw DeviceRefusal("VIF1 registers require aligned 32-bit accesses");
-        return vif1_.read_register(physical-0x10003C00u);
+    if((physical>=0x10003800u && physical<0x10003A00u) || (physical>=0x10003C00u && physical<0x10003E00u)) {
+        if(bytes!=4u || (physical&15u)) throw DeviceRefusal("VIF registers require aligned 32-bit accesses");
+        auto& vif=(physical&0x400u) ? vif1_ : vif0_;
+        return vif.read_register(physical&0x3FFu);
     }
     if (Iop::ee_dma_address(physical)) {
         if (bytes != 4u) throw DeviceRefusal("SIF1/DMAC requires 32-bit accesses");
@@ -338,8 +340,9 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
 }
 
 void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint64_t high) {
-    if (physical == 0x10005000u) {
-        vif1_.write_fifo(low, high, gif_, gs_);
+    if (physical==0x10004000u || physical==0x10005000u) {
+        auto& vif=(physical&0x1000u) ? vif1_ : vif0_;
+        vif.write_fifo(low, high, gif_, gs_);
         return;
     }
     if (physical == kGifFifo) return gif_.write_fifo(low, high, gs_);
@@ -347,9 +350,10 @@ void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint6
 }
 
 void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value) {
-    if(physical>=0x10003C00u && physical<0x10003E00u) {
-        if(bytes!=4u || (physical&15u)) throw DeviceRefusal("VIF1 registers require aligned 32-bit accesses");
-        vif1_.write_register(physical-0x10003C00u,static_cast<std::uint32_t>(value),gif_);return;
+    if((physical>=0x10003800u && physical<0x10003A00u) || (physical>=0x10003C00u && physical<0x10003E00u)) {
+        if(bytes!=4u || (physical&15u)) throw DeviceRefusal("VIF registers require aligned 32-bit accesses");
+        auto& vif=(physical&0x400u) ? vif1_ : vif0_;
+        vif.write_register(physical&0x3FFu,static_cast<std::uint32_t>(value),gif_);return;
     }
     if (Iop::ee_dma_address(physical)) {
         if (bytes != 4u) throw DeviceRefusal("SIF1/DMAC requires 32-bit accesses");

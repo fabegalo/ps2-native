@@ -73,14 +73,14 @@ public:
     [[nodiscard]] const Iop& iop() const noexcept { return iop_; }
     [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return video_encoder_; }
     [[nodiscard]] std::uint32_t read_vu_control(unsigned index) const {
-        if (index==29u && vif1_.direct_remaining())
-            throw DeviceRefusal("VU status with active VIF1 DIRECT is not modeled");
+        if (index==29u && (vif0_.processing() || vif1_.processing()))
+            throw DeviceRefusal("VU status with active VIF processing is not modeled");
         return vu_control_.read(index);
     }
     void write_vu_control(unsigned index, std::uint32_t value) { vu_control_.write(index,value); }
     [[nodiscard]] ObservedWord observe_vu_control(unsigned index) const {
-        if (index==29u && vif1_.direct_remaining())
-            throw DeviceRefusal("VU status with active VIF1 DIRECT is not modeled");
+        if (index==29u && (vif0_.processing() || vif1_.processing()))
+            throw DeviceRefusal("VU status with active VIF processing is not modeled");
         return vu_control_.observe(index);
     }
     void write_vu_control_observed(unsigned index, ObservedWord word) {vu_control_.write_observed(index,word);}
@@ -161,7 +161,7 @@ private:
     std::uint64_t vertical_generation_{~0ull};
     std::uint64_t vertical_sample_{};
     Gif gif_;
-    Vif1 vif1_;
+    Vif vif0_{Vif::Unit::Vu0},vif1_{Vif::Unit::Vu1};
     VuControl vu_control_;
     // Video encoder serial bus and its two masters.
     VideoEncoderBus video_encoder_;

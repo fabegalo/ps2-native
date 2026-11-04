@@ -50,6 +50,9 @@ inline Program program() {
     put64(0x3020u, 0u); put64(0x3028u, 0x61u);
     put64(0x3040u,0x2000000001000101ull); put64(0x3048u,0x30000000FFFFFFFFull);
     put64(0x3050u,0x5566778811223344ull); put64(0x3058u,0xDDEEFF0099AABBCCull);
+    put64(0x3080u,0x040003FF01000402ull); put64(0x3088u,0x0500000207004321ull);
+    a.la(t0,0xB0003820u); a.ori(t1,zero,2); a.sw(t1,0,t0);
+    a.la(t0,kResetVector+0x3080u); a.lq(t2,0,t0); a.la(t1,0xB0004000u); a.sq(t2,0,t1);
     a.la(t0,0xB0003C10u); a.ori(t1,zero,1); a.sw(t1,0,t0);
     a.la(t0,kResetVector+0x3040u); a.la(t1,0xB0005000u);
     for(int offset : {0,16}) {a.lq(t2,offset,t0);a.sq(t2,0,t1);}
