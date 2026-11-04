@@ -170,8 +170,25 @@ void partial_sif0_packets() {
     require(!unknown.sif0_metrics().bytes && ram[0x400u]==0xAAu && !(unknown.ee_dma_read(0x1000E010u)&0x20u),
             "unknown retained lanes fail before exposing payload or a completion IRQ");
 }
+void idle_sif0_receiver_stop() {
+    std::vector<std::uint8_t> ram(0x800u,0xAAu);Iop iop;iop.reset(partial_sender(6,true,0x500u),nullptr);
+    iop.attach_ee_ram(ram);iop.ee_dma_write(0x1000E000u,1);iop.ee_dma_write(0x1000C020u,0);iop.ee_dma_write(0x1000C000u,0x184u);
+    iop.ee_dma_write(0x1000C000u,0);iop.run_until(300);
+    require(!iop.stopped() && !iop.sif0_metrics().bytes && ram[0x400u]==0xAAu && !(iop.ee_dma_read(0x1000E010u)&0x20u),
+            "idle receiver stop leaves later real IOP data buffered without a false EE completion");
+    iop.ee_dma_write(0x1000C000u,0x184u);iop.run_until(320);
+    require(iop.sif0_metrics().bytes==32 && ram[0x414u]==5 && (iop.ee_dma_read(0x1000E010u)&0x20u),
+            "rearmed receiver drains the original buffered packet without dropping bytes");
+    iop.reset(partial_sender(6,true,0x500u),nullptr);iop.attach_ee_ram(ram);iop.ee_dma_write(0x1000E000u,1);
+    iop.ee_dma_write(0x1000C020u,0);iop.ee_dma_write(0x1000C000u,0x184u);
+    for(unsigned cycle=1;cycle<300 && !iop.ee_dma_read(0x1000C020u);++cycle)iop.run_until(cycle);
+    require(iop.ee_dma_read(0x1000C020u)!=0,"receiver has consumed a real tag and awaits payload");
+    rejects([&]{iop.ee_dma_write(0x1000C000u,0);},"write while busy");
+    iop.set_ee_dma_suspended(true);iop.ee_dma_write(0x1000C000u,0);
+    require(!(iop.ee_dma_read(0x1000E010u)&0x20u),"suspended active receiver stops without manufacturing successful completion");
+}
 }
 int main() try {
-    transfer_masks();incomplete_packet();source_chain();refused_packets();block_control_halfwords();partial_sif0_packets();
+    transfer_masks();incomplete_packet();source_chain();refused_packets();block_control_halfwords();partial_sif0_packets();idle_sif0_receiver_stop();
     std::cout<<"SIF1 source chains, exact payload, END/IRQ masks and incomplete packets passed\n";
 } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

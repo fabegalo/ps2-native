@@ -604,7 +604,9 @@ void dma_suspend() {
     require(iop.ee_dma_read(0x1000C410u)==0x110u && (iop.ee_dma_read(0x1000E010u)&0x40u),"only the new transfer's real completion raises CIS");
     Iop receiver;receiver.reset(rom,nullptr);receiver.attach_ee_ram(ram);
     receiver.ee_dma_write(0x1000E020u,0);receiver.ee_dma_write(0x1000C020u,0);receiver.ee_dma_write(0x1000C000u,0x184u);
-    rejects([&] {receiver.ee_dma_write(0x1000C000u,0);},"write while busy");
+    receiver.ee_dma_write(0x1000C000u,0);
+    require(!(receiver.ee_dma_read(0x1000C000u)&0x100u),"empty receiver can be disarmed without an in-flight bus beat");
+    receiver.ee_dma_write(0x1000C000u,0x184u);
     receiver.set_ee_dma_suspended(true);receiver.ee_dma_write(0x1000C000u,0);
     require(!(receiver.ee_dma_read(0x1000C000u)&0x100u) && !(receiver.ee_dma_read(0x1000E010u)&0x20u),
             "suspended SIF0 receiver can stop without a fabricated receive completion");

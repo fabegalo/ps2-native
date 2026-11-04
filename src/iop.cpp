@@ -326,7 +326,12 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
     // EE User's Manual p.62: suspend via CPND, then clear STR before
     // reconfiguring an active channel. A stopped transfer is not completion.
     const bool suspended_stop=ee_dma_suspended_ && field==0u && !(value&0x100u);
-    if(channel==5u && (ee_dma_setup_[5][0].value_or(0u)&0x100u) && !suspended_stop)
+    // No transfer is in process while the receiver awaits an absent tag.
+    // In this qword-atomic bus model STR can clear at that boundary; a
+    // payload in progress still requires documented CPND suspension.
+    const bool waiting_receiver_stop=channel==5u && field==0u && value==0u &&
+        ee_dma_setup_[5][2].value_or(0u)==0u && sif0_fifo_.empty();
+    if(channel==5u && (ee_dma_setup_[5][0].value_or(0u)&0x100u) && !suspended_stop && !waiting_receiver_stop)
         throw DeviceRefusal("EE SIF0 DMA register write while busy");
     if(channel==6u && (ee_sif1_chcr_ & 0x100u) && !suspended_stop) throw DeviceRefusal("EE SIF1 DMA register write while busy");
     if(!ee_dma_field_exists(channel,field)) {
