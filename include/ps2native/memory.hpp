@@ -159,8 +159,6 @@ public:
     [[nodiscard]] const GsRegisters& gs() const noexcept { return registers_.gs(); }
     [[nodiscard]] const Gif& gif() const noexcept { return registers_.gif(); }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
-    void diagnostic_dev9_control_latches() { registers_.diagnostic_dev9_control_latches(); }
-    void diagnostic_dev9_power_settle_cycles(std::uint32_t cycles) { registers_.diagnostic_dev9_power_settle_cycles(cycles); }
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles) { registers_.diagnostic_sio2_infrared_timeout(cycles); }
     void diagnostic_sio2_port_timing(unsigned bits) { registers_.diagnostic_sio2_port_timing(bits); }
     void diagnostic_sio2_digital_pad(unsigned port,std::uint16_t buttons,std::uint32_t cycles) { registers_.diagnostic_sio2_digital_pad(port,buttons,cycles); }
