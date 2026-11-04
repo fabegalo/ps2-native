@@ -12,7 +12,7 @@ std::vector<std::uint8_t> program(bool access) {
     a.la(9,0x00400401u);a.mtc0(9,m20::Status);a.nop();
     a.la(8,0xBF801070u);a.lw(10,0,8);a.nop();a.andi(10,10,1u<<9);
     a.la(11,0xA0000100u);a.sw(10,0,11);
-    if(access){a.la(8,0xBF90019Au);a.la(9,0x8000u);a.sh(9,0,8);}
+    if(access){a.la(8,0xBF90019Au);a.la(9,0x80C0u);a.sh(9,0,8);}
     a.label("idle");a.beq(0,0,"idle");a.nop();
     auto rom=m20::build_firmware().rom;const auto code=m20::le_words(a.finish());
     std::copy(code.begin(),code.end(),rom.begin());return rom;
@@ -89,6 +89,53 @@ int main() try {
         std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr);iop.run_until(80);
         if(!mode)require(!iop.stopped() && iop.ee_read(0x100,4)==0,"both AutoDMA disables generate neither data nor a DMA interrupt");
         else require(iop.stopped(),"streaming, readback timing and unsupported AutoDMA widths remain explicit");
+    }
+    for(const bool stop_clock : {false,true}) {
+        m20::Assembler a(kEeResetVector);a.la(8,0xBF90019Au);a.la(9,0x8000u);a.sh(9,0,8);
+        a.la(8,0xBF90059Au);a.la(9,0xA000u);a.sh(9,0,8);
+        if(stop_clock){for(unsigned n=0;n<1000;++n)a.nop();a.sh(0,0,8);a.la(8,0xBF90019Au);a.sh(0,0,8);}
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,true);
+        iop.run_until(767);require(!iop.stopped() && !iop.spu2_last_sample(0) && !iop.spu2_last_sample(1),"no audio sample precedes its 48 kHz clock edge");
+        iop.run_until(768);
+        for(unsigned core=0;core<2;++core)require(iop.spu2_sample_count(core)==1 && iop.spu2_last_sample(core)->cycle==768 &&
+            iop.spu2_last_sample(core)->left==0 && iop.spu2_last_sample(core)->right==0,"inactive sources produce a real zero stereo sample at the exact clock edge");
+        iop.run_until(3072);
+        require(!iop.stopped() && iop.spu2_sample_count(0)==(stop_clock ? 1u : 4u) && iop.spu2_sample_count(1)==(stop_clock ? 1u : 4u),
+                "both core clocks retain their phase and explicit disables stop future samples");
+        iop.reset(image,nullptr);iop.run_until(80);require(iop.stopped(),"quiet reset assumptions never become a default for active synthesis");
+    }
+    {
+        m20::Assembler a(kEeResetVector);a.la(8,0xBF90019Au);a.la(9,0x8000u);a.sh(9,0,8);
+        a.la(8,0xBF900344u);a.raw((0x25u<<26)|(8u<<21)|(9u<<16));a.nop();a.andi(11,9,0x7FFu);
+        a.la(10,0xA0000100u);a.sw(11,0,10);a.label("consume");a.addiu(11,9,1);
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,true);
+        const auto boundary=(a.at("consume")-kEeResetVector)/4u;iop.run_until(boundary);
+        require(!iop.stopped() && iop.ee_read(0x100,4)==0,"quiet STATX has no active request, busy transfer or enabled IRQ");
+        iop.run_until(boundary+1u);require(iop.stopped() && iop.stop_reason()->find("SPU2 STATX")!=std::string::npos,"unmodeled STATX bits cannot masquerade as zero");
+    }
+    for(unsigned mode=0;mode<6;++mode) {
+        m20::Assembler a(kEeResetVector);
+        if(mode!=5){a.la(8,0xBF90019Au);a.la(9,0x8000u);a.sh(9,0,8);}
+        for(unsigned core=0;core<2;++core) {
+            a.la(8,0xBF9001A4u+core*0x400u);a.la(9,0xFFFFu);a.sh(9,0,8);
+            a.la(9,0xFFFFu);a.sh(9,2,8);
+        }
+        if(mode==1){a.la(8,0xA0000300u);a.lw(9,0,8);a.nop();a.la(8,0xBF9001A4u);a.sh(9,0,8);}
+        else if(mode==2)a.sw(0,0,8);
+        else if(mode==3)a.raw((0x25u<<26)|(8u<<21)|(9u<<16));
+        else if(mode==4){a.la(8,0xBF9001A0u);a.la(9,1);a.sh(9,0,8);}
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,mode!=5);
+        iop.run_until(1536);
+        if(!mode)require(!iop.stopped() && iop.spu2_sample_count(0)==2 && iop.spu2_last_sample(0)->left==0,
+                         "KOFF on all 48 inactive voices preserves the quiet sample clock");
+        else {require(iop.stopped(),"KOFF rejects unproved masks, widths, readback, active synthesis and missing reset assumptions");
+            if(mode==5)require(iop.stop_reason()->find("KOFF")!=std::string::npos,"inactive voice state requires its explicit assumption even before a core starts");}
     }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

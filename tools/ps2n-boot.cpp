@@ -172,7 +172,7 @@ int boot_main(int argc, Character** argv) {
             if(assumptions.iop_sio2_irq_clear)
                 header<<"# DIAGNOSTIC IOP I_STAT.17 initially clear (unmeasured)\n";
             if(assumptions.spu2_quiescent_reset)
-                header<<"# DIAGNOSTIC SPU2 cores inactive and IRQ9 clear at reset (unmeasured)\n";
+                header<<"# DIAGNOSTIC SPU2 cores/voices/inputs inactive, no transfer and IRQ9 clear at reset; quiet clock phase modeled (unmeasured)\n";
         }
         header << "# engine " << (module != nullptr ? "hybrid: AOT blocks " + std::to_string(module->block_count) +
                                                           " + interpreter fallback"

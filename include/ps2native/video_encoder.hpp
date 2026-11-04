@@ -65,7 +65,7 @@ struct DiagnosticAssumptions {
     // modeled; absent means that a guest write is required before use.
     std::optional<std::uint32_t> iop_dmacinten;
     bool iop_sio2_irq_clear{}; // Unmeasured cold I_STAT.17; diagnostic only.
-    bool spu2_quiescent_reset{}; // Unmeasured inactive SPU2 cores and clear IRQ9.
+    bool spu2_quiescent_reset{}; // Unmeasured inactive SPU2 cores/voices/inputs, no transfer and clear IRQ9.
     // Experimental PCRTC timing after power-on/CSR reset, never a console
     // default. Guest SYNCV writes replace it until the next reset.
     std::optional<std::uint64_t> gs_reset_syncv;

@@ -202,6 +202,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     sio2_irq_acknowledged_=diagnostic_sio2_irq_clear;
     diagnostic_spu2_quiescent_=diagnostic_spu2_quiescent;
     spu2_control_={};
+    spu2_next_sample_={};spu2_last_sample_={};spu2_sample_count_={};spu2_clock_active_=false;
     gif_dma_cycle_=0;
     gif_dma_stop_.reset();
     dma_irq_output_=false;
@@ -849,6 +850,7 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
             step();
             ++cycle_;
             if (timers_running_) tick_timers();
+            if(spu2_clock_active_)tick_spu2_quiet();
             if (video != nullptr) tick_video();
         } catch (const IopStop& stop) {
             pc_ = pc;
@@ -1059,8 +1061,28 @@ void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
     // Disabled synthesis and transfer mode are sufficient to retain the
     // remaining configuration symbolically. No data processing is started.
     if(word.unknown&0x8030u)throw IopStop{"SPU2 control write does not establish disabled synthesis and transfer"};
-    if(word.value&0x8030u)throw IopStop{"SPU2 core processing/control configuration is not modeled"};
-    spu2_control_[(physical-0x1F90019Au)/0x400u]=word;
+    if(word.value&0x30u)throw IopStop{"SPU2 core processing/control configuration is not modeled"};
+    const auto core=(physical-0x1F90019Au)/0x400u;
+    if(word.value&0x8000u) {
+        // This is a real enabled clock, with no waveform source enabled by
+        // the explicitly selected cold-state experiment. Do not infer a
+        // mute polarity or synthesize an active voice's output.
+        if(!diagnostic_spu2_quiescent_ || ((word.value|word.unknown)&0xC0u))
+            throw IopStop{"SPU2 active voices, effects or IRQ processing is not modeled"};
+        // 36.864 MHz / 48 kHz = 768 IOP cycles. The modeled clock phase is
+        // aligned to reset, sharing the existing deterministic IOP timebase.
+        if(!spu2_next_sample_[core])spu2_next_sample_[core]=(cycle_/768u+1u)*768u;
+    } else spu2_next_sample_[core].reset();
+    spu2_control_[core]=word;
+    spu2_clock_active_=spu2_next_sample_[0].has_value() || spu2_next_sample_[1].has_value();
+}
+void Iop::tick_spu2_quiet() {
+    for(unsigned core=0;core<2;++core)if(spu2_next_sample_[core] && cycle_>=*spu2_next_sample_[core]) {
+        // Sum of the known inactive voice/input sources is zero. Nonquiet
+        // modes are refused at the control write, rather than faked here.
+        spu2_last_sample_[core]=Spu2Sample{*spu2_next_sample_[core],0,0};
+        ++spu2_sample_count_[core];*spu2_next_sample_[core]+=768u;
+    }
 }
 void Iop::reset_sio2_observed(ObservedWord word,std::uint64_t epoch) {
     if(word.unknown&1u)throw IopStop{"SIO2 control start bit is unknown"};
@@ -1124,6 +1146,19 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         return iop_sif1_read(physical);
     }
     const auto name = std::string("load ") + what + " of IOP register " + hex(physical);
+    if(physical==0x1F900344u || physical==0x1F900744u) {
+        if(bytes!=2u)throw IopStop{"SPU2 STATX requires halfword reads"};
+        const auto core=(physical-0x1F900344u)/0x400u;
+        const auto word=spu2_control_[core];
+        if(!word || !spu2_next_sample_[core])throw IopStop{"SPU2 STATX is not established by a quiet enabled core"};
+        // No PIO/DMA request, active waveform source, effect or IRQ can be
+        // in flight in this supported state. Unmodeled status stays unknown.
+        undefined_load_="SPU2 STATX: status outside the quiet transfer/IRQ fields is unknown";
+        auto known=0x7FFu;
+        if((word->value|word->unknown)&0xFu)known&=~0xFu;
+        undefined_known_=known|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
+        return 0;
+    }
     if(physical==0x1F9001B0u || physical==0x1F9005B0u)
         throw IopStop{"SPU2 AutoDMA readback/busy timing is not modeled"};
     if(physical==0x1F90019Au || physical==0x1F90059Au) {
@@ -1296,6 +1331,20 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
 }
 
 void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what) {
+    if(physical==0x1F9001A4u || physical==0x1F9001A6u ||
+       physical==0x1F9005A4u || physical==0x1F9005A6u) {
+        // KOFF selects 24 envelopes per core (16 low + 8 high). In the
+        // explicit cold-state experiment all are already inactive, and no
+        // accepted operation can key one on. Releasing them cannot create
+        // sound, an ENDX event, RAM traffic or an interrupt. This does not
+        // implement release of an active envelope or KOFF readback.
+        // Upper-bank bits 8..15 do not select a voice. Homebrew libsd
+        // ResetAll writes 0xFFFF to both halves as well as the 24-bit masks.
+        if(bytes!=2u || !value || !diagnostic_spu2_quiescent_)
+            throw IopStop{"SPU2 KOFF requires known inactive voices and a 24-voice halfword mask"};
+        return;
+    }
+
     if (physical>=0x1F801520u && physical<0x1F801530u) {
         if(bytes==2u && (physical==0x1F801524u || physical==0x1F801526u) && value) {
             if(iop_sif0_[2]&kChcrStart)throw IopStop{"IOP SIF0 register write while busy"};
@@ -1670,8 +1719,8 @@ std::uint32_t Iop::modeled_irqs() const noexcept {
     // Cold SIO2 has no in-flight command. Every path that could start one
     // (CTRL.0, FIFO, DMA) refuses before changing state, so IRQ17 cannot rise.
     // This proves the idle source only, not peripheral responses or timing.
-    // This opt-in experiment assumes inactive cores at reset. Synthesis,
-    // streaming and DMA starts still refuse; inactive setup creates no IRQ9.
+    // The opt-in cold-state experiment has no active voices or inputs. Only
+    // quiet clocks with effects/IRQ disabled are accepted; no IRQ9 is created.
     return kTimerIrqs | kDmaIrq | (1u<<2u) | (sio2_irq_acknowledged_ ? (1u<<17u) : 0u) |
            (diagnostic_spu2_quiescent_ ? (1u<<9u) : 0u) |
            (video_.state != GsRegisters::VerticalClock::State::Unknown ? kVblankStartIrq | kVblankEndIrq : 0u);

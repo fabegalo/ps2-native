@@ -112,6 +112,9 @@ public:
     void set_ee_dma_suspended(bool suspended) noexcept { ee_dma_suspended_=suspended; }
     [[nodiscard]] bool ee_dma_suspended() const noexcept { return ee_dma_suspended_; }
 
+    struct Spu2Sample { std::uint64_t cycle; std::int16_t left,right; };
+    [[nodiscard]] const std::optional<Spu2Sample>& spu2_last_sample(unsigned core) const { return spu2_last_sample_.at(core); }
+    [[nodiscard]] std::uint64_t spu2_sample_count(unsigned core) const { return spu2_sample_count_.at(core); }
     [[nodiscard]] std::uint64_t cycle() const noexcept { return cycle_; }
     [[nodiscard]] std::uint32_t pc() const noexcept { return pc_; }
     [[nodiscard]] bool stopped() const noexcept { return stop_.has_value(); }
@@ -214,6 +217,7 @@ private:
                const ObservedWord* observed=nullptr,std::uint64_t sio2_epoch=0);
     void reset_sio2_observed(ObservedWord word,std::uint64_t epoch);
     void write_spu2_control(std::uint32_t physical,ObservedWord word);
+    void tick_spu2_quiet();
     [[nodiscard]] std::uint32_t io_read(std::uint32_t physical, std::size_t bytes, const char* what);
     void io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what);
     void mechacon_command(std::uint8_t command, const char* what);
@@ -269,6 +273,12 @@ private:
     bool diagnostic_cav_nominal_timing_{};
     bool diagnostic_spu2_quiescent_{};
     std::array<std::optional<ObservedWord>,2> spu2_control_;
+    // Quiet clocks are available only under the explicit cold-state
+    // experiment: no active voices, inputs, effects or transfers.
+    std::array<std::optional<std::uint64_t>,2> spu2_next_sample_;
+    std::array<std::optional<Spu2Sample>,2> spu2_last_sample_;
+    std::array<std::uint64_t,2> spu2_sample_count_{};
+    bool spu2_clock_active_{};
     std::uint64_t gif_dma_cycle_{};
     std::optional<std::string> gif_dma_stop_;
     std::optional<std::uint8_t> cdvd_howto_;
