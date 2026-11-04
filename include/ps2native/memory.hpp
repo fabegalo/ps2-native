@@ -156,12 +156,12 @@ public:
     void write_vu_control(unsigned index, std::uint32_t value) { registers_.write_vu_control(index,value); }
     [[nodiscard]] ObservedWord observe_vu_control(unsigned index) const {return registers_.observe_vu_control(index);}
     void write_vu_control_observed(unsigned index, ObservedWord word) {registers_.write_vu_control_observed(index,word);}
-    void vu_integer_store(unsigned source,unsigned base,unsigned mask) {registers_.vu_integer_store(source,base,mask);}
     void vu_advance_q(std::uint64_t cycle) { registers_.vu_advance_q(cycle); }
     [[nodiscard]] std::uint64_t vu_q_ready_cycle() const noexcept { return registers_.vu_q_ready_cycle(); }
     void vu_issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,bool square_root) {
         registers_.vu_issue_q(cycle,left,right,left_lane,right_lane,square_root);
     }
+    void vu_integer_store(unsigned source,unsigned base,unsigned mask) {registers_.vu_integer_store(source,base,mask);}
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return registers_.observe_vu_data(address);}
     [[nodiscard]] ObservedQuadword observe_vu_vector(unsigned index) const {return registers_.observe_vu_vector(index);}
     void write_vu_vector(unsigned index,ObservedQuadword word) {registers_.write_vu_vector(index,word);}

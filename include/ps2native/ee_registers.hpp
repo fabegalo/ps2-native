@@ -81,23 +81,23 @@ public:
     [[nodiscard]] std::uint32_t read_vu_control(unsigned index) const {
         if (index==29u && (vif0_.processing() || vif1_.processing()))
             throw DeviceRefusal("VU status with active VIF processing is not modeled");
-        return vu_control_.read(index);
         vu_control_.advance_q(clock_ ? now() : 0);
+        return vu_control_.read(index);
     }
     void write_vu_control(unsigned index, std::uint32_t value) { vu_control_.write(index,value); }
     [[nodiscard]] ObservedWord observe_vu_control(unsigned index) const {
         if (index==29u && (vif0_.processing() || vif1_.processing()))
             throw DeviceRefusal("VU status with active VIF processing is not modeled");
-        return vu_control_.observe(index);
         vu_control_.advance_q(clock_ ? now() : 0);
+        return vu_control_.observe(index);
     }
     void write_vu_control_observed(unsigned index, ObservedWord word) {vu_control_.write_observed(index,word);}
-    void vu_integer_store(unsigned source,unsigned base,unsigned mask) {vu_control_.integer_store(source,base,mask);}
     void vu_advance_q(std::uint64_t cycle) { vu_control_.advance_q(cycle); }
     [[nodiscard]] std::uint64_t vu_q_ready_cycle() const noexcept { return vu_control_.q_ready_cycle(); }
     void vu_issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,bool square_root) {
         vu_control_.issue_q(cycle,left,right,left_lane,right_lane,square_root);
     }
+    void vu_integer_store(unsigned source,unsigned base,unsigned mask) {vu_control_.integer_store(source,base,mask);}
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return vu_control_.observe_data(address);}
     [[nodiscard]] ObservedQuadword observe_vu_vector(unsigned index) const {return vu_control_.observe_vector(index);}
     void write_vu_vector(unsigned index,ObservedQuadword word) {vu_control_.write_vector(index,word);}
@@ -192,7 +192,7 @@ private:
     VideoEncoderMaster encoder_master_190x_{VideoEncoderMaster::Layout::Byte190x};
     VideoEncoderMaster encoder_master_1a_{VideoEncoderMaster::Layout::Halfword1A};
     const std::uint64_t* clock_{};
-    const ConsoleHardware* hardware_{};
     const std::uint64_t* stall_clock_{};
+    const ConsoleHardware* hardware_{};
 };
 } // namespace ps2native
