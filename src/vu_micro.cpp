@@ -49,11 +49,85 @@ void VuControl::retire_micro_integers(unsigned unit) {
     for(unsigned n=0;n<state.vector_writes;++n) {
         const auto write=state.vectors[n];
         if(write.ready>state.next){state.vectors[kept++]=write;continue;}
-        auto& vector=unit ? vu1_vectors_[write.index] : vectors_[write.index];
+        auto& vector=write.index==32u ? (unit ? accumulator1_ : accumulator_) :
+            (unit ? vu1_vectors_[write.index] : vectors_[write.index]);
         if(write.index)for(unsigned lane=0;lane<4u;++lane)
             if(write.mask&(8u>>lane))vector[lane]=write.words[lane];
     }
     state.vector_writes=kept;
+    kept=0;
+    for(unsigned n=0;n<state.flag_writes;++n) {
+        const auto write=state.flags[n];
+        if(write.ready>state.next){state.flags[kept++]=write;continue;}
+        if(unit) {
+            vu1_controls_[1]={write.mac,0};
+            auto& status=vu1_controls_[0];
+            status.value=(status.value&~15u)|write.status|(write.status<<6u);
+            status.unknown&=~(15u|(write.status<<6u));
+        } else {
+            registers_[17]=write.mac;unknown_[17]=0;
+            registers_[16]=(*registers_[16]&~15u)|write.status|(write.status<<6u);
+            unknown_[16]&=~(15u|(write.status<<6u));
+        }
+    }
+    state.flag_writes=kept;
+}
+VuControl::MicroFmac VuControl::evaluate_micro_upper(unsigned unit,std::uint32_t instruction) const {
+    MicroFmac result;
+    const auto code=instruction&0x07FFFFFFu;
+    if(code==0x2FFu)return result;
+    const auto function=code&63u,extended=code&0x7FFu;
+    bool accumulator=false,accumulate=false;unsigned broadcast=4u;
+    if((extended&~3u)==0x1BCu || (extended&~3u)==0xBCu) {
+        accumulator=true;accumulate=(extended&~3u)==0xBCu;broadcast=extended&3u;
+    } else if(extended==0x2BEu || extended==0x2BFu) {
+        accumulator=true;accumulate=extended==0x2BFu;
+    } else if((function&~3u)==0x18u || (function&~3u)==8u) {
+        accumulate=(function&~3u)==8u;broadcast=function&3u;
+    } else if(function==0x2Au || function==0x29u) {
+        accumulate=function==0x29u;
+    } else throw DeviceRefusal("upper instruction is not modeled: "+hexword(instruction));
+    const auto mask=(code>>21u)&15u,fs=(code>>11u)&31u,ft=(code>>16u)&31u,fd=(code>>6u)&31u;
+    const auto& state=micro_[unit];const auto& vectors=unit ? vu1_vectors_ : vectors_;
+    const auto pending=[&](unsigned reg,unsigned lane) {
+        if(!reg)return false;
+        for(unsigned n=0;n<state.vector_writes;++n)
+            if(state.vectors[n].index==reg && (state.vectors[n].mask&(8u>>lane)))return true;
+        return false;
+    };
+    // FMAC source dependencies stall the entire LIW. A lower instruction in
+    // this same pair reads the old values; neither half has committed yet.
+    for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane)) {
+        if(pending(fs,lane) || pending(ft,broadcast<4u ? broadcast : lane)) {
+            result.hazard=true;return result;
+        }
+    }
+    result.active=true;result.output={accumulator ? 32u : fd,mask,{},state.next+4u};
+    for(unsigned lane=0;lane<4u;++lane) {
+        const auto bit=8u>>lane;if(!(mask&bit))continue;
+        const auto a=vectors[fs][lane],b=vectors[ft][broadcast<4u ? broadcast : lane];
+        if(a.unknown || b.unknown)throw DeviceRefusal("FMAC consumes unknown VF operand bits");
+        std::uint32_t flags=0;const auto product=ee_fpu_multiply(a.value,b.value,flags);
+        if(!product)throw DeviceRefusal("FMAC multiply has ambiguous low-column Booth rounding");
+        if(flags&0xC000u)throw DeviceRefusal("FMAC exceptional product/ACC metadata is not modeled");
+        auto value=*product;
+        if(accumulate) {
+            auto acc=(unit ? accumulator1_ : accumulator_)[lane];
+            // Consecutive MULA/MADDA/MADD share the accumulator bypass;
+            // vector destinations and flags still commit only at S.
+            for(unsigned n=state.vector_writes;n>0;--n) {
+                const auto& previous=state.vectors[n-1u];
+                if(previous.index==32u && (previous.mask&bit)){acc=previous.words[lane];break;}
+            }
+            if(acc.unknown)throw DeviceRefusal("FMAC accumulation consumes unknown ACC bits");
+            value=ee_fpu_add(acc.value,value,flags);
+            if(flags&0xC000u)throw DeviceRefusal("FMAC exceptional accumulation/ACC metadata is not modeled");
+        }
+        result.output.words[lane]={value,0};
+        if(!(value&0x7FFFFFFFu)){result.mac|=bit;result.status|=1u;}
+        if(value&0x80000000u){result.mac|=bit<<4u;result.status|=2u;}
+    }
+    return result;
 }
 void VuControl::step_micro(unsigned unit) {
     auto& state=micro_[unit];retire_micro_integers(unit);
@@ -68,7 +142,8 @@ void VuControl::step_micro(unsigned unit) {
     if(low.unknown || upper.unknown)throw DeviceRefusal("instruction fetch consumes unwritten micro memory");
     const auto lo=low.value,hi=upper.value;
     if(hi&0xB8000000u)throw DeviceRefusal("I/M/D/T microinstruction controls are not modeled");
-    if((hi&0x7FFu)!=0x2FFu)throw DeviceRefusal("upper instruction is not modeled: "+hexword(hi));
+    const auto fmac=evaluate_micro_upper(unit,hi);
+    if(fmac.hazard){++state.next;return;}
     const bool ending=(hi&0x40000000u)!=0u;
     if(state.end_delay && ending)throw DeviceRefusal("E bit in the termination delay slot is not supported");
     const auto op=lo>>25u,is=(lo>>11u)&31u,it=(lo>>16u)&31u,id=(lo>>6u)&31u;
@@ -119,15 +194,23 @@ void VuControl::step_micro(unsigned unit) {
             result=std::pair{id,(function==0x30u ? a+b : function==0x31u ? a-b : function==0x34u ? a&b : a|b)&0xFFFFu};
         }
     } else throw DeviceRefusal("lower instruction is not modeled: "+hexword(lo));
+    // Upper wins the whole VF destination, including fields it did not
+    // select. LQI still performs its independent VI post-increment.
+    if(fmac.active && fmac.output.mask && vector_result && fmac.output.index==vector_result->index)vector_result.reset();
     // No architectural effects of this pair until both decoders/operands
     // have succeeded. Integer S writeback is four cycles after T issue.
     if(result && result->first && state.writes==state.pending.size())throw DeviceRefusal("VU integer writeback queue is full");
-    if(vector_result && vector_result->index && vector_result->mask && state.vector_writes==state.vectors.size())
+    const auto lower_write=vector_result && vector_result->index && vector_result->mask;
+    const auto upper_write=fmac.active && fmac.output.index && fmac.output.mask;
+    if(state.vector_writes+static_cast<unsigned>(lower_write)+static_cast<unsigned>(upper_write)>state.vectors.size())
         throw DeviceRefusal("VU vector writeback queue is full");
+    if(fmac.active && state.flag_writes==state.flags.size())throw DeviceRefusal("VU flag writeback queue is full");
     if(result && result->first) {
         state.pending[state.writes++]={result->first,{result->second,0},state.next+4u};
     }
-    if(vector_result && vector_result->index && vector_result->mask)state.vectors[state.vector_writes++]=*vector_result;
+    if(lower_write)state.vectors[state.vector_writes++]=*vector_result;
+    if(upper_write)state.vectors[state.vector_writes++]=fmac.output;
+    if(fmac.active)state.flags[state.flag_writes++]={fmac.mac,fmac.status,state.next+4u};
     const auto next=state.branch.value_or((state.pc+8u)&(unit ? 16383u : 4095u));
     state.branch=branch;state.pc=next;++state.instructions;
     if(state.end_delay)state.drain=state.next+4u; // the delay pair must reach S before Ready

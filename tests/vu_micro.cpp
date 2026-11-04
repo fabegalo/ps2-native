@@ -22,6 +22,16 @@ ObservedWord vector_lane(const VuControl& vu,unsigned unit,unsigned index,unsign
     const auto shift=(lane&1u)*32u;
     return {static_cast<std::uint32_t>(half.value>>shift),static_cast<std::uint32_t>(half.unknown>>shift)};
 }
+void seed_vector(VuControl& vu,unsigned unit,unsigned index,const std::array<std::uint32_t,4>& words) {
+    if(unit) {
+        // Store raw lanes through the real VU0-to-VU1 register window.
+        vu.write_vector(31,{{words[0]|(std::uint64_t{words[1]}<<32u),0},{words[2]|(std::uint64_t{words[3]}<<32u),0}});
+        vu.write(2,0x400u+index);vu.vector_store_increment(31,2,15);
+    } else vu.write_vector(index,{{words[0]|(std::uint64_t{words[1]}<<32u),0},{words[2]|(std::uint64_t{words[3]}<<32u),0}});
+}
+std::uint32_t upper(unsigned op,unsigned destination,unsigned left,unsigned right,unsigned mask=15) {
+    return (mask<<21)|(right<<16)|(left<<11)|(destination<<6)|op;
+}
 }
 int main() try {
     for(unsigned unit=0;unit<2u;++unit) {
@@ -78,6 +88,48 @@ int main() try {
         instruction(vu,unit,1,0x81E1037Cu);vu.start_micro(unit,0,0);
         rejects([&]{vu.advance_micro(2);},"E delay slot");
         require(vu.diagnostic_micro_instructions(unit)==1,"invalid E-slot loads cannot modify registers or fabricate termination");
+        vu.reset();seed_vector(vu,unit,1,{0x3F800000,0x40000000,0x40800000,0x41000000});
+        seed_vector(vu,unit,2,{0x40000000,0x40800000,0x41000000,0x41800000});
+        instruction(vu,unit,0,nop,upper(0x1BC,0,1,2));
+        instruction(vu,unit,1,nop,upper(0xBD,0,1,2));
+        instruction(vu,unit,2,nop,upper(0xA,5,1,2)|0x40000000u);instruction(vu,unit,3,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(6);
+        require(vector_lane(vu,unit,5,0).unknown==~0u,"FMAC output is not externally visible before S");
+        vu.advance_micro(8);
+        const std::array<std::uint32_t,4> expected{0x41600000,0x41E00000,0x42600000,0x42E00000};
+        for(unsigned lane=0;lane<4;++lane)require(vector_lane(vu,unit,5,lane).value==expected[lane] &&
+            !vector_lane(vu,unit,5,lane).unknown,"consecutive MULA/MADDA/MADD use accumulator bypass and exact matrix arithmetic");
+        vu.reset();seed_vector(vu,unit,1,{0x3F800000,0,0,0});seed_vector(vu,unit,2,{0x40000000,0,0,0});
+        instruction(vu,unit,0,nop,upper(0x18,5,1,2,8));
+        instruction(vu,unit,1,addiu(1,0,7),upper(0x18,6,5,2,8)|0x40000000u);instruction(vu,unit,2,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(4);
+        require(vu.diagnostic_micro_instructions(unit)==1,"a pending VF source stalls both halves of the dependent LIW");
+        vu.advance_micro(5);require(vu.diagnostic_micro_instructions(unit)==2,"the dependent LIW issues when its source reaches S");
+        vu.advance_micro(10);require(vector_lane(vu,unit,6,0).value==0x40800000 && integer(vu,unit,1).value==7,
+            "a stalled lower integer operation executes once and the dependent product is correct");
+        vu.reset();seed_vector(vu,unit,1,{0x3F800000,0,0,0});seed_vector(vu,unit,2,{0x40000000,0x40800000,0,0});
+        vu.write_memory(data,4,{0x41100000,0});vu.write_memory(data+4,4,{0x41200000,0});
+        instruction(vu,unit,0,addiu(1,0,0));
+        instruction(vu,unit,1,0x8000037Cu|(4u<<21u)|(2u<<16u)|(1u<<11u),upper(0x18,2,1,2,8)|0x40000000u);
+        instruction(vu,unit,2,nop);vu.start_micro(unit,0,0);vu.advance_micro(7);
+        require(vector_lane(vu,unit,2,0).value==0x40000000 && vector_lane(vu,unit,2,1).value==0x40800000 && integer(vu,unit,1).value==1,
+            "upper reads the old VF value, discards the entire colliding LQI destination and preserves its VI increment");
+        vu.reset();seed_vector(vu,unit,1,{0,0xC0000000,0x40800000,0x80000000});
+        seed_vector(vu,unit,2,{0x40000000,0,0,0});instruction(vu,unit,0,nop,upper(0x18,6,1,2)|0x40000000u);
+        instruction(vu,unit,1,nop);vu.start_micro(unit,0,0);vu.advance_micro(4);
+        const auto mac_before=unit ? vu.observe_data(0x4310) : vu.observe(17);
+        require(mac_before.value==0,"MAC flags retain their previous value until S");
+        vu.advance_micro(6);const auto mac=unit ? vu.observe_data(0x4310) : vu.observe(17);
+        const auto status=unit ? vu.observe_data(0x4300) : vu.observe(16);
+        require(mac.value==0x59 && status.value==0xC3,"signed zero, sign/zero MAC fields and sticky STATUS flags commit with the actual product");
+        vu.reset();instruction(vu,unit,0,addiu(1,0,7),upper(0x18,5,1,0,8));vu.start_micro(unit,0,0);
+        rejects([&]{vu.advance_micro(1);},"unknown VF operand");
+        require(integer(vu,unit,1).unknown && vu.diagnostic_micro_instructions(unit)==0,
+            "unknown FMAC input refuses the whole pair without a lower integer side effect");
+        vu.reset();seed_vector(vu,unit,1,{0x3F800000,0,0,0});
+        instruction(vu,unit,0,addiu(1,0,7),upper(8,5,1,0,8));vu.start_micro(unit,0,0);
+        rejects([&]{vu.advance_micro(1);},"unknown ACC");
+        require(integer(vu,unit,1).unknown,"an unknown accumulator cannot be replaced by zero");
     }
     VuControl cold;cold.start_micro(1,0,0);rejects([&]{cold.advance_micro(1);},"unwritten micro memory");
     std::cout<<"Clocked VU integer LIW, bypass/S visibility, BAL delay, E drain, reset and refusals passed\n";

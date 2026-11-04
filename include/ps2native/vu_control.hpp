@@ -32,6 +32,7 @@ public:
         vectors_[0]={ObservedWord{},ObservedWord{},ObservedWord{},ObservedWord{0x3F800000u,0}};
         vu1_vectors_=vectors_;
         accumulator_.fill({0,~0u});
+        accumulator1_=accumulator_;
         micro0_.assign(1024u,{0,~0u}); micro1_.assign(4096u,{0,~0u}); data1_.assign(4096u,{0,~0u});
     }
     [[nodiscard]] std::uint32_t read(unsigned index) const {
@@ -270,6 +271,8 @@ private:
         std::array<ObservedWord,4> words{};
         std::uint64_t ready{};
     };
+    struct MicroFlagWrite {std::uint32_t mac{},status{};std::uint64_t ready{};};
+    struct MicroFmac {MicroVectorWrite output{};std::uint32_t mac{},status{};bool active{},hazard{};};
     struct MicroState {
         bool running{},end_delay{};
         std::uint32_t pc{};
@@ -278,14 +281,17 @@ private:
         std::optional<std::uint64_t> drain;
         std::array<MicroIntegerWrite,4> pending{};
         unsigned writes{};
-        std::array<MicroVectorWrite,4> vectors{};
+        std::array<MicroVectorWrite,8> vectors{};
         unsigned vector_writes{};
+        std::array<MicroFlagWrite,4> flags{};
+        unsigned flag_writes{};
         std::optional<std::string> failure;
     };
     void reset_micro(unsigned unit);
     void step_micro(unsigned unit);
     [[nodiscard]] ObservedWord micro_integer(unsigned unit,unsigned index,bool forwarded) const;
     void retire_micro_integers(unsigned unit);
+    [[nodiscard]] MicroFmac evaluate_micro_upper(unsigned unit,std::uint32_t instruction) const;
     std::array<MicroState,2> micro_{};
     struct PendingQ { std::uint64_t ready; std::uint32_t value,flags; };
     std::optional<PendingQ> pending_q_;
@@ -328,6 +334,7 @@ private:
     std::vector<ObservedWord> data_;
     std::array<std::array<ObservedWord,4>,32> vectors_{};
     std::array<ObservedWord,4> accumulator_{};
+    std::array<ObservedWord,4> accumulator1_{};
     std::array<std::array<ObservedWord,4>,32> vu1_vectors_{};
     std::vector<ObservedWord> micro0_,micro1_,data1_;
 };
