@@ -179,28 +179,32 @@ de timestamps restaurados. As identidades de conteúdo também participam
 do comando de compilação nos geradores Visual Studio, Ninja e Makefiles.
 
 Medições locais Windows x64/Release/MSVC/Ninja, mesma fixture própria e
-mesmos parâmetros, em 04/11/2026. A árvore local está identificada por hash
-nos manifestos e incluía alterações GS paralelas, preservadas fora do commit
-da toolchain. Dados em `out/`, não versionados:
+mesmos parâmetros, em 04/11/2026. Commit `392acc8`, checkout de verificação
+fixo e árvore Git limpa, identificados nos manifestos. Dados em `out/`,
+não versionados; nenhum firmware/jogo foi copiado para esse checkout:
 
 | Medida | Primeira rodada, build novo | Replay |
 |---|---:|---:|
-| Fluxo completo até a mesma recusa | 61,64 s | 1,22 s |
-| Build do runtime/AOT | 4,043 s | 0,179 s, zero recompilações |
-| Processo de execução, incluindo inicialização/I/O | 0,153 s | 0,085 s |
+| Fluxo completo até a mesma recusa | 64,49 s | 1,18 s |
+| Build do runtime/AOT | 4,152 s | 0,181 s, zero recompilações |
+| Processo de execução, incluindo inicialização/I/O | 0,161 s | 0,087 s |
 | Reutilização de análise e AOT | não | sim, hashes conferidos |
-| Espaço lógico do build | 27.852.446 bytes | 27.928.562 bytes |
+| Espaço lógico do build | 27.825.302 bytes | 27.865.711 bytes |
 
 O executável manteve o mesmo SHA-256 e ambas as execuções retiraram duas
 instruções antes da mesma recusa MMI. O ganho está na preparação/build;
 os tempos de processo incluem variação de startup e cache do host e não
 demonstram aceleração da CPU convidada. A rodada seguinte acrescentou
-76.116 bytes de evidência; não duplicou input, análise ou tradução.
-Comparação completa das duas execuções: 80 ms incluindo startup da CLI.
+40.409 bytes de evidência; não duplicou input, análise ou tradução.
+Comparação completa das duas execuções: 112 ms incluindo startup da CLI.
+Alterar orçamento/anel/stream preservou os três artefatos; repetir a
+geração após remover o metadado de chave reutilizou o mesmo C++/timestamp
+e manteve o build sem compilação (0,220 s). Corrupção real da tradução
+foi detectada e exigiu regeneração/rebuild, como esperado.
 
 Trace sintético de 1.000.001 linhas/40.000.081 bytes, três amostras
-alternadas: mediana de 0,634 s no resumo `ps2n-debug log`, produzindo
-1.734 bytes, e 0,088 s no `rg` buscando a recusa terminal. **Sem ganho
+alternadas: mediana de 0,511 s no resumo `ps2n-debug log`, produzindo
+1.734 bytes, e 0,082 s no `rg` buscando a recusa terminal. **Sem ganho
 em busca bruta**: os comandos produzem saídas diferentes; o resumo agrega
 causa, posição e cauda limitada. Não foi medido tempo humano poupado.
 

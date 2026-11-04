@@ -294,10 +294,12 @@ Revisar a evidência original e os limites de cada etapa nos relatórios [docs](
   estática, símbolos, relocations, destinos e limites conhecidos; Ghidra é
   opcional e seus mapas permanecem indicações validadas. IRX: só metadados
   de contêiner/seções, sem linker ou decodificação R5900.
-- Três testes da toolchain e 17 regressões focadas aprovados localmente.
-  Mesma fixture: primeira rodada 61,64 s, replay 1,22 s; build de runtime
-  4,043→0,179 s, mesmo executável e eventos, análise/AOT reutilizados.
-  Log de um milhão de linhas resumido em 0,634 s; sem ganho contra busca
+- `392acc8`: orçamento/anel/stream não invalidam análise/AOT; conteúdo C++
+  idêntico preserva caminho/timestamp mesmo após repetir a geração.
+  Três testes da toolchain e 17 regressões focadas aprovados localmente.
+  Validação isolada em árvore limpa: primeira rodada 64,49 s, replay 1,18 s;
+  build de runtime 4,152→0,181 s, mesmo executável e eventos, caches reutilizados.
+  Log de um milhão de linhas resumido em 0,511 s; sem ganho contra busca
   simples por `rg`. Firmware real testado só até o orçamento de 100 mil
   instruções; fixture gráfica própria capturada com hash esperado.
 - Sem save-state completo ou checkpoint de RAM; sem nova interface visual.
