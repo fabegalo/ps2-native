@@ -1,5 +1,6 @@
 #include "ps2native/interpreter.hpp"
 #include "ps2native/ee_fpu.hpp"
+#include "ps2native/vu_float.hpp"
 #include <bit>
 
 #include <iomanip>
@@ -237,21 +238,43 @@ public:
     }
 
     // LWC1/SWC1 move a raw 32-bit word between memory and an FPU register.
+    void require_fpr_known(unsigned index,const char* operation) {
+        if(s_.unknown_fpr_bits[index])stop(StopKind::NotModeled,std::string(operation)+" consumes unknown FPR bits");
+    }
+    void fpu_binary(MipsOpcode op,std::uint32_t word) {
+        if(!(s_.cp0(Cop0::Status)&kStatusCU1))
+            stop(StopKind::GuestException,"FPU arithmetic with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        const auto fs=ee::rd(word),ft=ee::rt(word),fd=ee::sa(word);
+        const ObservedWord a{s_.fpr[fs]&~s_.unknown_fpr_bits[fs],s_.unknown_fpr_bits[fs]};
+        ObservedWord b{s_.fpr[ft]&~s_.unknown_fpr_bits[ft],s_.unknown_fpr_bits[ft]};
+        if(op==MipsOpcode::SubS)b.value=(b.value^0x80000000u)&~b.unknown;
+        // Shared EE/VU normal-value bounds. The low bits remain unknown;
+        // neither a host product nor one endpoint substitutes for hardware.
+        const auto result=op==MipsOpcode::MulS ? vu_float_product(a,b) : vu_float_add(a,b);
+        if(!result)stop(StopKind::NotModeled,"FPU arithmetic cannot certify value/exception bounds; FS="+hex32(a.value)+", FT="+hex32(b.value));
+        s_.fpr[fd]=result->word.value;s_.unknown_fpr_bits[fd]=result->word.unknown;
+        s_.fcr31=(s_.fcr31&~0xC000u)|result->flags;
+    }
     void cop1_transfer(bool store, std::uint32_t word) {
         if ((s_.cp0(Cop0::Status) & kStatusCU1) == 0u)
             stop(StopKind::GuestException, std::string(store ? "SWC1" : "LWC1") +
                  " with Status.CU1 = 0: coprocessor unusable exception; vectoring is not modeled");
         const auto address = ee::effective_address(s_, word);
-        auto& fpr = s_.fpr[ee::rt(word)];
-        if (store) m_.write32(address, fpr);
-        else fpr = m_.read32(address);
+        const auto index=ee::rt(word);auto& fpr = s_.fpr[index];
+        if (store) m_.store32_observed(address,{fpr,s_.unknown_fpr_bits[index]});
+        else {const auto value=m_.load32_observed(address);fpr=value.value;s_.unknown_fpr_bits[index]=value.unknown;}
     }
     void cop1_register(MipsOpcode op,std::uint32_t word) {
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
             stop(StopKind::GuestException,"COP1 register transfer with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
         const auto rt=ee::rt(word),fs=ee::rd(word);
-        if(op==MipsOpcode::Mfc1)s_.set_reg32_sign_extended(rt,s_.fpr[fs]);
-        else if(op==MipsOpcode::Mtc1)s_.fpr[fs]=s_.reg32(rt);
+        if(op==MipsOpcode::Mfc1) {
+            const auto mask=s_.unknown_fpr_bits[fs];
+            s_.set_reg64_observed(rt,ee::sx32(s_.fpr[fs]),std::uint64_t{mask}|((mask&0x80000000u) ? 0xFFFFFFFF00000000ull : 0ull));
+        } else if(op==MipsOpcode::Mtc1) {
+            s_.unknown_fpr_bits[fs]=static_cast<std::uint32_t>(s_.unknown_gpr_bits[rt]);
+            s_.fpr[fs]=static_cast<std::uint32_t>(s_.gpr[rt].low)&~s_.unknown_fpr_bits[fs];
+        }
         else {
             if(fs!=31)stop(StopKind::NotModeled,"FPU control register "+std::to_string(fs)+" not modeled");
             if(op==MipsOpcode::Cfc1)s_.set_reg32_sign_extended(rt,s_.fcr31);
@@ -261,6 +284,7 @@ public:
     void madd(std::uint32_t word) {
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
             stop(StopKind::GuestException,"MADD.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        require_fpr_known(ee::rd(word),"MADD.S");require_fpr_known(ee::rt(word),"MADD.S");
         const auto fs=s_.fpr[ee::rd(word)],ft=s_.fpr[ee::rt(word)];
         // The documented zero-product path copies ACC without an add/round.
         // Denormal inputs are signed zero on the EE. General nonzero products
@@ -270,11 +294,13 @@ public:
         if((s_.fpu_acc&0x7F800000u)==0x7F800000u)
             stop(StopKind::NotModeled,"MADD.S accumulator overflow state not modeled");
         s_.fpr[ee::sa(word)]=s_.fpu_acc;
+        s_.unknown_fpr_bits[ee::sa(word)]=0;
         s_.fcr31&=~0x0000C000u; // no overflow/underflow from an exact zero product
     }
     void adda(std::uint32_t word) {
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
             stop(StopKind::GuestException,"ADDA.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        require_fpr_known(ee::rd(word),"ADDA.S");require_fpr_known(ee::rt(word),"ADDA.S");
         const auto fs=s_.fpr[ee::rd(word)],ft=s_.fpr[ee::rt(word)];
         const auto a=fs&0x7F800000u,b=ft&0x7F800000u;
         if(a && b)stop(StopKind::NotModeled,"ADDA.S nonzero addends: R5900 adder rounding not modeled");
@@ -394,6 +420,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         case MipsOpcode::CvtWS: case MipsOpcode::CvtSW: {
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"FPU conversion with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+            cpu.require_fpr_known(ee::rd(word),"FPU conversion");
             const auto input=state.fpr[ee::rd(word)];
             std::uint32_t result=0;
             if(instruction.opcode==MipsOpcode::CvtWS) {
@@ -412,32 +439,33 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
                     result=(input&0x80000000u)|((exponent+127u)<<23u)|(mantissa&0x7FFFFFu);
                 }
             }
-            state.fpr[ee::sa(word)]=result;break;
+            state.fpr[ee::sa(word)]=result;state.unknown_fpr_bits[ee::sa(word)]=0;break;
         }
         case MipsOpcode::AddS: case MipsOpcode::SubS:
-            if(!(state.cp0(Cop0::Status)&kStatusCU1))
-                cpu.stop(StopKind::GuestException,"FPU add/sub with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
-            state.fpr[ee::sa(word)]=ee_fpu_add(state.fpr[ee::rd(word)],
-                state.fpr[ee::rt(word)]^(instruction.opcode==MipsOpcode::SubS ? 0x80000000u : 0u),state.fcr31);break;
+            cpu.fpu_binary(instruction.opcode,word);break;
         case MipsOpcode::AbsS: case MipsOpcode::NegS:
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"FPU sign operation with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
             // Sign operations preserve all magnitude bits, including denormals
             // and exponent 255. They clear O/U causes, not their sticky history.
-            state.fpr[ee::sa(word)]=instruction.opcode==MipsOpcode::AbsS ?
-                state.fpr[ee::rd(word)]&0x7FFFFFFFu : state.fpr[ee::rd(word)]^0x80000000u;
+            state.unknown_fpr_bits[ee::sa(word)]=state.unknown_fpr_bits[ee::rd(word)]&(instruction.opcode==MipsOpcode::AbsS ? 0x7FFFFFFFu : 0xFFFFFFFFu);
+            state.fpr[ee::sa(word)]=(instruction.opcode==MipsOpcode::AbsS ?
+                state.fpr[ee::rd(word)]&0x7FFFFFFFu : state.fpr[ee::rd(word)]^0x80000000u);
+            state.fpr[ee::sa(word)]&=~state.unknown_fpr_bits[ee::sa(word)];
             state.fcr31&=~0xC000u;break;
         case MipsOpcode::MovS:
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"MOV.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
-            state.fpr[ee::sa(word)]=state.fpr[ee::rd(word)];break;
+            state.fpr[ee::sa(word)]=state.fpr[ee::rd(word)];state.unknown_fpr_bits[ee::sa(word)]=state.unknown_fpr_bits[ee::rd(word)];break;
         case MipsOpcode::DivS:
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"DIV.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
-            state.fpr[ee::sa(word)]=ee_fpu_divide(state.fpr[ee::rd(word)],state.fpr[ee::rt(word)],state.fcr31);break;
+            cpu.require_fpr_known(ee::rd(word),"DIV.S");cpu.require_fpr_known(ee::rt(word),"DIV.S");
+            state.fpr[ee::sa(word)]=ee_fpu_divide(state.fpr[ee::rd(word)],state.fpr[ee::rt(word)],state.fcr31);state.unknown_fpr_bits[ee::sa(word)]=0;break;
         case MipsOpcode::SqrtS: {
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"SQRT.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+            cpu.require_fpr_known(ee::rt(word),"SQRT.S");
             // EE instruction manual p.376: the operand is FT (FS is zero).
             // Negative nonzero inputs use sqrt(abs(FT)), set I/SI, and do
             // not trap. I/D causes are replaced; O/U and all stickies survive.
@@ -446,18 +474,12 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
             const auto root=ee_fpu_sqrt(input&0x7FFFFFFFu);
             if(!root)cpu.stop(StopKind::NotModeled,"SQRT.S nonnegative SRT root unavailable");
             state.fpr[ee::sa(word)]=exponent ? *root : input&0x80000000u;
+            state.unknown_fpr_bits[ee::sa(word)]=0;
             state.fcr31&=~0x30000u;
             if(exponent && (input&0x80000000u))state.fcr31|=0x20040u;
             break;
         }
-        case MipsOpcode::MulS: {
-            if(!(state.cp0(Cop0::Status)&kStatusCU1))
-                cpu.stop(StopKind::GuestException,"MUL.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
-            const auto value=ee_fpu_multiply(state.fpr[ee::rd(word)],state.fpr[ee::rt(word)],state.fcr31);
-            if(!value)cpu.stop(StopKind::NotModeled,"MUL.S ambiguous low-column Booth rounding not modeled; FS="+
-                hex32(state.fpr[ee::rd(word)])+", FT="+hex32(state.fpr[ee::rt(word)]));
-            state.fpr[ee::sa(word)]=*value;break;
-        }
+        case MipsOpcode::MulS: cpu.fpu_binary(instruction.opcode,word);break;
         case MipsOpcode::MaddS: cpu.madd(word);break;
         case MipsOpcode::AddaS: cpu.adda(word);break;
         case MipsOpcode::Addi: case MipsOpcode::Add: case MipsOpcode::Sub:

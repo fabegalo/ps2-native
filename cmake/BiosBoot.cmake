@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-ee-fpu-knowledge tests/ee_fpu_knowledge.cpp)
+    target_link_libraries(ps2n-ee-fpu-knowledge PRIVATE ps2n_core)
+    add_test(NAME native-ee-fpu-knowledge COMMAND ps2n-ee-fpu-knowledge)
+    set_tests_properties(native-ee-fpu-knowledge PROPERTIES TIMEOUT 30)
     add_executable(ps2n-ee-sqrt tests/ee_sqrt.cpp)
     target_link_libraries(ps2n-ee-sqrt PRIVATE ps2n_core)
     add_test(NAME native-ee-sqrt COMMAND ps2n-ee-sqrt)

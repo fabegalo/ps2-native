@@ -512,6 +512,8 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     } else if constexpr (Op==O::CFalseS || Op==O::CEqualS || Op==O::CLessS || Op==O::CLessEqualS) {
         if(!(s.cp0(Cop0::Status)&kStatusCU1))
             throw std::runtime_error("COP1 comparison with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        if constexpr(Op!=O::CFalseS)if(s.unknown_fpr_bits[d_] || s.unknown_fpr_bits[t_])
+            throw std::runtime_error("COP1 comparison consumes unknown FPR bits");
         const auto result=ee_fpu_compare(s.fpr[d_],s.fpr[t_],w&7u);
         s.fcr31=(s.fcr31&~(1u<<23))|(result ? 1u<<23 : 0u);
     } else if constexpr (Op==O::Bc1f || Op==O::Bc1t || Op==O::Bc1fl || Op==O::Bc1tl) {

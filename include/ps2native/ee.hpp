@@ -47,6 +47,9 @@ struct EEState {
     // COP1 (FPU) registers as raw 32-bit words. Cleared at reset like every
     // register (hypothesis: their power-on contents are not documented).
     std::array<std::uint32_t, 32> fpr{};
+    // Numeric uncertainty from certified arithmetic bounds and opaque raw
+    // transfers. A numeric consumer must prove its result or refuse.
+    std::array<std::uint32_t, 32> unknown_fpr_bits{};
     std::uint32_t fcr31{0x01000001u}; // fixed bits + reset flags (EE Core manual)
     std::uint32_t fpu_acc{}; // same explicit reset hypothesis as raw FPRs
     std::uint32_t pc{};
