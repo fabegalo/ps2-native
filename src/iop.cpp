@@ -529,6 +529,7 @@ void Iop::iop_sif0_write(std::uint32_t address,std::uint32_t value) {
         throw IopStop{"IOP SIF0 source/tag address outside aligned RAM"};
     iop_sif0_[field]=value;
     iop_sif0_written_|=static_cast<std::uint8_t>(1u<<field);
+    if(field==1u)iop_sif0_written_|=0x30u; // both BCR halfwords known
     if(field==2u) {sif0_source_tag_=false;sif0_source_words_=0;}
 }
 void Iop::finish_iop_sif0() {
@@ -811,7 +812,13 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
 
 std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char* what) {
     if (physical>=0x1F801520u && physical<0x1F801530u) {
-        if(bytes!=4u)throw IopStop{"SIF0 DMA requires 32-bit accesses"};
+        if(bytes==2u && (physical==0x1F801524u || physical==0x1F801526u)) {
+            const auto upper=(physical&2u)!=0u;
+            if(!(iop_sif0_written_&(upper ? 0x20u : 0x10u)))
+                throw IopStop{"IOP SIF0 BCR halfword read before write"};
+            return (iop_sif0_[1]>>(upper ? 16u : 0u))&0xFFFFu;
+        }
+        if(bytes!=4u)throw IopStop{"SIF0 DMA requires 32-bit or BCR halfword accesses"};
         return iop_sif0_read(physical);
     }
     if (physical >= 0x1F801530u && physical < 0x1F801540u) {
@@ -927,7 +934,15 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
 
 void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what) {
     if (physical>=0x1F801520u && physical<0x1F801530u) {
-        if(bytes!=4u || !value)throw IopStop{"SIF0 DMA requires known 32-bit accesses"};
+        if(bytes==2u && (physical==0x1F801524u || physical==0x1F801526u) && value) {
+            if(iop_sif0_[2]&kChcrStart)throw IopStop{"IOP SIF0 register write while busy"};
+            const auto shift=(physical&2u)*8u;
+            iop_sif0_[1]=(iop_sif0_[1]&~(0xFFFFu<<shift))|((*value&0xFFFFu)<<shift);
+            iop_sif0_written_|=physical&2u ? 0x20u : 0x10u;
+            if((iop_sif0_written_&0x30u)==0x30u)iop_sif0_written_|=2u;
+            return;
+        }
+        if(bytes!=4u || !value)throw IopStop{"SIF0 DMA requires known 32-bit or BCR halfword accesses"};
         iop_sif0_write(physical,*value); return;
     }
     if (physical >= 0x1F801530u && physical < 0x1F801540u) {

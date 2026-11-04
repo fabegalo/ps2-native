@@ -105,8 +105,32 @@ void refused_packets() {
     auto tag_irq=packet(0x40000400u);Iop ambiguous;ambiguous.reset(receiver(1u<<10),nullptr);arm(ambiguous,tag_irq,2);ambiguous.run_until(400);
     require(ambiguous.stopped() && ambiguous.stop_reason()->find("IRQ without END")!=std::string::npos,"unverified non-END IRQ behavior stays refused");
 }
+void block_control_halfwords() {
+    for(const unsigned first : {0u,1u})for(const bool complete : {false,true}) {
+        m20::Assembler a(0xBFC00000u);
+        a.la(8,0xBF801524u);a.la(9,first ? 0x1234u : 0x5678u);a.sh(9,first*2u,8);
+        a.lhu(10,first*2u,8);a.nop();a.la(11,0xA0000100u);a.sw(10,0,11);
+        if(complete){a.la(9,first ? 0x5678u : 0x1234u);a.sh(9,(1u-first)*2u,8);}
+        a.lw(10,0,8);a.nop();a.sw(10,4,11);
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> rom(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);iop.run_until(150);
+        if(complete)require(!iop.stopped() && iop.ee_read(0x104u,4)==0x12345678u,"both BCR halves preserve their actual written bits");
+        else require(iop.stopped() && iop.stop_reason()->find("register read before write")!=std::string::npos,
+                     "one written half cannot invent the opposite half of a 32-bit read");
+        // If the later full read stopped, its earlier byte result is private;
+        // gpr still retains the actual preceding halfword load.
+        if(complete)require(iop.ee_read(0x100u,4)==(first ? 0x1234u : 0x5678u),"LHU reads only the established BCR half");
+    }
+    m20::Assembler a(0xBFC00000u);store(a,0xBF801524u,0xAAAABBBBu);
+    a.la(8,0xBF801524u);a.la(9,0xCAFEu);a.sh(9,2,8);a.lw(10,0,8);a.nop();
+    a.la(11,0xA0000100u);a.sw(10,0,11);a.label("idle");a.beq(0,0,"idle");a.nop();
+    const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> rom(4u*1024u*1024u);
+    std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);iop.run_until(150);
+    require(!iop.stopped() && iop.ee_read(0x100u,4)==0xCAFEBBBBu,"SH after a full BCR write preserves the opposite halfword");
+}
 }
 int main() try {
-    transfer_masks();incomplete_packet();source_chain();refused_packets();
+    transfer_masks();incomplete_packet();source_chain();refused_packets();block_control_halfwords();
     std::cout<<"SIF1 source chains, exact payload, END/IRQ masks and incomplete packets passed\n";
 } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
