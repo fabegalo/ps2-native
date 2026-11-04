@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace ps2native {
@@ -16,18 +17,24 @@ public:
     void reset() {
         direct_left_ = 0; error_mask_.reset(); mark_.reset(); code_.reset();
         programmed_={}; pending_=Pending::None; pending_index_=0; mark_detected_=false;
+        direct_words_=0;direct_buffer_={};
     }
     [[nodiscard]] std::uint32_t read_register(std::uint32_t offset) const;
     void write_register(std::uint32_t offset,std::uint32_t value,Gif& gif);
     void write_fifo(std::uint64_t low, std::uint64_t high, Gif& gif, GsRegisters& gs);
+    // TTE sends only the upper 64 bits, in lanes 2/3 of a DMA tag.
+    void write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs);
     [[nodiscard]] std::uint32_t direct_remaining() const noexcept { return direct_left_; }
     [[nodiscard]] bool processing() const noexcept {return direct_left_ || pending_!=Pending::None;}
 private:
+    void write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters& gs);
     [[noreturn]] void refuse(const std::string& reason) const {
         throw DeviceRefusal(std::string(unit_==Unit::Vu0 ? "VIF0" : "VIF1")+reason);
     }
     Unit unit_;
     std::uint32_t direct_left_{};
+    std::array<std::uint32_t,4> direct_buffer_{};
+    unsigned direct_words_{};
     std::optional<std::uint32_t> error_mask_,mark_,code_;
     enum class Pending { None, Mask, Row, Col };
     Pending pending_{Pending::None};

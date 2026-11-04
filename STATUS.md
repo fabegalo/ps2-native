@@ -52,7 +52,10 @@
   com hipótese separada para hit via alias uncached. EE `0x108AD8` /
   353.409.922: próximo bloqueio é DMA VIF1 source-chain/TTE. Seis testes
   focados passaram, incluindo coerência observável pelo DMA/GIF. Ainda
-  16 pacotes de limpeza, sem PMODE/frame. CI dos controles `938ed35` e
+  16 pacotes de limpeza. No ensaio 90 o DMA VIF passou e o jogo escreveu PMODE/
+  circuito 2; EE `0x1024C0` / 358.037.955 para em escrita de profundidade
+  PSMZ16S; scanout recusa entrelaçamento. Ainda sem frame. Sete testes
+  focados DMA/cache/GS/AOT passaram. CI dos controles `938ed35` e
   `833004c` aprovada nos seis alvos de núcleo e launcher.
 - Sequência, hipóteses, testes e referências:
   [primeiro jogo](docs/FIRST-GAME-STATUS.md#continuação-experimental--subsistemas-exercitados-pelo-jogo).

@@ -1265,3 +1265,30 @@ instruções COP0 e semântica AOT compartilhada. Um pacote real sintético
 GIF/LABEL permanece invisível ao DMA até a escrita de volta e depois
 chega ao GS com o valor original. Esse fixture não é frame do jogo.
 Modo original repetido após o cache: PCs, contagens e hash canônicos preservados; zero GIF/pixels.
+
+Continuação DMA VIF: consultados PS2Recomp Kernel/Stubs/DMA.cpp e
+ps2_vif1_interpreter.cpp no mesmo ref e PCSX2 Hw.cpp (comportamento de TADR).
+Código BSD próprio para canais 0/1 normal e source-chain REFE/CNT/NEXT/REF/END.
+TTE entrega somente os 64 bits superiores da tag ao parser VIF antes do payload;
+não insere NOPs para os bits inferiores. Dados e comandos percorrem a RAM real,
+VIF e GIF PATH2. Tag/payload custam um BUSCLK cada, hipótese funcional já usada
+no DMA GIF; não há arbitragem física ou latência de memória comprovada.
+CNT avança TADR conforme payload consumido, END conserva TADR. D_STAT/STR
+mudam após a última transferência, com TIE/IRQ, DMAE, prioridade e suspensão.
+Fontes desconhecidas/fora da RAM, resume, CALL/RET/REFS, prioridade de tag,
+concorrência VIF/GIF e comandos VU não suportados recusam sem concluir DMA.
+Fixtures próprios verificam ambos os canais, tag vazia com prazo, STROW
+atravessando tag/payload, encadeamento e DIRECT até o LABEL real do GS.
+Seis testes focados aprovados; fixture AOT/direct-frame ainda precisa ser
+construído neste diretório isolado antes da sua execução.
+CI do cache a08f31d detectou duas declarações DEV9 concorrentes incluídas
+sem implementação publicada; d033f16 remove somente essas declarações
+publicadas, preservando o trabalho local. CI reenviada para os seis alvos.
+Ensaio 90: DMA VIF passou; EE `0x1024C0` / 358.037.955 instruções,
+GS recusou profundidade durante sprite (ZBUF PSMZ16S, escrita habilitada).
+IOP `0x4AAC` / 48.806.831; 110,572 s. PMODE=66, SMODE2=3 e circuito 2
+DISPFB=1400 / DISPLAY=1BF9FF0183227C foram escritos pelo jogo. Scanout
+recusa entrelaçamento; ainda 16 pacotes e 1.048.576 pixels de limpeza.
+O dump adicional da RAM foi interrompido pela recusa GS persistente ao
+sincronizar DMA; não há novo hash de RAM para este ensaio. Não houve frame.
+Modo original repetido depois do DMA VIF conserva PCs/contagens/hash canônicos.

@@ -20,6 +20,7 @@
 #include "ps2native/nvm.hpp"
 #include "ps2native/disc.hpp"
 #include "ps2native/gif.hpp"
+#include "ps2native/vif.hpp"
 #include <memory>
 
 #include <array>
@@ -108,8 +109,10 @@ public:
     [[nodiscard]] static bool ee_dma_address(std::uint32_t address);
     [[nodiscard]] ObservedWord ee_dma_observe(std::uint32_t address) const;
     void ee_dma_write_observed(std::uint32_t address, ObservedWord word);
-    [[nodiscard]] bool reads_ee_ram() const noexcept { return (ee_sif1_chcr_ & 0x100u) != 0u || (ee_dma_setup_[2][0].value_or(0u)&0x100u)!=0u; }
+    [[nodiscard]] bool reads_ee_ram() const noexcept { return (ee_sif1_chcr_ & 0x100u) != 0u ||
+        ((ee_dma_setup_[0][0].value_or(0u)|ee_dma_setup_[1][0].value_or(0u)|ee_dma_setup_[2][0].value_or(0u))&0x100u)!=0u; }
     void advance_gif_dma(std::uint64_t ee_cycle, Gif& gif, GsRegisters& gs);
+    void advance_vif_dma(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs);
     [[nodiscard]] bool writes_ee_ram() const noexcept { return (ee_dma_setup_[5][0].value_or(0u)&0x100u)!=0; }
     struct SifDmaMetrics {
         std::uint64_t bytes{}, source_full_cycles{}, destination_empty_cycles{};
@@ -442,6 +445,12 @@ private:
     unsigned spu2_adma_last_grant_{1u};
     std::uint64_t gif_dma_cycle_{};
     std::optional<std::string> gif_dma_stop_;
+    struct VifDma {
+        std::uint64_t cycle{};
+        bool end{}, inline_data{};
+        std::optional<std::string> stop;
+    };
+    std::array<VifDma,2> vif_dma_{};
     std::optional<std::uint8_t> cdvd_howto_;
     std::vector<std::uint8_t> cdvd_params_;
     std::uint32_t cdvd_lba_{}, cdvd_sectors_{}, cdvd_sector_cycles_{};

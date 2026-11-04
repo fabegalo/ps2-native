@@ -43,15 +43,25 @@ void Vif::write_register(std::uint32_t offset,std::uint32_t value,Gif& gif) {
     refuse(" register write is not modeled");
 }
 void Vif::write_fifo(std::uint64_t low, std::uint64_t high, Gif& gif, GsRegisters& gs) {
-    if (direct_left_) {
-        gif.write_path2(low, high, gs);
-        --direct_left_;
-        return;
-    }
     const std::array<std::uint32_t,4> words{static_cast<std::uint32_t>(low), static_cast<std::uint32_t>(low >> 32),
         static_cast<std::uint32_t>(high), static_cast<std::uint32_t>(high >> 32)};
-    for (unsigned i = 0; i < 4u; ++i) {
-        const auto command = words[i];
+    write_words(words,gif,gs);
+}
+void Vif::write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs) {
+    const std::array<std::uint32_t,2> words{static_cast<std::uint32_t>(data),static_cast<std::uint32_t>(data>>32)};
+    write_words(words,gif,gs);
+}
+void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters& gs) {
+    for (const auto command:words) {
+        if(direct_left_) {
+            direct_buffer_[direct_words_]=command;
+            if(direct_words_==3u) {
+                gif.write_path2(std::uint64_t{direct_buffer_[0]}|(std::uint64_t{direct_buffer_[1]}<<32),
+                                std::uint64_t{direct_buffer_[2]}|(std::uint64_t{direct_buffer_[3]}<<32),gs);
+                direct_words_=0;--direct_left_;
+            } else ++direct_words_;
+            continue;
+        }
         if(pending_!=Pending::None) {
             const auto base=pending_==Pending::Mask ? 7u : pending_==Pending::Row ? 16u : 20u;
             programmed_[base+pending_index_]=command;
