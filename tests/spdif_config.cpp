@@ -14,7 +14,7 @@ Iop run(unsigned mode) {
     else if(mode==3)a.lw(9,0,8);
     else if(mode==4)a.sb(0,0,8);
     else if(mode==5){a.la(8,0xBF9007C2u);a.lw(9,0,8);}
-    else if(mode==6){a.la(8,0xBF90019Au);a.sh(0,0,8);}
+    else if(mode==6){a.la(8,0xBF90019Au);a.la(9,0x8000u);a.sh(9,0,8);}
     else {
         a.raw((0x25u<<26)|(8u<<21)|(9u<<16));a.nop();a.sw(9,0,10);
         a.raw((0x25u<<26)|(8u<<21)|(9u<<16)|2u);a.nop();a.sw(9,4,10);

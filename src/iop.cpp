@@ -143,7 +143,8 @@ std::optional<unsigned> dma_channel_field(std::uint32_t address) {
     if (address >= 0x1F801500u && address < 0x1F801570u) return (address & 0xFu) / 4u;
     return std::nullopt;
 }
-bool is_spu2_output_config(std::uint32_t address) {
+bool is_spu2_boot_config(std::uint32_t address) {
+    if(address==0x1F90019Au || address==0x1F90059Au)return true;
     if(address==0x1F9007C6u || address==0x1F9007C8u)return true;
     // PS2SDK spu2_mmio_hwport.h: two banks, 0x28 apart, containing
     // master, effect, external-input and sound-input L/R levels.
@@ -1104,12 +1105,12 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         return iop_sif1_read(physical);
     }
     const auto name = std::string("load ") + what + " of IOP register " + hex(physical);
-    if(is_spu2_output_config(physical)) {
+    if(is_spu2_boot_config(physical)) {
         // PS2SDK spu2regs.h: digital-output and constant level configuration.
         // This does not establish core state, IRQ status or audio samples.
         if(bytes!=2u)throw IopStop{"SPU2 output configuration requires halfword reads"};
         const auto value=latch(physical);
-        if(!value || !*value)throw IopStop{"SPU2 output configuration before a known halfword write"};
+        if(!value || !*value)throw IopStop{name+": SPU2 output configuration before a known halfword write"};
         return **value;
     }
     if(physical==0x1F808268u) {
@@ -1286,8 +1287,12 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         return;
     }
     const auto name = std::string("store ") + what + " of IOP register " + hex(physical);
-    if(is_spu2_output_config(physical)) {
+    if(is_spu2_boot_config(physical)) {
         if(bytes!=2u || !value)throw IopStop{"SPU2 output configuration requires a known halfword write"};
+        // ATTR=0 explicitly disables the core, its IRQ enable and transfer
+        // mode. Enabling synthesis/DMA still needs the actual sound engine.
+        if((physical==0x1F90019Au || physical==0x1F90059Au) && *value)
+            throw IopStop{"SPU2 core processing/control configuration is not modeled"};
         if(physical>=0x1F900760u && physical<0x1F9007B0u &&
            (physical-0x1F900760u)%0x28u<4u && (*value&0x8000u))
             throw IopStop{"SPU2 master volume sweep is not modeled"};
