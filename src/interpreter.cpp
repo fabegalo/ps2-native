@@ -435,11 +435,27 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"DIV.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
             state.fpr[ee::sa(word)]=ee_fpu_divide(state.fpr[ee::rd(word)],state.fpr[ee::rt(word)],state.fcr31);break;
+        case MipsOpcode::SqrtS: {
+            if(!(state.cp0(Cop0::Status)&kStatusCU1))
+                cpu.stop(StopKind::GuestException,"SQRT.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+            // EE instruction manual p.376: the operand is FT (FS is zero).
+            // Negative nonzero inputs use sqrt(abs(FT)), set I/SI, and do
+            // not trap. I/D causes are replaced; O/U and all stickies survive.
+            const auto input=state.fpr[ee::rt(word)];
+            const auto exponent=input&0x7F800000u;
+            const auto root=ee_fpu_sqrt(input&0x7FFFFFFFu);
+            if(!root)cpu.stop(StopKind::NotModeled,"SQRT.S nonnegative SRT root unavailable");
+            state.fpr[ee::sa(word)]=exponent ? *root : input&0x80000000u;
+            state.fcr31&=~0x30000u;
+            if(exponent && (input&0x80000000u))state.fcr31|=0x20040u;
+            break;
+        }
         case MipsOpcode::MulS: {
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"MUL.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
             const auto value=ee_fpu_multiply(state.fpr[ee::rd(word)],state.fpr[ee::rt(word)],state.fcr31);
-            if(!value)cpu.stop(StopKind::NotModeled,"MUL.S ambiguous low-column Booth rounding not modeled");
+            if(!value)cpu.stop(StopKind::NotModeled,"MUL.S ambiguous low-column Booth rounding not modeled; FS="+
+                hex32(state.fpr[ee::rd(word)])+", FT="+hex32(state.fpr[ee::rt(word)]));
             state.fpr[ee::sa(word)]=*value;break;
         }
         case MipsOpcode::MaddS: cpu.madd(word);break;
