@@ -146,6 +146,7 @@ private:
     void load_clut(std::uint64_t tex0);
     [[nodiscard]] std::uint32_t sample_texture(std::uint64_t tex0, std::uint64_t clamp, int u, int v);
     void texture_write_guard(unsigned address) const;
+    void texture_transfer_write(unsigned address);
     void reset_drawing();
     void reset_events(std::uint64_t now);
     void raise_event(std::uint32_t event);
@@ -173,6 +174,7 @@ private:
     std::array<std::optional<std::uint32_t>,256> clut_{};
     std::array<std::optional<unsigned>,2> clut_base_{};
     std::array<bool,512> sampled_pages_{};
+    std::array<bool,512> dirty_texture_pages_{};
     std::uint64_t transfer_generation_{};
     std::optional<std::uint64_t> texture_flush_generation_;
     struct Transfer {

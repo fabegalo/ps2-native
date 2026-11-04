@@ -12,7 +12,7 @@ std::uint64_t GsRegisters::required(std::uint8_t index) const {
 void GsRegisters::reset_drawing() {
     general_ = {}; general_unknown_={}; display_ = {}; first_vertex_.reset(); triangle_vertices_count_=0; transfer_ = {};
     general_[0x22]=diagnostic_reset_scanmask_;
-    clut_={};clut_base_={};sampled_pages_={};transfer_generation_=0;texture_flush_generation_.reset();
+    clut_={};clut_base_={};sampled_pages_={};dirty_texture_pages_={};transfer_generation_=0;texture_flush_generation_.reset();
     imr_ = 0x7F00u;
 }
 void GsRegisters::start_transfer(std::uint64_t value) {
@@ -58,6 +58,7 @@ void GsRegisters::start_transfer(std::uint64_t value) {
             const auto dx = (order & 2u) ? width - 1u - col : col;
             const auto dy = (order & 1u) ? height - 1u - row : row;
             const auto pixel = vram_.read(sb, sw, sp, (sx + dx) & 2047u, (sy + dy) & 2047u);
+            texture_transfer_write(GsVram::address(base,bw,psm,(x+dx)&2047u,(y+dy)&2047u));
             vram_.write(base, bw, psm, (x + dx) & 2047u, (y + dy) & 2047u, pixel);
         }
     transfer_ = {};
@@ -68,6 +69,7 @@ void GsRegisters::transfer_data(std::uint64_t data) {
     if (!t.active) return;
     if (t.psm == 20u) {
         for(unsigned i=0;i<16u && t.active;++i) {
+            texture_transfer_write(GsVram::address(t.base,t.bw,t.psm,(t.x+t.pixel%t.width)&2047u,(t.y+t.pixel/t.width)&2047u));
             vram_.write(t.base,t.bw,t.psm,(t.x+t.pixel%t.width)&2047u,
                         (t.y+t.pixel/t.width)&2047u,static_cast<std::uint32_t>((data>>(i*4u))&15u));
             if(++t.pixel==t.width*t.height) {t.active=false;finish_transfer();}
@@ -78,6 +80,7 @@ void GsRegisters::transfer_data(std::uint64_t data) {
     for (unsigned i = 0; i < 8u && t.active; ++i) {
         t.pending |= static_cast<std::uint32_t>((data >> (8u * i)) & 255u) << (8u * t.pending_bytes++);
         if (t.pending_bytes != bytes) continue;
+        texture_transfer_write(GsVram::address(t.base,t.bw,t.psm,(t.x+t.pixel%t.width)&2047u,(t.y+t.pixel/t.width)&2047u));
         vram_.write(t.base, t.bw, t.psm, (t.x + t.pixel % t.width) & 2047u,
                      (t.y + t.pixel / t.width) & 2047u, t.pending);
         t.pending = 0u; t.pending_bytes = 0u;
@@ -121,12 +124,18 @@ void GsRegisters::texture_write_guard(unsigned address) const {
     if(sampled_pages_[address/8192u])
         throw DeviceRefusal("GS drawing aliases sampled texture memory; cache feedback is not modeled");
 }
+void GsRegisters::texture_transfer_write(unsigned address) {
+    // An upload/copy is legal even when the old texture is cached. Without
+    // cached texel bytes, a later read must refuse until explicit TEXFLUSH.
+    const auto page=address/8192u;
+    if(sampled_pages_[page])dirty_texture_pages_[page]=true;
+}
 std::uint32_t GsRegisters::sample_texture(std::uint64_t tex,std::uint64_t clamp,int u,int v) {
     const auto psm=static_cast<unsigned>((tex>>20)&63u),tw=static_cast<unsigned>((tex>>26)&15u),th=static_cast<unsigned>((tex>>30)&15u);
     if((psm!=0u && psm!=19u && psm!=20u) || tw>10u || th>10u)
         throw DeviceRefusal("GS texture format or dimensions are not modeled");
-    if(!texture_flush_generation_ || *texture_flush_generation_!=transfer_generation_)
-        throw DeviceRefusal("GS sampling requires TEXFLUSH after VRAM transfers; stale texture cache is not modeled");
+    if(!texture_flush_generation_)
+        throw DeviceRefusal("GS sampling requires an initial TEXFLUSH; reset texture cache validity is not established");
     const auto wrap=[](int p,unsigned bits,unsigned mode,unsigned low,unsigned high) {
         if(mode==0u)return static_cast<unsigned>(p)&((1u<<bits)-1u);
         if(mode==1u)return static_cast<unsigned>(std::clamp(p,0,static_cast<int>((1u<<bits)-1u)));
@@ -143,8 +152,13 @@ std::uint32_t GsRegisters::sample_texture(std::uint64_t tex,std::uint64_t clamp,
     // aligned TBP. Drawing into it needs a cache model, not live VRAM reads.
     const auto pw=psm==0u ? 64u : 128u,ph=psm==0u ? 32u : psm==19u ? 64u : 128u;
     const auto page=(base+((y/ph)*(bw/pw)+x/pw)*8192u)%GsVram::kBytes;
-    sampled_pages_[page/8192u]=true;
-    sampled_pages_[((page+8191u)%GsVram::kBytes)/8192u]=true;
+    const auto first=page/8192u,last=((page+8191u)%GsVram::kBytes)/8192u;
+    // TEXFLUSH invalidates all pages. A page not fetched since then remains
+    // cold across unrelated VRAM transfers; there is no stale value to read.
+    // Whole-page protection is conservative, including nonaligned TBP.
+    if(dirty_texture_pages_[first] || dirty_texture_pages_[last])
+        throw DeviceRefusal("GS sampling requires TEXFLUSH after a cached texture page changed; stale texture cache is not modeled");
+    sampled_pages_[first]=true;sampled_pages_[last]=true;
     const auto raw=vram_.read(base,bw,psm,x,y);
     if(psm==0u)return raw;
     const auto csa=static_cast<unsigned>((tex>>56)&31u);

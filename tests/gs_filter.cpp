@@ -6,7 +6,7 @@ using namespace ps2native;
 using namespace boot_checks;
 namespace {
 std::uint32_t source(unsigned x,unsigned y){return 0x80000000u|(x*16u)|(y*16u<<8u)|((x+y)*8u<<16u);}
-void setup(GsRegisters& gs) {
+void setup(GsRegisters& gs,bool flush=true) {
     gs.reset(0);gs.general_write(0,0x116);gs.general_write(1,0x3F80000080808080ull);
     gs.general_write(0x18,0);gs.general_write(0x1A,1);gs.general_write(0x4C,1u<<16u);
     gs.general_write(0x40,(7ull<<16u)|(7ull<<48u));gs.general_write(0x47,3u<<16u);
@@ -15,7 +15,8 @@ void setup(GsRegisters& gs) {
     gs.general_write(0x52,8u|(8ull<<32u));gs.general_write(0x53,0);
     for(unsigned n=0;n<64;n+=4)gs.image_write(source(n%8,n/8)|(std::uint64_t{source((n+1)%8,(n+1)/8)}<<32u),
         source((n+2)%8,(n+2)/8)|(std::uint64_t{source((n+3)%8,(n+3)/8)}<<32u));
-    gs.general_write(0x3F,0);gs.general_write(6,32ull|(1ull<<14u)|(3ull<<26u)|(3ull<<30u)|(1ull<<34u)|(1ull<<35u));
+    if(flush)gs.general_write(0x3F,0);
+    gs.general_write(6,32ull|(1ull<<14u)|(3ull<<26u)|(3ull<<30u)|(1ull<<34u)|(1ull<<35u));
     gs.general_write(8,0);gs.general_write(0x14,0x60);
 }
 void pixel(GsRegisters& gs,unsigned x,unsigned y,unsigned u,unsigned v) {
@@ -50,5 +51,26 @@ int main() try {
     gs.general_write(0x14,0x60);const auto before=gs.vram().pixel_writes();
     rejects([&]{pixel(gs,7,0,9,9);},"fractional bilinear truncation");
     require(gs.vram().pixel_writes()==before,"unproven intermediate rounding cannot fabricate even one fragment");
+    const auto upload=[](GsRegisters& device,unsigned pointer,std::uint32_t color) {
+        device.general_write(0x50,(std::uint64_t{pointer}|(1ull<<16u))<<32u);device.general_write(0x51,0);
+        device.general_write(0x52,8u|(8ull<<32u));device.general_write(0x53,0);
+        for(unsigned n=0;n<16;++n)device.image_write(color|(std::uint64_t{color}<<32u),color|(std::uint64_t{color}<<32u));
+    };
+    GsRegisters cache;setup(cache);upload(cache,32,0x80402010u);pixel(cache,0,0,8,8);
+    require(cache.vram().read(0,64,0,0,0)==0x80402010u,"a cold page loads actual new bytes after an upload without a redundant global invalidation");
+    upload(cache,64,0x80808080u);pixel(cache,1,0,8,8);
+    require(cache.vram().read(0,64,0,1,0)==0x80402010u,"transfers into unrelated pages cannot make an unchanged cached texture stale");
+    upload(cache,32,0x80201008u);const auto cached_before=cache.vram().pixel_writes();
+    rejects([&]{pixel(cache,2,0,8,8);},"cached texture page changed");
+    require(cache.vram().pixel_writes()==cached_before,"modified cached texels cannot silently read through to new VRAM bytes");
+    cache.general_write(0x3F,0);pixel(cache,2,0,8,8);
+    require(cache.vram().read(0,64,0,2,0)==0x80201008u,"explicit TEXFLUSH discards the stale page and exposes real uploaded bytes");
+    cache.general_write(0x50,64ull|(1ull<<16u)|((32ull|(1ull<<16u))<<32u));
+    cache.general_write(0x51,0);cache.general_write(0x52,8u|(8ull<<32u));cache.general_write(0x53,2);
+    rejects([&]{pixel(cache,3,0,8,8);},"cached texture page changed");
+    cache.general_write(0x3F,0);pixel(cache,3,0,8,8);
+    require(cache.vram().read(0,64,0,3,0)==0x80808080u,"local VRAM copies dirty the same cached pages as host uploads");
+    GsRegisters uninitialized;setup(uninitialized,false);
+    rejects([&]{pixel(uninitialized,0,0,8,8);},"initial TEXFLUSH");
     std::cout<<"Exact level-zero bilinear/nearest, subtexel centers, independent edge wrapping, fixed LOD and explicit rounding boundaries passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

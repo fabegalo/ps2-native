@@ -370,7 +370,7 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
             general_[index]=value;return;
         }
         case 0x3F:
-            texture_flush_generation_=transfer_generation_;sampled_pages_={};
+            texture_flush_generation_=transfer_generation_;sampled_pages_={};dirty_texture_pages_={};
             general_[index]=value;return;
         case 0x01: case 0x02: case 0x03: case 0x08: case 0x09: case 0x0A:
         case 0x14: case 0x15: case 0x18: case 0x19: case 0x1A: case 0x1B: case 0x1C:
