@@ -398,7 +398,13 @@ std::uint32_t Iop::iop_sif1_read(std::uint32_t address) const {
 }
 void Iop::iop_sif1_write(std::uint32_t address, std::uint32_t value) {
     const auto field = (address - 0x1F801530u) / 4u;
-    if (iop_sif1_[2] & kChcrStart) throw IopStop{"IOP SIF1 register write while busy"};
+    // An empty receiver has no in-flight payload to discard. Keep active
+    // packets and buffered data protected from an unmodeled abort.
+    const bool idle_stop=field==2u && value==0u && !sif1_have_tag_ &&
+        !sif1_words_ && sif1_fifo_.empty();
+    if((iop_sif1_[2]&kChcrStart) && !idle_stop)
+        throw IopStop{"IOP SIF1 register write while busy address="+hex(address)+" value="+hex(value)+
+                      " remaining="+std::to_string(sif1_words_)+" fifo="+std::to_string(sif1_fifo_.size())};
     // ps2sdk sceSifSetDChain uses 0x41000300; RAM is coherent here.
     if (field == 2u && value != 0u && value != 0x01000600u && value != 0x41000300u)
         throw IopStop{"IOP SIF1: only destination chain mode without TTE supported"};

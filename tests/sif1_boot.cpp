@@ -12,11 +12,12 @@ void put(std::vector<std::uint8_t>& ram,std::size_t at,std::uint32_t value) {
 void store(m20::Assembler& a,std::uint32_t address,std::uint32_t value) {
     a.la(8,address);a.la(9,value);a.sw(9,0,8);
 }
-std::vector<std::uint8_t> receiver(std::uint32_t masks,std::uint32_t master=1u<<23) {
+std::vector<std::uint8_t> receiver(std::uint32_t masks,std::uint32_t master=1u<<23,bool stop_receiver=false) {
     m20::Assembler a(0xBFC00000u);
     store(a,0xBF801570u,0x8000u);store(a,0xBF801578u,1);
     store(a,0xBF80157Cu,1);store(a,0xBF8010F4u,master);store(a,0xBF801574u,masks);
     store(a,0xBF801538u,0x41000300u);
+    if(stop_receiver)store(a,0xBF801538u,0);
     a.label("poll");
     a.la(8,0xBF801538u);a.lw(9,0,8);a.nop();a.la(10,0xA0000080u);a.sw(9,0,10);
     a.la(8,0xBF801574u);a.lw(9,0,8);a.nop();a.sw(9,4,10);
@@ -187,8 +188,18 @@ void idle_sif0_receiver_stop() {
     iop.set_ee_dma_suspended(true);iop.ee_dma_write(0x1000C000u,0);
     require(!(iop.ee_dma_read(0x1000E010u)&0x20u),"suspended active receiver stops without manufacturing successful completion");
 }
+void idle_iop_receiver_stop() {
+    Iop idle;idle.reset(receiver(1u<<19,1u<<23,true),nullptr);idle.run_until(400);
+    require(!idle.stopped() && !idle.ee_read(0x80u,4) && !(idle.ee_read(0x84u,4)&(1u<<27)) && !idle.ee_read(0x88u,4),
+            "IOP disarms an empty SIF1 receiver without a fabricated completion flag or interrupt");
+    auto ram=packet();Iop active;active.reset(receiver(1u<<19,1u<<23,true),nullptr);arm(active,ram,1);active.run_until(400);
+    require(active.stopped() && active.stop_reason()->find("IOP SIF1 register write while busy")!=std::string::npos &&
+            active.stop_reason()->find("remaining=4")!=std::string::npos,
+            "IOP cannot silently stop a tag whose actual payload is still incomplete");
+    require(!active.sif1_metrics().bytes && !completions(active),"refused payload abort cannot manufacture bytes or destination completion");
+}
 }
 int main() try {
-    transfer_masks();incomplete_packet();source_chain();refused_packets();block_control_halfwords();partial_sif0_packets();idle_sif0_receiver_stop();
+    transfer_masks();incomplete_packet();source_chain();refused_packets();block_control_halfwords();partial_sif0_packets();idle_sif0_receiver_stop();idle_iop_receiver_stop();
     std::cout<<"SIF1 source chains, exact payload, END/IRQ masks and incomplete packets passed\n";
 } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
