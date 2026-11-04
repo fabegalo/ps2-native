@@ -31,7 +31,9 @@ bool aot_enter(ExecutionContext& ctx, std::uint32_t pc, std::uint32_t word, bool
     auto& state = ctx.state;
     if (state.pc != pc) return false;
     if (ctx.executed >= ctx.budget || (!state.delay_pending && state.pc == ctx.stop_pc)) return false;
-    if (poll_ee_timer_interrupt(state)) return false;
+    state.instruction_pc=pc;
+    state.instruction_in_delay_slot=state.delay_pending;
+    if (poll_ee_interrupts(state,ctx.memory)) return false;
     if (has_delay_slot && state.delay_pending)
         throw std::runtime_error("Control transfer in an active delay slot is unsupported");
     if (ctx.memory.fetch32(pc) != word)
@@ -51,7 +53,7 @@ std::uint64_t run_aot_module(const AotModule& module, EEState& state, Memory& me
         }
         if (executed >= max_instructions)
             throw std::runtime_error("Guest instruction budget exhausted");
-        (void)poll_ee_timer_interrupt(state);
+        (void)poll_ee_interrupts(state,memory);
         memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi));
         const auto* block = find_aot_block(module, state.pc);
         if (block == nullptr)

@@ -241,9 +241,9 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
         const std::string name = report == &interpreted ? "interpreter" : "hybrid";
         require(report->outcome == BootOutcome::BlockPoint && report->category == "bus: device not implemented",
                 name + " stop category: " + report->category + " " + report->reason);
-        require(report->pc == mmio && report->word == 0x8D09F000u && !report->in_delay_slot,
+        require(report->pc == mmio && report->word == 0x8D09F020u && !report->in_delay_slot,
                 name + " block point at the INTC load");
-        require(report->reason.find("0xB000F000 (physical 0x1000F000, INTC)") != std::string::npos,
+        require(report->reason.find("0xB000F020 (physical 0x1000F020, INTC)") != std::string::npos,
                 name + " block point names the device: " + report->reason);
         require(contains(report->trace, "  S TLBWI 47: PageMask 0x00000000 EntryHi 0xE005E000"), name + " TLB init");
         require(contains(report->trace, "  S TLBP EntryHi 0x00080000 -> entry 1"), name + " TLBP");

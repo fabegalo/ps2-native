@@ -3,9 +3,9 @@
 // independent of any graphics backend, with a deterministic software GS subset.
 //
 // Modeled: SMODE1, SMODE2, SRFSH, SYNCH1, SYNCH2, SYNCV (write-only, 64-bit
-// stores), CSR/IMR writes, PMODE/DISPFB/DISPLAY/BGCOLOR and a software drawing
-// subset. Field layouts follow the GS manual and ps2sdk headers. CSR reads
-// still refuse unknown field/revision state; unsupported effects fail at use.
+// stores), CSR events/IMR, SIGNAL/FINISH/LABEL, display and software drawing.
+// Full CSR reads still refuse unknown field/revision state. The low byte can
+// be read independently, without inventing FIELD/NFIELD or chip identity.
 #include "ps2native/device_timing.hpp"
 #include "ps2native/framebuffer.hpp"
 #include "ps2native/gs_vram.hpp"
@@ -34,6 +34,7 @@ inline constexpr std::uint32_t kGsDispfb2 = 0x12000090u;
 inline constexpr std::uint32_t kGsDisplay2 = 0x120000A0u;
 inline constexpr std::uint32_t kGsBgcolor = 0x120000E0u;
 inline constexpr std::uint32_t kGsImr = 0x12001010u;
+inline constexpr std::uint32_t kGsSiglblid = 0x12001080u;
 
 // SMODE1 fields used by the line clock.
 inline constexpr std::uint64_t kSmode1Prst = 1ull << 16;
@@ -90,9 +91,16 @@ public:
                const LineClockGuard& guard);
     // Throws DeviceRefusal when no HBLANK is generated or its timing is not modeled.
     [[nodiscard]] LineClock line_clock() const;
+    [[nodiscard]] bool hblank_held() const noexcept { return line_.sync == Sync::Stopped; }
     [[nodiscard]] VerticalClock vertical_clock() const;
     // Incremented whenever the line or vertical clock may change.
     [[nodiscard]] std::uint64_t timing_generation() const noexcept { return generation_; }
+    [[nodiscard]] bool interrupts_masked() const noexcept { return (imr_ & 0x1F00u) == 0x1F00u; }
+    // Lazy event sampling at the common EE clock. Unknown timing taints the
+    // corresponding flag/request; masking a source never erases its history.
+    void advance(std::uint64_t now);
+    struct InterruptRequest { bool pending{}, unknown{}; };
+    [[nodiscard]] InterruptRequest take_interrupt_request(std::uint64_t now);
     // GS general register writes from GIF. Unsupported effects fail at use.
     void general_write(std::uint8_t index, std::uint64_t value);
     void image_write(std::uint64_t low, std::uint64_t high);
@@ -115,11 +123,17 @@ private:
     };
     static constexpr std::size_t kModeRegisters = 6u; // SMODE1..SYNCV
     void change_line_state(const LineState& next, const LineClockGuard& guard);
+    void write_impl(std::uint32_t physical, std::size_t bytes, std::uint64_t value, std::uint64_t now,
+                    const LineClockGuard& guard);
     [[nodiscard]] std::uint64_t required(std::uint8_t index) const;
     void vertex(std::uint8_t index, std::uint64_t value);
     void start_transfer(std::uint64_t value);
     void transfer_data(std::uint64_t value);
     void reset_drawing();
+    void reset_events(std::uint64_t now);
+    void raise_event(std::uint32_t event);
+    void update_interrupt_request();
+    void finish_transfer();
 
     std::array<std::optional<std::uint64_t>, kModeRegisters> mode_{};
     std::optional<std::uint64_t> csr_written_;
@@ -134,6 +148,10 @@ private:
         std::uint32_t pending{};
     } transfer_;
     std::uint32_t imr_{0x7F00u};
+    std::uint32_t events_{}, unknown_events_{};
+    std::uint64_t event_cycle_{};
+    bool irq_pending_{}, irq_unknown_{}, finish_pending_{};
+    std::uint64_t siglblid_{}, siglblid_known_{};
     LineState line_{};
     std::uint64_t generation_{};
 };

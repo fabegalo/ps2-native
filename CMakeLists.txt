@@ -269,7 +269,7 @@ if(BUILD_TESTING)
     target_link_libraries(ps2n-boot-m20 PRIVATE ps2n_core)
     add_test(NAME native-m20-boot COMMAND ps2n-boot-m20 "${M20_ROM}")
 
-    set(M20_BLOCK_POINT "# block point 0x[0-9A-F]+ \\[bus: device not implemented\\] EE bus R32 \\(LW\\) at 0xB000F000 \\(physical 0x1000F000, INTC\\)")
+    set(M20_BLOCK_POINT "# block point 0x[0-9A-F]+ \\[bus: device not implemented\\] EE bus R32 \\(LW\\) at 0xB000F020 \\(physical 0x1000F020, INTC\\)")
     add_test(NAME cli-m20-boot-interpreter COMMAND ps2n-boot "${M20_ROM}" --trace=full)
     set_tests_properties(cli-m20-boot-interpreter PROPERTIES
         PASS_REGULAR_EXPRESSION "# engine interpreter only.*${M20_BLOCK_POINT}")
@@ -421,6 +421,7 @@ if(BUILD_TESTING)
 endif()
 
 include(cmake/DirectElf.cmake)
+include(cmake/BiosBoot.cmake)
 
 # Desktop launcher (Qt 6 Quick). Optional: AUTO builds it only when Qt is found,
 # so headless and core-only builds never depend on a GUI toolkit.

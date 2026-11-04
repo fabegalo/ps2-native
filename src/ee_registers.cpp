@@ -26,6 +26,7 @@ constexpr std::uint32_t kModeEnable = 1u << 7;
 constexpr std::uint32_t kModeCompareIrq = 1u << 8;
 constexpr std::uint32_t kModeOverflowIrq = 1u << 9;
 constexpr std::uint32_t kModeConfig = 0x3FFu;
+constexpr std::uint32_t kModeCompareFlag = 1u << 10, kModeOverflowFlag = 1u << 11;
 enum TimerReg : unsigned { Count = 0, Mode = 1, Comp = 2, Hold = 3 };
 const char* timer_reg_name(unsigned reg) {
     static constexpr const char* kNames[] = {"COUNT", "MODE", "COMP", "HOLD"};
@@ -41,7 +42,7 @@ GsRegisters::LineClock timer_clock(std::uint32_t mode, const GsRegisters& gs) {
         case 0: return {0u, kEeCyclesPerBusCycle};
         case 1: return {0u, kEeCyclesPerBusCycle * 16u};
         case 2: return {0u, kEeCyclesPerBusCycle * 256u};
-        default: return gs.line_clock();
+        default: return gs.hblank_held() ? GsRegisters::LineClock{} : gs.line_clock();
     }
 }
 } // namespace
@@ -61,6 +62,10 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
     // Hypothesis: every source masked at power-on. The kernel reads I_MASK
     // before writing it (EnableIntc tests the bit, then reverses it).
     intc_mask_ = 0u;
+    intc_stat_ = 0u; // EE User's Manual, I_STAT initial state.
+    intc_unknown_ = 0u;
+    vertical_generation_ = ~0ull;
+    vertical_sample_ = 0;
     // Hypothesis: GIF not stopped, PATH3 unmasked, continuous mode at power-on.
     gif_.reset();
     vif1_.reset();
@@ -86,8 +91,86 @@ std::uint16_t EeRegisters::timer_count(const Timer& timer) const {
     // The anchor never precedes the clock epoch: a GS line clock change
     // re-anchors every timer counting HBLANK (see write()).
     const auto clock = timer_clock(timer.mode, gs_);
+    if (!clock.period) return timer.count_at_anchor; // known absence of external edges
     const auto ticks = (now() - clock.epoch) / clock.period - (timer.anchor_cycle - clock.epoch) / clock.period;
     return static_cast<std::uint16_t>(timer.count_at_anchor + ticks);
+}
+
+void EeRegisters::advance_timer(unsigned index) {
+    auto& timer=timers_[index];
+    const auto stamp=now();
+    if (!(timer.mode & kModeEnable)) {timer.anchor_cycle=stamp;return;}
+    const auto clock=timer_clock(timer.mode,gs_);
+    if (!clock.period) { timer.anchor_cycle=stamp; return; }
+    const auto ticks=(stamp-clock.epoch)/clock.period-(timer.anchor_cycle-clock.epoch)/clock.period;
+    if (!ticks) return;
+    if ((timer.mode & (kModeClearOnCompare|kModeCompareIrq)) && !timer.compare)
+        throw DeviceRefusal("T"+std::to_string(index)+" counts with undefined COMP (reset value not verified)");
+    const auto start=std::uint64_t{timer.count_at_anchor};
+    const auto overflow=65536u-start;
+    const auto target=std::uint64_t{timer.compare.value_or(0)};
+    auto distance=(target+65536u-start)&0xFFFFu;
+    if (!distance) distance=65536u;
+    const bool compared=timer.compare && ticks>=distance;
+    // A nonzero zero-return target suppresses overflow after the first compare.
+    const bool overflowed=ticks>=overflow && (!(timer.mode&kModeClearOnCompare) ||
+                                             target==0 || overflow<=distance);
+    auto flags=timer.mode&(kModeCompareFlag|kModeOverflowFlag);
+    if (compared && (timer.mode&kModeCompareIrq)) flags|=kModeCompareFlag;
+    if (overflowed && (timer.mode&kModeOverflowIrq)) flags|=kModeOverflowFlag;
+    if (flags & ~timer.mode) intc_stat_|=1u<<(9u+index); // only rising flag edges
+    auto count=(start+ticks)&0xFFFFu;
+    if ((timer.mode&kModeClearOnCompare) && compared)
+        count=(ticks-distance)%(target?target:65536u);
+    timer.mode|=flags;
+    timer.count_at_anchor=static_cast<std::uint16_t>(count);
+    timer.anchor_cycle=stamp;
+}
+
+void EeRegisters::advance_vertical() {
+    const auto stamp=now();
+    const auto clock=gs_.vertical_clock();
+    if(clock.state==GsRegisters::VerticalClock::State::Unknown && stamp>vertical_sample_)
+        intc_unknown_|=0xCu;
+    const auto from=vertical_generation_==gs_.timing_generation()?vertical_sample_+1u:stamp;
+    if(clock.state==GsRegisters::VerticalClock::State::Running) {
+        if(clock.next_edge(from,false)<=stamp)intc_stat_|=1u<<2u;
+        if(clock.next_edge(from,true)<=stamp)intc_stat_|=1u<<3u;
+    }
+    vertical_generation_=gs_.timing_generation();vertical_sample_=stamp;
+}
+ObservedWord EeRegisters::observe_intc(std::uint32_t needed) {
+    for(unsigned i=0;i<4;++i)advance_timer(i);
+    if (needed & 1u) {
+        advance_gs_interrupts();
+    }
+    if(needed&0xCu) {
+        advance_vertical();
+    }
+    // Unsupported VIF IRQ, VU, IPU and SBUS commands fail before producing
+    // effects. Their reset-zero INTC latches cannot receive a modeled edge yet.
+    return {intc_stat_, intc_unknown_ & ~intc_stat_ & needed};
+}
+std::uint32_t EeRegisters::intc_status(std::uint32_t needed) {
+    const auto observed = observe_intc(needed);
+    if (observed.unknown & 1u)
+        throw DeviceRefusal("I_STAT: unmasked GS event timing unknown since last acknowledge");
+    if (observed.unknown & 0xCu)
+        throw DeviceRefusal("I_STAT: vertical timing unknown since last acknowledge");
+    return observed.value;
+}
+bool EeRegisters::intc_interrupt_pending() {
+    return intc_mask_ && (intc_status(intc_mask_)&intc_mask_);
+}
+
+void EeRegisters::advance_gs_interrupts() {
+    const auto request = gs_.take_interrupt_request(now());
+    if (request.pending) {
+        intc_stat_ |= 1u;
+        intc_unknown_ &= ~1u; // a definite request establishes the latch
+    } else if (request.unknown && !(intc_stat_ & 1u)) {
+        intc_unknown_ |= 1u;
+    }
 }
 
 void EeRegisters::write_timer(unsigned index, unsigned reg, std::uint32_t value) {
@@ -95,6 +178,7 @@ void EeRegisters::write_timer(unsigned index, unsigned reg, std::uint32_t value)
     const auto name = "T" + std::to_string(index) + "_" + timer_reg_name(reg);
     switch (reg) {
         case Count:
+            advance_timer(index);
             timer.count_at_anchor = static_cast<std::uint16_t>(value);
             timer.anchor_cycle = now();
             return;
@@ -102,23 +186,26 @@ void EeRegisters::write_timer(unsigned index, unsigned reg, std::uint32_t value)
             if (value & kModeEnable) {
                 if (value & kModeGateEnable)
                     throw DeviceRefusal(name + " " + hex(value) + ": HBLANK/VBLANK gating is not modeled");
-                if (value & (kModeCompareIrq | kModeOverflowIrq))
-                    throw DeviceRefusal(name + " " + hex(value) + ": timer interrupts need the INTC, not modeled");
-                if (value & kModeClearOnCompare)
-                    throw DeviceRefusal(name + " " + hex(value) + ": clear-on-compare is not modeled");
-                if ((value & kModeClock) == kModeHblank) (void)gs_.line_clock(); // refuses without HBLANK
+                if ((value & kModeClock) == kModeHblank && !gs_.hblank_held())
+                    (void)gs_.line_clock(); // unknown modes still refuse; held sync is a stopped clock
             }
             // The counter keeps its value across the mode change and continues
             // from it with the new clock source (or stops when disabled).
-            timer.count_at_anchor = timer_count(timer);
+            advance_timer(index);
             timer.anchor_cycle = now();
-            // Bits 10/11 are write-1-to-clear flags; no flag is ever set here
-            // because compare/overflow tracking is refused above.
-            timer.mode = value & kModeConfig;
+            timer.mode = (value & kModeConfig) |
+                         (timer.mode & (kModeCompareFlag|kModeOverflowFlag) & ~value);
             return;
         }
         case Comp:
+            advance_timer(index);
             timer.compare = static_cast<std::uint16_t>(value);
+            return;
+        case Hold:
+            // EE User's Manual v6, pp. 35/39: T0/T1 HOLD are writable, low
+            // 16 bits. SBUS capture must be added when that source is modeled.
+            if (index >= 2u) throw DeviceRefusal(name + ": counter hold register does not exist");
+            timer.hold = static_cast<std::uint16_t>(value);
             return;
         default:
             throw DeviceRefusal(name + ": counter hold (SBUS capture) is not modeled");
@@ -126,6 +213,7 @@ void EeRegisters::write_timer(unsigned index, unsigned reg, std::uint32_t value)
 }
 
 std::uint32_t EeRegisters::read_timer(unsigned index, unsigned reg) {
+    if (reg != Hold) advance_timer(index);
     const auto& timer = timers_[index];
     const auto name = "T" + std::to_string(index) + "_" + timer_reg_name(reg);
     switch (reg) {
@@ -135,10 +223,11 @@ std::uint32_t EeRegisters::read_timer(unsigned index, unsigned reg) {
             if (!timer.compare) throw DeviceRefusal(name + " read before any write (reset value not verified)");
             return *timer.compare;
         case Mode:
-            // EQUF/OVFF are set when their enabled interrupt occurs (EE User's
-            // Manual, Tn_MODE). This subset refuses counting with CMPE/OVFE,
-            // so neither flag can become set; return the actual retained mode.
             return timer.mode;
+        case Hold:
+            if (index >= 2u) throw DeviceRefusal(name + ": counter hold register does not exist");
+            if (!timer.hold) throw DeviceRefusal(name + ": counter hold read before write (reset value not verified)");
+            return *timer.hold;
         default:
             throw DeviceRefusal(name + ": counter hold (SBUS capture) is not modeled");
     }
@@ -162,7 +251,10 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
                                 hex(offset, 3) + " is not modeled (32-bit Tn_COUNT/MODE/COMP only)");
         return read_timer((physical >> 11) & 3u, offset / 16u);
     }
-    if (physical >= kGsPrivilegedBase && physical < kGsPrivilegedEnd) return gs_.read(physical, bytes);
+    if (physical >= kGsPrivilegedBase && physical < kGsPrivilegedEnd) {
+        advance_gs_interrupts();
+        return gs_.read(physical, bytes);
+    }
     if (physical >= kSifBase && physical < kSifEnd) {
         if (bytes != 4u || (physical & 0xFu) != 0u)
             throw DeviceRefusal("SIF access of " + std::to_string(bytes) + " byte(s) at " + hex(physical) +
@@ -216,9 +308,10 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
         return encoder_master_190x_.read(physical - kVideoEncoderMaster190x, bytes, video_encoder_);
     if (physical >= kVideoEncoderMaster1A && physical < kVideoEncoderMaster1A + kVideoEncoderMasterBytes)
         return encoder_master_1a_.read(physical - kVideoEncoderMaster1A, bytes, video_encoder_);
-    if (physical == kIntcStat)
-        throw DeviceRefusal("I_STAT read: no EE interrupt source (GS, SBUS, VBLANK, VIF, VU, IPU, timers, SFIFO) "
-                            "is modeled, so the pending bits are unknown");
+    if (physical == kIntcStat) {
+        if(bytes!=4u)throw DeviceRefusal("I_STAT requires a 32-bit read");
+        return intc_status(kIntcSources);
+    }
     if (physical == kSioIsr) {
         if (bytes != 4u) throw DeviceRefusal("SIO_ISR read of " + std::to_string(bytes) + " byte(s) is not modeled");
         // Bits 12-15: TX FIFO level, 0 because transmission is instantaneous;
@@ -261,16 +354,26 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
     }
     if (physical >= kGsPrivilegedBase && physical < kGsPrivilegedEnd) {
         sync_iop(); // the IOP's VBLANK sources follow the GS timing
+        advance_gs_interrupts();
+        advance_vertical();
+        const auto generation=gs_.timing_generation();
         gs_.write(physical, bytes, value, now(), [this] {
             // A timer counting HBLANK keeps the edges of the old line clock up
             // to now and counts those of the new one from now on; a later read
             // refuses if the new state has no HBLANK.
-            for (auto& timer : timers_)
+            for (unsigned i=0;i<timers_.size();++i) {
+                auto& timer=timers_[i];
                 if ((timer.mode & kModeEnable) != 0u && (timer.mode & kModeClock) == kModeHblank) {
-                    timer.count_at_anchor = timer_count(timer);
+                    advance_timer(i);
                     timer.anchor_cycle = now();
                 }
+            }
         });
+        if(generation!=gs_.timing_generation()) {
+            vertical_generation_=gs_.timing_generation();
+            vertical_sample_=now();
+        }
+        advance_gs_interrupts();
         return;
     }
     if (physical >= kSifBase && physical < kSifEnd) {
@@ -338,6 +441,7 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
     }
     if (physical == kIntcMask) {
         if (bytes != 4u) throw DeviceRefusal("I_MASK write of " + std::to_string(bytes) + " byte(s) is not modeled");
+        for(unsigned i=0;i<4;++i)advance_timer(i);
         intc_mask_ ^= static_cast<std::uint32_t>(value) & kIntcSources;
         return;
     }
@@ -352,8 +456,14 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
     }
     if (physical == kIntcStat) {
         if (bytes != 4u) throw DeviceRefusal("I_STAT write of " + std::to_string(bytes) + " byte(s) is not modeled");
-        // Acknowledge (write 1 to clear): nothing is ever raised here and
-        // reads are refused, so there is no state to change.
+        if (value & 1u) advance_gs_interrupts();
+        // Sample timer edges before acknowledging their latched request.
+        for(unsigned i=0;i<4;++i)advance_timer(i);
+        // Unknown vertical timing cannot be invented. Clearing these latches
+        // starts a new observation interval; a later read still validates it.
+        if(value&0xCu)advance_vertical();
+        intc_stat_ &= ~static_cast<std::uint32_t>(value);
+        intc_unknown_ &= ~static_cast<std::uint32_t>(value);
         return;
     }
     throw DeviceRefusal("no register model");

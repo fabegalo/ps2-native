@@ -57,6 +57,7 @@ struct BusAccess {
     std::uint32_t physical_address{};
     BusRegion region{BusRegion::Unmapped};
     std::uint64_t value{};
+    std::uint64_t unknown_bits{};
 };
 class BusObserver {
 public:
@@ -108,6 +109,9 @@ public:
     [[nodiscard]] std::uint8_t read8(std::uint32_t guest_address) const;
     [[nodiscard]] std::uint16_t read16(std::uint32_t guest_address) const;
     [[nodiscard]] std::uint32_t read32(std::uint32_t guest_address) const;
+    // CPU word load may carry unknown status bits until a bitwise operation
+    // proves them irrelevant. Other reads remain strict.
+    [[nodiscard]] ObservedWord load32_observed(std::uint32_t guest_address) const;
     [[nodiscard]] std::uint64_t read64(std::uint32_t guest_address) const;
     void write8(std::uint32_t guest_address, std::uint8_t value);
     void write16(std::uint32_t guest_address, std::uint16_t value);
@@ -141,6 +145,7 @@ public:
     [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return registers_.video_encoder(); }
     // Runs the IOP up to the current EE time (boot mapping, clock attached).
     void sync_iop() { registers_.sync_iop(); }
+    [[nodiscard]] bool intc_interrupt_pending() const;
     [[nodiscard]] const std::string& sio_output() const noexcept { return registers_.sio_output(); }
 
 private:
@@ -155,7 +160,7 @@ private:
     [[nodiscard]] std::uint32_t translate_tlb(std::uint32_t guest_address, std::size_t size, bool write,
                                               bool& scratchpad) const;
     [[nodiscard]] std::uint64_t read_le(std::uint32_t guest_address, std::size_t size, const char* what,
-                                        bool notify) const;
+                                        bool notify, std::uint32_t* unknown = nullptr) const;
     void write_le(std::uint32_t guest_address, std::size_t size, std::uint64_t value, const char* what);
     std::vector<std::uint8_t> ram_;
     // EE register reads can have side effects (timers sample the clock).

@@ -133,9 +133,10 @@ void check_registers(const std::vector<std::uint8_t>& rom) {
     require(m.read32(0xB0000010u) == 0u && m.read32(0xB0001810u) == 0x83u,
             "Tn_MODE retains stopped/running configuration; no enabled interrupts means flags stay clear");
     device_refused([&] { m.write32(0xB0000010u, 0x84u); }, "gating is not modeled");
-    device_refused([&] { m.write32(0xB0000010u, 0x180u); }, "timer interrupts need the INTC");
-    device_refused([&] { m.write32(0xB0000010u, 0x280u); }, "timer interrupts need the INTC");
-    device_refused([&] { m.write32(0xB0000010u, 0xC0u); }, "clear-on-compare is not modeled");
+    for(const auto mode:{0x180u,0x280u,0xC0u}) {
+        m.write32(0xB0000010u,mode);
+        require(m.read32(0xB0000010u)==mode,"timer compare/overflow/zero-return configuration retained");
+    }
     m.write32(0xB0000010u, 0x100u); // interrupt bit while stopped: nothing can fire
     require(m.read32(0xB0000010u) == 0x100u, "disabled counter retains interrupt enable");
     m.write32(0xB0000010u, 0xC00u); // W1C flags do not set them
@@ -150,7 +151,7 @@ void check_registers(const std::vector<std::uint8_t>& rom) {
     device_refused([&] { m.write16(0xB000F500u, 1u); }, "no register model");
     device_refused([&] { m.write32(0xB000F510u, 1u); }, "DMAC extended): device not implemented (no register model)");
     device_refused([&] { (void)m.read32(0xB000F020u); }, "INTC): device not implemented (no register model)");
-    device_refused([&] { (void)m.read32(0xB000F000u); }, "INTC): device not implemented (I_STAT read: no EE interrupt source");
+    device_refused([&] { (void)m.read32(0xB000F000u); }, "vertical timing unknown");
     device_refused([&] { (void)m.read32(0xB000F410u); }, "MCH (RDRAM controller)");
     device_refused([&] { (void)m.fetch32(0xB0000000u); }, "instruction fetch from device registers");
 
@@ -230,7 +231,7 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
     for (const auto* report : {&interpreted, &hybrid}) {
         const std::string name = report == &interpreted ? "interpreter" : "hybrid";
         require(report->outcome == BootOutcome::BlockPoint && report->pc == mmio &&
-                report->reason.find("0xB000F000 (physical 0x1000F000, INTC)") != std::string::npos,
+                report->reason.find("0xB000F020 (physical 0x1000F020, INTC)") != std::string::npos,
                 name + " block point at the INTC load: " + report->reason);
         require(contains(report->trace, "  M W32 v=B0000010 p=10000010 EE timers = 00000083"), name + " T0_MODE");
         require(contains(report->trace, "  M R32 v=B0000000 p=10000000 EE timers = "), name + " T0_COUNT reads");

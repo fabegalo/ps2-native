@@ -187,7 +187,8 @@ void check_ee_view(const IopRom& rom) {
     registers.write(kIntcMask, 4u, 0xFFFF0004u);
     require(registers.read(kIntcMask, 4u) == 0x1u, "I_MASK toggles only sources 0-14");
     registers.write(kIntcStat, 4u, 0xFFFFu);
-    rejects([&] { (void)registers.read(kIntcStat, 4u); }, "no EE interrupt source");
+    // No time passes after acknowledging: the reset/acknowledged latches are known.
+    require(registers.read(kIntcStat,4u)==0,"I_STAT acknowledge clears pending latches");
     rejects([&] { registers.write(kIntcMask, 2u, 1u); }, "I_MASK write of 2 byte(s)");
 
     // Video encoder bus masters (M2.8): configuration writes latched, reading

@@ -1,0 +1,20 @@
+# Focused original-boot hardware tests; all firmware fixtures are our own.
+if(BUILD_TESTING)
+    add_executable(ps2n-gs-events-fixture tests/gs_events.cpp)
+    target_compile_definitions(ps2n-gs-events-fixture PRIVATE PS2N_GS_EVENTS_FIXTURE=1)
+    target_link_libraries(ps2n-gs-events-fixture PRIVATE ps2n_core)
+    set(GS_EVENTS_ROM "${FIXTURE_DIR}/gs-events.bin")
+    set(GS_EVENTS_AOT "${FIXTURE_DIR}/gs_events_aot.cpp")
+    add_custom_command(OUTPUT "${GS_EVENTS_ROM}"
+        COMMAND $<TARGET_FILE:ps2n-gs-events-fixture> "${GS_EVENTS_ROM}"
+        DEPENDS ps2n-gs-events-fixture VERBATIM)
+    add_custom_command(OUTPUT "${GS_EVENTS_AOT}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${GS_EVENTS_ROM}" "${GS_EVENTS_AOT}" --bios --entry=0xBFC00400
+        DEPENDS ps2n-aot "${GS_EVENTS_ROM}" VERBATIM)
+    add_executable(ps2n-gs-events tests/gs_events.cpp "${GS_EVENTS_AOT}")
+    target_link_libraries(ps2n-gs-events PRIVATE ps2n_core)
+    foreach(CASE IN ITEMS events timing reset irq knowledge held-counter guest)
+        add_test(NAME bios-gs-${CASE} COMMAND ps2n-gs-events ${CASE} "${GS_EVENTS_ROM}")
+        set_tests_properties(bios-gs-${CASE} PROPERTIES TIMEOUT 30)
+    endforeach()
+endif()

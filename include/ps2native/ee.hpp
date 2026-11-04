@@ -21,6 +21,7 @@ inline constexpr std::uint32_t kStatusEXL = 1u << 1;
 inline constexpr std::uint32_t kStatusERL = 1u << 2;
 inline constexpr std::uint32_t kStatusKSU = 3u << 3;
 inline constexpr std::uint32_t kStatusIM7 = 1u << 15;
+inline constexpr std::uint32_t kStatusIM2 = 1u << 10; // INTC INT0
 inline constexpr std::uint32_t kStatusEIE = 1u << 16;
 inline constexpr std::uint32_t kStatusEDI = 1u << 17;
 inline constexpr std::uint32_t kStatusBEV = 1u << 22;
@@ -29,6 +30,10 @@ inline constexpr std::uint32_t kStatusCU1 = 1u << 29;
 inline constexpr std::uint32_t kStatusWritable = 0xF0C79C1Fu;
 
 struct EEState {
+    // Unknown bits from partially specified MMIO are symbolic. Ordinary GPR
+    // consumers refuse them; bitwise semantics may prove a result independent.
+    std::array<std::uint64_t, 32> unknown_gpr_bits{};
+    std::uint32_t unknown_gprs{};
     std::array<Register128, 32> gpr{};
     // LO/HI are 128 bits: lo/hi are the lower halves (pipeline 0), lo1/hi1 the
     // upper halves written by the MMI pipeline-1 instructions (MULT1, DIV1, ...).
@@ -67,6 +72,7 @@ struct EEState {
     void set_reg32(unsigned index, std::uint32_t value);
     void set_reg32_sign_extended(unsigned index, std::uint32_t value);
     void set_reg64(unsigned index, std::uint64_t value);
+    void set_reg64_observed(unsigned index, std::uint64_t value, std::uint64_t unknown);
     void set_reg128(unsigned index, std::uint64_t low, std::uint64_t high);
     [[nodiscard]] std::uint32_t cp0(Cop0 reg) const noexcept { return cop0[static_cast<unsigned>(reg)]; }
     void set_cp0(Cop0 reg, std::uint32_t value) noexcept { cop0[static_cast<unsigned>(reg)] = value; }
@@ -81,6 +87,8 @@ struct EEState {
 // when interrupt entry changed PC. Timing retains the shared 1 cycle/instruction
 // model; this does not claim cycle-accurate superscalar execution.
 bool poll_ee_timer_interrupt(EEState& state);
+class Memory;
+bool poll_ee_interrupts(EEState& state, Memory& memory);
 // Level-1 synchronous exception entry. Does not implement a BIOS service:
 // execution continues at the guest's V_COMMON handler (or bootstrap vector).
 // Nested EXL preserves EPC/BD; the instruction's pending branch is cancelled.

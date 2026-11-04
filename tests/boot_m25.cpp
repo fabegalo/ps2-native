@@ -240,7 +240,7 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
     for (const auto* report : {&interpreted, &hybrid}) {
         const std::string name = report == &interpreted ? "interpreter" : "hybrid";
         require(report->outcome == BootOutcome::BlockPoint && report->pc == fw.at("mmio") + 4u &&
-                report->reason.find("0xB000F000 (physical 0x1000F000, INTC)") != std::string::npos,
+                report->reason.find("0xB000F020 (physical 0x1000F020, INTC)") != std::string::npos,
                 name + " block point at the INTC load: " + report->reason);
         for (const char* line : {"  M R32 v=B000F520 p=1000F520 DMAC extended = 00004111",
                                  "  M W32 v=B000F410 p=1000F410 MCH (RDRAM controller) = 00000000",

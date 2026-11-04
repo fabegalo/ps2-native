@@ -24,6 +24,8 @@
 #include <string>
 
 namespace ps2native {
+// Bits marked unknown are symbolic, never a default hardware response.
+struct ObservedWord { std::uint32_t value{}, unknown{}; };
 // DEV9 interface registers 0x1F801470/0x1F801472 (ps2sdk dev9regs.h names
 // them only by address). The RDRAM module pulses them (1472 = 1, 1470 = 0,
 // 1472 = 0, ~555-iteration delay, 1472 = 1); their function is undocumented.
@@ -74,6 +76,10 @@ public:
     // INTC sources enabled in I_MASK (an interrupt reaches COP0 IP2 when one
     // of them is pending).
     [[nodiscard]] std::uint32_t intc_mask() const noexcept { return intc_mask_; }
+    // Samples implemented interrupt sources at the shared EE clock. Unknown
+    // timing is refused only when it can affect the requested source bits.
+    [[nodiscard]] bool intc_interrupt_pending();
+    [[nodiscard]] ObservedWord observe_intc(std::uint32_t needed = 0x7FFFu);
     // Runs the IOP up to the current EE time.
     void sync_iop();
     [[nodiscard]] bool dma_reads_ram() const noexcept { return iop_.reads_ee_ram(); }
@@ -91,9 +97,14 @@ private:
         std::uint16_t count_at_anchor{};
         std::uint64_t anchor_cycle{};
         std::optional<std::uint16_t> compare; // unset until written
+        std::optional<std::uint16_t> hold; // T0/T1 only; reset contents not established
     };
     [[nodiscard]] std::uint64_t now() const;
     [[nodiscard]] std::uint16_t timer_count(const Timer& timer) const;
+    void advance_timer(unsigned index);
+    void advance_vertical();
+    void advance_gs_interrupts();
+    [[nodiscard]] std::uint32_t intc_status(std::uint32_t needed);
     void write_timer(unsigned index, unsigned reg, std::uint32_t value);
     [[nodiscard]] std::uint32_t read_timer(unsigned index, unsigned reg);
 
@@ -110,6 +121,10 @@ private:
     std::array<std::optional<std::uint32_t>, 3> sio_setup_{};
     std::string sio_output_;
     std::uint32_t intc_mask_{};
+    std::uint32_t intc_stat_{};
+    std::uint32_t intc_unknown_{};
+    std::uint64_t vertical_generation_{~0ull};
+    std::uint64_t vertical_sample_{};
     Gif gif_;
     Vif1 vif1_;
     // Video encoder serial bus and its two masters.

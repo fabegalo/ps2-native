@@ -797,7 +797,7 @@ inline Firmware build_firmware(Stage stage = Stage::M20) {
     if (m21) emit_m21_scratchpad(a);
     a.label("mmio");
     a.lui(t0, 0xB001u);
-    a.lw(t1, -0x1000, t0);           // INTC_STAT (0x1000F000 through KSEG1): not modeled yet
+    a.lw(t1, -0x0FE0, t0);           // Reserved INTC offset: still an explicit MMIO refusal
     a.label("fail");
     a.brk();
     a.label("iop_path");

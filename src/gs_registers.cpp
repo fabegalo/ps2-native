@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <tuple>
 
 namespace ps2native {
 namespace {
@@ -40,15 +41,29 @@ void GsRegisters::reset(std::uint64_t now) {
     ++generation_;
     mode_ = {};
     reset_drawing();
+    reset_events(now);
     vram_.invalidate();
     csr_written_.reset();
     line_ = {Sync::Running, 2u, {now, kEeCyclesPerBusCycle * kBusCyclesPerNtscLine}};
 }
 
 std::uint64_t GsRegisters::read(std::uint32_t physical, std::size_t bytes) const {
+    if (physical == kGsCsr && bytes == 1u) {
+        if (unknown_events_)
+            throw DeviceRefusal("GS CSR event byte: HSINT/VSINT timing unknown since last acknowledge");
+        return events_;
+    }
     if (physical == kGsCsr)
         throw DeviceRefusal("GS CSR read: VSINT/FIELD/NFIELD need VBLANK timing and REV/ID depend on the "
                             "console's GS revision; not modeled");
+    if ((physical == kGsSiglblid && (bytes == 4u || bytes == 8u)) ||
+        (physical == kGsSiglblid + 4u && bytes == 4u)) {
+        const auto shift = (physical - kGsSiglblid) * 8u;
+        const auto mask = bytes == 8u ? ~0ull : 0xFFFFFFFFull << shift;
+        if ((siglblid_known_ & mask) != mask)
+            throw DeviceRefusal("GS SIGLBLID read consumes ID bits not written since reset");
+        return (siglblid_ & mask) >> shift;
+    }
     if (const auto index = mode_index(physical))
         throw DeviceRefusal(std::string("GS ") + kModeLayouts[*index].name + " read (" +
                             std::to_string(bytes) + " byte(s)): write-only register; reads are not modeled");
@@ -62,8 +77,82 @@ void GsRegisters::change_line_state(const LineState& next, const LineClockGuard&
     ++generation_;
 }
 
+void GsRegisters::reset_events(std::uint64_t now) {
+    events_ = unknown_events_ = 0u;
+    event_cycle_ = now;
+    irq_pending_ = irq_unknown_ = finish_pending_ = false;
+    // ID reset contents are not established for the selected chip. Masked
+    // SIGNAL/LABEL writes define only the bits they actually replace.
+    siglblid_ = siglblid_known_ = 0u;
+}
+
+void GsRegisters::raise_event(std::uint32_t event) {
+    if ((events_ & event) == 0u && (event & ~(imr_ >> 8))) irq_pending_ = true;
+    events_ |= event;
+    unknown_events_ &= ~event; // a definite event resolves the flag to one
+}
+
+void GsRegisters::update_interrupt_request() {
+    if (unknown_events_ & ~(imr_ >> 8) & 0x1Fu) irq_unknown_ = true;
+}
+
+void GsRegisters::advance(std::uint64_t now) {
+    if (now < event_cycle_) throw DeviceRefusal("GS event clock moved backwards");
+    if (now == event_cycle_) return;
+    const auto from = event_cycle_ + 1u;
+    if (line_.sync == Sync::Running) {
+        const auto& clock = line_.clock;
+        if ((now - clock.epoch) / clock.period > (event_cycle_ - clock.epoch) / clock.period)
+            raise_event(kCsrHsint);
+    } else if (line_.sync == Sync::UnsupportedMode && !(events_ & kCsrHsint)) {
+        unknown_events_ |= kCsrHsint;
+    }
+    const auto clock = vertical_clock();
+    if (clock.state == VerticalClock::State::Running) {
+        if (clock.next_edge(from, false) <= now) raise_event(kCsrVsint);
+    } else if (clock.state == VerticalClock::State::Unknown && !(events_ & kCsrVsint)) {
+        unknown_events_ |= kCsrVsint;
+    }
+    update_interrupt_request();
+    event_cycle_ = now;
+}
+
+GsRegisters::InterruptRequest GsRegisters::take_interrupt_request(std::uint64_t now) {
+    advance(now);
+    const InterruptRequest result{irq_pending_, irq_unknown_};
+    irq_pending_ = irq_unknown_ = false;
+    return result;
+}
+
+void GsRegisters::finish_transfer() {
+    if (finish_pending_) {
+        finish_pending_ = false;
+        raise_event(kCsrFinish);
+    }
+}
+
 void GsRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value, std::uint64_t now,
                         const LineClockGuard& guard) {
+    const auto before = std::tuple{events_, unknown_events_, event_cycle_, irq_pending_, irq_unknown_};
+    try { write_impl(physical, bytes, value, now, guard); }
+    catch (...) {
+        std::tie(events_, unknown_events_, event_cycle_, irq_pending_, irq_unknown_) = before;
+        throw;
+    }
+}
+
+void GsRegisters::write_impl(std::uint32_t physical, std::size_t bytes, std::uint64_t value, std::uint64_t now,
+                            const LineClockGuard& guard) {
+    // Preserve events at/before a write before changing timing, masks or CSR.
+    advance(now);
+    if ((physical == kGsSiglblid && (bytes == 4u || bytes == 8u)) ||
+        (physical == kGsSiglblid + 4u && bytes == 4u)) {
+        const auto shift = (physical - kGsSiglblid) * 8u;
+        const auto mask = bytes == 8u ? ~0ull : 0xFFFFFFFFull << shift;
+        siglblid_ = (siglblid_ & ~mask) | ((value << shift) & mask);
+        siglblid_known_ |= mask;
+        return;
+    }
     if (physical == kGsPmode || physical == kGsDispfb1 || physical == kGsDisplay1 ||
         physical == kGsDispfb2 || physical == kGsDisplay2 || physical == kGsBgcolor) {
         if (bytes != 8u) throw DeviceRefusal("GS display register requires a 64-bit store");
@@ -79,7 +168,12 @@ void GsRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
         if (bytes != 8u && bytes != 4u) throw DeviceRefusal("GS IMR requires a 32/64-bit store");
         if ((value & ~0x7F00ull) || (value & 0x6000u) != 0x6000u)
             throw DeviceRefusal("GS IMR reserved bits (13/14 must be one)");
+        const auto previous = imr_;
         imr_ = static_cast<std::uint32_t>(value);
+        // An event already latched while masked becomes observable on unmask.
+        const auto newly_unmasked = static_cast<std::uint32_t>((~value & previous) >> 8) & 0x1Fu;
+        if (events_ & newly_unmasked) irq_pending_ = true;
+        if (unknown_events_ & newly_unmasked) irq_unknown_ = true;
         return;
     }
     if (const auto index = mode_index(physical)) {
@@ -126,12 +220,14 @@ void GsRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
             change_line_state({Sync::Running, 2u, {now, kEeCyclesPerBusCycle * kBusCyclesPerNtscLine}}, guard);
             mode_ = {};
             reset_drawing(); // VRAM survives a soft GS reset
+            reset_events(now);
             ++generation_;
         }
-        // SIGNAL/FINISH/HSINT/VSINT/EDWINT: 1 clears the event and re-enables
-        // it. This model never raises GS events (no GIF, no GS interrupts),
-        // so there is nothing to clear. FLUSH: the GIF FIFO is not modeled
-        // and therefore holds nothing to flush.
+        // W1C does not acknowledge the EE's separate INTC latch. FLUSH drops
+        // the partial upload in this synchronous GS (no internal draw queue).
+        events_ &= ~static_cast<std::uint32_t>(value & 0x1Fu);
+        unknown_events_ &= ~static_cast<std::uint32_t>(value & 0x1Fu);
+        if (value & kCsrFlush) { transfer_ = {}; finish_pending_ = false; }
         csr_written_ = value;
         return;
     }
@@ -229,8 +325,25 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
             transfer_data(value);
             return;
         case 0x7F: return; // NOP
-        case 0x60: case 0x61: case 0x62:
-            throw DeviceRefusal(shown + ": SIGNAL/FINISH/LABEL event and ID semantics are not modeled");
+        case 0x60: case 0x62: {
+            // A second unacknowledged SIGNAL stalls the real GS. Until GIF
+            // backpressure can retain/retry it, stop before changing its ID.
+            if (index == 0x60 && (events_ & kCsrSignal))
+                throw DeviceRefusal(shown + ": second SIGNAL requires GIF backpressure (not modeled)");
+            const auto shift = index == 0x60 ? 0u : 32u;
+            const auto mask = (value >> 32) << shift;
+            const auto data = (value & 0xFFFFFFFFull) << shift;
+            siglblid_ = (siglblid_ & ~mask) | (data & mask);
+            siglblid_known_ |= mask;
+            if (index == 0x60) raise_event(kCsrSignal);
+            return;
+        }
+        case 0x61:
+            // Raster and local copies complete synchronously; an unfinished
+            // host upload must finish before FINISH can be reported.
+            if (transfer_.active) finish_pending_ = true;
+            else raise_event(kCsrFinish);
+            return;
         default:
             throw DeviceRefusal(shown + ": no GS general register at this address");
     }

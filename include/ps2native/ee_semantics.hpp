@@ -43,6 +43,9 @@ constexpr std::uint32_t simm32(std::uint32_t word) {
 }
 constexpr std::uint64_t simm64(std::uint32_t word) { return sx32(simm32(word)); }
 constexpr std::uint64_t zimm(std::uint32_t word) { return word & 0xffffu; }
+inline std::uint64_t raw_gpr64(const EEState& state, unsigned index) {
+    return index == 0 ? 0u : state.gpr[index].low;
+}
 // Effective address: lower 32 bits of rs plus the sign-extended offset.
 inline std::uint32_t effective_address(const EEState& state, std::uint32_t word) {
     return state.reg32(rs(word)) + simm32(word);
@@ -171,13 +174,21 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     } else if constexpr (Op == O::Dsubu) {
         s.set_reg64(d_, s.reg64(s_) - s.reg64(t_));
     } else if constexpr (Op == O::And) {
-        s.set_reg64(d_, s.reg64(s_) & s.reg64(t_));
+        const auto a = raw_gpr64(s, s_), b = raw_gpr64(s, t_);
+        const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];
+        const auto unknown = (ua | ub) & ~((~a & ~ua) | (~b & ~ub));
+        s.set_reg64_observed(d_, a & b, unknown);
     } else if constexpr (Op == O::Or) {
-        s.set_reg64(d_, s.reg64(s_) | s.reg64(t_));
+        const auto a = raw_gpr64(s, s_), b = raw_gpr64(s, t_);
+        const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];
+        s.set_reg64_observed(d_, a | b, (ua | ub) & ~((a & ~ua) | (b & ~ub)));
     } else if constexpr (Op == O::Xor) {
-        s.set_reg64(d_, s.reg64(s_) ^ s.reg64(t_));
+        s.set_reg64_observed(d_, raw_gpr64(s, s_) ^ raw_gpr64(s, t_),
+                            s_ == t_ ? 0u : s.unknown_gpr_bits[s_] | s.unknown_gpr_bits[t_]);
     } else if constexpr (Op == O::Nor) {
-        s.set_reg64(d_, ~(s.reg64(s_) | s.reg64(t_)));
+        const auto a = raw_gpr64(s, s_), b = raw_gpr64(s, t_);
+        const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];
+        s.set_reg64_observed(d_, ~(a | b), (ua | ub) & ~((a & ~ua) | (b & ~ub)));
     } else if constexpr (Op == O::Slt) {
         s.set_reg64(d_, s64(s.reg64(s_)) < s64(s.reg64(t_)) ? 1u : 0u);
     } else if constexpr (Op == O::Sltu) {
@@ -261,11 +272,11 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         s.set_reg64(t_, s.reg64(s_) < simm64(w) ? 1u : 0u);
     // Logical immediates are zero-extended and act on all 64 bits.
     } else if constexpr (Op == O::Andi) {
-        s.set_reg64(t_, s.reg64(s_) & zimm(w));
+        s.set_reg64_observed(t_, raw_gpr64(s, s_) & zimm(w), s.unknown_gpr_bits[s_] & zimm(w));
     } else if constexpr (Op == O::Ori) {
-        s.set_reg64(t_, s.reg64(s_) | zimm(w));
+        s.set_reg64_observed(t_, raw_gpr64(s, s_) | zimm(w), s.unknown_gpr_bits[s_] & ~zimm(w));
     } else if constexpr (Op == O::Xori) {
-        s.set_reg64(t_, s.reg64(s_) ^ zimm(w));
+        s.set_reg64_observed(t_, raw_gpr64(s, s_) ^ zimm(w), s.unknown_gpr_bits[s_]);
     } else if constexpr (Op == O::Lui) {
         s.set_reg32_sign_extended(t_, (w & 0xffffu) << 16);
     } else if constexpr (Op == O::Lb) {
@@ -279,9 +290,12 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     } else if constexpr (Op == O::Lhu) {
         s.set_reg64(t_, m.read16(effective_address(s, w)));
     } else if constexpr (Op == O::Lw) {
-        s.set_reg32_sign_extended(t_, m.read32(effective_address(s, w)));
+        const auto word = m.load32_observed(effective_address(s, w));
+        const auto unknown = std::uint64_t{word.unknown} | ((word.unknown & 0x80000000u) ? 0xFFFFFFFF00000000ull : 0u);
+        s.set_reg64_observed(t_, sx32(word.value), unknown);
     } else if constexpr (Op == O::Lwu) {
-        s.set_reg64(t_, m.read32(effective_address(s, w)));
+        const auto word = m.load32_observed(effective_address(s, w));
+        s.set_reg64_observed(t_, word.value, word.unknown);
     } else if constexpr (Op == O::Ld) {
         s.set_reg64(t_, m.read64(effective_address(s, w)));
     // LQ/SQ silently clear the low four address bits (no address error).

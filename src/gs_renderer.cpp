@@ -15,6 +15,8 @@ void GsRegisters::reset_drawing() {
 }
 void GsRegisters::start_transfer(std::uint64_t value) {
     if (value & ~3ull) throw DeviceRefusal("GS TRXDIR bits above 1 are reserved");
+    if (finish_pending_)
+        throw DeviceRefusal("GS transfer reprogrammed while FINISH waits for an incomplete upload");
     const auto direction = static_cast<unsigned>(value);
     if (direction == 3u) { transfer_ = {}; return; }
     const auto area = required(0x52);
@@ -66,7 +68,7 @@ void GsRegisters::transfer_data(std::uint64_t data) {
         vram_.write(t.base, t.bw, t.psm, (t.x + t.pixel % t.width) & 2047u,
                      (t.y + t.pixel / t.width) & 2047u, t.pending);
         t.pending = 0u; t.pending_bytes = 0u;
-        if (++t.pixel == t.width * t.height) t.active = false;
+        if (++t.pixel == t.width * t.height) { t.active = false; finish_transfer(); }
     }
 }
 void GsRegisters::image_write(std::uint64_t low, std::uint64_t high) {

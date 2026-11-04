@@ -1,4 +1,5 @@
 #include "ps2native/ee.hpp"
+#include "ps2native/memory.hpp"
 
 #include <cstddef>
 #include <stdexcept>
@@ -20,13 +21,18 @@ void enter_ee_exception(EEState& state, std::uint32_t code, std::uint32_t pc, bo
     state.indirect_entry_pending = false;
 }
 
-bool poll_ee_timer_interrupt(EEState& state) {
+namespace {
+bool poll_interrupts(EEState& state, Memory* memory) {
     auto cause = state.cp0(Cop0::Cause);
+    const auto status = state.cp0(Cop0::Status);
+    if (memory != nullptr && (status & kStatusIM2)) {
+        cause &= ~kStatusIM2;
+        if (memory->intc_interrupt_pending()) cause |= kStatusIM2;
+    }
     if (state.compare_written && state.count() == state.cp0(Cop0::Compare)) cause |= kStatusIM7;
     state.set_cp0(Cop0::Cause, cause);
-    const auto status = state.cp0(Cop0::Status);
     if ((status & (kStatusEXL | kStatusERL)) || !(status & kStatusIE) || !(status & kStatusEIE) ||
-        !(status & cause & kStatusIM7)) return false;
+        !(status & cause & (kStatusIM7|kStatusIM2))) return false;
     state.set_cp0(Cop0::Epc, state.delay_pending ? state.pc - 4u : state.pc);
     state.set_cp0(Cop0::Cause, (cause & ~0x8000007Cu) | (state.delay_pending ? 0x80000000u : 0u));
     state.set_cp0(Cop0::Status, status | kStatusEXL);
@@ -36,6 +42,11 @@ bool poll_ee_timer_interrupt(EEState& state) {
     state.indirect_entry_pending = false;
     return true;
 }
+} // namespace
+bool poll_ee_timer_interrupt(EEState& state) { return poll_interrupts(state, nullptr); }
+bool poll_ee_interrupts(EEState& state, Memory& memory) {
+    return poll_interrupts(state, &memory);
+}
 namespace {
 void check_index(std::size_t index, std::size_t count) {
     if (index >= count) throw std::out_of_range("Invalid R5900 GPR index");
@@ -43,22 +54,30 @@ void check_index(std::size_t index, std::size_t count) {
 } // namespace
 std::uint32_t EEState::reg32(unsigned index) const {
     check_index(index, gpr.size());
+    if ((unknown_gprs & (1u << index)) && (unknown_gpr_bits[index] & 0xFFFFFFFFull))
+        throw std::runtime_error("EE GPR " + std::to_string(index) + " consumes unknown MMIO bits (32-bit operand)");
     return index == 0 ? 0u : static_cast<std::uint32_t>(gpr[index].low);
 }
 std::uint64_t EEState::reg64(unsigned index) const {
     check_index(index, gpr.size());
+    if (unknown_gprs & (1u << index))
+        throw std::runtime_error("EE GPR " + std::to_string(index) + " consumes unknown MMIO bits (64-bit operand)");
     return index == 0 ? 0u : gpr[index].low;
 }
 Register128 EEState::reg128(unsigned index) const {
     check_index(index, gpr.size());
+    if (unknown_gprs & (1u << index))
+        throw std::runtime_error("EE GPR " + std::to_string(index) + " consumes unknown MMIO bits (128-bit operand)");
     return index == 0 ? Register128{} : gpr[index];
 }
 void EEState::set_reg32(unsigned index, std::uint32_t value) {
     check_index(index, gpr.size());
+    if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
     if (index != 0) gpr[index].low = value;
 }
 void EEState::set_reg32_sign_extended(unsigned index, std::uint32_t value) {
     check_index(index, gpr.size());
+    if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
     if (index != 0) {
         const auto signed_value = value < 0x80000000u
             ? static_cast<std::int64_t>(value)
@@ -68,10 +87,19 @@ void EEState::set_reg32_sign_extended(unsigned index, std::uint32_t value) {
 }
 void EEState::set_reg64(unsigned index, std::uint64_t value) {
     check_index(index, gpr.size());
+    if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
     if (index != 0) gpr[index].low = value;
+}
+void EEState::set_reg64_observed(unsigned index, std::uint64_t value, std::uint64_t unknown) {
+    set_reg64(index, value & ~unknown);
+    if (index != 0 && unknown) {
+        unknown_gpr_bits[index] = unknown;
+        unknown_gprs |= 1u << index;
+    }
 }
 void EEState::set_reg128(unsigned index, std::uint64_t low, std::uint64_t high) {
     check_index(index, gpr.size());
+    if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
     if (index != 0) gpr[index] = {low, high};
 }
 EEState ee_reset_state() {

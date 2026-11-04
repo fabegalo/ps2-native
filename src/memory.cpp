@@ -189,6 +189,13 @@ void Memory::load_iop_program(std::span<const std::uint8_t> bytes, std::uint32_t
     if (mapping_ != Mapping::DirectElf) throw std::runtime_error("IOP development payload requires Direct ELF mode");
     registers_.load_iop_program(bytes, address, entry);
 }
+bool Memory::intc_interrupt_pending() const {
+    try {return registers_.intc_interrupt_pending();}
+    catch(const DeviceRefusal& error) {
+        throw device_refusal(BusFault::Device,false,4,kIntcStat,kIntcStat,BusRegion::Intc,
+                             "interrupt sample",error.what());
+    }
+}
 
 void Memory::set_translation_context(std::uint8_t asid, bool error_level, Privilege privilege) noexcept {
     asid_ = asid;
@@ -325,8 +332,10 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
     }
 }
 
-std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const char* what, bool notify) const {
+std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const char* what, bool notify,
+                              std::uint32_t* unknown) const {
     const auto target = resolve(address, size, false, what);
+    if (unknown) *unknown = 0;
     std::uint64_t value = 0;
     if (is_ee_register_region(target.region)) {
         // Only instruction fetches are not notified: never execute from registers.
@@ -334,7 +343,11 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
             throw device_refusal(BusFault::Device, false, size, address, target.physical, target.region, what,
                                  "instruction fetch from device registers");
         try {
-            value = registers_.read(target.physical, size);
+            if (unknown != nullptr && size == 4u && target.physical == kIntcStat) {
+                const auto observed = registers_.observe_intc();
+                value = observed.value;
+                *unknown = observed.unknown;
+            } else value = registers_.read(target.physical, size);
         } catch (const DeviceRefusal& refusal) {
             throw device_refusal(BusFault::Device, false, size, address, target.physical, target.region, what,
                                  refusal.what());
@@ -347,7 +360,7 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
     }
     if (notify && observer_ != nullptr)
         observer_->on_bus_access({false, static_cast<std::uint8_t>(size), address, target.physical,
-                                  target.region, value});
+                                  target.region, value, unknown ? *unknown : 0u});
     return value;
 }
 void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t value, const char* what) {
@@ -387,6 +400,11 @@ void Memory::write16(std::uint32_t address, std::uint16_t value) {
 }
 std::uint32_t Memory::read32(std::uint32_t address) const {
     return static_cast<std::uint32_t>(read_le(address, 4, "LW", true));
+}
+ObservedWord Memory::load32_observed(std::uint32_t address) const {
+    ObservedWord word;
+    word.value = static_cast<std::uint32_t>(read_le(address, 4, "LW", true, &word.unknown));
+    return word;
 }
 void Memory::write32(std::uint32_t address, std::uint32_t value) {
     write_le(address, 4, value, "SW");

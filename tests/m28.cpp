@@ -244,7 +244,7 @@ void check_gif() {
     registers.write128(kGifFifo, 0u, 0x54u);
     require(registers.gs().vram().revision() == revision, "inactive HWREG is a documented NOP");
     registers.write128(kGifFifo, giftag(1u, true, 1u), kAllAd);
-    rejects([&] { registers.write128(kGifFifo, 0u, 0x61u); }, "SIGNAL/FINISH/LABEL");
+    rejects([&] { registers.write128(kGifFifo, 0u, 0x63u); }, "no GS general register");
     rejects([&] { registers.write128(kGifFifo, 0u, 0x30u); }, "no GS general register");
     rejects([&] { registers.write128(kGifFifo, 0x0000000100000002ull, 0x53u); }, "TRXDIR bits above 1");
     rejects([&] { registers.write128(kGifFifo, 0u, 0x53u); }, "has not been written since reset");

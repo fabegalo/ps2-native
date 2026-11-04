@@ -227,7 +227,9 @@ const char* stop_kind_name(StopKind kind) noexcept {
 void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
     auto& state = ctx.state;
     auto& memory = ctx.memory;
-    (void)poll_ee_timer_interrupt(state);
+    state.instruction_pc=state.pc;
+    state.instruction_in_delay_slot=state.delay_pending;
+    (void)poll_ee_interrupts(state,memory);
     memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi));
     const auto pc = state.pc;
     state.instruction_pc = pc;

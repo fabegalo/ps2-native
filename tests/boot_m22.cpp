@@ -120,7 +120,8 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     m.write64(0xB2000000u, 0u);
     require(m.gs().latched(kGsPmode) == 0u, "PMODE through the bus");
     device_refused([&] { (void)m.fetch32(0xB2000010u); }, "instruction fetch from device registers");
-    device_refused([&] { m.write32(0xB0000010u, 0x83u); }, "GS video sync is held (SMODE1.SINT = 1)");
+    m.write32(0xB0000010u, 0x83u);
+    require(m.read32(0xB0000000u) == 0u, "HBLANK counter is enabled but frozen while video sync is held");
     m.write32(0xB0000810u, 0x80u); // BUSCLK timers do not depend on the GS
 
     cycles = 1000u;
@@ -295,7 +296,7 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
     for (const auto* report : {&interpreted, &hybrid}) {
         const std::string name = report == &interpreted ? "interpreter" : "hybrid";
         require(report->outcome == BootOutcome::BlockPoint && report->pc == mmio &&
-                report->reason.find("0xB000F000 (physical 0x1000F000, INTC)") != std::string::npos,
+                report->reason.find("0xB000F020 (physical 0x1000F020, INTC)") != std::string::npos,
                 name + " block point at the INTC load: " + report->reason);
         for (const char* line : {"  M W32 v=B0000010 p=10000010 EE timers = 00000000",
                                  "  M W32 v=B2001000 p=12001000 GS privileged registers = 00000200",
