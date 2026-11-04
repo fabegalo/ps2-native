@@ -245,13 +245,21 @@ public:
     FpuAffine fpu_relation(unsigned index) {
         const auto value=s_.fpr[index]&~s_.unknown_fpr_bits[index],unknown=s_.unknown_fpr_bits[index];
         auto& relation=s_.fpr_affine[index];
-        if(unknown && relation.candidates && relation.origin && relation.value==value && relation.unknown==unknown)return relation;
+        if(unknown && (relation.candidates || relation.ranges) && relation.origin && relation.value==value && relation.unknown==unknown)return relation;
         if(!unknown || (unknown&0xFF800000u) || !(value&0x7F800000u)){relation={};return {};}
         if(!relation.origin || relation.value!=value || relation.unknown!=unknown)
             relation={m_.allocate_fpu_origin(),0,(value>>23u)&255u,false,value,unknown,value,value|unknown,{}};
         return relation;
     }
     static void transform_candidates(FpuAffine& relation,bool absolute=false) {
+        if(relation.ranges) {
+            auto ranges=std::make_shared<std::vector<FloatBounds>>(*relation.ranges);
+            for(auto& range:*ranges)for(auto& value:range)value=absolute ? value&0x7FFFFFFFu : value^0x80000000u;
+            std::sort(ranges->begin(),ranges->end());
+            relation.minimum=ranges->front()[0];relation.maximum=0;
+            for(const auto& range:*ranges)relation.maximum=std::max(relation.maximum,range[1]);
+            relation.ranges=std::move(ranges);
+        }
         if(!relation.candidates)return;
         auto values=std::make_shared<std::vector<std::uint32_t>>(*relation.candidates);
         for(auto& value:*values)value=absolute ? value&0x7FFFFFFFu : value^0x80000000u;
@@ -261,6 +269,15 @@ public:
     static std::vector<std::uint32_t> fpu_candidates(ObservedWord word,const FpuAffine& relation) {
         if(!word.unknown)return {word.value};
         if(relation.candidates)return *relation.candidates;
+        if(relation.ranges) {
+            std::vector<std::uint32_t> values;
+            for(const auto& range:*relation.ranges) {
+                if(std::uint64_t{range[1]}-range[0]+1u>64u-values.size())return {};
+                for(std::uint64_t value=range[0];value<=range[1];++value)
+                    if(!((value^word.value)&~word.unknown))values.push_back(static_cast<std::uint32_t>(value));
+            }
+            return values;
+        }
         const auto lo=relation.origin ? relation.minimum : word.value&~word.unknown;
         const auto hi=relation.origin ? relation.maximum : word.value|word.unknown;
         std::vector<std::uint32_t> values;
@@ -317,6 +334,94 @@ public:
         if(result.word.unknown)candidates=std::make_shared<const std::vector<std::uint32_t>>(std::move(values));
         return result;
     }
+    static ObservedWord interval_word(FloatBounds range) {
+        const auto different=range[0]^range[1];
+        const auto mask=different ? (1u<<std::bit_width(different))-1u : 0u;
+        return {range[0]&~mask,mask};
+    }
+    static std::vector<FloatBounds> fpu_ranges(ObservedWord word,const FpuAffine& relation) {
+        if(!word.unknown)return {{word.value,word.value}};
+        if(relation.ranges)return *relation.ranges;
+        if(relation.candidates) {
+            std::array<std::optional<FloatBounds>,512> classes{};
+            for(const auto value:*relation.candidates) {
+                auto& range=classes[value>>23u];
+                if(!range)range=FloatBounds{value,value};
+                else {(*range)[0]=std::min((*range)[0],value);(*range)[1]=std::max((*range)[1],value);}
+            }
+            std::vector<FloatBounds> ranges;
+            for(const auto& range:classes)if(range)ranges.push_back(*range);
+            return ranges;
+        }
+        if(word.unknown&0xFF800000u)return {};
+        return {{relation.origin ? relation.minimum : word.value,relation.origin ? relation.maximum : word.value|word.unknown}};
+    }
+    static std::optional<VuFloatResult> range_fpu(MipsOpcode op,ObservedWord a,ObservedWord b,
+        const FpuAffine& ar,const FpuAffine& br,std::shared_ptr<const std::vector<FloatBounds>>& ranges) {
+        std::array<std::optional<FloatBounds>,512> classes{};std::optional<std::uint32_t> flags;
+        const auto append=[&](std::uint32_t lo,std::uint32_t hi,std::uint32_t next_flags) {
+            if((flags && *flags!=next_flags) || lo>hi || ((lo^hi)&0x80000000u))return false;
+            flags=next_flags;
+            for(unsigned index=lo>>23u;index<=(hi>>23u);++index) {
+                const auto begin=std::max(lo,index<<23u),end=std::min(hi,(index<<23u)|0x7FFFFFu);
+                auto& range=classes[index];
+                if(!range)range=FloatBounds{begin,end};
+                else {(*range)[0]=std::min((*range)[0],begin);(*range)[1]=std::max((*range)[1],end);}
+            }
+            return true;
+        };
+        const auto ac=fpu_candidates(a,ar),bc=fpu_candidates(b,br);
+        if(op!=MipsOpcode::MulS && !ac.empty() && !bc.empty() && ac.size()*bc.size()<=16384u) {
+            // Folding exact scalar sums directly into intervals bounds live
+            // storage even when thousands of distinct outputs are possible.
+            for(const auto x:ac)for(const auto y:bc) {
+                std::uint32_t next_flags=0;const auto value=ee_fpu_add(x,y,next_flags);
+                if(!append(value,value,next_flags))return {};
+            }
+        } else {
+            const auto av=fpu_ranges(a,ar),bv=fpu_ranges(b,br);
+            if(av.empty() || bv.empty() || av.size()*bv.size()>4096u)return {};
+            for(const auto& x:av)for(const auto& y:bv) {
+                if(x[0]>x[1] || y[0]>y[1] || ((x[0]^x[1])&0xFF800000u) || ((y[0]^y[1])&0xFF800000u))return {};
+                // Each input pair has fixed signs/exponents. Existing integer
+                // bounds prove every result and flag. Overlapping cancellation
+                // needs the separate guard-column proof below.
+                const auto result=op==MipsOpcode::MulS ? vu_float_product(interval_word(x),interval_word(y),false,x,y,true) :
+                    vu_float_add(interval_word(x),interval_word(y),x,y,true);
+                const auto common=std::max((x[0]>>23u)&255u,(y[0]>>23u)&255u);
+                if(!result && op!=MipsOpcode::MulS && ((x[0]^y[0])&0x80000000u) && common>=25u) {
+                    // The integer adder retains one guard column: every
+                    // nonzero sum is at least 2^(common-151). At common>=25
+                    // that is normal, while opposite signs cannot overflow.
+                    // Thus an interior zero cannot hide an underflow flag.
+                    std::uint32_t positive=0,negative=0;
+                    for(const auto a:x)for(const auto b:y) {
+                        std::uint32_t next_flags=0;const auto value=ee_fpu_add(a,b,next_flags);
+                        if(next_flags)return {};
+                        auto& bound=(value&0x80000000u) ? negative : positive;
+                        bound=std::max(bound,value&0x7FFFFFFFu);
+                    }
+                    const auto minimum=(common-24u)<<23u;
+                    if(!append(0,0,0) || (positive && !append(minimum,positive,0)) ||
+                       (negative && !append(minimum|0x80000000u,negative|0x80000000u,0)))return {};
+                    continue;
+                }
+                if(!result)return {};
+                const auto lo=result->bounded ? result->bounds[0] : result->word.value;
+                const auto hi=result->bounded ? result->bounds[1] : result->word.value;
+                if(!append(lo,hi,result->flags))return {};
+            }
+        }
+        std::vector<FloatBounds> output;std::uint32_t all=~0u,any=0;
+        for(const auto& range:classes)if(range) {
+            output.push_back(*range);const auto word=interval_word(*range);
+            all&=word.value;any|=word.value|word.unknown;
+        }
+        if(output.empty())return {};
+        const VuFloatResult result{{all,all^any},*flags,{output.front()[0],output.back()[1]},true};
+        if(result.word.unknown)ranges=std::make_shared<const std::vector<FloatBounds>>(std::move(output));
+        return result;
+    }
     void fpu_binary(MipsOpcode op,std::uint32_t word) {
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
             stop(StopKind::GuestException,"FPU arithmetic with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
@@ -334,6 +439,7 @@ public:
         // neither a host product nor one endpoint substitutes for hardware.
         std::optional<VuFloatResult> result;
         std::shared_ptr<const std::vector<std::uint32_t>> candidates;
+        std::shared_ptr<const std::vector<FloatBounds>> ranges;
         FpuAffine relation;
         if(op!=MipsOpcode::MulS && ar.origin && ar.origin==br.origin && ar.exponent==br.exponent && ar.negated!=br.negated) {
             std::uint32_t flags=0;
@@ -348,6 +454,7 @@ public:
             const auto finite=finite_fpu(op,a,b,ar,br,fs==ft,candidates);
             if(finite)result=finite;
         }
+        if(!result)result=range_fpu(op,a,b,ar,br,ranges);
         if(!result)stop(StopKind::NotModeled,"FPU arithmetic cannot certify value/exception bounds; FS="+hex32(a.value)+", FT="+hex32(b.value));
         if(op!=MipsOpcode::MulS && result->word.unknown && (a.unknown!=0u)!=(b.unknown!=0u)) {
             const auto source=a.unknown ? a : b,constant=a.unknown ? b : a;
@@ -370,6 +477,7 @@ public:
         relation.minimum=result->bounded ? result->bounds[0] : result->word.value;
         relation.maximum=result->bounded ? result->bounds[1] : result->word.value|result->word.unknown;
         relation.candidates=std::move(candidates);
+        relation.ranges=std::move(ranges);
         s_.fpr[fd]=result->word.value;s_.unknown_fpr_bits[fd]=result->word.unknown;
         s_.fpr_affine[fd]=relation;
         s_.fcr31=(s_.fcr31&~0xC000u)|result->flags;

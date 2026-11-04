@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <vector>
 namespace ps2native {
@@ -15,6 +16,9 @@ struct FpuAffine {
     std::uint32_t minimum{},maximum{}; // tighter numeric interval than a bit hull
     // A bounded finite domain may cross sign/exponent classes. In that case
     // exponent is zero and origin proves copy/negation identity only.
-    std::shared_ptr<const std::vector<std::uint32_t>> candidates;
+    std::shared_ptr<const std::vector<std::uint32_t>> candidates{};
+    // A union of conservative raw intervals, each within one sign/exponent
+    // class. This bounds storage when exact finite sets grow too large.
+    std::shared_ptr<const std::vector<std::array<std::uint32_t,2>>> ranges{};
 };
 }

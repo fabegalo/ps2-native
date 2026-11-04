@@ -3,7 +3,7 @@
 #include <optional>
 #include <array>
 namespace ps2native {
-using FloatBounds=std::array<std::uint32_t,2>; // raw ordered endpoints, one sign/exponent class
+using FloatBounds=std::array<std::uint32_t,2>; // raw endpoints; inputs have one sign/exponent class
 struct VuFloatResult {
     ObservedWord word;std::uint32_t flags{};
     FloatBounds bounds{};bool bounded{};
@@ -12,8 +12,8 @@ struct VuFloatResult {
 // to the fraction of a normal value with a known sign/exponent and flags.
 // Unsupported uncertainty/cancellation/exception boundaries return nullopt.
 std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
-    std::optional<FloatBounds> a_bounds={},std::optional<FloatBounds> b_bounds={});
-// The opt-in exponent hull is for finite EE enumeration only. Default VU
+    std::optional<FloatBounds> a_bounds={},std::optional<FloatBounds> b_bounds={},bool allow_exponent_bounds=false);
+// The opt-in exponent hull is for EE domain analysis only. Default VU
 // callers retain a proven single exponent for their separate MAC flag model.
 std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,bool diagnostic_early_digit_carry=false,
     std::optional<FloatBounds> a_bounds={},std::optional<FloatBounds> b_bounds={},bool allow_exponent_bounds=false);

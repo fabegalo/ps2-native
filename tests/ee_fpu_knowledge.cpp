@@ -2,6 +2,7 @@
 #include "boot_checks.hpp"
 #include "bios_program.hpp"
 #include "ps2native/interpreter.hpp"
+#include "ps2native/vu_float.hpp"
 #include <iostream>
 using namespace ps2native;
 using namespace boot_checks;
@@ -117,8 +118,9 @@ int main() try {
     }
     step(math(1,0,4,3));step(0xE4200000);
     const auto opaque=memory.load32_observed(0x80002000);memory.store32_observed(0xA0002000,opaque);
-    step(0xC4210000);rejects([&]{step(math(1,0,4,1));},"cannot certify");
-    require(state.unknown_fpr_bits[1],"an ordinary aliased RAM overwrite with identical opaque bits cannot retain a false origin relationship");
+    step(0xC4210000);step(math(1,0,4,1));
+    require(state.unknown_fpr_bits[1] && state.unknown_fpr_bits[0] && state.fpr_affine[0].ranges,
+        "an aliased opaque overwrite loses origin correlation: only a conservative interval union survives, never a fabricated exact cancellation");
     step(math(6,1,4,0));step(math(1,0,4,1));require(!state.fpr[0] && !state.unknown_fpr_bits[0],
         "MOV.S preserves identity so subtraction of the same opaque value proves exact positive zero");
     state.fpr[0]=0x40490F00u;state.unknown_fpr_bits[0]=0xFFu;
@@ -167,10 +169,48 @@ int main() try {
     require(state.fpr_affine[10].candidates && *state.fpr_affine[10].candidates==expected,
         "all 2010 concrete input pairs produce the exact retained set despite repeated outputs, without truncating its candidates");
     for(unsigned n=30;n<65;++n)tiny.push_back(0x0E457440u+n);
-    finite_register(1,tiny);state.fcr31=0x0183C079u;
+    finite_register(1,tiny);state.fcr31=0x0183C079u;step(math(1,10,1,2));
+    require(state.fpr_affine[10].ranges && state.fpr_affine[10].ranges->size()==2 && state.fcr31==0x01830079u,
+        "larger finite domains use two certified sign/exponent intervals with proven flags instead of truncating candidates");
+    for(const auto a:tiny)for(const auto b:larger) {
+        std::uint32_t flags=0;const auto value=ee_fpu_add(a,b^0x80000000u,flags);
+        bool contained=false;for(const auto& range:*state.fpr_affine[10].ranges)contained|=value>=range[0] && value<=range[1];
+        require(contained && !flags,"every concrete result is contained in its certified output interval");
+    }
+    state.set_reg64(1,0x80002110);step(0xE42A0000u);step(0xC42B0000u);
+    require(state.fpr_affine[11].ranges==state.fpr_affine[10].ranges,"SWC1/LWC1 preserves the immutable interval union through RAM");
+    step(math(7,11,11,0));step(math(5,11,11,0));
+    state.fpr[13]=0x3F800000u;state.unknown_fpr_bits[13]=0;step(math(0,12,11,13));
+    require(state.fpr[12]==0x3F800000u && !state.unknown_fpr_bits[12],
+        "all interval classes collapse to the same known result under dominated addition after NEG/ABS");
+    const auto crossing=vu_float_add({0x3F7FFFFEu,1},{0x33800000u,0});
+    const auto exponent_bounds=vu_float_add({0x3F7FFFFEu,1},{0x33800000u,0},{},{},true);
+    require(!crossing && exponent_bounds && exponent_bounds->bounds==FloatBounds{0x3F7FFFFFu,0x3F800000u},
+        "exponent-spanning addition is opt-in and preserves both sides of the normalization boundary");
+    state.fpr[1]=0x3F800000u;state.unknown_fpr_bits[1]=0x1FFu;
+    state.fpr_affine[1]={memory.allocate_fpu_origin(),0,0,false,state.fpr[1],state.unknown_fpr_bits[1],0x3F800000u,0x3F800100u,{},
+        std::make_shared<const std::vector<FloatBounds>>(std::initializer_list<FloatBounds>{{0x3F800000u,0x3F800100u}})};
+    state.fpr[2]=0x3F800080u;state.unknown_fpr_bits[2]=0;state.fcr31=0x0183C079u;
+    step(math(1,10,1,2));
+    require(state.fpr_affine[10].ranges && state.fcr31==0x01830079u,
+        "a normal guard-column quantum proves flags even when the interval crosses exact zero");
+    for(unsigned n=0;n<=256;++n) {
+        std::uint32_t flags=0;const auto value=ee_fpu_add(0x3F800000u+n,0xBF800080u,flags);
+        bool contained=false;for(const auto& range:*state.fpr_affine[10].ranges)contained|=value>=range[0] && value<=range[1];
+        require(contained && !flags,"every concrete negative, zero and positive cancellation remains inside the output union");
+    }
+    state.fpr[1]=0x0B800000u;state.unknown_fpr_bits[1]=0x1FFu;
+    state.fpr_affine[1]={memory.allocate_fpu_origin(),0,0,false,state.fpr[1],state.unknown_fpr_bits[1],0x0B800000u,0x0B800100u,{},
+        std::make_shared<const std::vector<FloatBounds>>(std::initializer_list<FloatBounds>{{0x0B800000u,0x0B800100u}})};
+    state.fpr[2]=0x0B800080u;state.unknown_fpr_bits[2]=0;state.fcr31=0x0183C079u;
     const auto before=state.fpr[10],before_mask=state.unknown_fpr_bits[10];
     rejects([&]{step(math(1,10,1,2));},"cannot certify");
     require(state.fpr[10]==before && state.unknown_fpr_bits[10]==before_mask && state.fcr31==0x0183C079u,
-        "exceeding the 4096-pair budget refuses without publishing a partial domain or exception flags");
+        "a cancellation interval with possible underflow still refuses without publishing a result or flags");
+    state.fpr[4]=0x3F800000u;state.unknown_fpr_bits[4]=0x800001FFu;
+    state.fpr_affine[4]={memory.allocate_fpu_origin(),0,0,false,state.fpr[4],state.unknown_fpr_bits[4],0x3F800000u,0xBF800101u,{},
+        std::make_shared<const std::vector<FloatBounds>>(std::initializer_list<FloatBounds>{{0x3F800000u,0x3F8001FFu},{0xBF800100u,0xBF800101u}})};
+    step(math(5,4,4,0));require(state.fpr_affine[4].maximum==0x3F8001FFu && !state.fpr_affine[4].negated,
+        "ABS keeps the full outer range when sign folding produces nested intervals, and replaces the signed affine origin");
     std::cout<<"EE floating bounds, dominated addition, raw register/RAM transport, sign operations, consumer refusals and comparison parity passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

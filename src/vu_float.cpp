@@ -37,7 +37,7 @@ VuFloatResult packed(std::uint64_t product,int exponent,std::uint32_t sign) {
 }
 }
 std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
-    std::optional<FloatBounds> a_bounds,std::optional<FloatBounds> b_bounds) {
+    std::optional<FloatBounds> a_bounds,std::optional<FloatBounds> b_bounds,bool allow_exponent) {
     if(!a.unknown && !b.unknown) {
         std::uint32_t flags=0;const auto value=ee_fpu_add(a.value,b.value,flags);
         return VuFloatResult{{value,0},flags};
@@ -60,7 +60,7 @@ std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
         if(!first && flags!=common_flags)return std::nullopt;
         first=false;common_flags=flags;low=std::min(low,value);high=std::max(high,value);
     }
-    return hull(low,high,common_flags);
+    return hull(low,high,common_flags,allow_exponent);
 }
 std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,bool diagnostic,
     std::optional<FloatBounds> a_bounds,std::optional<FloatBounds> b_bounds,bool allow_exponent) {
