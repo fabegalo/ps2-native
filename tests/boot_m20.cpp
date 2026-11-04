@@ -156,6 +156,8 @@ void check_interpreter_stops(const std::vector<std::uint8_t>& rom) {
                 report.category == category && report.reason.find(reason) != std::string::npos,
                 "stop for " + hex8(word) + ": [" + report.category + "] " + report.reason);
         require(report.word == word && report.retired == 0u, "stop leaves the instruction unretired");
+        require(report.aot_instructions+report.interpreted_instructions==report.retired,
+                "failed instruction attempts do not inflate execution coverage");
     };
     for (const auto word : {0x0000000Cu, 0x0000000Du}) {
         auto patched = rom;
@@ -171,9 +173,9 @@ void check_interpreter_stops(const std::vector<std::uint8_t>& rom) {
                 (state.cp0(Cop0::Cause) & 0x7Cu) == (word == 0xCu ? 8u : 9u) * 4u &&
                 (state.cp0(Cop0::Status) & kStatusEXL), "synchronous exception enters bootstrap vector");
     }
-    expect(0x44000000u, "unsupported", "(COP1/FPU) not implemented by the interpreter");
+    expect(0x46000000u, "unsupported", "(COP1/FPU) not implemented by the interpreter");
     expect(0x70000000u, "unsupported", "(MMI) not implemented");
-    expect(0x88080000u, "unsupported", "(unaligned load/store)");
+    expect(0xC0080000u, "unsupported", "(other)"); // LL is absent on the R5900.
     expect(0x42000006u, "not modeled", "TLBWR");
     expect(0xBC000000u, "not modeled", "CACHE operation 0x00000000");
     // These retire nothing before failing, but they do start executing.
@@ -257,8 +259,8 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
     }
     check_final_state(interpreted_state, interpreted_memory, fw, "interpreter");
     check_final_state(hybrid_state, hybrid_memory, fw, "hybrid");
-    require(interpreted.aot_instructions == 0u && interpreted.interpreted_instructions == interpreted.retired + 1u,
-            "interpreter-only run (the faulting instruction started but did not retire)");
+    require(interpreted.aot_instructions == 0u && interpreted.interpreted_instructions == interpreted.retired,
+            "interpreter-only coverage excludes the unretired faulting instruction");
     require(hybrid.aot_instructions > 0u && hybrid.interpreted_instructions > 0u && hybrid.engine_switches > 2u,
             "hybrid run used both engines");
     require(hybrid.retired == interpreted.retired, "same retired instruction count");

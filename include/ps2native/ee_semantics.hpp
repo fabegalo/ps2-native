@@ -229,6 +229,18 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         s.hi1 = s.reg64(s_);
     } else if constexpr (Op == O::Mtlo1) {
         s.lo1 = s.reg64(s_);
+    } else if constexpr (Op == O::Mfsa) {
+        s.set_reg64(d_,s.shift_amount);
+    } else if constexpr (Op == O::Mtsa) {
+        s.shift_amount=s.reg64(s_);
+    } else if constexpr (Op == O::Pmfhi) {
+        s.set_reg128(d_,s.hi,s.hi1);
+    } else if constexpr (Op == O::Pmflo) {
+        s.set_reg128(d_,s.lo,s.lo1);
+    } else if constexpr (Op == O::Pmthi) {
+        const auto value=s.reg128(s_);s.hi=value.low;s.hi1=value.high;
+    } else if constexpr (Op == O::Pmtlo) {
+        const auto value=s.reg128(s_);s.lo=value.low;s.lo1=value.high;
     // PADDUW: four 32-bit lanes, unsigned saturation at 0xFFFFFFFF; all 128 bits written.
     } else if constexpr (Op == O::Padduw) {
         const auto a = s.reg128(s_);
@@ -251,6 +263,25 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         const auto low = s.reg64(t_);
         const auto high = s.reg64(s_);
         s.set_reg128(d_, low, high);
+    } else if constexpr (Op == O::Pcpyud) {
+        const auto low=s.reg128(s_).high, high=s.reg128(t_).high;
+        s.set_reg128(d_,low,high);
+    } else if constexpr (Op == O::Pextlw || Op == O::Pextuw) {
+        const auto a=s.reg128(s_),b=s.reg128(t_);
+        const auto x=Op==O::Pextlw?a.low:a.high, y=Op==O::Pextlw?b.low:b.high;
+        s.set_reg128(d_,(y&0xFFFFFFFFu)|(x<<32u),(y>>32u)|(x&0xFFFFFFFF00000000ull));
+    } else if constexpr (Op == O::Psubb) {
+        const auto x=s.reg128(s_),y=s.reg128(t_);
+        const auto subtract=[](std::uint64_t a,std::uint64_t b) {
+            std::uint64_t result=0;
+            for(unsigned bit=0;bit<64;bit+=8)
+                result|=(((a>>bit)-(b>>bit))&0xFFu)<<bit;
+            return result;
+        };
+        s.set_reg128(d_,subtract(x.low,y.low),subtract(x.high,y.high));
+    } else if constexpr (Op == O::Ppacw) {
+        const auto a=s.reg128(s_),b=s.reg128(t_);
+        s.set_reg128(d_,(b.low&0xFFFFFFFFu)|(b.high<<32u),(a.low&0xFFFFFFFFu)|(a.high<<32u));
     // PAND/PXOR/POR/PNOR: bitwise over all 128 bits.
     } else if constexpr (Op == O::Pand || Op == O::Pxor || Op == O::Por || Op == O::Pnor) {
         const auto a = s.reg128(s_);
@@ -289,6 +320,51 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
                             static_cast<std::int16_t>(m.read16(effective_address(s, w))))));
     } else if constexpr (Op == O::Lhu) {
         s.set_reg64(t_, m.read16(effective_address(s, w)));
+    } else if constexpr (Op == O::Lwl || Op == O::Lwr || Op == O::Ldl || Op == O::Ldr) {
+        constexpr bool wide=Op==O::Ldl || Op==O::Ldr;
+        constexpr bool left=Op==O::Lwl || Op==O::Ldl;
+        constexpr unsigned bytes=wide ? 8u : 4u;
+        const auto address=effective_address(s,w);
+        const auto offset=address&(bytes-1u);
+        const auto aligned=address&~(bytes-1u);
+        std::uint64_t value=0,source_unknown=0;
+        if constexpr(wide)value=m.read64(aligned);
+        else {const auto observed=m.load32_observed(aligned);value=observed.value;source_unknown=observed.unknown;}
+        auto result=raw_gpr64(s,t_);
+        auto unknown=s.unknown_gpr_bits[t_];
+        // Merge selected bytes with the old destination, little endian.
+        // A byte loop avoids host shifts by the width at the full-load edges.
+        for(unsigned i=0;i<bytes;++i) {
+            if((left && i<=offset) || (!left && i>=offset)) {
+                const auto target=left ? bytes-1u-offset+i : i-offset;
+                const auto mask=0xFFull<<(target*8u);
+                result=(result&~mask)|(((value>>(i*8u))&0xFFull)<<(target*8u));
+                unknown=(unknown&~mask)|(((source_unknown>>(i*8u))&0xFFull)<<(target*8u));
+            }
+        }
+        if constexpr(!wide)unknown=(unknown&0xFFFFFFFFu)|((unknown&0x80000000u) ? 0xFFFFFFFF00000000ull : 0u);
+        s.set_reg64_observed(t_,wide ? result : sx32(static_cast<std::uint32_t>(result)),unknown);
+    } else if constexpr (Op == O::Swl || Op == O::Swr || Op == O::Sdl || Op == O::Sdr) {
+        constexpr unsigned bytes=(Op==O::Sdl || Op==O::Sdr) ? 8u : 4u;
+        constexpr bool left=Op==O::Swl || Op==O::Sdl;
+        const auto address=effective_address(s,w);
+        const auto offset=address&(bytes-1u);
+        const auto aligned=address&~(bytes-1u);
+        const auto value=raw_gpr64(s,t_);
+        std::uint64_t used=0;
+        for(unsigned i=0;i<bytes;++i)if((left && i<=offset) || (!left && i>=offset)) {
+            const auto source=left ? bytes-1u-offset+i : i-offset;
+            used|=0xFFull<<(source*8u);
+        }
+        if(used&s.unknown_gpr_bits[t_])(void)s.reg64(t_); // refuse before any write
+        // Only enabled bytes are written; never read-modify-write an MMIO
+        // register or touch the adjacent page to complete a partial store.
+        for(unsigned i=0;i<bytes;++i) {
+            if((left && i<=offset) || (!left && i>=offset)) {
+                const auto source=left ? bytes-1u-offset+i : i-offset;
+                m.write8(aligned+i,static_cast<std::uint8_t>(value>>(source*8u)));
+            }
+        }
     } else if constexpr (Op == O::Lw) {
         const auto word = m.load32_observed(effective_address(s, w));
         const auto unknown = std::uint64_t{word.unknown} | ((word.unknown & 0x80000000u) ? 0xFFFFFFFF00000000ull : 0u);
@@ -308,7 +384,9 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     } else if constexpr (Op == O::Sh) {
         m.write16(effective_address(s, w), static_cast<std::uint16_t>(s.reg32(t_)));
     } else if constexpr (Op == O::Sw) {
-        m.write32(effective_address(s, w), s.reg32(t_));
+        const auto unknown = static_cast<std::uint32_t>(s.unknown_gpr_bits[t_]);
+        if (unknown) m.store32_observed(effective_address(s, w), {static_cast<std::uint32_t>(raw_gpr64(s,t_)),unknown});
+        else m.write32(effective_address(s, w), s.reg32(t_));
     } else if constexpr (Op == O::Sd) {
         m.write64(effective_address(s, w), s.reg64(t_));
     } else if constexpr (Op == O::Sq) {

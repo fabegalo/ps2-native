@@ -1,0 +1,9 @@
+#pragma once
+#include <cstdint>
+#include <optional>
+namespace ps2native {
+// Integer circuit model; independent of the host FPU/rounding environment.
+std::uint32_t ee_fpu_divide(std::uint32_t numerator,std::uint32_t denominator,std::uint32_t& fcr31);
+// Exact sparse-right-operand multiply path. General Booth cases return nullopt.
+std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31);
+}

@@ -17,17 +17,20 @@ namespace ps2native {
     X(Mult) X(Multu) X(Div) X(Divu) X(Mfhi) X(Mflo) X(Mthi) X(Mtlo) \
     X(Addiu) X(Daddiu) X(Slti) X(Sltiu) X(Andi) X(Ori) X(Xori) X(Lui) \
     X(Lb) X(Lbu) X(Lh) X(Lhu) X(Lw) X(Lwu) X(Ld) X(Lq) X(Sb) X(Sh) X(Sw) X(Sd) X(Sq) \
+    X(Lwl) X(Lwr) X(Ldl) X(Ldr) X(Swl) X(Swr) X(Sdl) X(Sdr) \
     X(Beq) X(Bne) X(Blez) X(Bgtz) X(Bltz) X(Bgez) X(Bltzal) X(Bgezal) \
     X(Beql) X(Bnel) X(Blezl) X(Bgtzl) X(Bltzl) X(Bgezl) X(Bltzall) X(Bgezall) \
     X(J) X(Jal) X(Jr) X(Jalr) \
-    X(Mult1) X(Multu1) X(Div1) X(Divu1) X(Mfhi1) X(Mflo1) X(Mthi1) X(Mtlo1) X(Padduw) X(Pcpyh) X(Pcpyld) X(Pand) X(Pxor) X(Por) X(Pnor)
+    X(Mult1) X(Multu1) X(Div1) X(Divu1) X(Mfhi1) X(Mflo1) X(Mthi1) X(Mtlo1) X(Mfsa) X(Mtsa) \
+    X(Pmfhi) X(Pmflo) X(Pmthi) X(Pmtlo) X(Padduw) X(Pcpyh) X(Pcpyld) X(Pcpyud) \
+    X(Pextlw) X(Pextuw) X(Ppacw) X(Psubb) X(Pand) X(Pxor) X(Por) X(Pnor)
 // System instructions executed only by the interpreter (boot path): COP0
 // moves, TLB maintenance, ERET, EI/DI, CACHE, PREF, the COP1 word loads and
 // stores LWC1/SWC1 (FPU arithmetic is not decoded) and the trap-style
 // exceptions SYSCALL/BREAK, which enter the guest's level-1 handler.
 #define PS2N_R5900_SYSTEM_OPCODES(X) \
     X(Mfc0) X(Mtc0) X(Tlbr) X(Tlbwi) X(Tlbwr) X(Tlbp) X(Eret) X(Ei) X(Di) \
-    X(Cache) X(Pref) X(Syscall) X(Break) X(Lwc1) X(Swc1)
+    X(Cache) X(Pref) X(Syscall) X(Break) X(Lwc1) X(Swc1) X(Mfc1) X(Mtc1) X(Cfc1) X(Ctc1) X(MovS) X(DivS) X(MulS) X(CvtWS) X(CvtSW) X(MaddS) X(AddaS)
 
 enum class MipsOpcode : std::uint8_t {
 #define PS2N_OPCODE_ENUMERATOR(name) name,

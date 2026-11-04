@@ -41,9 +41,12 @@ struct EEState {
     std::uint64_t hi{};
     std::uint64_t lo1{};
     std::uint64_t hi1{};
+    std::uint64_t shift_amount{}; // SA saved/restored by MFSA/MTSA
     // COP1 (FPU) registers as raw 32-bit words. Cleared at reset like every
     // register (hypothesis: their power-on contents are not documented).
     std::array<std::uint32_t, 32> fpr{};
+    std::uint32_t fcr31{0x01000001u}; // fixed bits + reset flags (EE Core manual)
+    std::uint32_t fpu_acc{}; // same explicit reset hypothesis as raw FPRs
     std::uint32_t pc{};
     bool delay_pending{};
     std::uint32_t delay_target{};

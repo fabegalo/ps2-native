@@ -142,11 +142,64 @@ inline Program exceptions() {
     return {{{text,5,le_words(a.finish())},{data,6,std::move(records)},
              {0x00000180u,5,le_words(h.finish())}},stop,{},std::move(roots)};
 }
+inline Program timer() {
+    Assembler a(text);
+    a.la(t0,0xB2000010u);a.la(t1,1u<<17u);a.sd(t1,0,t0); // SINT: known, held sync
+    store(a,0xB000F000u,0x7FFF);
+    store(a,0xB0000020u,16);store(a,0xB0000000u,0);
+    store(a,0xB000F010u,1u<<9u);store(a,0xB0000010u,0xDC0);
+    a.la(t0,0x00010401u);a.mtc0(t0,Status);
+    const auto resume=a.here();
+    a.la(t0,data);a.label("wait");a.lw(t1,0,t0);a.beq(t1,zero,"wait");a.nop();
+    a.addiu(v0,zero,42);
+    a.raw(0x00006028u);a.nop();a.nop();a.nop(); // MFSA t4
+    a.raw(0x01800029u);a.nop();a.nop();a.nop(); // MTSA t4
+    a.la(t0,data+16);a.lq(t1,0,t0);
+    a.raw(0x70000229u|(t1<<21u));a.raw(0x70000269u|(t1<<21u));
+    a.raw(0x70000209u|(t2<<11u));a.raw(0x70000249u|(t3<<11u));
+    a.sq(t2,16,t0);a.sq(t3,32,t0);
+    a.raw(0x700003A9u|(t2<<21u)|(t3<<16u)|(t4<<11u));a.sq(t4,48,t0);
+    a.raw(0x70000488u|(t2<<21u)|(t3<<16u)|(t4<<11u));a.sq(t4,64,t0);
+    a.raw(0x700004A8u|(t2<<21u)|(t3<<16u)|(t4<<11u));a.sq(t4,80,t0);
+    a.raw(0x700004C8u|(t2<<21u)|(t3<<16u)|(t4<<11u));a.sq(t4,96,t0);
+    const auto stop=a.here();a.brk();
+    Assembler h(0x80000200u);
+    h.la(k0,data);h.mfc0(27,Cause);h.sw(27,4,k0);
+    h.la(t2,0xB000F000u);h.lw(t3,0,t2);h.sw(t3,8,k0);
+    h.la(t2,0xB0000010u);h.addiu(t3,zero,0x400);h.sw(t3,0,t2); // stop/clear EQUF
+    h.la(t2,0xB000F000u);h.addiu(t3,zero,1u<<9u);h.sw(t3,0,t2);
+    h.addiu(27,zero,1);h.sw(27,0,k0);h.eret();
+    std::vector<std::uint8_t> bytes(128);
+    put(bytes,16,0x0123456789ABCDEFull,8);put(bytes,24,0xFEDCBA9876543210ull,8);
+    return {{{text,5,le_words(a.finish())},{data,6,std::move(bytes)},
+             {0x200u,5,le_words(h.finish())}},stop,{},{resume}};
+}
+inline Program unaligned() {
+    Assembler a(text);a.la(s0,data);
+    unsigned index=0;
+    for(unsigned width:{4u,8u})for(unsigned offset=0;offset<width;++offset,++index) {
+        a.lq(t2,32,s0);
+        a.i(width==8 ? 0x1A : 0x22,s0,t2,offset+width-1);
+        a.i(width==8 ? 0x1B : 0x26,s0,t2,offset);
+        a.sq(t2,128+index*32,s0);
+        a.lq(t3,16,s0);a.la(t4,data+512+index*32);
+        a.i(width==8 ? 0x2C : 0x2A,t4,t3,offset+width-1);
+        a.i(width==8 ? 0x2D : 0x2E,t4,t3,offset);
+    }
+    a.lq(t2,16,s0);a.lq(t3,32,s0);a.mmi(t2,t3,t4,9,8);a.sq(t4,960,s0);
+    const auto stop=a.here();a.brk();
+    std::vector<std::uint8_t> bytes(1024,0xCC);
+    for(unsigned i=0;i<32;++i)bytes[i]=static_cast<std::uint8_t>(0x80+i);
+    put(bytes,32,0xFFEEDDCCBBAA9988ull,8);put(bytes,40,0x0123456789ABCDEFull,8);
+    return {{{text,5,le_words(a.finish())},{data,6,std::move(bytes)}},stop,{}, {}};
+}
 inline Program build(const std::string& mode) {
     if(mode=="cpu") return cpu();
     if(mode=="dma") return dma();
     if(mode=="frame") return frame();
     if(mode=="exceptions") return exceptions();
+    if(mode=="timer") return timer();
+    if(mode=="unaligned") return unaligned();
     if(mode=="dynamic") {
         Assembler a(text);
         a.la(t0,data);a.la(t1,dynamic_address);a.addiu(t2,zero,3);

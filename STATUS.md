@@ -18,16 +18,17 @@
 
 ## Última evidência: primeiro ELF comercial
 
-- **Shadow of the Colossus (USA), SCUS-97472:** executado diretamente da ISO original. Até o vetor
-  da primeira syscall: 86.278 instruções, 86.277 AOT/1 interpretada, PC `0x80000180`, zero pixels GS.
+- **The Simpsons: Hit & Run (USA), SLUS-20624:** escolhido entre os novos discos pelo ELF monolítico.
+  Até a primeira syscall: 214.945 instruções, 214.944 AOT/1 interpretada, PC `0x80000180`, zero pixels GS.
   Tetris Plus local é PS1 e não é candidato ao runtime EE. **Nenhum menu, controle ou gameplay.**
-- **Correções genéricas executadas:** exceções SYSCALL/BREAK, retorno usuário/supervisor, permissões,
-  kuseg com ERL, CACHE por índice, PCPYH/PCPYLD e leitura Tn_MODE no subconjunto suportado.
+- **Correções genéricas executadas:** contexto SA/HI-LO/FCR31, packing e PSUBB, cargas/escritas
+  desalinhadas, MOV/conversões FPU, divisão SRT e multiplicação esparsa. Casos restantes falham;
+  a cobertura exclui a instrução que não aposentou. Nenhum serviço HLE substitui a BIOS.
 - **Diagnóstico separado, sem boot concluído:** ELF injetado no estado parcial do firmware executou
-  handlers Sony reais até 312.702 instruções e parou ao habilitar interrupções do Timer 2
-  (`0x001103E8`). Isso não comprova inicialização normal. Boot ROM0/NVM original repetido mantém
+  handlers Sony reais até 627.894 instruções; interpretador/híbrido conferem RAM. Parou em MUL.S
+  geral (`0x002DEAF4`). Isso não comprova inicialização normal. Boot ROM0/NVM original repetido mantém
   o bloqueio externo no ID não medido do codificador (`0x80007D20`), sem respostas assumidas.
-- **Regressões:** leitura ISO/BOOT2, exceções, modos de memória, cache e MMI com fixtures próprios;
+- **Regressões:** contexto/FPU, falhas e equivalência AOT/interpretador com fixtures próprios;
   nenhuma alteração no launcher. Identidades, logs, testes/CI e limites: [primeiro jogo](docs/FIRST-GAME-STATUS.md).
 
 ## Evidência anterior: incremento M3.0

@@ -19,7 +19,7 @@ void check_loader(const ElfImage& elf) {
     require(memory.read32(0x100)==0x5678 && memory.read32(0x80000100)==0x5678,"shared RAM aliases");
     bus_fault([&]{(void)memory.fetch32(0xBFC00000u);},BusFault::Unmapped,"unmapped");
     bus_fault([&]{(void)memory.fetch32(0xB000F000u);},BusFault::Device,"instruction fetch");
-    device_refused([&]{(void)memory.read32(0xB000F000u);},"pending bits are unknown");
+    require(memory.read32(0xB000F000u)==0,"INTC reset state is known before time advances");
     auto wrong=aot_module();wrong.source_sha256="wrong";
     rejects([&]{prepare_direct_elf(elf,&wrong,state,memory);},"provenance");
     wrong=aot_module();wrong.source_kind="bios-rom0";
@@ -138,6 +138,37 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
                     "SIF1 byte count and bounded FIFO backpressure");
             require((memory.read32(0xB000C400u)&0x100u)==0 && memory.read32(0xB000C420u)==0 &&
                     (memory.read32(0xB000E010u)&0x40u),"EE source completion and QWC");
+        } else if(mode=="unaligned") {
+            require(memory.read64(direct_test::data+960)==0x98A8B8C8D8E8F808ull &&
+                    memory.read64(direct_test::data+968)==0x9E7B583512EFCCA9ull,"PSUBB executes in shared AOT/interpreter path");
+            unsigned index=0;
+            for(unsigned width:{4u,8u})for(unsigned offset=0;offset<width;++offset,++index) {
+                const auto result=direct_test::data+128+index*32;
+                for(unsigned i=0;i<width;++i)
+                    require(memory.read8(result+i)==0x80+offset+i,"unaligned load pair recovers contiguous bytes");
+                if(width==4)require(memory.read32(result+4)==0xFFFFFFFFu,"word merge sign extends lower 64 bits");
+                require(memory.read64(result+8)==0x0123456789ABCDEFull,"unaligned loads preserve upper GPR half");
+                const auto dest=direct_test::data+512+index*32;
+                for(unsigned i=0;i<32;++i)
+                    require(memory.read8(dest+i)==(i>=offset && i<offset+width ? 0x90+i-offset : 0xCC),
+                            "unaligned stores write only selected bytes");
+            }
+        } else if(mode=="timer") {
+            require(state.reg32(2)==42 && memory.read32(direct_test::data)==1,"timer IRQ handler resumes guest");
+            require((memory.read32(direct_test::data+4)&kStatusIM2) &&
+                    memory.read32(direct_test::data+8)==(1u<<9u),"real timer edge captured in Cause and I_STAT");
+            require(memory.read32(kIntcStat|0xA0000000u)==0 && memory.read32(0xB0000010u)==0,"handler acknowledges both latches");
+            for(unsigned offset:{32u,48u})
+                require(memory.read64(direct_test::data+offset)==0x0123456789ABCDEFull &&
+                        memory.read64(direct_test::data+offset+8)==0xFEDCBA9876543210ull,"AOT HI/LO context retains both pipelines");
+            require(memory.read64(direct_test::data+64)==0xFEDCBA9876543210ull &&
+                    memory.read64(direct_test::data+72)==0xFEDCBA9876543210ull,"AOT PCPYUD");
+            require(memory.read64(direct_test::data+80)==0x89ABCDEF89ABCDEFull &&
+                    memory.read64(direct_test::data+88)==0x0123456701234567ull,"AOT PEXTLW");
+            require(memory.read64(direct_test::data+96)==0x7654321076543210ull &&
+                    memory.read64(direct_test::data+104)==0xFEDCBA98FEDCBA98ull,"AOT PEXTUW");
+            require(memory.read64(direct_test::data+112)==0x7654321089ABCDEFull &&
+                    memory.read64(direct_test::data+120)==0x7654321089ABCDEFull,"AOT PPACW");
         } else if(mode=="exceptions") {
             require(state.reg32(2)==48 && memory.read32(direct_test::data)==3,
                     "guest handler returns to user mode, cancels branch, annuls false likely slot");
@@ -170,6 +201,9 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
     require(reports[0].retired==reports[1].retired,"retired equivalence");
     for(unsigned i=0;i<32;++i) require(states[0].gpr[i].low==states[1].gpr[i].low && states[0].gpr[i].high==states[1].gpr[i].high,"GPR equivalence");
     require(states[0].cop0==states[1].cop0 && states[0].fpr==states[1].fpr && states[0].pc==states[1].pc,"COP0/FPU/PC equivalence");
+    require(states[0].shift_amount==states[1].shift_amount,"SA context equivalence");
+    require(states[0].fcr31==states[1].fcr31,"FPU control context equivalence");
+    require(states[0].fpu_acc==states[1].fpu_acc,"FPU accumulator context equivalence");
     require(frames[0].size()==frames[1].size(),"frame event count equivalence");
     for(std::size_t i=0;i<frames[0].size();++i) require(frames[0][i].rgba==frames[1][i].rgba && frames[0][i].ee_cycle==frames[1][i].ee_cycle,"frame event digest and cycle equivalence");
     std::cout<<mode<<" retired="<<reports[1].retired<<" aot="<<reports[1].aot_instructions<<" interpreted="

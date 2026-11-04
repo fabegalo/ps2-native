@@ -74,6 +74,14 @@ public:
         report_.trace.push_back("  S " + std::string(event));
     }
     void finish() {
+        // on_instruction observes an attempt. A fault after that callback has
+        // no retirement; exclude that final attempt from coverage counters.
+        if(sequence_>report_.retired && engine_) {
+            if(sequence_-report_.retired!=1u)
+                throw std::logic_error("instruction observation/retirement accounting mismatch");
+            if(*engine_==ExecutionEngine::Aot)--report_.aot_instructions;
+            else --report_.interpreted_instructions;
+        }
         for (const auto& r : tail_) report_.tail.push_back(instruction_line(r));
     }
 

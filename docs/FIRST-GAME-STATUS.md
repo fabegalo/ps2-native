@@ -121,3 +121,36 @@ O ID do codificador não está na ROM0/NVM e não há captura desse registrador 
 Também faltam implementação de timer/INTC, serviços IOP/SIF e os demais dispositivos que a execução
 vier a exigir. Não se confunde esse trabalho interno pendente com o dado físico ausente.
 O próximo trabalho do mesmo jogo fica exclusivamente em [NEXT-TASK](NEXT-TASK.md).
+
+## 03/11/2026 — seleção atual: The Simpsons: Hit & Run
+
+Os novos discos locais foram examinados: God of War (SCUS-97399), Simpsons
+(SLUS-20624) e Shadow. Simpsons foi priorizado pelo ELF monolítico, sem a camada
+XFF de Shadow. ISO SHA-256 `9a06ea661088893df39103e0a15a8aec613246d9e181f5beee1d2b7222a44ebb`;
+ELF `57f29e593b9f290a74ddf86576cd63916b1d68059bcc51972320a5190dc86653`.
+Onze módulos em IRX, incluindo IOPRP254, PADMAN, LIBSD e RADSOUND, foram
+inventariados com hashes em `out/game-first/simpsons-irx-manifest.json`, ignorado.
+
+O harness local executou o ELF com o kernel Sony carregado pela BIOS parcial,
+sem assumir IDs do encoder nem substituir syscalls por serviços do host.
+**É diagnóstico de injeção após firmware bloqueado, não ExecPS2/boot normal.**
+Interpretador e híbrido chegaram a **627.894 instruções**, `PC 0x002DEAF4`, com
+RAM SHA-256 idêntica `e4157f8f9399112583e9160dd4d6d1015fffce94eb7e64bdf98b687fba705925`.
+O startup AOT cobre 23 instruções estáticas/4 blocos; aposentou 214.944 instruções
+na execução híbrida. A multiplicação Booth geral continua recusada nesse PC.
+Zero pixels GS, zero frames reais, nenhum menu, controle ou gameplay demonstrado.
+Logs, harness, traduções e snapshots permanecem locais em `out/game-first/`.
+
+Revisão estudada do PS2Recomp: `e5636981a1c9de368f6b71e819c3dc188dfedbf4`.
+
+| Arquivos consultados, somente como referência | Comparação e fundamento independente |
+|---|---|
+| `ps2xRecomp/src/lib/mmi_translator.cpp`, `ps2xRuntime/include/ps2_runtime_macros.h` | PSUBB por bytes, SA e movimentos/packing HI/LO; implementação portátil própria na semântica compartilhada, conferida no EE Instruction Set. |
+| `ps2xRecomp/src/lib/fpu_translator.cpp`, macros FPU no mesmo header | A referência usa operações/conversões do host e não resolve integralmente o arredondamento EE. MOV/conversões usam bits inteiros; DIV usa circuito SRT próprio. MUL aceita apenas o subconjunto esparso verificado; sem aproximação geral silenciosa. |
+| `ps2xRuntime/src/lib/Kernel/Syscalls/{Dispatcher,System}.cpp` | A rota de serviços do host não substitui a BIOS original no produto; syscalls continuam entrando no handler do convidado. |
+
+Fontes independentes: [EE Core](https://docs.alexrp.com/mips/ee.pdf),
+[EE Instruction Set](https://docs.alexrp.com/mips/ee_insns.pdf),
+[Prabhu/Zyner, ARITH 1995, tabelas e circuito SRT](https://www.acsel-lab.com/arithmetic/arith12/papers/ARITH12_Prabhu.pdf),
+[resultados medidos de FPU](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/cpu/ee_fpu/muldiv.expected).
+Nenhum código GPL, firmware, módulo ou código traduzido comercial foi integrado.

@@ -1,4 +1,6 @@
 #include "ps2native/interpreter.hpp"
+#include "ps2native/ee_fpu.hpp"
+#include <bit>
 
 #include <iomanip>
 #include <sstream>
@@ -208,6 +210,43 @@ public:
         if (store) m_.write32(address, fpr);
         else fpr = m_.read32(address);
     }
+    void cop1_register(MipsOpcode op,std::uint32_t word) {
+        if(!(s_.cp0(Cop0::Status)&kStatusCU1))
+            stop(StopKind::GuestException,"COP1 register transfer with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        const auto rt=ee::rt(word),fs=ee::rd(word);
+        if(op==MipsOpcode::Mfc1)s_.set_reg32_sign_extended(rt,s_.fpr[fs]);
+        else if(op==MipsOpcode::Mtc1)s_.fpr[fs]=s_.reg32(rt);
+        else {
+            if(fs!=31)stop(StopKind::NotModeled,"FPU control register "+std::to_string(fs)+" not modeled");
+            if(op==MipsOpcode::Cfc1)s_.set_reg32_sign_extended(rt,s_.fcr31);
+            else s_.fcr31=(s_.reg32(rt)&0x0083C078u)|0x01000001u;
+        }
+    }
+    void madd(std::uint32_t word) {
+        if(!(s_.cp0(Cop0::Status)&kStatusCU1))
+            stop(StopKind::GuestException,"MADD.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        const auto fs=s_.fpr[ee::rd(word)],ft=s_.fpr[ee::rt(word)];
+        // The documented zero-product path copies ACC without an add/round.
+        // Denormal inputs are signed zero on the EE. General nonzero products
+        // require the R5900 multiplier/accumulator rounding model, not host IEEE FMA.
+        if((fs&0x7F800000u) && (ft&0x7F800000u))
+            stop(StopKind::NotModeled,"MADD.S nonzero product: R5900 multiplier rounding not modeled");
+        if((s_.fpu_acc&0x7F800000u)==0x7F800000u)
+            stop(StopKind::NotModeled,"MADD.S accumulator overflow state not modeled");
+        s_.fpr[ee::sa(word)]=s_.fpu_acc;
+        s_.fcr31&=~0x0000C000u; // no overflow/underflow from an exact zero product
+    }
+    void adda(std::uint32_t word) {
+        if(!(s_.cp0(Cop0::Status)&kStatusCU1))
+            stop(StopKind::GuestException,"ADDA.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        const auto fs=s_.fpr[ee::rd(word)],ft=s_.fpr[ee::rt(word)];
+        const auto a=fs&0x7F800000u,b=ft&0x7F800000u;
+        if(a && b)stop(StopKind::NotModeled,"ADDA.S nonzero addends: R5900 adder rounding not modeled");
+        if(a==0x7F800000u || b==0x7F800000u)
+            stop(StopKind::NotModeled,"ADDA.S exponent-255 arithmetic not modeled");
+        s_.fpu_acc=a?fs:b?ft:(fs&ft&0x80000000u);
+        s_.fcr31&=~0x0000C000u;
+    }
 
     EEState& s_;
     Memory& m_;
@@ -283,6 +322,48 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         case MipsOpcode::Pref: break; // A hint: no architectural effect.
         case MipsOpcode::Lwc1: cpu.cop1_transfer(false, word); break;
         case MipsOpcode::Swc1: cpu.cop1_transfer(true, word); break;
+        case MipsOpcode::Mfc1: case MipsOpcode::Mtc1: case MipsOpcode::Cfc1: case MipsOpcode::Ctc1:
+            cpu.cop1_register(instruction.opcode,word);break;
+        case MipsOpcode::CvtWS: case MipsOpcode::CvtSW: {
+            if(!(state.cp0(Cop0::Status)&kStatusCU1))
+                cpu.stop(StopKind::GuestException,"FPU conversion with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+            const auto input=state.fpr[ee::rd(word)];
+            std::uint32_t result=0;
+            if(instruction.opcode==MipsOpcode::CvtWS) {
+                const int exponent=static_cast<int>((input>>23u)&255u)-127;
+                if(exponent>=31)result=(input&0x80000000u) ? 0x80000000u : 0x7FFFFFFFu;
+                else if(exponent>=0) {
+                    const auto mantissa=(input&0x7FFFFFu)|0x800000u;
+                    const auto magnitude=exponent>=23 ? mantissa<<(exponent-23) : mantissa>>(23-exponent);
+                    result=(input&0x80000000u) ? 0u-magnitude : magnitude;
+                }
+            } else {
+                const auto magnitude=(input&0x80000000u) ? 0u-input : input;
+                if(magnitude) {
+                    const auto exponent=31u-std::countl_zero(magnitude);
+                    const auto mantissa=exponent<=23 ? magnitude<<(23u-exponent) : magnitude>>(exponent-23u);
+                    result=(input&0x80000000u)|((exponent+127u)<<23u)|(mantissa&0x7FFFFFu);
+                }
+            }
+            state.fpr[ee::sa(word)]=result;break;
+        }
+        case MipsOpcode::MovS:
+            if(!(state.cp0(Cop0::Status)&kStatusCU1))
+                cpu.stop(StopKind::GuestException,"MOV.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+            state.fpr[ee::sa(word)]=state.fpr[ee::rd(word)];break;
+        case MipsOpcode::DivS:
+            if(!(state.cp0(Cop0::Status)&kStatusCU1))
+                cpu.stop(StopKind::GuestException,"DIV.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+            state.fpr[ee::sa(word)]=ee_fpu_divide(state.fpr[ee::rd(word)],state.fpr[ee::rt(word)],state.fcr31);break;
+        case MipsOpcode::MulS: {
+            if(!(state.cp0(Cop0::Status)&kStatusCU1))
+                cpu.stop(StopKind::GuestException,"MUL.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+            const auto value=ee_fpu_multiply(state.fpr[ee::rd(word)],state.fpr[ee::rt(word)],state.fcr31);
+            if(!value)cpu.stop(StopKind::NotModeled,"MUL.S general Booth partial-product rounding not modeled");
+            state.fpr[ee::sa(word)]=*value;break;
+        }
+        case MipsOpcode::MaddS: cpu.madd(word);break;
+        case MipsOpcode::AddaS: cpu.adda(word);break;
         case MipsOpcode::Syscall: case MipsOpcode::Break: break; // Stopped above.
     }
     (void)ee::retire(ctx, frame);

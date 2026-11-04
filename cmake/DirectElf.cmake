@@ -1,5 +1,5 @@
 # Shared bare-metal runtime; independent of the desktop launcher.
-target_sources(ps2n_core PRIVATE src/vif.cpp src/executable.cpp src/disc.cpp)
+target_sources(ps2n_core PRIVATE src/vif.cpp src/executable.cpp src/disc.cpp src/ee_fpu.cpp)
 add_executable(ps2n-disc tools/ps2n-disc.cpp)
 target_link_libraries(ps2n-disc PRIVATE ps2n_core)
 add_executable(ps2n-run tools/ps2n-run.cpp)
@@ -26,7 +26,7 @@ if(BUILD_TESTING)
     add_test(NAME native-ee-context COMMAND ps2n-ee-context)
     add_executable(ps2n-direct-fixture tests/make_direct_elf.cpp)
     target_link_libraries(ps2n-direct-fixture PRIVATE ps2n_core)
-    foreach(program IN ITEMS cpu dma frame exceptions)
+    foreach(program IN ITEMS cpu dma frame exceptions timer unaligned)
         set(elf "${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-${program}.elf")
         set(aot "${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-${program}.cpp")
         add_custom_command(OUTPUT "${elf}"
