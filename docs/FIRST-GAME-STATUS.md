@@ -713,3 +713,23 @@ conforme manual, diferentemente de LQ/SQ. Semântica compartilhada AOT/intérpre
 Mantém o modelo síncrono explícito existente de macros; não declara pipeline
 VU de quatro ciclos nem microprogramas completos. Nenhuma lógica de jogo
 substituída, nenhum dado proprietário incluído no código/testes.
+
+Ensaio 52: matriz identidade concluída; EE `0x1CD208` / 339.416.958 instruções,
+IOP `0xAE98` / 46.479.204, 89,593 s. RAM SHA-256
+`4f083bd2cb55035cd50b8fad28f4afa1aefa679b85db227e2b41e977df3d9276`.
+Nova recusa em VMULAx, seguido de VMADDAy/VMADDAz/VMADDw para multiplicação
+de matrizes. Sem PMODE, mesmos 16 pacotes da limpeza. Testes de contexto,
+boot, VU existente e execução GS convidada aprovados. CI de `bc80a16` e
+`1c929e3`: seis alvos do núcleo e seis do launcher aprovados.
+
+A investigação do acumulador consultou novamente o caminho VU de PS2Recomp
+e o manual, seções 2.1/2.2/3.3.6 e instruções MUL/MULA/MADD/MADDA.
+O [relato técnico de cottonvibes](https://pcsx2.net/blog/2009/ps2-vu-vector-unit-documentation-part-1/),
+nota 3, confirma que VU e FPU usam o alinhamento com um guard bit. VADD passa
+a compartilhar o somador inteiro existente, incluindo MAC/status O/U. O
+multiplicador usa as mesmas provas de Booth, preservando recusas ambíguas.
+ACC passa a ter quatro palavras observadas inicialmente desconhecidas; versões
+vetoriais e broadcast de MUL/MULA/MADD/MADDA validam todos os componentes
+antes de modificar destino, ACC ou flags. MADD não modifica ACC. Produtos e
+somas excepcionais ainda recusam, pois o estado extra de overflow do ACC e
+as regras combinadas de exceção não estão implementados. Sem float/FMA host.

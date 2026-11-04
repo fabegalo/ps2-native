@@ -1,5 +1,6 @@
 #pragma once
 #include "ps2native/device_timing.hpp"
+#include "ps2native/ee_fpu.hpp"
 #include <array>
 #include <optional>
 #include <vector>
@@ -27,6 +28,7 @@ public:
         for(auto& vector : vectors_) vector.fill({0,~0u});
         vectors_[0]={ObservedWord{},ObservedWord{},ObservedWord{},ObservedWord{0x3F800000u,0}};
         vu1_vectors_=vectors_;
+        accumulator_.fill({0,~0u});
         micro0_.assign(1024u,{0,~0u}); micro1_.assign(4096u,{0,~0u}); data1_.assign(4096u,{0,~0u});
     }
     [[nodiscard]] std::uint32_t read(unsigned index) const {
@@ -128,16 +130,48 @@ public:
             const auto bit=8u>>lane;
             if(!(mask&bit))continue;
             const auto a=vectors_.at(left)[lane],b=vectors_.at(right)[lane];
-            const auto ea=(a.value>>23u)&255u,eb=(b.value>>23u)&255u;
-            if(a.unknown || b.unknown || (ea && eb) || ea==255u || eb==255u)
-                throw DeviceRefusal("VU ADD outside proven zero-addend operands");
-            const auto value=ea ? a.value : eb ? b.value : (a.value&b.value&0x80000000u);
+            if(a.unknown || b.unknown)throw DeviceRefusal("VU ADD consumes unknown operands");
+            std::uint32_t flags=0;
+            const auto value=ee_fpu_add(a.value,b.value,flags);
+            result[lane]={value,0};
+            if(!(value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
+            if(value&0x80000000u){mac|=bit<<4u;status|=2u;}
+            if(flags&0x4000u){mac|=bit<<8u;status|=4u;}
+            if(flags&0x8000u){mac|=bit<<12u;status|=8u;}
+        }
+        // Commit only after all selected operands have been validated.
+        if(destination)vectors_.at(destination)=result;
+        registers_[17]=mac;unknown_[17]=0;
+        registers_[16]=(*registers_[16]&~0xFu)|status|(status<<6u);
+        unknown_[16]&=~(0xFu|(status<<6u));
+    }
+    void product(unsigned destination,unsigned left,unsigned right,unsigned mask,
+                 unsigned broadcast,bool accumulate,bool to_accumulator) {
+        auto result=to_accumulator ? accumulator_ : vectors_.at(destination);
+        std::uint32_t mac=0,status=0;
+        for(unsigned lane=0;lane<4;++lane) {
+            const auto bit=8u>>lane;
+            if(!(mask&bit))continue;
+            const auto a=vectors_.at(left)[lane],b=vectors_.at(right)[broadcast<4 ? broadcast : lane];
+            if(a.unknown || b.unknown)throw DeviceRefusal("VU multiply consumes unknown operands");
+            std::uint32_t flags=0;
+            const auto multiplied=ee_fpu_multiply(a.value,b.value,flags);
+            if(!multiplied)throw DeviceRefusal("VU multiply ambiguous low-column Booth rounding");
+            // ACC has extra exception state on real VU hardware. Until that
+            // state is modeled, refuse any exceptional product/sum atomically.
+            if(flags&0xC000u)throw DeviceRefusal("VU multiply exception/ACC state is not modeled");
+            auto value=*multiplied;
+            if(accumulate) {
+                if(accumulator_[lane].unknown)throw DeviceRefusal("VU multiply-add consumes unknown ACC");
+                value=ee_fpu_add(accumulator_[lane].value,value,flags);
+                if(flags&0xC000u)throw DeviceRefusal("VU accumulation exception/ACC state is not modeled");
+            }
             result[lane]={value,0};
             if(!(value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
             if(value&0x80000000u){mac|=bit<<4u;status|=2u;}
         }
-        // Commit only after all selected operands have been validated.
-        if(destination)vectors_.at(destination)=result;
+        if(to_accumulator)accumulator_=result;
+        else if(destination)vectors_.at(destination)=result;
         registers_[17]=mac;unknown_[17]=0;
         registers_[16]=(*registers_[16]&~0xFu)|status|(status<<6u);
         unknown_[16]&=~(0xFu|(status<<6u));
@@ -245,6 +279,7 @@ private:
     std::array<ObservedWord,16> vu1_controls_{};
     std::vector<ObservedWord> data_;
     std::array<std::array<ObservedWord,4>,32> vectors_{};
+    std::array<ObservedWord,4> accumulator_{};
     std::array<std::array<ObservedWord,4>,32> vu1_vectors_{};
     std::vector<ObservedWord> micro0_,micro1_,data1_;
 };

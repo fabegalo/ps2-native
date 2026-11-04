@@ -140,7 +140,7 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     (void)m;
     (void)pc;
     // Host execution is sequential: guest memory accesses are already ordered (SYNC).
-    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2) {
+    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc) {
         if (!(s.cp0(Cop0::Status) & (1u<<30)))
             throw std::runtime_error("COP2 transfer with Status.CU2 = 0; coprocessor unusable vectoring is not modeled");
         // Implemented macros complete synchronously in the shared instruction
@@ -175,6 +175,13 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         else if constexpr (Op == O::Vsub) m.vu_subtract(a_,d_,t_,(w>>21u)&15u);
         else if constexpr (Op == O::Vadd) m.vu_add(a_,d_,t_,(w>>21u)&15u);
         else if constexpr (Op == O::Vmr32) m.vu_rotate(t_,d_,(w>>21u)&15u);
+        else if constexpr (Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc ||
+                           Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc) {
+            constexpr bool broadcast=Op==O::VmulBc || Op==O::VmaddBc || Op==O::VmulaBc || Op==O::VmaddaBc;
+            constexpr bool accumulate=Op==O::Vmadd || Op==O::VmaddBc || Op==O::Vmadda || Op==O::VmaddaBc;
+            constexpr bool to_accumulator=Op==O::Vmula || Op==O::VmulaBc || Op==O::Vmadda || Op==O::VmaddaBc;
+            m.vu_product(a_,d_,t_,(w>>21u)&15u,broadcast ? w&3u : 4u,accumulate,to_accumulator);
+        }
         else if constexpr (Op == O::Vsqi) m.vu_vector_store_increment(d_,t_,(w>>21u)&15u);
         else m.vu_add_integer(a_,d_,t_);
     } else if constexpr (Op == O::Nop || Op == O::Sync) {

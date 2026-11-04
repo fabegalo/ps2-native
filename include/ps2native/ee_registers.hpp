@@ -101,6 +101,9 @@ public:
         vu_control_.add(destination,left,right,mask);
     }
     void vu_rotate(unsigned destination,unsigned source,unsigned mask) {vu_control_.rotate(destination,source,mask);}
+    void vu_product(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast,bool accumulate,bool to_accumulator) {
+        vu_control_.product(destination,left,right,mask,broadcast,accumulate,to_accumulator);
+    }
     void vu_vector_store_increment(unsigned source,unsigned base,unsigned mask) {
         vu_control_.vector_store_increment(source,base,mask);
     }

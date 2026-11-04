@@ -451,7 +451,7 @@ void vector_setup() {
             "negative nonzero result sets component sign and sticky sign");
     const auto flags=memory.read_vu_control(16);
     memory.write_vu_vector(3,{{0,0},{0,0xFFFFFFFF00000000ull}});
-    rejects([&]{memory.vu_add(2,1,3,15);},"zero-addend");
+    rejects([&]{memory.vu_add(2,1,3,15);},"unknown operands");
     require(memory.observe_vu_vector(2).low.value==0xC0400000u && memory.read_vu_control(16)==flags,
             "unknown later component cannot partially change vector or flags");
     memory.write_vu_vector(2,{{0x1122334455667700ull,0xFFu},{0xAABBCCDDEEFF0000ull,0xFFFFu}});
@@ -475,6 +475,34 @@ void vector_setup() {
     rejects([&]{ee::exec<MipsOpcode::Sqc2>(s,memory,0,store);},"Status.CU2 = 0");
     memory.vu_rotate(0,3,15);
     require(memory.observe_vu_vector(0).high.value==0x3F80000000000000ull,"VF00 stays constant");
+    // Distinct source lanes catch broadcast selection and accidental host FMA.
+    memory.write_vu_vector(4,{{0x400000003F800000ull,0},{0x4080000040400000ull,0}});
+    memory.write_vu_vector(5,{{0x3F00000040000000ull,0},{0x3F80000000000000ull,0}});
+    rejects([&]{memory.vu_product(6,4,5,15,0,true,false);},"unknown ACC");
+    s.set_cp0(Cop0::Status,1u<<30);
+    constexpr auto mula=0x4BE521BCu,madda=0x4BE520BDu,madd=0x4BE5218Bu;
+    require(try_decode_r5900(0,mula)->opcode==MipsOpcode::VmulaBc &&
+            try_decode_r5900(0,madda)->opcode==MipsOpcode::VmaddaBc &&
+            try_decode_r5900(0,madd)->opcode==MipsOpcode::VmaddBc,"broadcast accumulator opcode groups");
+    ee::exec<MipsOpcode::VmulaBc>(s,memory,0,mula); // ACC = (1,2,3,4)*2
+    ee::exec<MipsOpcode::VmaddaBc>(s,memory,0,madda); // ACC += (1,2,3,4)*0.5
+    ee::exec<MipsOpcode::VmaddBc>(s,memory,0,madd); // VF06 = ACC + (1,2,3,4)*1
+    const auto accumulated=memory.observe_vu_vector(6);
+    require(accumulated.low.value==0x40E0000040600000ull && accumulated.high.value==0x4160000041280000ull,
+            "broadcast matrix accumulation uses actual persistent ACC lanes");
+    // MADD must leave ACC unchanged: a zero product exposes its prior value.
+    memory.vu_product(6,4,5,15,2,true,false);
+    require(memory.observe_vu_vector(6).low.value==0x40A0000040200000ull &&
+            memory.observe_vu_vector(6).high.value==0x4120000040F00000ull,"MADD destination does not overwrite ACC");
+    memory.write_vu_vector(7,{{0x7FFFFFFFu,0},{0,0}});
+    const auto saved=memory.observe_vu_vector(6);
+    rejects([&]{memory.vu_product(6,7,5,8,0,false,true);},"exception/ACC");
+    memory.vu_product(6,4,5,15,2,true,false);
+    require(memory.observe_vu_vector(6).low.value==saved.low.value,"refused multiplication preserves ACC");
+    memory.write_vu_vector(7,{{0x3F800000u,0},{0,0}});
+    memory.write_vu_vector(8,{{0xBE800001u,0},{0,0}});
+    memory.vu_add(7,7,8,8);
+    require(memory.observe_vu_vector(7).low.value==0x3F400000u,"VU addition shares the one-guard-bit circuit");
 }
 void dma_idle_knowledge() {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
