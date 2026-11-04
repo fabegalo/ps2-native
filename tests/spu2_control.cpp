@@ -271,5 +271,33 @@ int main() try {
                 "writes of any data clear the selected ENDX bank on either core");
         }
     }
+    {
+        m20::Assembler a(kEeResetVector);a.la(10,0xA0000100u);
+        for(unsigned core=0;core<2u;++core) {
+            a.la(8,0xBF90033Cu+core*0x400u);a.lhu(9,0,8);a.nop();a.addiu(9,9,1);a.sw(9,core*4u,10);
+        }
+        a.label("configured");a.la(8,0xBF90019Au);a.sh(0,0,8);
+        a.la(8,0xBF90033Cu);a.la(9,3u);a.sh(9,0,8);a.lhu(9,0,8);a.nop();a.addiu(9,9,1);
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());
+        for(unsigned pass=0;pass<3u;++pass) {
+            iop.reset(image,nullptr);
+            if(pass==1u)iop.diagnostic_spu2_effect_end_reset({0xBu,0xCu});
+            const auto boundary=(a.at("configured")-kEeResetVector)/4u;
+            iop.run_until(boundary);
+            if(pass!=1u){require(iop.stopped(),"initial EEA stays unknown by default and after reset");continue;}
+            require(!iop.stopped() && iop.ee_read(0x100,4)==0xCu && iop.ee_read(0x104,4)==0xDu,
+                    "explicit EEA experiment supplies only the selected initial readbacks");
+            bool rejected=false;try{iop.diagnostic_spu2_effect_end_reset({1,2});}catch(const DeviceRefusal&){rejected=true;}
+            require(rejected,"initial EEA cannot be replaced after execution started");
+            iop.run_until(100);
+            require(iop.stopped() && iop.stop_reason()->find("reserved readback")!=std::string::npos,
+                    "guest EEA writes supersede the initial experiment; reserved bits are not fabricated thereafter");
+        }
+        iop.reset(image,nullptr);bool rejected=false;
+        try{iop.diagnostic_spu2_effect_end_reset({0x10,0});}catch(const DeviceRefusal&){rejected=true;}
+        require(rejected,"EEA experiment rejects values outside the address field");
+    }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

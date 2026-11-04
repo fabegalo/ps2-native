@@ -918,3 +918,18 @@ payload, portanto a cópia não precisa inventar bits reservados. Regressão
 própria copia LHU→SH nos dois bancos/cores. Três testes SPU2 focados passaram;
 ensaio 64 iniciado. Modo BIOS original repetido após KON/ENDX: PCs, contagens,
 zero pacotes/pixels e hash canônico `cead2f7c...def9c354` preservados.
+
+Ensaio 64: limpeza/cópia ENDX passaram; IOP `0x603A8` / 46.559.703,
+LHU de EEA core 0 (0x1F90033C) antes de escrita conhecida. EE `0x81FCC` /
+360.000.000, 98,6717 s, 22 stalls; mesmo hash RAM, 16 pacotes, sem PMODE.
+O driver transforma EEA em endereço final da área de efeitos; não é apenas
+preservação de bits. PS2Recomp não oferece o reset desse MMIO. PS2SDK libsd
+programa E/F na inicialização completa; PCSX2 inicia essas mesmas áreas.
+Essas referências não medem o reset deste console/perfil.
+
+Próximo diagnóstico acrescenta valores iniciais EEA E/F, incluindo reservados
+zero, como hipótese explícita selecionada antes da execução. A API exige
+valores de quatro bits por core; não aceita mudança após começar. Nenhum
+valor padrão foi adicionado: reset remove a hipótese, escrita convidada a
+supera, e outros registradores/reservados posteriores continuam desconhecidos.
+Não se trata de prova de efeitos, reset físico ou boot original concluído.

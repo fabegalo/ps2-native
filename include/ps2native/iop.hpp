@@ -129,6 +129,9 @@ public:
     // Separate hypothesis for the unassigned 0x346..0x3FF aperture and its
     // 0x800 mirror. Does not turn reads or functional registers into stubs.
     void diagnostic_spu2_reserved_latches() { diagnostic_spu2_reserved_latches_=true; }
+    // Explicit initial EEA readbacks, including zero reserved bits; not a
+    // measured reset value. Guest writes supersede it and reset removes it.
+    void diagnostic_spu2_effect_end_reset(std::array<std::uint16_t,2> values);
     // Functional FIFO-to-RAM transfer with an explicit, unmeasured rate.
     // Select before guest execution. Reset removes this timing experiment.
     void diagnostic_spu2_pio_word_cycles(std::uint32_t cycles);
@@ -315,6 +318,7 @@ private:
     std::array<std::uint32_t,2> spu2_symbolic_voices_{};
     std::array<std::array<std::optional<std::uint16_t>,4>,2> spu2_keys_;
     std::array<ObservedWord,2> spu2_endx_;
+    std::optional<std::array<std::uint16_t,2>> diagnostic_spu2_effect_end_;
     // Quiet clocks are available only under the explicit cold-state
     // experiment: no active voices, inputs, effects or transfers.
     std::array<std::optional<std::uint64_t>,2> spu2_next_sample_;

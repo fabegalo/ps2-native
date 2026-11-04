@@ -225,6 +225,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     diagnostic_spu2_reserved_latches_=false;
     spu2_control_={};spu2_symbolic_voices_={};spu2_keys_={};
     spu2_endx_.fill(ObservedWord{0u,0xFFFFFFu});
+    diagnostic_spu2_effect_end_.reset();
     spu2_next_sample_={};spu2_last_sample_={};spu2_sample_count_={};spu2_clock_active_=false;
     spu2_transfer_={};spu2_ram_.clear();spu2_ram_written_.clear();diagnostic_spu2_pio_cycles_=0;
     spu2_adma_={};diagnostic_spu2_adma_cycles_=0;
@@ -1086,6 +1087,11 @@ void Iop::diagnostic_spu2_pio_word_cycles(std::uint32_t cycles) {
     if(!cycles || cycle_)throw DeviceRefusal("SPU2 PIO experiment requires positive word cycles before guest execution");
     diagnostic_spu2_pio_cycles_=cycles;
 }
+void Iop::diagnostic_spu2_effect_end_reset(std::array<std::uint16_t,2> values) {
+    if(cycle_ || values[0]>0xFu || values[1]>0xFu)
+        throw DeviceRefusal("SPU2 initial EEA experiment requires two four-bit addresses before guest execution");
+    diagnostic_spu2_effect_end_=values;
+}
 std::optional<std::uint16_t> Iop::spu2_ram_halfword(std::uint32_t word_address) const {
     if(word_address>=0x100000u)throw DeviceRefusal("SPU2 RAM word address outside 2 MiB");
     // Voices 1 and 3 capture their pre-volume output into 512-word rings.
@@ -1465,6 +1471,8 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         // This does not establish core state, IRQ status or audio samples.
         if(bytes!=2u)throw IopStop{"SPU2 output configuration requires halfword reads"};
         const auto value=latch(physical);
+        if((physical==0x1F90033Cu || physical==0x1F90073Cu) && (!value || !*value) && diagnostic_spu2_effect_end_)
+            return (*diagnostic_spu2_effect_end_)[(physical>>10u)&1u];
         if(!value || !*value)throw IopStop{name+": SPU2 output configuration before a known halfword write"};
         if(is_spu2_voice_start(physical)) {
             const auto mask=(physical&2u) ? 0xFFF8u : 0xFu;
