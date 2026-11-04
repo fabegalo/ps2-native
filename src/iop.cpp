@@ -899,7 +899,7 @@ void Iop::ee_write(std::uint32_t offset, std::size_t bytes, std::uint64_t value)
 
 std::uint32_t Iop::reg(unsigned index) const {
     if ((gpr_defined_ & (1u << index)) == 0u)
-        throw IopStop{"GPR " + std::to_string(index) + " used while its value is unknown (" + gpr_origin_[index] + ")"};
+        throw IopStop{"GPR " + std::to_string(index) + " used while its value is unknown (" + gpr_origin_[index] + "); instruction=" + hex(fetch(pc_))};
     return gpr_[index];
 }
 std::uint32_t Iop::masked_reg(unsigned index, std::uint32_t mask) const {
@@ -935,6 +935,17 @@ bool Iop::regs_equal(unsigned rs, unsigned rt) const {
 std::optional<std::uint32_t> Iop::stored_reg(unsigned index) const {
     if ((gpr_defined_ & (1u << index)) == 0u) return std::nullopt;
     return gpr_[index];
+}
+void Iop::shift_right(unsigned destination, unsigned source, unsigned amount) {
+    if (!destination) return;
+    if (!amount) return copy_reg(destination, source);
+    if (gpr_defined_ & (1u << source)) return set_reg(destination, gpr_[source] >> amount);
+    // Vacated high bits are zero; every other output bit retains the
+    // knowledge of its corresponding source bit. No numeric guess is made.
+    const auto known = (gpr_known_[source] >> amount) | (~0u << (32u - amount));
+    const auto value = (gpr_[source] >> amount) & known;
+    if (known == ~0u) return set_reg(destination, value);
+    write_ = PendingLoad{destination, value, false, gpr_origin_[source], known};
 }
 void Iop::copy_reg(unsigned destination, unsigned source) {
     if (!destination) return;
@@ -1819,7 +1830,7 @@ void Iop::step() {
         case 0x00:
             switch (fn) {
                 case 0x00: set_reg(rd, reg(rt) << sa); break;                                   // SLL
-                case 0x02: set_reg(rd, reg(rt) >> sa); break;                                   // SRL
+                case 0x02: shift_right(rd, rt, sa); break;                                   // SRL
                 case 0x03: set_reg(rd, static_cast<std::uint32_t>(static_cast<std::int32_t>(reg(rt)) >> sa)); break;
                 case 0x04: set_reg(rd, reg(rt) << (reg(rs) & 31u)); break;                      // SLLV
                 case 0x06: set_reg(rd, reg(rt) >> (reg(rs) & 31u)); break;                      // SRLV

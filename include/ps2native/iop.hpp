@@ -204,6 +204,7 @@ private:
     [[nodiscard]] std::optional<std::uint32_t> stored_reg(unsigned index) const;
     void set_reg(unsigned index, std::uint32_t value);
     void copy_reg(unsigned destination, unsigned source);
+    void shift_right(unsigned destination, unsigned source, unsigned amount);
     void load_reg(unsigned index, std::uint32_t value);
     [[nodiscard]] Access translate(std::uint32_t address, std::size_t bytes, bool write, const char* what) const;
     [[nodiscard]] std::uint32_t fetch(std::uint32_t address) const;

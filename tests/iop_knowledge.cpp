@@ -64,5 +64,22 @@ int main() try {
         const auto iop=run(a);require(!iop.stopped() && iop.ee_read(0x100,4)==0,
                 "discarded moves do not consume undefined bits and $zero stays immutable");
     }
+    for(unsigned amount=0;amount<32;++amount) for(const unsigned destination : {9u,11u}) {
+        m20::Assembler a(kEeResetVector);input(a);a.ori(9,9,0xFFFFu);
+        a.r(0,9,destination,amount,0x02u);
+        const auto known=(0xFFFFu>>amount)|(amount ? (~0u<<(32u-amount)) : 0u);
+        a.la(10,known);a.r(destination,10,10,0,0x24u);a.sw(10,0x100,8);
+        const auto iop=run(a);
+        require(!iop.stopped() && iop.ee_read(0x100,4)==(0xFFFFu>>amount),
+                "SRL transports each known bit and inserts known high zeros for every shift and operand alias");
+        m20::Assembler b(kEeResetVector);input(b);b.r(0,9,destination,amount,0x02u);b.addiu(10,destination,1);
+        const auto unknown=run(b);require(unknown.stopped() && unknown.stop_reason()->find("used while its value is unknown")!=std::string::npos,
+                                       "SRL never invents the unknown source bits shifted into a result");
+    }
+    {
+        m20::Assembler a(kEeResetVector);a.lui(8,0xA000u);a.la(9,0x80);a.lw(9,0x300,8);
+        a.r(0,9,9,3,0x02u);a.sw(9,0x100,8);const auto iop=run(a);
+        require(!iop.stopped() && iop.ee_read(0x100,4)==0x10u,"SRL honors the old operand in the load delay slot and overrides its pending load");
+    }
     std::cout<<"R3000A OR/ORI preserve known bits, aliases, unknown consumption and load delay\n";
 } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
