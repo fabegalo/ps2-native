@@ -235,7 +235,14 @@ void check_gif() {
     require(registers.gs().general(0) == 0u, "PRE writes PRIM");
     registers.write128(kGifFifo, 0u, 0x01u);
     rejects([&] { registers.write128(kGifFifo, giftag(1u, true, 1u, 1u), kAllAd); }, "invalid register descriptor");
-    rejects([&] { registers.write128(kGifFifo, giftag(1u, true, 1u) | (1ull << 20), kAllAd); }, "bits 16-45");
+    for(const auto padding : {1ull<<16u,1ull<<45u,0x00003FFFFFFF0000ull}) {
+        const auto packets=registers.gif().packets().size();
+        registers.write128(kGifFifo,giftag(1u,true,1u)|padding,kAllAd);
+        require(registers.read(kGifStat,4u)!=0u,"GIFtag padding preserves the actual payload count");
+        registers.write128(kGifFifo,0xFFFFFFFF12345678ull,0x62u);
+        require(registers.read(kGifStat,4u)==0u && registers.gif().packets().size()==packets+1u && registers.gs().read(kGsSiglblid+4u,4u)==0x12345678u,
+            "GIFtag unused bits do not reject or alter the real A+D payload and EOP boundary");
+    }
     rejects([&] { registers.write128(kGifFifo, giftag(1u, true, 2u), 0xBEu); }, "invalid register descriptor");
     registers.write128(kGifFifo, giftag(1u, true, 1u), kAllAd);
     rejects([&] { registers.write128(kGifFifo, 0u, 0x105u); }, "A+D bits 72-127");

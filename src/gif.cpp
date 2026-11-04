@@ -95,8 +95,9 @@ void Gif::write_path(std::uint64_t low, std::uint64_t high, GsRegisters& gs, uns
         const auto flg = static_cast<unsigned>((low >> 58) & 3u);
         auto nreg = static_cast<std::uint32_t>((low >> 60) & 0xFu);
         if (nreg == 0u) nreg = 16u;
-        if (nloop && (low & 0x00003FFFFFFF0000ull) != 0u)
-            throw DeviceRefusal(shown() + ": GIFtag bits 16-45 are reserved; their effect is not documented");
+        // EE manual 7.2.2 (p.151): bits 16-45 have no field in the
+        // GIFtag; ps2tek calls them unused. They carry no control/data
+        // semantics and do not alter NLOOP/EOP, PRE, PRIM, FLG or NREG.
         if (nloop && flg < 2u)
             for (std::uint32_t i = 0; i < nreg; ++i) {
                 const auto descriptor = (high >> (4u * i)) & 15u;
