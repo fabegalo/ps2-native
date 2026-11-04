@@ -155,6 +155,33 @@ Fontes independentes: [EE Core](https://docs.alexrp.com/mips/ee.pdf),
 [resultados medidos de FPU](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/cpu/ee_fpu/muldiv.expected).
 Nenhum código GPL, firmware, módulo ou código traduzido comercial foi integrado.
 
+### Reensaio de Simpsons — 04/11/2026
+
+A pedido do usuário, The Simpsons: Hit & Run foi repetido no núcleo
+`3681ddc`, após as capturas reais de Super Bust-A-Move. A ISO SLUS-20624
+foi montada como PS2 DVD, sem reutilizar a mídia ou o AOT do outro título.
+ELF e startup AOT conferidos pelo SHA-256 registrado acima. Firmware e
+hipóteses explícitas são os do ensaio 101; injeção após checkpoint
+`0x82000` / 32.416.676 instruções, não boot original do disco.
+
+Híbrido e interpretador puro pararam em **849.776 instruções**,
+EE **`0x001681B0`**, opcode `0x460CA302` (`MUL.S`, no delay slot de JAL).
+Operandos crus: F20=`0x3F800000`, F12=`0x48B33333`. A recusa é
+`MUL.S ambiguous low-column Booth rounding not modeled`.
+IOP ativo em `0x2F28` / 4.158.306 instruções, sem recusa.
+Zero bytes SIF1/SIF0, zero pacotes GIF, zero escritas de pixels;
+scanout recusa PMODE ainda não escrito. **Nenhum frame do Simpsons.**
+
+RAM idêntica nos dois motores, sem doublewords desconhecidos:
+`c9059fda7e7b29936039341b31c8ee4b02b3e506f8f8a7a0c0193d7b791dadc7`.
+Híbrido: 214.944 instruções AOT e 634.832 interpretadas, 0,385 s na fase
+do jogo; interpretador: 849.776, 0,592 s. Medição única, sem reivindicar
+benchmark geral. Nenhuma mudança no núcleo foi necessária para o ensaio.
+Logs locais `out/game-first/simpsons-trial-1.log` e
+`simpsons-trial-interpreter.log`; harness `simpsons-trial-probe.cpp`,
+build `out/gs-iop-build/simpsons-trial.exe`. Artefatos proprietários
+permanecem ignorados; capturas do Super Bust-A-Move preservadas.
+
 ## 04/11/2026 — Super Bust-A-Move (SLUS-20115)
 
 BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;

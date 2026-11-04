@@ -1,4 +1,16 @@
-# Próxima execução — Super Bust-A-Move (SLUS-20115)
+# Próxima execução — jogos reais
+
+Último pedido concluído: experimentar The Simpsons: Hit & Run (SLUS-20624).
+Híbrido e interpretador puro reproduziram EE `0x001681B0` / 849.776
+instruções, `MUL.S` com arredondamento Booth ambíguo; IOP ativo `0x2F28`.
+Zero pacotes GIF/pixels/frames. Nenhuma alteração do núcleo. Se solicitada
+a continuação do Simpsons, investigar o multiplicador R5900 a partir dos
+operandos `0x3F800000` e `0x48B33333`, consultando PS2Recomp e evidência
+independente antes de implementar, sem substituir pelo float do host.
+Logs `out/game-first/simpsons-trial-{1,interpreter}.log`; relatório
+[primeiro jogo](FIRST-GAME-STATUS.md#reensaio-de-simpsons--04112026).
+
+## Checkpoint preservado — Super Bust-A-Move (SLUS-20115)
 
 O objetivo de capturar pixels reais do jogo foi atingido no ensaio 101:
 três capturas no VBLANK, campos nativos 640x224, mostram a tela original

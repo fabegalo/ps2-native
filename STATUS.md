@@ -18,6 +18,14 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **Reensaio de The Simpsons: Hit & Run (SLUS-20624):** com o núcleo que
+  produziu as capturas do Super Bust-A-Move, híbrido e interpretador puro
+  chegaram às mesmas 849.776 instruções e RAM, parando em `0x001681B0`:
+  `MUL.S` com arredondamento Booth ainda ambíguo. IOP ativo em `0x2F28`,
+  4.158.306 instruções. Zero pacotes GIF, pixels ou frames. Ensaio por
+  injeção de ELF, ISO própria montada como DVD e hipóteses explícitas;
+  nenhum subsistema ou modo BIOS original alterado. Detalhes no relatório
+  [primeiro jogo](docs/FIRST-GAME-STATUS.md#reensaio-de-simpsons--04112026).
 - **Primeiros quadros não pretos do jogo, ensaio 101:** três capturas no
   VBLANK, campos nativos 640x224 com 64.478 pixels não pretos cada,
   mostram a tela original de Super Bust-A-Move informando Memory Card ausente.
