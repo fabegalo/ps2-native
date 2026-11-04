@@ -137,5 +137,32 @@ int main() try {
         else {require(iop.stopped(),"KOFF rejects unproved masks, widths, readback, active synthesis and missing reset assumptions");
             if(mode==5)require(iop.stop_reason()->find("KOFF")!=std::string::npos,"inactive voice state requires its explicit assumption even before a core starts");}
     }
+    for(unsigned mode=0;mode<5;++mode) {
+        m20::Assembler a(kEeResetVector);
+        for(unsigned core=0;core<2;++core) {
+            a.la(8,0xBF90019Au+core*0x400u);a.la(9,0x8000u);if(mode!=4)a.sh(9,0,8);
+            for(unsigned pair=0;pair<6;++pair) {
+                a.la(8,0xBF900180u+core*0x400u+pair*4u);a.la(9,0xA5C3u);a.sh(9,0,8);a.la(9,0x96u);a.sh(9,2,8);
+                a.raw((0x25u<<26)|(8u<<21)|(9u<<16));a.nop();a.la(10,0xA0000100u+core*0x40u+pair*8u);a.sw(9,0,10);
+                a.raw((0x25u<<26)|(8u<<21)|(9u<<16)|2u);a.nop();a.andi(9,9,0xFFu);a.sw(9,4,10);
+            }
+            a.la(8,0xBF900198u+core*0x400u);a.la(9,0xF30u+core*12u);a.sh(9,0,8);
+            a.raw((0x25u<<26)|(8u<<21)|(9u<<16));a.nop();a.la(10,0xA0000130u+core*0x40u);a.sw(9,0,10);
+        }
+        if(mode==1){a.la(8,0xBF900182u);a.raw((0x25u<<26)|(8u<<21)|(9u<<16));a.nop();a.addiu(9,9,1);}
+        else if(mode==2)a.sw(0,0,8);
+        else if(mode==3)a.sb(0,0,8);
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,mode!=4);iop.run_until(1536);
+        if(!mode) {
+            require(!iop.stopped() && iop.spu2_sample_count(0)==2 && iop.spu2_sample_count(1)==2,"routing inactive sources preserves both quiet sample clocks");
+            for(unsigned core=0;core<2;++core) {
+                for(unsigned pair=0;pair<6;++pair)require(iop.ee_read(0x100u+core*0x40u+pair*8u,4)==0xA5C3u &&
+                    iop.ee_read(0x104u+core*0x40u+pair*8u,4)==0x96u,"all voice bitmap halves remain independent");
+                require(iop.ee_read(0x130u+core*0x40u,4)==0xF30u+core*12u,"core input routing retains its own configured mask");
+            }
+        } else require(iop.stopped(),"reserved readback bits, unsupported widths and unproved inactive sources stay explicit");
+    }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
