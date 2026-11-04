@@ -46,6 +46,7 @@ class Launcher : public QObject {
     Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY settingsChanged)
     Q_PROPERTY(bool scanOnStart READ scanOnStart WRITE setScanOnStart NOTIFY settingsChanged)
     Q_PROPERTY(QString libraryView READ libraryView WRITE setLibraryView NOTIFY settingsChanged)
+    Q_PROPERTY(QString language READ language WRITE setLanguage NOTIFY settingsChanged)
     Q_PROPERTY(QString dataDir READ dataDir CONSTANT)
     Q_PROPERTY(QString libraryFile READ libraryFile CONSTANT)
     Q_PROPERTY(QString settingsFile READ settingsFile CONSTANT)
@@ -92,6 +93,8 @@ public:
     void setScanOnStart(bool value);
     [[nodiscard]] QString libraryView() const;
     void setLibraryView(const QString& value);
+    QString language() const;
+    void setLanguage(const QString& value);
     [[nodiscard]] QString dataDir() const { return data_dir_; }
     [[nodiscard]] QString libraryFile() const;
     [[nodiscard]] QString settingsFile() const;

@@ -41,6 +41,20 @@ Flickable {
             subtitle: qsTr("Saved automatically. Options for components that are not implemented yet are shown, and locked, so nothing pretends to work.")
         }
 
+        Card {
+            Layout.fillWidth: true
+            SettingRow {
+                anchors.fill: parent
+                title: qsTr("Language")
+                description: qsTr("Use English or Brazilian Portuguese. Changes apply immediately.")
+                iconName: "settings"
+                AppComboBox {
+                    model: [qsTr("Automatic"), "English", "Português (Brasil)"]
+                    currentIndex: Launcher.language === "en" ? 1 : Launcher.language === "pt-BR" ? 2 : 0
+                    onActivated: Launcher.language = ["auto", "en", "pt-BR"][currentIndex]
+                }
+            }
+        }
         // Library
         Card {
             Layout.fillWidth: true

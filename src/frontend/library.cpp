@@ -268,6 +268,7 @@ std::string LauncherSettings::serialize() const {
     put(out, "renderer", renderer);
     put(out, "reduce_motion", reduce_motion ? "1" : "0");
     put(out, "library_view", library_view);
+    put(out, "language", language);
     return out.str();
 }
 LauncherSettings LauncherSettings::parse(std::string_view text) {
@@ -283,6 +284,7 @@ LauncherSettings LauncherSettings::parse(std::string_view text) {
         else if (key == "diagnostic_budget") settings.diagnostic_budget = parse_integer<std::uint64_t>(value, settings.diagnostic_budget);
         else if (key == "diagnostic_trace" && (value == "events" || value == "full")) settings.diagnostic_trace = value;
         else if (key == "renderer" && (value == "gs-faithful" || value == "native")) settings.renderer = value;
+        else if (key == "language" && (value == "auto" || value == "en" || value == "pt-BR")) settings.language = value;
         else if (key == "reduce_motion") settings.reduce_motion = value == "1";
         else if (key == "library_view" && (value == "grid" || value == "list")) settings.library_view = value;
     }

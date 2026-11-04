@@ -22,7 +22,7 @@ qt_add_executable(ps2-native WIN32 MACOSX_BUNDLE
     src/diagnostic_runner.cpp src/diagnostic_runner.hpp
     src/icon_provider.cpp src/icon_provider.hpp
     src/automation.cpp src/automation.hpp
-    src/qt_support.hpp)
+    src/qt_support.hpp src/translation.hpp)
 set_target_properties(ps2-native PROPERTIES
     AUTOMOC ON
     # Same directory as ps2n-boot (per configuration on multi-config generators).
@@ -93,6 +93,12 @@ set_source_files_properties(assets/app-icon.svg PROPERTIES QT_RESOURCE_ALIAS ass
 qt_add_resources(ps2-native ps2native_assets
     PREFIX /ps2native
     FILES "${PROJECT_SOURCE_DIR}/docs/assets/ps2-native-banner.webp" assets/app-icon.svg)
+
+qt_add_resources(ps2-native translations PREFIX /i18n BASE i18n FILES i18n/pt_BR.json)
+if(WIN32)
+    enable_language(RC)
+    target_sources(ps2-native PRIVATE assets/app-icon.rc)
+endif()
 
 # ps2n-boot is the diagnostic the launcher runs; keep it next to the launcher.
 add_dependencies(ps2-native ps2n-boot)

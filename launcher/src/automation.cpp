@@ -152,6 +152,15 @@ void Automation::fail(const QString& message) {
 }
 
 void Automation::finish() {
+    const auto previousLanguage = launcher_.language();
+    launcher_.setLanguage(QStringLiteral("pt-BR"));
+    if (QCoreApplication::translate("SettingsPage", "Settings") != QString::fromUtf8("Configurações"))
+        fail(QStringLiteral("Portuguese translation unavailable"));
+    launcher_.setLanguage(QStringLiteral("en"));
+    if (QCoreApplication::translate("SettingsPage", "Settings") != QStringLiteral("Settings"))
+        fail(QStringLiteral("English translation unavailable"));
+    launcher_.setLanguage(previousLanguage);
+
     launcher_.flush();
     // The persisted library, read back from disk, is what the next start restores.
     try {

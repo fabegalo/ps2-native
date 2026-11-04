@@ -59,5 +59,13 @@ Automação para testes e validação visual: `ps2-native --automate --data-dir 
 
 - Jogos, Browser, controle, áudio, memory cards e renderização não estão disponíveis: dependem do runtime. O botão Jogar fica bloqueado.
 - Imagens comprimidas (CSO/ZSO/CHD/gzip), MDF/MDS e folhas CUE que referenciam subpastas não são lidas.
-- Sem traduções (interface em inglês) nem pacote de distribuição; o launcher é ferramenta de desenvolvimento, sem release.
+- Interface em inglês e português brasileiro; saída técnica do núcleo/diagnóstico permanece original. Sem pacote de distribuição; o launcher é ferramenta de desenvolvimento, sem release.
 - A automação importa pelo mesmo caminho dos diálogos e do arrastar e soltar (`Launcher::importPaths`), mas **não** abre os diálogos de arquivo nem simula o mouse: diálogos nativos, arrastar e soltar real e leitores de tela não foram verificados. A janela real foi exercitada só no Windows; nos demais hosts a evidência é build + testes offscreen da CI.
+
+## Ícone Windows e idiomas EN/PT-BR
+
+- Ícone ICO original derivado de `assets/app-icon.svg` em sete tamanhos (16–256), embutido no executável Windows por recurso RC. O atalho local aponta também explicitamente para esse ICO.
+- Configurações → Idioma: Automático, English e Português (Brasil). Automático acompanha o idioma do sistema; preferência `language=auto|en|pt-BR` no mesmo `settings.cfg`, tolerando configurações antigas e valores desconhecidos.
+- Catálogo UTF-8 `launcher/i18n/pt_BR.json` embutido por Qt Resources, com 334 textos compartilhados por `QTranslator`; inglês é o texto-fonte. Troca imediata por `QQmlEngine::retranslate`, apenas quando o idioma muda. Firmware, nomes de arquivos e saída técnica do núcleo/diagnóstico permanecem originais.
+- Windows x64 Release/Qt 6.8.3: `launcher-core`, `launcher-ui-clean`, `launcher-ui-import` e `launcher-ui-restore` aprovados; automação verifica alternância PT-BR/EN, importação, diagnóstico e restauração. Persistência e recusa de idioma inválido testadas no núcleo. Placeholders do catálogo conferidos. Ícone extraído do PE por API Windows.
+- CI desta alteração ainda não executada (commit local). CI anterior `701e6ac`: núcleo aprovado nos seis alvos; launcher aprovado nos dois Linux, com falhas preexistentes nos dois Windows e dois macOS. Não houve validação visual por Computer Use.

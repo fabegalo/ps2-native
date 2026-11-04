@@ -864,3 +864,13 @@ void Launcher::copyText(const QString& text) const {
 QString Launcher::fileUrl(const QString& path) const { return QUrl::fromLocalFile(path).toString(); }
 QString Launcher::formatCount(double value) const { return QLocale().toString(static_cast<qlonglong>(value)); }
 } // namespace ps2launcher
+
+namespace ps2launcher {
+QString Launcher::language() const { return qstr(settings_.language); }
+void Launcher::setLanguage(const QString& value) {
+    if (value != "auto" && value != "en" && value != "pt-BR") return;
+    if (value == language()) return;
+    settings_.language = utf8(value);
+    save_settings();
+}
+}

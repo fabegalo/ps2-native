@@ -105,6 +105,7 @@ struct LauncherSettings {
     std::uint64_t diagnostic_budget{10'000'000};
     std::string diagnostic_trace{"events"}; // events | full
     std::string renderer{"gs-faithful"};    // gs-faithful | native (future runtime)
+    std::string language{"auto"}; // auto | en | pt-BR
     bool reduce_motion{};
     std::string library_view{"grid"};       // grid | list
 

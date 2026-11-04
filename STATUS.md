@@ -103,3 +103,7 @@ Ver [próxima tarefa](docs/NEXT-TASK.md). Esta lista é dinâmica; não deve ser
 | M2.8 | Primeira ROM0/NVM real pareada; codificador de vídeo e caminho GIF PATH3 |
 
 Revisar a evidência original e os limites de cada etapa nos relatórios [docs](docs/README.md). Não interpretar o número de instruções retiradas como certificação de boot, vídeo ou jogos.
+
+## Launcher — ícone Windows e idiomas
+
+Ícone Windows embutido no executável; seleção Automático/English/Português (Brasil), persistente e com troca imediata. Catálogo com 334 textos da interface; saída técnica original preservada. Quatro testes focados do launcher aprovados no Windows x64, incluindo alternância de idioma e persistência. CI do novo commit local pendente; detalhes e limites em [LAUNCHER](docs/LAUNCHER.md).

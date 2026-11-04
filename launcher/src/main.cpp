@@ -5,6 +5,7 @@
 #include "automation.hpp"
 #include "icon_provider.hpp"
 #include "launcher.hpp"
+#include "translation.hpp"
 
 #include <QCommandLineParser>
 #include <QDir>
@@ -69,6 +70,18 @@ int main(int argc, char* argv[]) {
     qmlRegisterUncreatableType<ps2launcher::LogModel>("PS2Native.Backend", 1, 0, "LogModel", QStringLiteral("backend"));
 
     QQmlApplicationEngine engine;
+    ps2launcher::Translation translation;
+    QString appliedLanguage;
+    const auto translate = [&] {
+        const auto language = launcher.language();
+        if (language == appliedLanguage) return;
+        appliedLanguage = language;
+        translation.setPortuguese(language == "pt-BR" || (language == "auto" && QLocale::system().language() == QLocale::Portuguese));
+        engine.retranslate();
+    };
+    app.installTranslator(&translation);
+    QObject::connect(&launcher, &ps2launcher::Launcher::settingsChanged, &engine, translate);
+    translate();
     engine.addImportPath(QStringLiteral("qrc:/qt/qml"));
     engine.addImageProvider(QStringLiteral("icon"), new ps2launcher::IconProvider);
     QSize initial(1360, 860);

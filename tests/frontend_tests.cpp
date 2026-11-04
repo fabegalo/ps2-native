@@ -270,10 +270,13 @@ void test_library(const fs::path& dir) {
     settings.reduce_motion = true;
     settings.scan_folders_on_start = false;
     settings.library_view = "list";
+    settings.language = "pt-BR";
     const auto settings_file = root / "settings.cfg";
     settings.save(settings_file);
     const auto loaded = LauncherSettings::load(settings_file);
     check(loaded.serialize() == settings.serialize(), "settings round trip");
+    check(loaded.language == "pt-BR", "language preference persists");
+    check(LauncherSettings::parse("ps2-native settings 1\nlanguage=bogus\n").language == "auto", "invalid language ignored");
     check(loaded.game_folders.size() == 2 && loaded.game_folders[0] == root, "settings Unicode folder");
     check(LauncherSettings::parse("ps2-native settings 1\nrenderer=bogus\n").renderer == "gs-faithful", "invalid setting ignored");
 }
