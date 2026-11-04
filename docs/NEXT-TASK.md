@@ -2,6 +2,18 @@
 
 Pedido atual: continuar Super Bust-A-Move do aviso de Memory Card até o
 menu e comprovar resposta aos controles. SIO2 agora aceita press/release;
+**Execução atual: 108 ativa**, fonte fixa da main `6524aa8`, build
+`out/gs-iop-frozen-build`, log `superbust-menu-108.log`, entrada
+`superbust-pad108.txt` e captura configurável `superbust-capture108.txt`.
+Evitar misturar cabeçalhos da main em movimento com essa biblioteca.
+107 confirmou a próxima VMADDA em `0x1CD1DC` / 7.176.168.943;
+replay matricial isolado passou com X/Y conhecidos e Z/W incertos.
+108 inclui propagação simbólica VU/ACC/Q e os metadados COP1 da revisão
+fixa; 14 testes pertinentes e BIOS original passaram. CI `2eb9955`
+aprovada nos seis alvos de núcleo e launcher. Continuar a rodada até menu
+e navegação real, sem promover replay parcial a frame.
+
+Histórico dos preparativos anteriores:
 Cross chegou aos buffers EE sem escrita host em RAM. O ensaio 104 passou
 ATE/AFAIL e mostrou créditos/logotipo Acclaim; parou em `0x1CD584` /
 7.176.168.746, C.LT.S. Comparações/branches COP1 passaram em testes.

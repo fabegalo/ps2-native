@@ -473,6 +473,44 @@ carga host concorrente. Fontes BSD de cada versão compiladas com ABI
 coerente. Próxima rodada preparada em `superbust-menu108-*`, ainda sem
 afirmar passagem por um novo bloqueio completo. O 107 continua supervisionado.
 
+### Nova fronteira matricial e build fixo — ensaios 107 e 108
+
+107 passou pelo VMULbc anterior e terminou em **7.176.168.943** instruções:
+VMADDA `0x4BE830BE` recusada em **`0x1CD1DC`**; PC de estado já em
+`0x1CD1E0`. IOP `0xAE98` / 901.073.205 ativo. 8.169 pacotes novos,
+379.580.400 escritas de pixels; 3.121,47 s, carga host não isolada.
+Backing de RAM `5a8d8bb59d84bfcdbc98203fe3b459b11f39b8af0bc583d3953b4e1b2b5cb47e`,
+um doubleword parcialmente desconhecido. Não inclui um save-state de
+D-cache/dispositivos. Só aviso, créditos e Acclaim comprovados, sem menu.
+
+Replay isolado das quatro instruções matriciais, reconstruindo ACC a partir
+dos vetores capturados, passou com a propagação simbólica. VF09 X/Y ficam
+conhecidos (`C4800000`, `C4800000`); Z/W mantêm um bit incerto cada
+(`ABCDABCC/00000001`). Nada converteu essa incerteza em valor conhecido.
+Isso não é replay do sistema nem prova de frame.
+
+Alterações paralelas de layout de EE/IOP tornaram novamente um auxiliar
+incompatível com sua biblioteca; a falha host foi isolada da recusa do jogo.
+Para evitar nova mistura de ABI, somente arquivos rastreados da revisão
+**`6524aa8db4d8274a52beccdc54ae0f517b09007c`** da main foram exportados
+para `out/gs-iop-frozen-source`, com build em `out/gs-iop-frozen-build`.
+Código continua na main; essa cópia local é apenas fonte fixa de compilação.
+Não contém jogo, firmware, NVM ou traces. Nenhum cache de firmware compartilhado.
+Núcleo, cabeçalhos, auxiliares e AOT do jogo foram recompilados juntos.
+14 testes pertinentes passaram, incluindo metadados COP1 e VU/VIF/PATH1.
+BIOS original manteve PCs/contagens e SHA-256 canônico.
+
+108 iniciada com essa revisão fixa, mesmas identidades/hipóteses e roteiro
+de botões do 105, 90 minutos/16 bilhões. Binário SHA-256
+`6beb4bef55c411230817b428db4d356c808ef92825a20efc33bdb9c648ac452a`;
+manifesto local `superbust-menu108-build-provenance.json` registra hashes
+de núcleo, cabeçalhos, probe e AOT. Entrada `superbust-pad108.txt`;
+`superbust-capture108.txt=1` solicita cada VBLANK distinto, `0` mantém a
+cadência econômica. Isso altera apenas a captura host. Dumps finais também
+registram máscaras de RAM e FPR, sem alegar save-state restaurável.
+Processo acompanhado; continuar até menu e resposta visível aos controles.
+CI `2eb9955`: núcleo e launcher aprovados nos seis alvos.
+
 BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;
 ELF `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`.
 Seis arquivos IOP/IOPRP202, com hashes locais em `out/game-first/superbust-irx-manifest.json`.

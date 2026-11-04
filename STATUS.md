@@ -18,6 +18,13 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **108 em execução com fonte fixa:** 107 confirmou nova VMADDA
+  `0x1CD1DC` / 7.176.168.943, IOP ativo. Replay matricial passou sem
+  inventar Z/W incertos. Núcleo/cabeçalhos/AOT compilados da revisão
+  `6524aa8`, evitando ABI divergente por edições paralelas; 14 testes e
+  BIOS original passaram. CI `2eb9955` aprovada nos seis alvos de núcleo
+  e launcher. Ainda sem menu ou navegação comprovados; processo 108
+  supervisionado. [Evidência](docs/FIRST-GAME-STATUS.md#nova-fronteira-matricial-e-build-fixo--ensaios-107-e-108).
 - **VU preserva incertezas de fração:** intervalos conservadores de MUL,
   ADD e SQRT limitada propagam máscaras conhecidas/desconhecidas por VF,
   ACC e Q; só eliminam incerteza quando provam irrelevância. Sem escolher
