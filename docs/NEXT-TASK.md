@@ -4,9 +4,9 @@ O checkpoint experimental já produziu 16 pacotes GIF PATH3 e 1.048.576 escritas
 de pixels por IMAGE: limpeza real da VRAM comandada pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução concluída: ensaio 85, EE `0x81FD0`, 360.000.000 instruções,
-em espera após FIELD; IOP `0x47850`, 47.580.787, polls digitais 01/42 nas duas portas SIO2.
-31.584 palavras reais DMA normal core 1 e 16 halfwords PIO. Ensaio 86 configura dois pads digitais com botões soltos; prazo serial 8192 ciclos e DMA SIO2 4 ciclos/palavra são hipóteses. RECV2.4/.5=0 explícitos para timing PADMAN, além da
+Última execução concluída: ensaio 86, EE `0x81FD0`, 360.000.000 instruções,
+em espera após FIELD; IOP `0x47850`, 48.196.722, comandos 01/43 de configuração nas duas portas SIO2.
+31.584 palavras reais DMA normal core 1 e 16 halfwords PIO. Ensaio 87 rejeita configuração com falta de ACK e mantém dois pads digitais com botões soltos; prazo serial 8192 ciclos e DMA SIO2 4 ciclos/palavra são hipóteses. RECV2.4/.5=0 explícitos para timing PADMAN, além da
 hipótese FIELD inicial=1 e GS-vsync 7/6 half-lines após VBON NTSC/PAL.
 Permanecem explícitas as hipóteses SPU2 (barramento 16 ciclos/palavra,
 PIO 8 ciclos/halfword, ESA/EEA iniciais, área invertida inativa e readback

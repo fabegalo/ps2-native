@@ -1286,7 +1286,7 @@ void Iop::start_sio2_infrared(std::uint32_t interrupt_enable) {
     if(sio2_complete_at_ || !sio2_control_epoch_ || !sio2_output_.empty())
         throw IopStop{"SIO2 infrared start while busy, unconfigured, or with unread data"};
     std::size_t consumed=0,clocked=0;std::deque<ObservedWord> reply;
-    unsigned pad_ports=0,absent_packets=0;
+    unsigned pad_ports=0,pad_no_ack=0,absent_packets=0;
     for(unsigned n=0;n<16;++n) {
         const auto descriptor=latch(0x1F808200u+4u*n);
         if(!descriptor || !*descriptor)throw IopStop{"SIO2 command descriptor is unknown"};
@@ -1310,11 +1310,19 @@ void Iop::start_sio2_infrared(std::uint32_t interrupt_enable) {
         }
         if(consumed+input>sio2_input_.size())throw IopStop{"SIO2 infrared command input is incomplete"};
         if(port<2u && sio2_digital_pads_[port] && sio2_input_[consumed]==0x01u) {
-            if(tx!=5u || sio2_input_[consumed+1u]!=0x42u)
-                throw IopStop{"SIO2 digital pad supports only a five-byte button poll"};
-            const auto buttons=*sio2_digital_pads_[port];
-            for(const auto byte:{0xFFu,0x41u,0x5Au,unsigned(buttons&0xFFu),unsigned(buttons>>8u)})
-                reply.push_back({byte,0});
+            if(tx<2u)throw IopStop{"SIO2 digital pad packet does not contain a command"};
+            if(sio2_input_[consumed+1u]==0x42u) {
+                if(tx!=5u)throw IopStop{"SIO2 digital pad supports only a five-byte button poll"};
+                const auto buttons=*sio2_digital_pads_[port];
+                for(const auto byte:{0xFFu,0x41u,0x5Au,unsigned(buttons&0xFFu),unsigned(buttons>>8u)})
+                    reply.push_back({byte,0});
+            } else {
+                // A standard digital pad does not implement analog/config
+                // commands. It releases DAT and withholds ACK; the explicit
+                // serial timeout completes this failed request, not a mode change.
+                for(unsigned b=0;b<rx;++b)reply.push_back({0xFFu,0});
+                pad_no_ack|=1u<<port;
+            }
             pad_ports|=1u<<port;
         } else {
             if(!unplugged && (!diagnostic_sio2_infrared_absent_ || sio2_input_[consumed]!=0x61u))
@@ -1330,6 +1338,7 @@ void Iop::start_sio2_infrared(std::uint32_t interrupt_enable) {
     if(reply.size()>256u)throw IopStop{"SIO2 reply exceeds the bounded RX FIFO"};
     if(pad_ports && absent_packets)throw IopStop{"SIO2 mixed connected/absent response status is not modeled"};
     sio2_response_status_=pad_ports ? (0x1000u|(pad_ports==3u ? 0x200u : 0x100u)) : 0x1D100u;
+    if(pad_no_ack)sio2_response_status_|=0xC000u|(pad_no_ack<<16u);
     sio2_interrupt_enable_=interrupt_enable&0x300u;
     update_sio2_irq();
     sio2_diagnostic_control_=interrupt_enable&~0xDu;

@@ -15,7 +15,7 @@ void packet(m20::Assembler& a,unsigned port,unsigned size,unsigned command){
 }
 void fifo(unsigned ports,std::uint16_t buttons,unsigned cycles,unsigned bad=0u) {
     m20::Assembler a(kEeResetVector);sw(a,0xBF801070u,0);sw(a,0xBF801078u,0);sw(a,0xBF808268u,0x3BCu);
-    for(unsigned p=0;p<ports;++p)packet(a,p,bad==2 ? 4u : 5u,bad==1 ? 0x43u : 0x42u);
+    for(unsigned p=0;p<ports;++p)packet(a,p,bad==2 ? 4u : 5u,bad==1 ? 0x43u : bad==4 ? 0u : 0x42u);
     sw(a,0xBF808200u+ports*4u,0);sw(a,0xBF808268u,0x3B1u);a.label("started");
     a.la(8,0xBF80826Cu);a.lw(9,0,8);a.nop();a.andi(9,9,0x1000u);a.la(10,0xA0000200u);a.sw(9,0,10);
     for(unsigned n=0;n<128;++n)a.nop();
@@ -27,13 +27,14 @@ void fifo(unsigned ports,std::uint16_t buttons,unsigned cycles,unsigned bad=0u) 
     for(unsigned p=0;p<(bad==3 ? 1u : ports);++p)iop.diagnostic_sio2_digital_pad(p,buttons,cycles);
     const auto due=(a.at("started")-kEeResetVector)/4u-1u+cycles;
     iop.run_until(due-1u);
-    if(bad){require(iop.stopped(),"unknown peripheral command, packet size or unconfigured port refuses");return;}
+    if(bad==2u || bad==3u){require(iop.stopped(),"unsupported packet size or unconfigured port refuses");return;}
     require(!iop.stopped() && iop.ee_read(0x200u,4)==0u,"serial completion is not asserted before the explicit packet clock");
     rejects([&]{(void)iop.ee_read(0x300u,1);},"has not been written");
     iop.run_until(1000);require(!iop.stopped(),iop.stop_reason().value_or("running"));
     const unsigned expected[]={0xFFu,0x41u,0x5Au,unsigned((buttons|6u)&0xFFu),unsigned(buttons>>8u)};
-    for(unsigned n=0;n<ports*5u;++n)require(iop.ee_read(0x300u+n,1)==expected[n%5u],"FIFO returns protocol ID and the configured active-low button bits");
-    require(iop.ee_read(0x310u,4)==(ports==2u ? 0x1200u : 0x1100u) && (iop.ee_read(0x314u,4)&(1u<<17u)),
+    for(unsigned n=0;n<ports*5u;++n)require(iop.ee_read(0x300u+n,1)==(bad ? 0xFFu : expected[n%5u]),"FIFO returns button data only for a poll; unsupported commands leave the wire undriven");
+    const auto status=(ports==2u ? 0x1200u : 0x1100u)|(bad ? 0xC000u|((ports==2u ? 3u : 1u)<<16u) : 0u);
+    require(iop.ee_read(0x310u,4)==status && (iop.ee_read(0x314u,4)&(1u<<17u)),
         "status counts the addressed ports and completion drives the serial IRQ");
     rejects([&]{iop.diagnostic_sio2_digital_pad(0,0,cycles);},"before execution");
     iop.reset(data,nullptr);iop.diagnostic_sio2_infrared_timeout(cycles);iop.run_until(1000);
@@ -52,14 +53,30 @@ void dma() {
     require(iop.ee_read(0x500u,4)==0x365A41FFu && iop.ee_read(0x504u,1)==0x12u,"DMA carries the same controller bytes as PIO");
     for(unsigned n=5;n<8;++n)rejects([&]{(void)iop.ee_read(0x500u+n,1);},"has not been written");
 }
+void rejected_configuration() {
+    m20::Assembler a(kEeResetVector);sw(a,0xBF801070u,0);
+    for(unsigned attempt=0;attempt<2u;++attempt) {
+        sw(a,0xBF808268u,0x3BCu);packet(a,0,5u,attempt ? 0x42u : 0x43u);
+        sw(a,0xBF808204u,0);sw(a,0xBF808268u,0x3B1u);
+        for(unsigned n=0;n<80u;++n)a.nop();
+        a.la(8,0xBF808264u);a.la(10,0xA0000300u+attempt*16u);
+        for(unsigned n=0;n<5u;++n){a.lbu(9,0,8);a.nop();a.sb(9,n,10);}
+        sw(a,0xBF808280u,1u);
+    }
+    const auto data=rom(a);Iop iop;iop.reset(data,nullptr);iop.diagnostic_sio2_digital_pad(0,0xFFF7u,32);iop.run_until(1000);
+    require(!iop.stopped(),iop.stop_reason().value_or("running"));
+    require(iop.ee_read(0x300u,4)==0xFFFFFFFFu && iop.ee_read(0x304u,1)==0xFFu &&
+        iop.ee_read(0x310u,4)==0xF75A41FFu && iop.ee_read(0x314u,1)==0xFFu,
+        "a rejected configuration packet leaves the digital ID and actual button state unchanged on the next poll");
+}
 }
 int main() try {
     for(unsigned ports=1;ports<=2;++ports)for(const auto buttons:{0xFFFFu,0xA55Au,0u})for(const auto cycles:{32u,64u})fifo(ports,static_cast<std::uint16_t>(buttons),cycles);
-    for(unsigned bad=1;bad<=3;++bad)fifo(2,0xFFFFu,32,bad);
+    for(unsigned bad=1;bad<=4;++bad)fifo(2,0xFFFFu,32,bad);
     Iop iop;iop.reset({},nullptr);rejects([&]{iop.diagnostic_sio2_digital_pad(2,0,32);},"port 0/1");
     rejects([&]{iop.diagnostic_sio2_digital_pad(0,0,0);},"positive packet");
     iop.diagnostic_sio2_digital_pad(0,0,32);rejects([&]{iop.diagnostic_sio2_unplugged_ports(1,32);},"conflicts");
     rejects([&]{iop.diagnostic_sio2_digital_pad(1,0,64);},"share");
     iop.reset({},nullptr);iop.diagnostic_sio2_unplugged_ports(1,32);rejects([&]{iop.diagnostic_sio2_digital_pad(0,0,32);},"unplugged");
-    dma();std::cout<<"Digital pad serial payload, button state, timing, status and DMA passed\n";return 0;
+    dma();rejected_configuration();std::cout<<"Digital pad serial payload, button state, timing, status and DMA passed\n";return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

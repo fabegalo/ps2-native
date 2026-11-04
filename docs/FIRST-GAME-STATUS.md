@@ -1204,3 +1204,17 @@ protocolo digital consultado em https://psx-spx.consoledev.net/controllersandmem
 e contagem de portas/status em PCSX2 Sio2.cpp. Código/testes originais BSD,
 sem incorporar GPL. CI `0f05001` e `3050f99` passou nos seis alvos do núcleo
 e do launcher.
+Ensaio 86: polls digitais completaram; IOP avançou a 48.196.722 instruções,
+`0x47850`, agora transmitindo dois `01 43 00 01 00` para detectar configuração.
+EE `0x81FD0` / 360.000.000; 108,811 s; RAM
+`c2a89a619a2def4a0dc60dea2fe34c785f28f5e0479d505b03a54458cfef9416`.
+Sem PMODE/frame; 31.584 palavras DMA SPU2. Controle digital padrão não
+reconhece comandos diferentes de 42: DAT permanece sem acionamento e não há
+ACK após o comando. A conclusão por timeout devolve os bytes de linha alta
+com status de falha por porta; não entra em modo de configuração. Isso é
+exercitado no ensaio 87, conservando a duração serial explícita. A identificação
+padrão e os botões reaparecem no poll seguinte, comprovados por teste próprio.
+Três testes SIO2 aprovados. Consulta adicional comportamental:
+https://github.com/stenzek/duckstation/blob/master/src/core/digital_controller.cpp
+Sem código copiado, adaptado ou vinculado; implementação/testes BSD próprios.
+Modo original repetido após os pads: PCs/contagens/hash canônicos preservados.
