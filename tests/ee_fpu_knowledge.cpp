@@ -3,6 +3,7 @@
 #include "bios_program.hpp"
 #include "ps2native/interpreter.hpp"
 #include "ps2native/vu_float.hpp"
+#include "ps2native/boot.hpp"
 #include <iostream>
 using namespace ps2native;
 using namespace boot_checks;
@@ -66,10 +67,29 @@ void integer_domains(Memory& memory) {
             "every pair remains represented after the finite-work fallback");
     }
 }
+void floating_trace(Memory& memory) {
+    EEState state;state.pc=0x80001000;state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
+    state.fpr[1]=0x3F800001u;state.fpr[2]=0x3F800003u;
+    memory.write32(state.pc,math(2,3,1,2));memory.write32(state.pc+4u,math(6,4,3,0));
+    BootOptions options;options.max_instructions=2;options.stop_at=state.pc+8u;options.trace=TraceLevel::Full;
+    const auto report=run_ee_boot(state,memory,nullptr,options);
+    require(report.retired==2 && state.unknown_fpr_bits[3] && state.fpr[4]==state.fpr[3],
+        "a full trace executes the real uncertain product and register copy");
+    bool inputs=false,result=false;
+    for(const auto& line:report.trace) {
+        inputs|=line.find("  F FS=3F800001/?00000000 FT=3F800003/?00000000")!=std::string::npos;
+        result|=line.find("  F FS="+hex8(state.fpr[3])+"/?"+hex8(state.unknown_fpr_bits[3]))!=std::string::npos;
+    }
+    require(inputs && result,"full COP1 records expose original operands and resulting uncertainty without choosing unknown bits");
+    state.pc=0x80001000;options.trace=TraceLevel::Events;
+    const auto events=run_ee_boot(state,memory,nullptr,options);
+    for(const auto& line:events.trace)require(line.find("  F ")==std::string::npos,"event tracing carries no per-operation FPU records");
+}
 }
 int main() try {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     integer_domains(memory);
+    floating_trace(memory);
     EEState state;state.set_cp0(Cop0::Status,kStatusCU1);
     std::uint64_t executed=0;ExecutionContext context{state,memory,executed,1000,0xFFFFFFFFu};
     const auto step=[&](std::uint32_t word){state.pc=0x80001000;memory.write32(state.pc,word);interpret_instruction(context);};

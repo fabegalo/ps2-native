@@ -55,7 +55,18 @@ public:
             report_.trace.push_back(std::string("E ") + (engine == ExecutionEngine::Aot
                 ? "aot (host-compiled block) at " : "interpreter (no AOT block) at ") + hex32(pc));
         }
-        if (options_.trace == TraceLevel::Full) report_.trace.push_back(instruction_line(r));
+        if (options_.trace == TraceLevel::Full) {
+            report_.trace.push_back(instruction_line(r));
+            if((word>>26u)==0x11u) {
+                // Observe raw COP1 operands before execution. Reading these
+                // fields does not consume unknown data or alter FPU flags.
+                const auto fs=(word>>11u)&31u,ft=(word>>16u)&31u,fd=(word>>6u)&31u;
+                report_.trace.push_back("  F FS="+hex32(state_.fpr[fs])+"/?"+hex32(state_.unknown_fpr_bits[fs])+
+                    " FT="+hex32(state_.fpr[ft])+"/?"+hex32(state_.unknown_fpr_bits[ft])+
+                    " FD-before="+hex32(state_.fpr[fd])+"/?"+hex32(state_.unknown_fpr_bits[fd])+
+                    " FCR31="+hex32(state_.fcr31));
+            }
+        }
         if (options_.tail_instructions != 0) {
             if (tail_.size() == options_.tail_instructions) tail_.pop_front();
             tail_.push_back(r);
