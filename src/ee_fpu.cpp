@@ -90,8 +90,16 @@ std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std
     const auto ea=(a>>23u)&255u,eb=(b>>23u)&255u;
     const auto sign=(a^b)&0x80000000u;
     if(!ea || !eb){fcr31&=~0xC000u;return sign;}
-    const auto product=static_cast<std::uint64_t>((a&0x7FFFFFu)|0x800000u)*((b&0x7FFFFFu)|0x800000u);
-    if(b&0x3FFFFu) {
+    auto product=static_cast<std::uint64_t>((a&0x7FFFFFu)|0x800000u)*((b&0x7FFFFFu)|0x800000u);
+    if((b&0xFFFFu)==0x8000u) {
+        // Boundary-column proof: the first nonzero radix-4 digit is -2
+        // at column 14. Its complement and delayed sign correction each
+        // contribute a bit at 14; discarding those separate columns loses
+        // exactly the carry into 15. Later digits start at column 16 and
+        // cannot change it. This applies to every multiplicand/sign/exponent,
+        // not just the physical 1 * 129.5 example. See FIRST-GAME-STATUS.md.
+        product-=std::uint64_t{1}<<15u;
+    } else if(b&0x3FFFFu) {
         // Certify a result without guessing the R5900's low-column tree.
         // A 24-bit radix-4 Booth array has 13 partial rows and at most 13
         // separate sign corrections. Reducing 26 rows to two needs at most

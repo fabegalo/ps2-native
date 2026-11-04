@@ -383,6 +383,16 @@ void divider() {
     const auto flags=fcr;
     require(!ee_fpu_multiply(0x3F800000,0x3FFFFFFF,fcr) && fcr==flags,
             "general asymmetric Booth case cannot substitute host multiplication or change flags");
+    // Published physical VU observation: 1 * 129.5 loses one output ULP.
+    // The shared multiplier boundary is asymmetric; the operand order matters.
+    require(ee_fpu_multiply(0x3F800000,0x43018000,fcr)==0x43017FFF &&
+            ee_fpu_multiply(0x43018000,0x3F800000,fcr)==0x43018000,
+            "column-15 Booth carry loss preserves physical operand asymmetry");
+    require(ee_fpu_multiply(0xC31B0000,0x453B8000,fcr)==0xC8E30CFF &&
+            ee_fpu_multiply(0x431B0000,0xC53B8000,fcr)==0xC8E30CFF,
+            "column-15 proof applies across signs and non-unit multiplicands");
+    require(ee_fpu_multiply(0x3F800001,0x3F808000,fcr)==0x3F808001,
+            "a discarded carry need not change the retained output mantissa");
     // Exact integer mantissa product is 0x68DB8B5DCC64. Even the conservative
     // maximum low-column loss cannot cross the retained 24-bit boundary.
     require(ee_fpu_multiply(0x3C23D70A,0x3C23D70A,fcr)==0x38D1B716,

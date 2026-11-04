@@ -614,3 +614,26 @@ Launcher de `1ddd0d1` aprovado nas seis arquiteturas,
 [run 41788609723](https://github.com/fabegalo/ps2-native/actions/runs/41788609723).
 Nenhum executável local de diagnóstico foi deixado rodando. Nenhum frame de
 jogo foi declarado; primeiro pacote real comprovado, jogabilidade não atingida.
+
+### Continuação do multiplicador — carry da coluna 15
+
+A ambiguidade do ensaio 47 foi reduzida por uma propriedade de uma classe de
+operandos, sem tabela por valores ou endereço: mantissa do segundo operando
+com exatamente 15 zeros baixos. A recodificação radix-4 começa com -2 na
+coluna 14. O complemento e a correção de sinal retardada têm, separadamente,
+um bit nessa coluna; o corte de cada linha elimina o carry para a coluna 15.
+Os dígitos seguintes começam na coluna 16 e não podem mudar essa perda.
+O produto antes da normalização é, portanto, o produto inteiro menos `2^15`.
+As outras classes continuam sob a prova de intervalo anterior e recusam quando
+ela não decide o resultado. Isso não é um multiplicador geral concluído.
+
+PS2Recomp FPU/macros foi consultado antes. A descrição comportamental do carry
+foi confrontada com a referência PS2Float, sem copiar ou incorporar sua árvore
+nem sua implementação. A implementação BSD é a redução aritmética dessa classe.
+A observação física publicada por F0bes confirma `1 * 129,5` como `43017FFF`,
+enquanto a ordem inversa preserva `43018000`:
+[relato](https://fobes.dev/ps2/detecting-emu-vu-floats) e
+[resultados crus](https://gist.github.com/F0bes/5f209d8a0890879ad0e25ceb6973977a).
+O teste também cobre sinal, multiplicando não unitário e produto cuja mantissa
+retida não muda apesar da perda. Os resultados físicos citados são VU; o modelo
+comum EE/VU é a referência comportamental, sem alegar nova medição de COP1 local.
