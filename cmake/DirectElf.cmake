@@ -38,7 +38,7 @@ if(BUILD_TESTING)
     add_test(NAME native-ee-context COMMAND ps2n-ee-context)
     add_executable(ps2n-direct-fixture tests/make_direct_elf.cpp)
     target_link_libraries(ps2n-direct-fixture PRIVATE ps2n_core)
-    foreach(program IN ITEMS cpu dma sif0 frame exceptions timer unaligned)
+    foreach(program IN ITEMS cpu dma sif0 frame exceptions timer unaligned fpu)
         set(elf "${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-${program}.elf")
         set(aot "${CMAKE_CURRENT_BINARY_DIR}/fixtures/direct-${program}.cpp")
         add_custom_command(OUTPUT "${elf}"

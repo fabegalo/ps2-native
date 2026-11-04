@@ -298,6 +298,48 @@ Oito testes gráficos/DMA/Direct ELF passaram. Um teste Direct ELF foi
 alinhado ao motivo específico atual de recusa MSCAL sem motor VU.
 Reexecução seguinte: harness `superbust-menu104-probe.cpp`, mesma sequência
 de entrada do 103; nenhum resultado de menu antecipado.
+
+### Abertura real e próxima fronteira FPU — ensaio 104
+
+ATE/AFAIL passaram pelo PC anterior. Captura 14, ciclo 3.824.089.587:
+tela original de créditos/direitos autorais, 640x224, 18.535 pixels não
+pretos, RGBA SHA-256 `3003e21b2d66029b543aa6940961f6d5ac4e18a04fbc9fd95622211963bc715a`.
+Captura 18, ciclo 5.703.243.087: logotipo Acclaim, 13.493 pixels não
+pretos, SHA-256 `9665f363b8c18476eff3572263ad4c6405fcabe5e1bb8b96dcdee79eacbd43c0`.
+Pixels vêm dos comandos do jogo; BMP/PNG locais `superbust-menu104-vblank-*`.
+Start foi exercitado com press/release. Não há menu principal comprovado.
+
+O harness recebeu extensão apenas do limite host de 8 para 16 bilhões,
+mantendo 60 minutos, sem escrever em RAM/CPU/código convidado. Evento
+local em `superbust-menu104-host-limit.log`, fonte local ajustada ao limite;
+não é alteração do núcleo. A rodada terminou por recusa após 2.754,49 s:
+**7.176.168.746** instruções, EE **`0x1CD584`**, opcode `0x46006034`,
+**C.LT.S** ausente. IOP ativo `0xAE94` / 901.073.180. RAM
+`bc5c550b8b49b93244f910759888d7e960e30304095b03fc3c9d7f75a5dc3e11`.
+Em 2,54 bilhões, conservou hash/PCs anteriores (1.008,39 s). A carga host
+não foi isolada nas amostras 102–104; os 29,2% observados no 103 não
+constituem benchmark controlado.
+
+Implementadas C.F/EQ/LT/LE e BC1F/T/FL/TL na semântica compartilhada
+AOT/interpretador. Ordenação inteira: denormais/zeros com sinal são zero,
+expoente 255 é finito. Só FCC/FCR31.23 muda; flags e FPRs preservados.
+Campos reservados e CU1 desligado recusam; branches mantêm delay slot,
+annul e metadados CFG. Consulta prévia: PS2Recomp `fpu_translator.cpp` e
+`ps2_runtime_macros.h`, revisão `e5636981`; comparações IEEE do host não
+adotadas. Fundamentos: [EE Instruction Set, pp.349–352](https://docs.alexrp.com/mips/ee_insns.pdf)
+e [resultados físicos](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/cpu/ee_fpu/compare.expected).
+Sem código das referências incorporado. Sete testes focados passaram,
+incluindo `native-m30-direct-fpu` com trace/estado iguais nos dois motores
+e oito combinações de condição/branch normal e likely.
+
+Próxima rodada: `superbust-menu105-probe.cpp`, 90 minutos/16 bilhões,
+supervisionada. Novo cenário, não replay: `10003` no arquivo de entrada
+mantém Cross 60 campos após a primeira imagem não preta, solta 30 e
+depois pulsa Start 30 campos/solta 90. `FFFF` desliga o script e solta;
+entradas manuais continuam disponíveis. Relatórios em chunks de 200
+milhões reduzem cópias de diagnóstico; clocks/instruções continuam
+executados, com progresso a cada 30 VBLANKs. Objetivo: menu e navegação
+visível, ainda não demonstrados.
 Após ATE/AFAIL, a regressão do modo original manteve 17.690.079 /
 `0x80007D20`, 4.486.087 / `0x80005F00`, IOP 2.210.789 / `0x40B0` e
 RAM `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.

@@ -6,6 +6,7 @@
 #include "ps2native/ee.hpp"
 #include "ps2native/memory.hpp"
 #include "ps2native/mips.hpp"
+#include "ps2native/ee_fpu.hpp"
 
 #include <cstdint>
 #include <bit>
@@ -508,6 +509,17 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         }
     // R5900 branches compare the full lower 64 bits. The condition reads rs
     // before BxxZAL writes the link register.
+    } else if constexpr (Op==O::CFalseS || Op==O::CEqualS || Op==O::CLessS || Op==O::CLessEqualS) {
+        if(!(s.cp0(Cop0::Status)&kStatusCU1))
+            throw std::runtime_error("COP1 comparison with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        const auto result=ee_fpu_compare(s.fpr[d_],s.fpr[t_],w&7u);
+        s.fcr31=(s.fcr31&~(1u<<23))|(result ? 1u<<23 : 0u);
+    } else if constexpr (Op==O::Bc1f || Op==O::Bc1t || Op==O::Bc1fl || Op==O::Bc1tl) {
+        if(!(s.cp0(Cop0::Status)&kStatusCU1))
+            throw std::runtime_error("COP1 branch with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        const bool condition=(s.fcr31&(1u<<23))!=0;
+        constexpr bool positive=Op==O::Bc1t || Op==O::Bc1tl;
+        branch(s,condition==positive,pc,w,Op==O::Bc1fl || Op==O::Bc1tl);
     } else if constexpr (Op == O::Beq || Op == O::Beql) {
         branch(s, s.reg64(s_) == s.reg64(t_), pc, w, Op == O::Beql);
     } else if constexpr (Op == O::Bne || Op == O::Bnel) {

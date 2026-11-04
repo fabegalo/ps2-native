@@ -18,6 +18,15 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **Super Bust-A-Move passou do aviso para a abertura real:** ensaio 104
+  mostrou créditos e logotipo Acclaim por comandos do jogo após ATE/AFAIL
+  do GS. Menu ainda não demonstrado. Novo bloqueio EE `0x1CD584` /
+  7.176.168.746, C.LT.S; IOP ativo `0xAE94`. Comparações/branches COP1
+  implementados em semântica compartilhada; sete testes focados passaram,
+  incluindo equivalência AOT/interpretador. SIO2 entrega botões aos buffers
+  EE; navegação visível ainda precisa ser comprovada. Rodada seguinte 105,
+  com pulsos mais longos medidos em VBLANKs. Evidência no
+  [relatório](docs/FIRST-GAME-STATUS.md#abertura-real-e-próxima-fronteira-fpu--ensaio-104).
 - **Simpsons avançou para 93.117.072 instruções:** MUL.S da classe potência
   de dois/dígito Booth inicial negativo, leitura NCMD 06 de dados em DVD
   e descarte simbólico da FIFO MECHACON vazia passaram. IOP `0x25E34` /

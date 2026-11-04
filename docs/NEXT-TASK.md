@@ -2,16 +2,19 @@
 
 Pedido atual: continuar Super Bust-A-Move do aviso de Memory Card até o
 menu e comprovar resposta aos controles. SIO2 agora aceita press/release;
-Cross chegou aos buffers EE sem escrita host em RAM. O ensaio 103 passou
-o redesenho do aviso, mas parou em `0x1CE454` / 3.781.852.170, teste de
-alpha GS. ATE/AFAIL implementados, oito testes focados passaram; executar
-`out/game-first/superbust-menu104-run.cmd` após build coerente para passar
-essa fronteira e investigar as seguintes. Capturar apenas pixels reais.
+Cross chegou aos buffers EE sem escrita host em RAM. O ensaio 104 passou
+ATE/AFAIL e mostrou créditos/logotipo Acclaim; parou em `0x1CD584` /
+7.176.168.746, C.LT.S. Comparações e branches COP1 implementados; sete
+testes focados passaram. Executar `out/game-first/superbust-menu105-run.cmd`
+após build coerente e continuar pelos próximos bloqueios. Só pixels reais.
 Entrada supervisionada em `out/game-first/superbust-pad.txt`, palavra
 hex ativa baixa; `FFFF` solto, `BFFF` Cross, `FFF7` Start, `DFFF` Circle;
 `10000` encerra voluntariamente no próximo VBLANK conhecido.
-O harness 104 repete as entradas do 103 até o bloqueio antigo e depois
-aceita o arquivo. Limite 60 minutos/8 bilhões, processo sempre acompanhado.
+O harness 105 usa `10003` no arquivo para um novo cenário: Cross mantido
+60 campos após primeira imagem não preta, solto 30; depois Start mantido
+30 campos/solto 90. `FFFF` cancela o script. Limite 90 minutos/16 bilhões,
+processo sempre acompanhado. Não é replay; não afirmar paridade de RAM
+com o cenário antigo quando entradas diferirem.
 Usa AOT local do laço do mesmo kernel, bytes/ROM0 conferidos; em 2,54
 bilhões o 103 reproduziu PCs/RAM do 102 em 29,2% menos tempo. Nenhum
 save-state completo disponível. Hipóteses do diagnóstico permanecem

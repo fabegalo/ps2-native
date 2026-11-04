@@ -122,7 +122,13 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
         if(run) require(report.aot_instructions>0,"host-compiled code executed");
         trace[run]=normalized(report.trace);events[run]=report.iop_events;
         for(const auto& seg:elf.segments) for(unsigned i=0;i<seg.memory_size;++i)ram[run].push_back(memory.read8(seg.vaddr+i));
-        if(mode=="cpu") {
+        if(mode=="fpu") {
+            require(memory.read32(direct_test::data)==6 && memory.read32(direct_test::data+4)==4,
+                "all COP1 branch variants take/fall through and annul only false likely delay slots");
+            require(state.fcr31==0x01800001u && state.fpr[0]==0xBF800000u && state.fpr[1]==0x3F800000u,
+                "native comparisons preserve FPR data and update only FCC");
+            if(run)require(report.aot_instructions>=24,"comparisons and branches execute in generated AOT blocks");
+        } else if(mode=="cpu") {
             require(memory.read32(direct_test::data)==30000 && memory.read32(direct_test::data+4)==1,"function calls/memory/IRQ handler");
             require(memory.read32(direct_test::data+8)&0x8000,"handler captured timer pending");
             require(memory.read64(direct_test::data+32)==30 && memory.read64(direct_test::data+40)==0x0123456789ABCDEFull,

@@ -6,6 +6,9 @@ namespace ps2native {
 // Addition aligns 24-bit significands with one guard bit, then chops.
 std::uint32_t ee_fpu_add(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31);
 std::uint32_t ee_fpu_divide(std::uint32_t numerator,std::uint32_t denominator,std::uint32_t& fcr31);
+// Condition bits 0/2/4/6: false/equal/less/less-or-equal. Denormals are
+// zero and exponent 255 remains finite; host IEEE comparisons are not used.
+bool ee_fpu_compare(std::uint32_t a,std::uint32_t b,unsigned condition);
 // Only nonnegative inputs with an exactly representable square root.
 // Non-square rounding and invalid-input behavior remain explicit refusals.
 std::optional<std::uint32_t> ee_fpu_sqrt_exact(std::uint32_t value);

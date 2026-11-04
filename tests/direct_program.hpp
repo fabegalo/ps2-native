@@ -22,6 +22,20 @@ inline void put(std::vector<std::uint8_t>& b, std::size_t p, std::uint64_t v, un
 inline void store(Assembler& a, std::uint32_t address, std::uint32_t value) {
     a.la(t0,address); a.la(t1,value); a.sw(t1,0,t0);
 }
+inline Program fpu() {
+    Assembler a(text);a.la(t0,ps2native::kStatusCU1);a.mtc0(t0,Status);
+    a.la(t0,0xBF800000u);a.raw(0x44880000u);
+    a.la(t0,0x3F800000u);a.raw(0x44880800u);
+    a.addiu(t1,zero,0);a.addiu(t2,zero,0);
+    for(unsigned kind=0;kind<4;++kind)for(unsigned condition=0;condition<2;++condition) {
+        a.raw(condition?0x46000032u:0x46010030u);
+        a.raw(0x45000002u|(kind<<16));
+        a.addiu(t1,t1,1);a.addiu(t2,t2,1);
+    }
+    a.raw(0x46010034u);a.la(t0,data);a.sw(t1,0,t0);a.sw(t2,4,t0);
+    const auto stop=a.here();a.brk();
+    return {{{text,5,le_words(a.finish())},{data,6,std::vector<std::uint8_t>(8)}},stop,{}, {}};
+}
 inline Program cpu() {
     Assembler a(text);
     a.la(s0,data); a.addiu(t4,zero,10000); a.addiu(v0,zero,0);
@@ -230,6 +244,7 @@ inline Program unaligned() {
     return {{{text,5,le_words(a.finish())},{data,6,std::move(bytes)}},stop,{}, {}};
 }
 inline Program build(const std::string& mode) {
+    if(mode=="fpu")return fpu();
     if(mode=="cpu") return cpu();
     if(mode=="dma") return dma();
     if(mode=="sif0") return sif0();

@@ -1,8 +1,16 @@
 #include "ps2native/ee_fpu.hpp"
 #include <array>
 #include <bit>
+#include <stdexcept>
 
 namespace ps2native {
+bool ee_fpu_compare(std::uint32_t a,std::uint32_t b,unsigned condition) {
+    if(condition&~6u)throw std::invalid_argument("reserved EE floating comparison condition");
+    if(!(a&0x7F800000u))a=0;
+    if(!(b&0x7F800000u))b=0;
+    const auto ordered=[](std::uint32_t bits){return bits&0x80000000u ? ~bits : bits^0x80000000u;};
+    return ((condition&2u) && a==b) || ((condition&4u) && ordered(a)<ordered(b));
+}
 std::optional<std::uint32_t> ee_fpu_sqrt_exact(std::uint32_t value) {
     const auto exponent=(value>>23u)&255u;
     if(!exponent)return 0u; // VU denormals and signed zero are zero.

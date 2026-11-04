@@ -20,6 +20,7 @@ bool MipsInstruction::is_conditional_branch() const noexcept {
         case MipsOpcode::Blez: case MipsOpcode::Bgtz:
         case MipsOpcode::Bltz: case MipsOpcode::Bgez:
         case MipsOpcode::Bltzal: case MipsOpcode::Bgezal:
+        case MipsOpcode::Bc1f: case MipsOpcode::Bc1t:
             return true;
         default:
             return is_likely_branch();
@@ -32,6 +33,7 @@ bool MipsInstruction::is_likely_branch() const noexcept {
         case MipsOpcode::Blezl: case MipsOpcode::Bgtzl:
         case MipsOpcode::Bltzl: case MipsOpcode::Bgezl:
         case MipsOpcode::Bltzall: case MipsOpcode::Bgezall:
+        case MipsOpcode::Bc1fl: case MipsOpcode::Bc1tl:
             return true;
         default:
             return false;
@@ -299,6 +301,16 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
         if (rs == 5u) return make(MipsOpcode::Qmtc2);
         if (rs == 6u) return make(MipsOpcode::Ctc2);
     } else if (op == 0x11) {
+        if(rs==8 && rt<4u) {
+            constexpr MipsOpcode branches[]={MipsOpcode::Bc1f,MipsOpcode::Bc1t,MipsOpcode::Bc1fl,MipsOpcode::Bc1tl};
+            return make(branches[rt]);
+        }
+        if(rs==16 && sa==0) {
+            if(funct==0x30)return make(MipsOpcode::CFalseS);
+            if(funct==0x32)return make(MipsOpcode::CEqualS);
+            if(funct==0x34)return make(MipsOpcode::CLessS);
+            if(funct==0x36)return make(MipsOpcode::CLessEqualS);
+        }
         if(rs==16 && rt==0 && funct==0x24)return make(MipsOpcode::CvtWS);
         if(rs==20 && rt==0 && funct==0x20)return make(MipsOpcode::CvtSW);
         if(rs==16 && funct==0)return make(MipsOpcode::AddS);

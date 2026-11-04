@@ -56,6 +56,39 @@ void privilege_and_cache() {
     rejects([&]{interpret_instruction(ctx);},"COP0 unusable");
     require(executed==6,"privileged COP0 cannot silently execute in user mode");
 }
+void floating_comparisons() {
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    struct Row {std::uint32_t a,b;bool equal,less;};
+    const Row rows[]={{0,0x80000000u,true,false},{0,1,true,false},
+        {0x80001337u,0,true,false},{0,0x00800000u,false,true},
+        {0x7F800000u,0x7F800001u,false,true},{0x7FFFFFFFu,0x7FFFFFFFu,true,false},
+        {0xFFFFFFFFu,0x7FFFFFFFu,false,true},{0xBF800000u,0xC0000000u,false,false},
+        {0xC0000000u,0xBF800000u,false,true},{0x3F800000u,0x40000000u,false,true}};
+    for(const auto& r:rows)for(unsigned condition:{0u,2u,4u,6u})for(auto flags:{0x0103C079u,0x0183C079u}) {
+        EEState state;state.pc=0x80001000u;state.set_cp0(Cop0::Status,kStatusCU1);
+        state.fpr[0]=r.a;state.fpr[1]=r.b;state.fcr31=flags;
+        const auto before=state.fpr;memory.write32(state.pc,0x46010030u|condition);
+        std::uint64_t count=0;ExecutionContext ctx{state,memory,count,10,0xFFFFFFFFu};
+        interpret_instruction(ctx);
+        const bool expected=((condition&2u)&&r.equal)||((condition&4u)&&r.less);
+        require(state.fcr31==((flags&~0x800000u)|(expected?0x800000u:0u)) && state.fpr==before,
+            "EE comparison uses signed magnitude, flushed denormals and finite exponent 255; only FCC changes");
+    }
+    for(unsigned kind=0;kind<4;++kind) {
+        const auto d=decode_mips(0x1000u,0x45000002u|(kind<<16));
+        require(d.is_conditional_branch() && d.has_delay_slot() && d.is_likely_branch()==(kind>=2u) && !d.written_gpr(),
+            "COP1 branch metadata preserves CFG delay-slot and likely semantics");
+    }
+    for(auto word:{0x46010070u,0x46010031u,0x45040000u})
+        require(!try_decode_r5900(0,word),"reserved comparison destination, condition and FCC encodings refuse");
+    for(auto word:{0x46010034u,0x45010002u}) {
+        EEState state;state.pc=0x80001000u;state.fcr31=0x0183C079u;
+        memory.write32(state.pc,word);std::uint64_t count=0;ExecutionContext ctx{state,memory,count,10,0xFFFFFFFFu};
+        rejects([&]{interpret_instruction(ctx);},"Status.CU1 = 0");
+        require(state.fcr31==0x0183C079u && state.instruction_pc==0x80001000u && count==0 && !state.delay_pending,
+            "disabled COP1 cannot change FCC or schedule a branch");
+    }
+}
 void nested_exception() {
     EEState state;state.set_cp0(Cop0::Cause,0x80008000u);state.set_cp0(Cop0::Epc,0x12345678u);
     state.set_cp0(Cop0::Status,kStatusEXL|kStatusBEV|0x10u);
@@ -669,6 +702,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();adder();divider();vector_q();vector_setup();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();adder();divider();vector_q();vector_setup();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }
