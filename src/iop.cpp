@@ -2861,6 +2861,22 @@ void Iop::mechacon_command(std::uint8_t command, const char* what) {
             s_results_.push_back({0u,static_cast<std::uint8_t>(diagnostic_forbid_dvdp_error_clear_ ? 0x80u : 0u),"MECHACON ForbidDVDP acknowledgement and resulting permission state are unmeasured"});
             break;
         }
+        case 0x17: { // ps2sdk sceCdRM: offset 0/8 -> status and eight NVM bytes.
+            if(s_params_.size()!=1u || (s_params_[0]!=0u && s_params_[0]!=8u))
+                throw IopStop{name+": ReadModelName requires one supported chunk offset (0 or 8)"};
+            if(!hardware_ || !hardware_->mechacon)
+                throw IopStop{name+": ReadModelName requires the selected MECHACON profile"};
+            if(!nvm_ || nvm_->model_name!=hardware_->model || nvm_->layout!=hardware_->mechacon->layout || nvm_->bytes.size()!=kNvmBytes)
+                throw IopStop{name+": ReadModelName requires the matching console NVM"};
+            const auto offset=std::size_t{nvm_layout_info(nvm_->layout).model_name}+s_params_[0];
+            if(offset>nvm_->bytes.size() || 8u>nvm_->bytes.size()-offset)
+                throw IopStop{name+": NVM model-name chunk is out of range"};
+            // Read the actual record, including its NUL and padding bytes.
+            // A profile label or reconstructed string cannot replace it.
+            s_results_.push_back(0u); // completed validated storage read, as ReadNVM
+            for(unsigned n=0;n<8u;++n)s_results_.push_back(nvm_->bytes[offset+n]);
+            break;
+        }
         case 0x1A: { // ps2sdk sceCdBootCertify: four ROM-name bytes, one reply byte.
             if(s_params_.size()!=4u)throw IopStop{name+": BootCertify requires exactly four ROM-name bytes"};
             if(!hardware_ || !hardware_->mechacon || hardware_->romver.size()<6u)
