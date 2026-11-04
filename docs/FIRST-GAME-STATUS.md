@@ -580,3 +580,37 @@ runs [41787441581](https://github.com/fabegalo/ps2-native/actions/runs/417874415
 e [41787441462](https://github.com/fabegalo/ps2-native/actions/runs/41787441462).
 Commit `94230de` (família aritmética inteira): testes focados aprovados localmente;
 CI e ensaios posteriores registrados separadamente.
+
+### MUL.S e limite comprovado — ensaio 47
+
+SUB.S foi executada. O novo bloqueio é EE `0x100948`, 339.415.349 instruções
+(106,423 s), MUL.S com `fs=C31B0000` (-155) e `ft=453B8000` (3000).
+IOP ativo `0xAE94` / 46.479.003. Permanecem os 16 pacotes GIF e 1.048.576
+escritas de pixels; nenhum frame exibido. RAM canônica igual ao ensaio 46,
+`7bb5c94c14e55264f66f654a4ec47a197133bf3c6f9ba9b5db458b787c9d1049`.
+Após ADD.S/SUB.S, o modo original também repetiu os mesmos PCs/contagens e
+hash `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
+
+Produto inteiro das mantissas: `0x718680000000`. O limite conservador já
+implementado abrange mantissas retidas `E30CFF` e `E30D00`; portanto não decide
+entre `C8E30CFF` e `C8E30D00`. O multiplicador tem somente 15 zeros baixos;
+a pesquisa publicada alerta que esse limite não permite substituir a árvore
+truncada por multiplicação comum. Não foi relaxada a recusa nem inserido caso
+especial por operandos, endereço ou jogo. Continuar exige caracterizar os
+carries descartados do multiplicador, com implementação BSD independente e
+resultados de referência verificáveis. O repositório PS2Float consultado não
+declara licença; nenhum código dele foi copiado, traduzido, vinculado ou incorporado.
+
+CI do commit `94230de`: núcleo aprovado nos seis alvos, run
+[41787994140](https://github.com/fabegalo/ps2-native/actions/runs/41787994140).
+O commit `1ddd0d1` compilou, mas a CI encontrou um teste antigo que esperava
+ADD.S não implementada. Corrigido em `dd6ed41`: a fixture de recusa usa SQRT.S,
+ainda ausente. `native-m20-boot` e `native-ee-context` passaram localmente;
+verificar a nova CI antes de considerar o conjunto concluído.
+
+Validação final: `dd6ed41` aprovado nos seis alvos do núcleo,
+[run 41789281037](https://github.com/fabegalo/ps2-native/actions/runs/41789281037).
+Launcher de `1ddd0d1` aprovado nas seis arquiteturas,
+[run 41788609723](https://github.com/fabegalo/ps2-native/actions/runs/41788609723).
+Nenhum executável local de diagnóstico foi deixado rodando. Nenhum frame de
+jogo foi declarado; primeiro pacote real comprovado, jogabilidade não atingida.

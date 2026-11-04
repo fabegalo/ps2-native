@@ -21,9 +21,9 @@
 - Super Bust-A-Move transferiu setores reais do CD, incluindo os LBAs
   15637–15691 de IOPRP202, por ReadCd/DMA3. Após a tag SIF1 NEXT,
   alcançou IOP `0x1F458` / 31.828.183 instruções, consulta MECHACON `03:00`;
-  1.920 bytes SIF1 e 1.696 SIF0. A consulta agora usa a versão medida do
-  perfil do console, com reexecução em andamento. CAV nominal é hipótese
-  explícita de diagnóstico; não houve loader de módulos pelo host.
+  1.920 bytes SIF1 e 1.696 SIF0. A consulta passou usando a versão medida do
+  perfil; o CDVD depois chegou ao LBA 15824, final de RSPU2DRV.IRX.
+  CAV nominal é hipótese explícita de diagnóstico; não houve loader host.
 - DMA/IRQ SIF nos dois sentidos, pacotes parciais, PLZCW e salvamento simbólico
   de BPC/PCCR exercitados por código convidado. Nenhuma resposta RPC fabricada.
 - Modo original repetido após ROM1/CDVD: mesmos PCs `0x80007D20`/`0x80005F00`,
@@ -34,11 +34,14 @@
   `0x1CDF74`, leitura GS CSR, após 338.172.827 instruções. O ensaio usa injeção
   de ELF e hipóteses explícitas, incluindo SPU2 inativo no reset; não comprova
   boot original. O modo original mantém PCs/contagens/hash anteriores.
-- Continuação após CSR/IMR: ensaio 44 alcançou EE `0x1092CC` /
-  339.407.163 instruções, IOP ativo `0x4698` / 46.477.979. Próximo bloqueio
-  era ADDI; sem novos pixels além da limpeza. IMR e ADDI foram implementados
-  com testes focados; nova execução em andamento. Commit gráfico `d4d98a1`
-  aprovado na CI dos seis alvos (núcleo e launcher).
+- Continuação até ensaio 47: CSR, IMR, aritmética inteira com overflow e
+  ADD.S/SUB.S superados. EE `0x100948` / 339.415.349 instruções, IOP ativo
+  `0xAE94` / 46.479.003. MUL.S ainda recusa uma fronteira de truncamento
+  Booth que o modelo não consegue decidir; sem novos pixels além da limpeza.
+  Commits `d4d98a1` e `8410973` aprovados na CI dos seis alvos (núcleo e launcher);
+  `94230de` e a correção de fixture FPU `dd6ed41` aprovados nos seis do núcleo.
+  ADD.S/SUB.S (`1ddd0d1`) também aprovado nos seis do launcher.
+  BSD e modo original preservados.
 - Sequência, hipóteses, testes e referências:
   [primeiro jogo](docs/FIRST-GAME-STATUS.md#continuação-experimental--subsistemas-exercitados-pelo-jogo).
 
