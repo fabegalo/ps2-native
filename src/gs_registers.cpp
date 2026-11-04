@@ -37,7 +37,8 @@ std::optional<std::size_t> mode_index(std::uint32_t physical) {
 }
 } // namespace
 
-void GsRegisters::reset(std::uint64_t now, std::optional<std::uint64_t> diagnostic_reset_syncv) {
+void GsRegisters::reset(std::uint64_t now, std::optional<std::uint64_t> diagnostic_reset_syncv,
+                        std::optional<bool> diagnostic_reset_field) {
     if (diagnostic_reset_syncv) {
         const auto v = *diagnostic_reset_syncv;
         const auto display = (v >> 42) & 0x7FFu;
@@ -48,6 +49,7 @@ void GsRegisters::reset(std::uint64_t now, std::optional<std::uint64_t> diagnost
     ++generation_;
     mode_ = {};
     diagnostic_reset_syncv_ = diagnostic_reset_syncv;
+    diagnostic_reset_field_ = diagnostic_reset_field;
     mode_.back() = diagnostic_reset_syncv_;
     reset_drawing();
     reset_events(now);
@@ -87,6 +89,7 @@ void GsRegisters::change_line_state(const LineState& next, const LineClockGuard&
 }
 
 void GsRegisters::reset_events(std::uint64_t now) {
+    field_=diagnostic_reset_field_;
     events_ = unknown_events_ = 0u;
     event_cycle_ = now;
     irq_pending_ = irq_unknown_ = finish_pending_ = false;
@@ -118,10 +121,27 @@ void GsRegisters::advance(std::uint64_t now) {
     }
     const auto clock = vertical_clock();
     if (clock.state == VerticalClock::State::Running) {
-        if (clock.next_edge(from, false) <= now) raise_event(kCsrVsint);
+        if(diagnostic_reset_field_) {
+            // Explicit analog phase experiment: GS vsync trails IOP VBON by
+            // 3.5 NTSC / 3 PAL lines. Count crossed edges, not CSR reads.
+            const auto delay=clock.half_line*(line_.cmod==2u ? 7u : 6u);
+            const auto period=clock.half_line*clock.field,first=clock.epoch+delay;
+            if(delay>=period) {
+                field_.reset();if(!(events_&kCsrVsint))unknown_events_|=kCsrVsint;
+            } else {
+                const auto count=[&](std::uint64_t t){return t<first ? 0ull : 1ull+(t-first)/period;};
+                const auto edges=count(now)-count(event_cycle_);
+                if(edges) {
+                    raise_event(kCsrVsint);
+                    if((*mode_.back()&1u)==0u)field_=true; // non-interlaced analog output
+                    else if(field_ && (edges&1u))*field_=!*field_;
+                }
+            }
+        } else if (clock.next_edge(from, false) <= now) raise_event(kCsrVsint);
     } else if (clock.state == VerticalClock::State::Unknown && !(events_ & kCsrVsint)) {
         unknown_events_ |= kCsrVsint;
     }
+    if(clock.state==VerticalClock::State::Unknown)field_.reset();
     update_interrupt_request();
     event_cycle_ = now;
 }
@@ -142,10 +162,10 @@ void GsRegisters::finish_transfer() {
 
 void GsRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value, std::uint64_t now,
                         const LineClockGuard& guard) {
-    const auto before = std::tuple{events_, unknown_events_, event_cycle_, irq_pending_, irq_unknown_};
+    const auto before = std::tuple{events_, unknown_events_, event_cycle_, irq_pending_, irq_unknown_,field_};
     try { write_impl(physical, bytes, value, now, guard); }
     catch (...) {
-        std::tie(events_, unknown_events_, event_cycle_, irq_pending_, irq_unknown_) = before;
+        std::tie(events_, unknown_events_, event_cycle_, irq_pending_, irq_unknown_,field_) = before;
         throw;
     }
 }

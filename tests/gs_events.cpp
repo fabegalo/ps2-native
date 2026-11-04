@@ -67,6 +67,39 @@ void events() {
 }
 
 void timing() {
+    for(const auto cmod:{2u,3u})for(const bool initial:{false,true}) {
+        GsRegisters field;
+        const auto sync=1ull|(10ull<<42u);
+        field.reset(0,sync,initial);
+        field.write(kGsSmode1,8,std::uint64_t{cmod}<<kSmode1CmodShift,0,{});
+        const auto clock=field.vertical_clock();const auto period=clock.half_line*clock.field;
+        const auto edge=clock.half_line*(cmod==2u ? 7u : 6u);
+        const auto polarity=[&]{const auto value=field.observe_csr();
+            require(!(value.unknown&(1ull<<13u)),"explicit FIELD polarity stays known under modeled sync");
+            require(value.unknown&(1ull<<12u),"NFIELD remains unverified");
+            return (value.value&(1ull<<13u))!=0;};
+        field.advance(edge-1u);require(polarity()==initial && !(field.read(kGsCsr,1)&kCsrVsint),
+            "FIELD/VSINT cannot precede the selected analog GS edge");
+        field.advance(edge);require(polarity()!=initial && (field.read(kGsCsr,1)&kCsrVsint),
+            "FIELD and VSINT use the same modeled GS edge");
+        field.advance(edge);require(polarity()!=initial,"reading the same cycle never flips FIELD");
+        field.advance(edge+3u*period);require(polarity()==initial,"batch advancement counts every crossed field");
+        field.write(kGsSmode1,8,kSmode1Sint|(std::uint64_t{cmod}<<kSmode1CmodShift),edge+3u*period,{});
+        field.advance(edge+8u*period);require(polarity()==initial,"held sync preserves field without new edges");
+        field.write(kGsSmode1,8,std::uint64_t{cmod}<<kSmode1CmodShift,edge+8u*period,{});
+        field.advance(2u*edge+8u*period);require(polarity()!=initial,"resumed sync uses its new phase");
+        const auto now=2u*edge+8u*period;
+        rejects([&]{field.write(kGsCsr,8,kCsrReset,now+period,[]{throw DeviceRefusal("guard refuses");});},"guard refuses");
+        require(polarity()!=initial,"rejected reset rolls back lazy field advancement");
+        field.write(kGsCsr,8,kCsrReset,now,{});require(polarity()==initial,"soft reset restores only explicit initial polarity");
+        field.reset(0,sync);field.advance(edge);
+        require(field.observe_csr().unknown&(1ull<<13u),"reset without opt-in leaves FIELD unknown");
+        field.reset(0,std::nullopt,initial);field.advance(1);
+        require(field.observe_csr().unknown&(1ull<<13u),"unknown vertical clock destroys field phase knowledge");
+        field.reset(0,2ull|(10ull<<42u),false);field.advance(7u*line/2u);
+        require(polarity(),"even front porch selects the non-interlaced analog field at the first edge");
+        field.advance(100u*line);require(polarity(),"non-interlaced analog field does not alternate");
+    }
     GsRegisters gs; hold(gs);
     gs.write(kGsSyncv, 8, short_syncv, 0, {}); gs.write(kGsSmode1, 8, running, 0, {});
     rejects([&] { gs.write(kGsSmode1, 4, 0, line, {}); }, "64-bit stores only");

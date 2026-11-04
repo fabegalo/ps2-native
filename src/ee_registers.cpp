@@ -75,7 +75,8 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
     dev9_147x_ = {};
     sio_setup_ = {};
     sio_output_.clear();
-    gs_.reset(0u, assumptions ? assumptions->gs_reset_syncv : std::nullopt);
+    gs_.reset(0u, assumptions ? assumptions->gs_reset_syncv : std::nullopt,
+              assumptions ? assumptions->gs_reset_field : std::nullopt);
     mch_.reset();
     // Hypothesis: every source masked at power-on. The kernel reads I_MASK
     // before writing it (EnableIntc tests the bit, then reverses it).

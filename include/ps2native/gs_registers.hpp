@@ -85,10 +85,13 @@ public:
 
     // Power-on state at EE cycle `now`: nothing written; the line clock is
     // NTSC from `now` (hypothesis, as before the GS was modeled).
-    void reset(std::uint64_t now, std::optional<std::uint64_t> diagnostic_reset_syncv = {});
+    void reset(std::uint64_t now, std::optional<std::uint64_t> diagnostic_reset_syncv = {},
+               std::optional<bool> diagnostic_reset_field = {});
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes) const;
     [[nodiscard]] ObservedDoubleword observe_csr() const noexcept {
-        return {events_,std::uint64_t{unknown_events_}|~std::uint64_t{0x1F}};
+        auto result=ObservedDoubleword{events_,std::uint64_t{unknown_events_}|~std::uint64_t{0x1F}};
+        if(field_) { result.value|=std::uint64_t{*field_}<<13u;result.unknown&=~(1ull<<13u); }
+        return result;
     }
     void write(std::uint32_t physical, std::size_t bytes, std::uint64_t value, std::uint64_t now,
                const LineClockGuard& guard);
@@ -140,6 +143,7 @@ private:
 
     std::array<std::optional<std::uint64_t>, kModeRegisters> mode_{};
     std::optional<std::uint64_t> diagnostic_reset_syncv_;
+    std::optional<bool> diagnostic_reset_field_,field_;
     std::optional<std::uint64_t> csr_written_;
     std::array<std::optional<std::uint64_t>, 256> general_{};
     std::array<std::optional<std::uint64_t>, 15> display_{};

@@ -76,7 +76,9 @@ struct DiagnosticAssumptions {
     // Experimental PCRTC timing after power-on/CSR reset, never a console
     // default. Guest SYNCV writes replace it until the next reset.
     std::optional<std::uint64_t> gs_reset_syncv;
-    [[nodiscard]] bool empty() const noexcept { return video_encoder_registers.empty() && !gs_reset_syncv && !omit_f510_zero_write && !sbus_configuration_latches && !iop_dmacinten && !iop_sio2_irq_clear && !spu2_quiescent_reset && !spu2_pio_word_cycles && !spu2_effect_end_reset && !spu2_effect_start_reset && !spu2_effect_address_reserved_zero && !spu2_inverted_effect_area_inactive && !spu2_adma_word_cycles && !spu2_admas_control_latch; }
+    // Unmeasured FIELD reset polarity and analog GS-vsync phase experiment.
+    std::optional<bool> gs_reset_field;
+    [[nodiscard]] bool empty() const noexcept { return video_encoder_registers.empty() && !gs_reset_syncv && !gs_reset_field && !omit_f510_zero_write && !sbus_configuration_latches && !iop_dmacinten && !iop_sio2_irq_clear && !spu2_quiescent_reset && !spu2_pio_word_cycles && !spu2_effect_end_reset && !spu2_effect_start_reset && !spu2_effect_address_reserved_zero && !spu2_inverted_effect_area_inactive && !spu2_adma_word_cycles && !spu2_admas_control_latch; }
 };
 
 // The slave and the transactions that reach it (shared by both masters).

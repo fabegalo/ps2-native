@@ -1148,3 +1148,22 @@ consultados em PS2tek e PCSX2 Sio2.cpp; sem código copiado.
 Repetição do modo original após DMA: ROM0 `0x80007D20` / 17.690.079,
 ELF `0x80005F00` / 4.486.087, IOP `0x40B0` / 2.210.789; zero pixels/GIF;
 RAM `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
+Ensaio 82: 31.584 palavras DMA core 1; EE chegou a `0x112EC0` /
+348.197.915 instruções consumindo FIELD (CSR.13), que permanece desconhecido
+por padrão. IOP parou em `0x4E570` / 47.389.200, consumindo valor opaco
+carregado de 0x506B0 por PADMAN. Tempo 106,650 s; RAM
+`886717b3fb2cb95118826bf39f3c31a14ecfb1d41c7e246ec926a8227a5c842c`.
+Sem PMODE/frame, ainda 16 pacotes de limpeza. O ensaio 83 seleciona uma
+hipótese GS separada: FIELD inicial=1, borda GS-vsync a 7 half-lines NTSC /
+6 PAL após VBON. FIELD alterna por bordas atravessadas quando VFP é ímpar;
+no experimento analógico com VFP par, assume 1 na borda. VSINT usa essa mesma
+fase somente com opt-in; interrupções VBON/VBOF do IOP conservam o relógio
+anterior. Sync suspenso preserva FIELD; timing desconhecido invalida seu
+conhecimento. Reset/retomada e escritas recusadas são testados. NFIELD e
+outros bits não ganham valores. Sem opt-in, modo original fica inalterado.
+Sete testes focados GS aprovados; teste sintético não mede fase física.
+PS2Recomp gs_frontend.cpp consultado (frontend de comandos, sem FIELD);
+PCSX2 Counters.cpp consultado para borda atrasada e condição VFP/CMOD.
+Implementação BSD própria; nenhuma cópia/adaptação GPL. A fase aproximada
+não é medição do SCPH-70004 e não vira default. CI `8ec7190`: núcleo e
+launcher aprovados nos seis alvos.
