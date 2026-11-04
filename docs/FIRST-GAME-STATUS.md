@@ -870,3 +870,30 @@ CI da correção publicada de Q `da867c6`: núcleo 41799523668 e launcher
 núcleo (41800073863); demais pipelines continuam acompanhados. O caminho
 PIO paralelo foi registrado em `387aabe`; seu conteúdo não foi incluído nos
 commits de configuração de vozes deste trabalho.
+
+Ensaio 61: parâmetros das 48 vozes passaram; IOP `0x66CD4` / 46.499.143,
+KON core 1 em 0x1F9005A0. EE `0x81FCC` / 340.000.000, 22 stalls,
+95,7011 s; RAM/GIF/PMODE iguais ao 60. PIO preservou as 16 palavras reais.
+
+Continuação de KON/KOFF: PS2Recomp áudio novamente consultado; não contém
+modelo de comandos SPU2. PS2SDK fornece mapa, e PCSX2 `RegTable.cpp`,
+`spu2sys.cpp` e `Mixer.cpp` foram consultados somente como referência de
+comportamento. Implementação BSD própria: comandos halfword pendentes,
+consumidos na borda de 48 kHz; readback é comando, não bitmap de atividade.
+A fase física desses comandos ainda não foi medida. Bits reservados ficam
+desconhecidos, inclusive ao copiar o comando entre cores.
+
+Vozes iniciadas tornam-se simbólicas: somente VOLL=VOLR=0 constantes permitem
+provar a contribuição zero no mixer sem inventar ADPCM ou envelope. KON exige
+ambos os comparadores IRQ de RAM explicitamente desabilitados. KOFF não prova
+fim da release nem permite unmute; qualquer ganho não zero posterior recusa.
+ENVX, ENDX, NAX e LSAX não são fabricados. Os buffers de captura pré-volume
+das vozes 1/3 permanecem desconhecidos na inspeção RAM, mesmo com ganho zero.
+Isso não implementa reprodução audível nem decodificação, e continua dependendo
+da hipótese inicial explícita de vozes inativas. Sete testes focados passaram,
+incluindo readback antes/depois da borda, cópia entre cores, desconhecimento,
+unmute após KOFF e IRQ do outro core. Ensaio 62 preparado.
+
+CI de `be450b1`, `fbb2140`, `d63cdba`, `387aabe` e `8e3a16f` concluída com
+sucesso no núcleo e launcher, seis alvos por workflow. Para `8e3a16f`, runs
+41802889808 / 41802889728. Isso valida builds/testes, não execução do jogo.

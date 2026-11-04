@@ -132,7 +132,7 @@ int main() try {
         const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
         std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,mode!=5);
         iop.run_until(1536);
-        if(!mode)require(!iop.stopped() && iop.spu2_sample_count(0)==2 && iop.spu2_last_sample(0)->left==0,
+        if(!mode || mode==3)require(!iop.stopped() && iop.spu2_sample_count(0)==2 && iop.spu2_last_sample(0)->left==0,
                          "KOFF on all 48 inactive voices preserves the quiet sample clock");
         else {require(iop.stopped(),"KOFF rejects unproved masks, widths, readback, active synthesis and missing reset assumptions");
             if(mode==5)require(iop.stop_reason()->find("KOFF")!=std::string::npos,"inactive voice state requires its explicit assumption even before a core starts");}
@@ -212,6 +212,39 @@ int main() try {
             iop.ee_read(0x10Cu+core*32u,4)==0x1234u && iop.ee_read(0x114u+core*32u,4)==0xAu &&
             iop.ee_read(0x118u+core*32u,4)==0x2800u,"inactive voices retain independent pitch, envelope configuration and aligned start addresses");
         else require(iop.stopped(),"voice startup, envelope processing, sweeps, unknown reset and active configuration remain explicit");
+    }
+    for(unsigned mode=0;mode<8u;++mode) {
+        m20::Assembler a(kEeResetVector);
+        const auto sh=[&](std::uint32_t address,std::uint32_t value){a.la(8,address);a.la(9,value);a.sh(9,0,8);};
+        for(unsigned core=0;core<2u;++core) {
+            if(mode!=7u || !core)sh(0xBF90019Au+core*0x400u,0x8000u);
+            for(unsigned voice=0;voice<24u;++voice) {
+                sh(0xBF900000u+core*0x400u+voice*16u,mode==1u ? 1u : 0u);
+                sh(0xBF900002u+core*0x400u+voice*16u,0u);
+            }
+        }
+        // Position command writes away from a synthesis edge, then copy
+        // both halves as a driver may do. Reserved bits remain unknown.
+        a.label("keys");sh(0xBF9005A0u,0xFFFFu);
+        a.lhu(9,0,8);a.nop();a.la(8,0xBF9001A0u);a.sh(9,0,8);
+        sh(0xBF9005A2u,0xFFu);a.lhu(9,0,8);a.nop();a.la(8,0xBF9001A2u);a.sh(9,0,8);
+        a.label("pending");a.la(10,0xA0000100u);
+        a.la(8,0xBF9001A0u);a.lhu(9,0,8);a.nop();a.sw(9,0,10);
+        for(unsigned n=0;n<800u;++n)a.nop();
+        a.lhu(9,0,8);a.nop();a.sw(9,4,10);
+        if(mode==2u)sh(0xBF900000u,1u);
+        if(mode==3u){sh(0xBF9001A4u,0xFFFFu);sh(0xBF900000u,1u);}
+        if(mode==4u)sh(0xBF90059Au,0x40u); // disabled core still compares shared RAM addresses
+        if(mode==5u){a.la(8,0xBF90000Au);a.lhu(9,0,8);}
+        if(mode==6u){a.la(8,0xBF900340u);a.lhu(9,0,8);}
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,true);
+        iop.run_until(2304u);
+        if(!mode)require(!iop.stopped() && iop.ee_read(0x100u,4)==0xFFFFu && iop.ee_read(0x104u,4)==0u &&
+            iop.spu2_sample_count(0)==3u && iop.spu2_last_sample(1)->right==0,
+            "zero gains prove the mixer output while key commands clear at the sample clock; envelopes stay unknown");
+        else require(iop.stopped(),"symbolic voices refuse audible gain, release guesses, IRQ enable, unknown core IRQ and invented ENVX/ENDX");
     }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

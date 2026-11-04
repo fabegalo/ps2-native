@@ -298,6 +298,11 @@ private:
     bool diagnostic_spu2_7ca_latch_{};
     bool diagnostic_spu2_reserved_latches_{};
     std::array<std::optional<ObservedWord>,2> spu2_control_;
+    // Abstract voice state: KON makes decoder/envelope state unknown. A
+    // constant zero gain on both channels still proves its mixer output.
+    // KOFF does not prove that an unknown release envelope has finished.
+    std::array<std::uint32_t,2> spu2_symbolic_voices_{};
+    std::array<std::array<std::optional<std::uint16_t>,4>,2> spu2_keys_;
     // Quiet clocks are available only under the explicit cold-state
     // experiment: no active voices, inputs, effects or transfers.
     std::array<std::optional<std::uint64_t>,2> spu2_next_sample_;
