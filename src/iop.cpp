@@ -204,6 +204,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     std::fill(ram_written_.begin(), ram_written_.end(), std::uint8_t{0});
     gpr_ = {};
     gpr_sio2_epoch_={};sio2_control_epoch_=undefined_sio2_epoch_=0;
+    diagnostic_sio2_port_timing_.reset();
     sio2_input_.clear();sio2_output_.clear();sio2_complete_at_.reset();
     diagnostic_sio2_timeout_cycles_=sio2_reply_bytes_=sio2_interrupt_enable_=0;
     sio2_completion_flag_=sio2_response_valid_=false;sio2_diagnostic_control_.reset();
@@ -1154,6 +1155,10 @@ std::uint32_t Iop::load(std::uint32_t address, std::size_t bytes, const char* wh
 }
 
 
+void Iop::diagnostic_sio2_port_timing(unsigned bits) {
+    if(bits>3u || cycle_)throw DeviceRefusal("SIO2 port timing bits require a two-bit sample before guest execution");
+    diagnostic_sio2_port_timing_=bits;
+}
 void Iop::diagnostic_sio2_dma_word_cycles(std::uint32_t cycles) {
     if(!cycles || cycle_)throw DeviceRefusal("SIO2 DMA experiment requires positive word cycles before guest execution");
     diagnostic_sio2_dma_cycles_=cycles;
@@ -1871,6 +1876,9 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         // These read-only status samples have no established numeric value.
         // Firmware may transport them; only consuming their bits must stop.
         undefined_load_="SIO2 RECV2/RECV3 response bits are unverified";
+        if(physical==0x1F808270u && diagnostic_sio2_port_timing_) {
+            undefined_known_=0x30u;return *diagnostic_sio2_port_timing_<<4u;
+        }
         undefined_known_=0;return 0;
     }
     if(physical==0x1F808280u) {

@@ -1167,3 +1167,15 @@ PCSX2 Counters.cpp consultado para borda atrasada e condição VFP/CMOD.
 Implementação BSD própria; nenhuma cópia/adaptação GPL. A fase aproximada
 não é medição do SCPH-70004 e não vira default. CI `8ec7190`: núcleo e
 launcher aprovados nos seis alvos.
+Ensaio 83: FIELD passou; EE `0x81FD0` / 360.000.000 em espera; IOP manteve
+`0x4E570` / 47.389.200. 107,186 s, 31.584 palavras DMA, sem novos pixels/PMODE.
+RAM `b850b4d2e979ac203a979e451aaaeaac5e31a8fc72753257c4ab2af891d80394`.
+Inspeção local confirma RECV2 deslocado por 4/5, mascarado com 1 e salvo
+para escolher controle de temporização PADMAN; PS2SDK padData.c usa os mesmos
+campos stat70bit. A referência PCSX2 conserva RECV2=F, mas isso não mede os
+bits no console do perfil. Ensaio 84 seleciona apenas RECV2.4/.5=0 em opção
+estreita, antes da execução; os outros 30 bits e RECV3 continuam desconhecidos.
+Reset remove a hipótese; configuração tardia/valores fora de dois bits recusam.
+Testes exercitam as quatro combinações, recusa dos demais bits, reset e RECV3;
+IOP knowledge e boot M20 passaram. A opção não configura periféricos, não
+cria conexão e não produz respostas seriais. Código BSD próprio.

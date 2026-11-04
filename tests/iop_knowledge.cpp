@@ -5,16 +5,35 @@
 using namespace ps2native;
 using namespace boot_checks;
 namespace {
-Iop run(m20::Assembler& a) {
+Iop run(m20::Assembler& a,std::optional<unsigned> timing={},bool reset=false) {
     a.label("idle");a.beq(0,0,"idle");a.nop();
     const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> rom(4u*1024u*1024u);
-    std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);iop.run_until(100);return iop;
+    std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);
+    if(timing)iop.diagnostic_sio2_port_timing(*timing);
+    if(reset)iop.reset(rom,nullptr);
+    iop.run_until(100);return iop;
 }
 void input(m20::Assembler& a) {
     a.lui(8,0xA000u);a.lw(9,0x300,8);a.nop(); // Unwritten RAM is wholly symbolic.
 }
 }
 int main() try {
+    for(unsigned timing=0;timing<4u;++timing)for(const auto mask:{0x10u,0x20u,0x30u,0x40u}) {
+        m20::Assembler a(kEeResetVector);a.la(8,0xBF808270u);a.lw(9,0,8);a.nop();
+        a.andi(10,9,mask);a.addiu(11,10,1);a.la(8,0xA0000100u);a.sw(11,0,8);
+        auto iop=run(a,timing);
+        if(mask==0x40u)require(iop.stopped(),"port timing experiment leaves other RECV2 bits unknown");
+        else require(!iop.stopped() && iop.ee_read(0x100u,4)==((timing<<4u)&mask)+1u,
+            "only the two explicit RECV2 timing bits can choose a numeric result");
+        rejects([&]{iop.diagnostic_sio2_port_timing(0u);},"before guest execution");
+    }
+    for(const bool reset:{false,true}) {
+        m20::Assembler a(kEeResetVector);a.la(8,reset ? 0xBF808270u : 0xBF808274u);
+        a.lw(9,0,8);a.nop();a.andi(9,9,0x30u);a.addiu(10,9,1);
+        const auto iop=run(a,0u,reset);
+        require(iop.stopped(),"reset clears the experiment and RECV3 never receives the RECV2 sample");
+    }
+    { Iop iop;iop.reset({},nullptr);rejects([&]{iop.diagnostic_sio2_port_timing(4u);},"two-bit sample"); }
     for(const auto address:{0xBF808270u,0xBF808274u}) {
         m20::Assembler a(kEeResetVector);a.la(8,address);a.lw(9,0,8);a.nop();
         a.la(8,0xA0000100u);a.sw(9,0,8);a.lw(10,0,8);a.nop();

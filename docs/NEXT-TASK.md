@@ -4,14 +4,13 @@ O checkpoint experimental já produziu 16 pacotes GIF PATH3 e 1.048.576 escritas
 de pixels por IMAGE: limpeza real da VRAM comandada pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução concluída: ensaio 82, EE `0x112EC0`, 348.197.915 instruções,
-consumo FIELD; IOP `0x4E570`, 47.389.200, bit desconhecido usado por PADMAN.
-31.584 palavras reais DMA normal core 1 e 16 halfwords PIO. Ensaio 83 usa
+Última execução concluída: ensaio 83, EE `0x81FD0`, 360.000.000 instruções,
+em espera após FIELD; IOP `0x4E570`, 47.389.200, bit desconhecido usado por PADMAN.
+31.584 palavras reais DMA normal core 1 e 16 halfwords PIO. Ensaio 84 usa RECV2.4/.5=0 explícitos para a seleção de timing PADMAN, além da
 hipótese FIELD inicial=1 e GS-vsync 7/6 half-lines após VBON NTSC/PAL.
 Permanecem explícitas as hipóteses SPU2 (barramento 16 ciclos/palavra,
 PIO 8 ciclos/halfword, ESA/EEA iniciais, área invertida inativa e readback
-reservado), além de encoder/SYNCV e latches não atribuídos. RECV2/RECV3
-continuam opacos; nenhum valor de conexão é fabricado.
+reservado), além de encoder/SYNCV e latches não atribuídos. Os demais bits RECV2 e RECV3 continuam opacos; nenhum valor de conexão é fabricado.
 PMODE ainda não foi escrito; sem scanout.
 Continuar reexecutando, registrando PCs e resolvendo os bloqueios até conteúdo
 real exibido. Não trocar por float host nem criar exceções por título/PC.

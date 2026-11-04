@@ -129,6 +129,9 @@ public:
     // these control/status details are not physical measurements. Reset
     // disables it. Other peripherals and SIO2 DMA remain unsupported.
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles);
+    // Unmeasured RECV2 bits 4/5 used by PADMAN to choose port timing.
+    // Defines only these two bits; no connection status or serial reply.
+    void diagnostic_sio2_port_timing(unsigned bits);
     void diagnostic_sio2_dma_word_cycles(std::uint32_t cycles);
     [[nodiscard]] std::uint64_t sio2_dma_words(unsigned channel) const { return sio2_dma_.at(channel).words; }
     [[nodiscard]] std::optional<std::uint8_t> sio2_input_byte(std::size_t n) const {
@@ -324,6 +327,7 @@ private:
     std::uint32_t undefined_known_{};            // bits of that value that are known
     std::array<std::uint64_t,32> gpr_sio2_epoch_{};
     std::uint64_t sio2_control_epoch_{},undefined_sio2_epoch_{};
+    std::optional<unsigned> diagnostic_sio2_port_timing_;
     std::vector<std::uint8_t> sio2_input_;
     std::deque<std::uint8_t> sio2_output_;
     std::optional<std::uint64_t> sio2_complete_at_;

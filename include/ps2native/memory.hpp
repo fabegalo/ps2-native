@@ -154,6 +154,7 @@ public:
     [[nodiscard]] const Gif& gif() const noexcept { return registers_.gif(); }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles) { registers_.diagnostic_sio2_infrared_timeout(cycles); }
+    void diagnostic_sio2_port_timing(unsigned bits) { registers_.diagnostic_sio2_port_timing(bits); }
     void diagnostic_sio2_dma_word_cycles(std::uint32_t cycles) { registers_.diagnostic_sio2_dma_word_cycles(cycles); }
     [[nodiscard]] const Iop& iop() const noexcept { return registers_.iop(); }
     void diagnostic_spu2_7ca_latch() { registers_.diagnostic_spu2_7ca_latch(); }
