@@ -298,6 +298,9 @@ Oito testes gráficos/DMA/Direct ELF passaram. Um teste Direct ELF foi
 alinhado ao motivo específico atual de recusa MSCAL sem motor VU.
 Reexecução seguinte: harness `superbust-menu104-probe.cpp`, mesma sequência
 de entrada do 103; nenhum resultado de menu antecipado.
+Após ATE/AFAIL, a regressão do modo original manteve 17.690.079 /
+`0x80007D20`, 4.486.087 / `0x80005F00`, IOP 2.210.789 / `0x40B0` e
+RAM `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
 
 BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;
 ELF `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`.

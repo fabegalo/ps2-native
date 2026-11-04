@@ -283,7 +283,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
                 const auto old = vram_.read_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y));
                 if (z < old || (zfunc == 3u && z == old)) continue;
             }
-            if(color_write) {    
+            if(color_write) {
                 bool blend=blended;
                 if(blend && !(color&0x80000000u))blend=(required(0x49)&1u)==0u;
                 if(blend) {
