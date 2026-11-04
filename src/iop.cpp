@@ -162,7 +162,12 @@ bool is_spu2_voice_start(std::uint32_t address) {
     const auto reg=address&0x3FFu;
     return reg>=0x1C0u && reg<0x2E0u && (reg-0x1C0u)%12u<=2u && !(reg&1u);
 }
+bool is_spu2_effect_coefficient(std::uint32_t address) {
+    return address>=0x1F900760u && address<0x1F9007B0u && !(address&1u) &&
+           (address-0x1F900760u)%0x28u>=0x14u;
+}
 bool is_spu2_boot_config(std::uint32_t address) {
+    if(is_spu2_effect_coefficient(address))return true;
     if(is_spu2_voice_parameter(address) || is_spu2_voice_start(address))return true;
     if(is_spu2_voice_routing(address) || is_spu2_effect_address(address))return true;
     if(address==0x1F9007C0u || address==0x1F9007C6u || address==0x1F9007C8u)return true;
@@ -1676,6 +1681,12 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
 }
 
 void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what) {
+    if(physical==0x1F900770u || physical==0x1F900772u || physical==0x1F900798u || physical==0x1F90079Au) {
+        if(bytes!=2u)throw IopStop{"SPU2 current master volume accepts only halfword write attempts"};
+        // MVOLX is read-only. A write cannot change the current gain or
+        // establish readback; its data has no effect, even if unknown.
+        return;
+    }
     if(physical==0x1F900340u || physical==0x1F900342u || physical==0x1F900740u || physical==0x1F900742u) {
         if(bytes!=2u || !value || !diagnostic_spu2_quiescent_)
             throw IopStop{"SPU2 ENDX clear requires a known halfword and established voice state"};
@@ -1808,6 +1819,12 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
     }
     if(is_spu2_boot_config(physical)) {
         if(bytes!=2u || !value)throw IopStop{"SPU2 output configuration requires a known halfword write"};
+        if(is_spu2_effect_coefficient(physical)) {
+            const auto core=(physical-0x1F900760u)/0x28u;
+            const auto control=spu2_control_[core];
+            if(!control || ((control->value|control->unknown)&0x80u))
+                throw IopStop{"SPU2 effect coefficients require effects explicitly disabled"};
+        }
         if(is_spu2_voice_parameter(physical) || is_spu2_voice_start(physical)) {
             if(!diagnostic_spu2_quiescent_)throw IopStop{"SPU2 voice configuration requires established inactive voices"};
             if(is_spu2_voice_parameter(physical) && (physical&15u)<4u && *value &&

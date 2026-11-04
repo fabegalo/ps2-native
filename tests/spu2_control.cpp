@@ -318,5 +318,27 @@ int main() try {
         for(unsigned core=0;core<2u;++core)require(!iop.stopped() && iop.ee_read(0x100u+core*8u,4)==14u+core &&
             iop.ee_read(0x104u+core*8u,4)==0xFFF8u,"EEA byte-address arithmetic and ESA writes consume only proven address bits");
     }
+    for(unsigned mode=0;mode<4u;++mode) {
+        m20::Assembler a(kEeResetVector);a.la(10,0xA0000100u);
+        for(unsigned core=0;core<2u;++core) {
+            a.la(8,0xBF90019Au+core*0x400u);if(mode!=1u)a.sh(0,0,8);
+            const auto base=0xBF900760u+core*0x28u;
+            a.la(8,base);a.la(9,0x1234u);a.sh(9,0,8);
+            a.la(8,base+0x10u);a.la(9,0xFFFFu);a.sh(9,0,8);a.sh(9,2,8);
+            if(mode==2u)a.lhu(9,0,8);
+            if(mode==3u)a.sw(9,0,8);
+            a.la(8,base);a.lhu(9,0,8);a.nop();a.sw(9,core*32u,10);
+            for(unsigned field=0x14u;field<0x28u;field+=2u) {
+                a.la(8,base+field);a.la(9,0xF000u+field+core);a.sh(9,0,8);
+                a.lhu(9,0,8);a.nop();a.sw(9,core*32u+4u,10);
+            }
+        }
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr);iop.run_until(300u);
+        if(!mode)for(unsigned core=0;core<2u;++core)require(!iop.stopped() && iop.ee_read(0x100u+core*32u,4)==0x1234u &&
+            iop.ee_read(0x104u+core*32u,4)==0xF026u+core,"read-only MVOLX writes do not change gain; disabled effects retain all coefficients independently");
+        else require(iop.stopped(),"MVOLX readback, unsupported widths and unproved disabled effects remain explicit");
+    }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

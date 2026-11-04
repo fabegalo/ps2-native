@@ -970,3 +970,14 @@ Escritas ESA/EEA agora consomem somente seus campos: alto de quatro bits,
 baixo ESA de 16 bits. Não convertem reservados desconhecidos em números.
 Fixture própria percorre EEA→endereço em bytes→SUBU→ESA nos dois cores,
 sem hipóteses iniciais, usando EEA explicitamente escrito pelo convidado.
+
+Ensaio 68: ESA passou; IOP `0x55248` / 46.630.819, escrita zero no volume
+master atual MVOLXL (0x1F900770). EE `0x81FD0` / 360.000.000, 103,358 s;
+RAM/GIF/PMODE iguais ao 67. PCSX2 relata verificação física de que escritas
+MVOLX não alteram o volume; PS2SDK confirma mapa, PS2Recomp áudio consultado.
+Implementação própria trata apenas tentativas halfword como ignoradas, sem
+criar readback. Coeficientes IIR/COMB/WALL/APF/entrada podem ser configurados
+quando efeitos estão explicitamente desabilitados. Não executa reverberação,
+não habilita efeitos, não muda o volume atual nem inventa amostras.
+O push SSH deixou de autenticar; a sessão existente da mesma conta no GitHub
+CLI permitiu publicar `ab13949` por HTTPS, preservando origin e os commits.
