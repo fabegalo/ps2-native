@@ -70,7 +70,11 @@ template<class C> int test_main(int argc,C** argv) {
     // Small fixture reaches a real unsupported MMI encoding after four GPR ops.
     m20::Assembler a(direct_test::text);a.addiu(m20::t0,m20::zero,17);a.addiu(m20::t1,m20::t0,3);a.raw(0x7000003Fu);
     direct_test::Program program{{{direct_test::text,5,m20::le_words(a.finish())}},0,{},{}};
-    const auto bytes=direct_test::elf(program);(void)write_binary_if_changed(elf,bytes);
+    auto bytes=direct_test::elf(program);
+    // Fresh, unmapped fixture padding gives each test a cold input identity
+    // without deleting build artifacts or changing the guest workload.
+    direct_test::put(bytes,0xf0,static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()),8);
+    (void)write_binary_if_changed(elf,bytes);
     const auto hash=sha256_file(elf);
     const auto file=root / "game.ps2n";
     auto invoke=[&](const std::string& name,std::vector<fs::path> args,int expected) {
@@ -112,10 +116,37 @@ template<class C> int test_main(int argc,C** argv) {
     auto invalid=profile;invalid.cmake_args.push_back("--build");save_text(root / "invalid.ps2n",invalid.serialize());
     invoke("invalid-profile",{"run",root / "invalid.ps2n"},2);
     // Corrupted generated content must be regenerated from the original input.
-    const auto translation=cli::utf8_path(read_text(first / "analysis-reference.txt")).parent_path() / "module.cpp";
+    const auto translation=cli::utf8_path(read_text(first / "aot-reference.txt"));
     require(file_exists(translation),"active profile AOT cache exists");const auto original=sha256_file(translation);
     save_text(translation,"// corrupted synthetic cache\n");
     invoke("cache-repair",{"replay",file},1);require(sha256_file(translation)==original,"cache hash catches corruption");
+    // Re-running a changed generator (or rebuilding its missing key) can emit
+    // identical C++. Content addressing must retain its original path/mtime.
+    const auto source_stamp=file_write_time(translation);
+    const auto key=cli::utf8_path(read_text(first / "aot-key-reference.txt"));
+    require(remove_file(key),"remove owned synthetic generation-key metadata");
+    invoke("cache-key-repair",{"replay",file},1);
+    const auto key_repaired=cli::utf8_path(read_text(profile.path("build") / "ps2n-dev/last.txt"));
+    require(file_write_time(translation)==source_stamp && read_text(key_repaired / "aot-reference.txt")==path_utf8(translation),
+        "identical regenerated AOT retains content path and mtime");
+    require(read_text(key_repaired / "manifest.json").find("\"aot_content_reused\":true")!=std::string::npos &&
+        read_text(key_repaired / "build-runtime.log").find("Building CXX")==std::string::npos,
+        "regenerating identical code does not recompile it");
+    // Execution controls must not regenerate analysis/AOT or recompile code.
+    const auto repaired=cli::utf8_path(read_text(profile.path("build") / "ps2n-dev/last.txt"));
+    const auto repaired_runtime=read_text(repaired / "runtime.sha256");
+    profile.runtime_args={"--budget=2000000"};profile.values["ring"]="512";profile.values["stream_bytes"]="2097152";
+    save_text(file,profile.serialize());invoke("runtime-options",{"run",file},1);
+    const auto controlled=cli::utf8_path(read_text(profile.path("build") / "ps2n-dev/last.txt"));
+    require(read_text(controlled / "analysis-reference.txt")==read_text(first / "analysis-reference.txt") &&
+        read_text(controlled / "aot-reference.txt")==path_utf8(translation),"execution options retain the same cache artifacts");
+    require(read_text(controlled / "manifest.json").find("\"aot_reused\":true")!=std::string::npos &&
+        read_text(controlled / "analysis-reused.txt")=="true" && read_text(controlled / "runtime.sha256")==repaired_runtime,
+        "budget/ring/stream changes reuse analysis, AOT and runtime");
+    auto isolated=profile;save_text(root / "other-profile.ps2n",isolated.serialize());
+    invoke("profile-isolation",{"run",root / "other-profile.ps2n"},2);
+    require(read_text(root / "profile-isolation.log").find("different profile/source")!=std::string::npos,
+        "separate profiles cannot adopt the same build/firmware cache");
     // Exercise disc identification, BOOT2 AOT and ps2n-run --disc using same build.
     const auto disc=root / "fixture.iso";(void)write_binary_if_changed(disc,disc_image(bytes));
     profile.values["input"]=path_utf8(disc);profile.values["input_sha256"]=sha256_file(disc);profile.values["kind"]="disc";save_text(file,profile.serialize());

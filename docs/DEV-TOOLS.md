@@ -62,6 +62,13 @@ recusada antes de executar. Repetições usam dependências incrementais;
 os artefatos AOT são separados por perfil, SHA-256 do input, opções e
 gerador efetivamente compilado. O hash da tradução é conferido antes do
 reuso. Não se copiam ISO, BIOS, árvore de fontes ou tradução AOT.
+Orçamento, tamanho do anel e streaming não invalidam análise/AOT. As
+revisões do analisador e do gerador possuem chaves independentes; mudar
+somente o relatório de análise não regenera a tradução. O dono original
+do build preserva o isolamento do perfil também no replay de snapshots.
+O C++ gerado possui endereço por hash do próprio conteúdo: mesmo quando
+uma nova versão do gerador exige repetir a geração, resultado idêntico
+mantém caminho e timestamp e não é recompilado nem duplicado no cache.
 
 Cada rodada guarda `profile.ps2n`, `identities.txt`, `manifest.json`,
 commit Git, estado/diff local, hash do runtime, configuração CMake e
@@ -157,6 +164,7 @@ nenhum código desse projeto foi incorporado.
 O fluxo `ps2n-dev` executa `ps2n-analyze` antes da geração e confere os
 hashes de todos os relatórios antes de reutilizá-los. A pasta de análise
 é referenciada por `analysis-reference.txt`; não é copiada a cada rodada.
+A tradução compilada é referenciada por `aot-reference.txt` no modo AOT.
 
 ## Validação
 

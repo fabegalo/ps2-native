@@ -76,9 +76,10 @@ int run(Profile p, const fs::path& replay) {
     if (!p.get("input_sha256").empty() && p.get("input_sha256")!=input_hash) throw std::runtime_error("input SHA-256 changed; update the profile deliberately");
     p.values["input_sha256"]=input_hash;
     std::string identities=input_hash+' '+path_utf8(input)+'\n';
+    std::string map_hash;
     auto aot_args=p.aot_args;
     if(!p.get("ghidra").empty()) {
-        const auto map=p.path("ghidra");identities+=sha256_file(map)+' '+path_utf8(map)+'\n';
+        const auto map=p.path("ghidra");map_hash=sha256_file(map);identities+=map_hash+' '+path_utf8(map)+'\n';
         for(const auto& hint:parse_ghidra_csv(read_text(map)))aot_args.push_back("--entry="+std::to_string(hint.start));
     }
     for (auto& arg : p.runtime_args) {
@@ -120,7 +121,7 @@ int run(Profile p, const fs::path& replay) {
     save_text(directory / "profile.ps2n",p.serialize()); save_text(directory / "identities.txt",identities);
     std::string stages; bool first_stage=true; std::string status="host-error", error;
     std::string source_hash, runtime_hash, commit, cache_hash;
-    bool reused=false, analysis_reused=false, dirty=false;
+    bool reused=false, content_reused=false, analysis_reused=false, dirty=false;
     int result=2;
     auto stage=[&](const std::string& name,const fs::path& tool,const std::vector<fs::path>& args,bool required=true) {
         std::cout << name << "..." << std::endl;
@@ -155,14 +156,19 @@ int run(Profile p, const fs::path& replay) {
         stage("build-tools",cmake,{"--build",build,"--config",config,"--target","ps2n-aot","ps2n-disc","ps2n-analyze","--parallel","2"});
         const auto aot=executable(build,config,"ps2n-aot");
         const auto analyzer=executable(build,config,"ps2n-analyze");
-        std::string cache_material=kind+'\n'+identities+'\n'+sha256_file(aot)+'\n'+sha256_file(analyzer)+'\n';
-        for(const auto& arg:aot_args)cache_material+=arg+'\n';
-        // Profile namespace prevents sharing original firmware artifacts across
-        // console/profile configurations, even when input basenames coincide.
-        const auto cache=build / "ps2n-dev" / "cache" / digest(p.serialize()) / digest(cache_material);
-        const auto translation=cache / "module.cpp", proof=cache / "module.sha256";
-        const auto analysis=cache / "analysis";
-        const auto analysis_proof=cache / "analysis.sha256";
+        std::string aot_material=kind+'\n'+input_hash+'\n'+sha256_file(aot)+'\n';
+        for(const auto& arg:aot_args)aot_material+=arg+'\n';
+        std::string analysis_material=kind+'\n'+input_hash+'\n'+sha256_file(analyzer)+'\n'+map_hash+'\n';
+        for(const auto& arg:p.aot_args)analysis_material+=arg+'\n';
+        // The original profile owns this build, also during snapshot replay.
+        // Execution budgets, logging and analyzer revisions do not change AOT.
+        // Separate content keys still isolate every executable/firmware input.
+        const auto cache=build / "ps2n-dev" / "cache" / digest(read_text(owner));
+        const auto aot_cache=cache / "aot" / digest(aot_material);
+        const auto proof=aot_cache / "content.sha256";
+        fs::path translation;
+        const auto analysis=cache / "analysis" / digest(analysis_material);
+        const auto analysis_proof=analysis / "report.sha256";
         const auto analysis_hash=[&]{std::string text;for(const auto* file:{"analysis.json","analysis.txt","cfg.dot"})text+=sha256_file(analysis / file);return digest(text);};
         if(file_exists(analysis / "analysis.json") && file_exists(analysis / "analysis.txt") && file_exists(analysis / "cfg.dot") && file_exists(analysis_proof))
             analysis_reused=read_text(analysis_proof)==analysis_hash();
@@ -175,12 +181,33 @@ int run(Profile p, const fs::path& replay) {
         }
         save_text(directory / "analysis-reference.txt",path_utf8(analysis));
         save_text(directory / "analysis-reused.txt",analysis_reused ? "true" : "false");
-        if(file_exists(translation) && file_exists(proof) && read_text(proof)==sha256_file(translation)) reused=true;
+        const auto source_path=[&](const std::string& hash){return cache / "sources" / hash / "module.cpp";};
+        if(engine=="aot" && file_exists(proof)) {
+            const auto hash=read_text(proof);
+            if(hash.size()==64 && hash.find_first_not_of("0123456789abcdef")==std::string::npos) {
+                const auto path=source_path(hash);
+                if(file_exists(path) && sha256_file(path)==hash){translation=path;reused=content_reused=true;}
+            }
+        }
         if(!reused && engine=="aot") {
-            std::vector<fs::path> args{input,translation,kind=="bios" ? "--bios" : "--hybrid"};
+            const auto candidate=aot_cache / "candidate.cpp";
+            std::vector<fs::path> args{input,candidate,kind=="bios" ? "--bios" : "--hybrid"};
             if(kind=="disc")args.emplace_back("--disc");
             for(const auto& arg:aot_args)args.push_back(cli::utf8_path(arg));
-            stage("generate-aot",aot,args); save_text(proof,sha256_file(translation));
+            stage("generate-aot",aot,args);
+            const auto hash=sha256_file(candidate);translation=source_path(hash);
+            content_reused=file_exists(translation) && sha256_file(translation)==hash;
+            if(content_reused) (void)remove_file(candidate);
+            else {
+                ps2native::create_directories(translation.parent_path());
+                if(file_exists(translation) && !remove_file(translation))throw std::runtime_error("cannot replace corrupted AOT cache artifact");
+                fs::rename(native_io_path(candidate),native_io_path(translation));
+            }
+            save_text(proof,hash);
+        }
+        if(engine=="aot") {
+            save_text(directory / "aot-reference.txt",path_utf8(translation));
+            save_text(directory / "aot-key-reference.txt",path_utf8(proof));
         }
         if(kind=="disc") stage("identify-disc",executable(build,config,"ps2n-disc"),{input});
         configure.push_back(option("-DPS2N_BIOS_AOT_SOURCE=",engine=="aot" && kind=="bios" ? translation : fs::path{}));
@@ -232,6 +259,7 @@ int run(Profile p, const fs::path& replay) {
         ",\"git_commit\":"+json_string(commit)+",\"git_dirty\":"+(dirty ? "true" : "false")+
         ",\"runtime_sha256\":"+json_string(runtime_hash)+",\"cmake_cache_sha256\":"+json_string(cache_hash)+
         ",\"analysis_reused\":"+(analysis_reused ? "true" : "false")+
+        ",\"aot_content_reused\":"+(content_reused ? "true" : "false")+
         ",\"aot_reused\":"+(reused ? "true" : "false")+",\"disk_bytes\":"+std::to_string(disk_bytes(build))+",\"stages\":["+stages+"]}\n";
     save_text(directory / "manifest.json",manifest);
     std::cout << "run=" << path_utf8(directory) << "\naot_reused=" << (reused ? "true" : "false") << '\n';
