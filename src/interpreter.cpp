@@ -280,11 +280,18 @@ public:
     static std::optional<VuFloatResult> finite_fpu(MipsOpcode op,ObservedWord a,ObservedWord b,
         const FpuAffine& ar,const FpuAffine& br,bool identical,std::shared_ptr<const std::vector<std::uint32_t>>& candidates) {
         const auto av=fpu_candidates(a,ar),bv=fpu_candidates(b,br);
-        if(av.empty() || bv.empty() || av.size()*(identical ? 1u : bv.size())>256u)return {};
+        if(av.empty() || bv.empty() || av.size()*(identical ? 1u : bv.size())>4096u)return {};
         std::vector<std::uint32_t> values;std::optional<std::uint32_t> common_flags;
         const auto append=[&](std::uint32_t value,std::uint32_t flags) {
             if(common_flags && *common_flags!=flags)return false;
-            common_flags=flags;values.push_back(value);return values.size()<=512u;
+            common_flags=flags;
+            // Many input pairs collapse to the same value after alignment.
+            // Bound live storage, not the number of duplicate observations.
+            if(values.size()==512u) {
+                std::sort(values.begin(),values.end());values.erase(std::unique(values.begin(),values.end()),values.end());
+                if(values.size()==512u)return std::binary_search(values.begin(),values.end(),value);
+            }
+            values.push_back(value);return true;
         };
         for(const auto x:av)for(unsigned i=0;i<(identical ? 1u : bv.size());++i) {
             const auto y=identical ? (op==MipsOpcode::SubS ? x^0x80000000u : x) : bv[i];

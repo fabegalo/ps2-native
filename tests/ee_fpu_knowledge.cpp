@@ -147,5 +147,30 @@ int main() try {
     state.fpr[9]=0x00800001u;state.unknown_fpr_bits[9]=0;state.fcr31=0x0183C079u;
     rejects([&]{step(math(0,10,8,9));},"cannot certify");
     require(state.fcr31==0x0183C079u,"different concrete underflow classes cannot fabricate shared FPU exception flags");
+    const auto finite_register=[&](unsigned index,std::vector<std::uint32_t> values) {
+        std::sort(values.begin(),values.end());std::uint32_t all=~0u,any=0;
+        for(const auto value:values){all&=value;any|=value;}
+        state.fpr[index]=all;state.unknown_fpr_bits[index]=all^any;
+        state.fpr_affine[index]={memory.allocate_fpu_origin(),0,0,false,all,all^any,values.front(),values.back(),
+            std::make_shared<const std::vector<std::uint32_t>>(std::move(values))};
+    };
+    std::vector<std::uint32_t> tiny,larger{0};
+    for(unsigned n=0;n<30;++n)tiny.push_back(0x0E457440u+n);
+    for(unsigned n=0;n<66;++n)larger.push_back(0xAA9CCC40u+n);
+    finite_register(1,tiny);finite_register(2,larger);step(math(1,10,1,2));
+    std::vector<std::uint32_t> expected;
+    for(const auto a:tiny)for(const auto b:larger) {
+        std::uint32_t flags=0;expected.push_back(ee_fpu_add(a,b^0x80000000u,flags));
+        require(!flags,"every concrete normal residual has the same exception class");
+    }
+    std::sort(expected.begin(),expected.end());expected.erase(std::unique(expected.begin(),expected.end()),expected.end());
+    require(state.fpr_affine[10].candidates && *state.fpr_affine[10].candidates==expected,
+        "all 2010 concrete input pairs produce the exact retained set despite repeated outputs, without truncating its candidates");
+    for(unsigned n=30;n<65;++n)tiny.push_back(0x0E457440u+n);
+    finite_register(1,tiny);state.fcr31=0x0183C079u;
+    const auto before=state.fpr[10],before_mask=state.unknown_fpr_bits[10];
+    rejects([&]{step(math(1,10,1,2));},"cannot certify");
+    require(state.fpr[10]==before && state.unknown_fpr_bits[10]==before_mask && state.fcr31==0x0183C079u,
+        "exceeding the 4096-pair budget refuses without publishing a partial domain or exception flags");
     std::cout<<"EE floating bounds, dominated addition, raw register/RAM transport, sign operations, consumer refusals and comparison parity passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
