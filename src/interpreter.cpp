@@ -299,20 +299,31 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         !(status & (kStatusEXL | kStatusERL | (1u << 28u))) && (status & kStatusKSU))
         cpu.stop(StopKind::GuestException, "COP0 unusable in supervisor/user mode with Status.CU0 = 0; vectoring is not modeled");
     switch (instruction.opcode) {
-        case MipsOpcode::Addi: {
-            // Use a widened sum: signed host overflow is never evaluated.
-            const auto sum = static_cast<std::int64_t>(static_cast<std::int32_t>(state.reg32(instruction.rs))) +
-                             static_cast<std::int16_t>(word & 0xFFFFu);
+        case MipsOpcode::Addi: case MipsOpcode::Add: case MipsOpcode::Sub:
+        case MipsOpcode::Daddi: case MipsOpcode::Dadd: case MipsOpcode::Dsub: {
+            const auto op=instruction.opcode;
+            const bool wide=op==MipsOpcode::Daddi || op==MipsOpcode::Dadd || op==MipsOpcode::Dsub;
+            const bool immediate=op==MipsOpcode::Addi || op==MipsOpcode::Daddi;
+            const bool subtract=op==MipsOpcode::Sub || op==MipsOpcode::Dsub;
+            const std::uint64_t a=wide ? state.reg64(instruction.rs) : state.reg32(instruction.rs);
+            const std::uint64_t b=immediate ? ee::simm64(word) :
+                (wide ? state.reg64(instruction.rt) : state.reg32(instruction.rt));
+            // Unsigned host arithmetic avoids UB even for the 64-bit limits.
+            const auto result=subtract ? a-b : a+b;
+            const auto sign=std::uint64_t{1}<<(wide ? 63u : 31u);
+            const bool overflow=((a^result)&(subtract ? (a^b) : ~(a^b))&sign)!=0;
             if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Interpreter);
-            if (sum < INT32_MIN || sum > INT32_MAX) {
+            if (overflow) {
                 enter_ee_exception(state, 12u, pc, state.delay_pending);
                 memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi));
-                cpu.event("ADDI overflow exception -> " + hex32(state.pc));
+                cpu.event(std::string(mips_opcode_name(op))+" overflow exception -> " + hex32(state.pc));
                 ++ctx.executed;
                 ++state.retired_instructions;
             } else {
                 const auto frame = ee::begin(state, pc);
-                state.set_reg32_sign_extended(instruction.rt, static_cast<std::uint32_t>(sum));
+                const auto target=immediate ? instruction.rt : instruction.rd;
+                if (wide) state.set_reg64(target,result);
+                else state.set_reg32_sign_extended(target,static_cast<std::uint32_t>(result));
                 (void)ee::retire(ctx, frame);
             }
             return;
@@ -397,7 +408,9 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         }
         case MipsOpcode::MaddS: cpu.madd(word);break;
         case MipsOpcode::AddaS: cpu.adda(word);break;
-        case MipsOpcode::Addi: case MipsOpcode::Syscall: case MipsOpcode::Break: break; // Handled above.
+        case MipsOpcode::Addi: case MipsOpcode::Add: case MipsOpcode::Sub:
+        case MipsOpcode::Daddi: case MipsOpcode::Dadd: case MipsOpcode::Dsub:
+        case MipsOpcode::Syscall: case MipsOpcode::Break: break; // Handled above.
     }
     (void)ee::retire(ctx, frame);
 }

@@ -109,6 +109,44 @@ void addi_exception() {
     rejects([&]{interpret_instruction(ctx);},"consumes unknown MMIO bits");
     require(state.pc==pc && state.retired_instructions==0,"unknown arithmetic does not fabricate a sum or exception");
 }
+void signed_arithmetic() {
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    struct Case {std::uint32_t word;std::uint64_t a,b,result;bool overflow;};
+    constexpr Case cases[]{
+        {0x01094020u,0x7FFFFFFFu,1,0,true}, // ADD
+        {0x01094020u,0x80000000u,0xFFFFFFFFu,0,true},
+        {0x01094020u,0x80000000u,1,0xFFFFFFFF80000001ull,false},
+        {0x01094022u,0x7FFFFFFFu,0xFFFFFFFFu,0,true}, // SUB
+        {0x01094022u,0x80000000u,1,0,true},
+        {0x01094022u,0x80000000u,0x80000000u,0,false},
+        {0x0109402Cu,0x7FFFFFFFFFFFFFFFull,1,0,true}, // DADD
+        {0x0109402Cu,0x8000000000000000ull,~0ull,0,true},
+        {0x0109402Cu,0x8000000000000000ull,1,0x8000000000000001ull,false},
+        {0x0109402Eu,0x7FFFFFFFFFFFFFFFull,~0ull,0,true}, // DSUB
+        {0x0109402Eu,0x8000000000000000ull,1,0,true},
+        {0x0109402Eu,0x8000000000000000ull,0x8000000000000000ull,0,false},
+        {0x61080001u,0x7FFFFFFFFFFFFFFFull,0,0,true}, // DADDI
+        {0x6108FFFFu,0x8000000000000000ull,0,0,true},
+        {0x6108FFFFu,0,0,~0ull,false},
+    };
+    for(const auto& c:cases) {
+        EEState state;state.pc=0x80001000u;
+        state.set_reg128(8,c.a,0x0123456789ABCDEFull);state.set_reg64(9,c.b);
+        memory.set_cpu_context(0,0);memory.write32(state.pc,c.word);
+        std::uint64_t executed=0;ExecutionContext ctx{state,memory,executed,4,0};
+        const auto instruction=decode_r5900(state.pc,c.word);
+        require(instruction.written_gpr()==8u && !mips_aot_supported(instruction.opcode),
+                "signed arithmetic decode records the correct destination and interpreter boundary");
+        interpret_instruction(ctx);
+        require(state.gpr[8].high==0x0123456789ABCDEFull && executed==1,
+                "signed arithmetic preserves the upper GPR half and accounts for one instruction");
+        if(c.overflow)require(state.pc==0x80000180u && state.cp0(Cop0::Cause)==48 &&
+                              state.reg64(8)==c.a,"signed overflow preserves aliased destination");
+        else require(state.pc==0x80001004u && state.reg64(8)==c.result,"signed arithmetic result at representable limits");
+    }
+    for(const auto fn:{0x20u,0x22u,0x2Cu,0x2Eu})
+        require(!try_decode_r5900(0,0x01094040u|fn),"signed register arithmetic rejects reserved shift bits");
+}
 void packed_copy() {
     require(decode_mips(0,0x700006E9u).opcode==MipsOpcode::Pcpyh,"PCPYH is AOT-capable");
     require(!try_decode_r5900(0,0x702006E9u),"PCPYH rejects reserved rs");
@@ -381,6 +419,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();nested_exception();addi_exception();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();divider();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();divider();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

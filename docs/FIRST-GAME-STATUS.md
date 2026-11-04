@@ -541,3 +541,17 @@ sem alterar o destino. O handler convidado recebe EPC/BD corretos e o branch
 pendente é cancelado no trap. Testes próprios incluem limites positivo/negativo,
 destino zero, alias, delay slot e origem desconhecida. Consultados PS2Recomp
 decoder/translator e EE Core User's Manual, seção 4.2.16; código próprio BSD.
+
+### Após ADDI — ensaio 45
+
+ADDI executou e o EE avançou até `0x109364`, 339.415.003 instruções (91,365 s),
+ADD de registradores ainda ausente. IOP ativo `0xAE94` / 46.478.959. RAM canônica
+`be56d15eac3de03a4a05cbb1a6c6d54292b0f19e173138594b2f445193cb9086`.
+Continuam 16 pacotes/1.048.576 pixels da limpeza, sem frame exibido.
+O modo original repetido após ADDI preservou PCs, contagens e hash anteriores.
+
+A família ADD/SUB/DADD/DSUB/DADDI usa agora o mesmo caminho de exceção de ADDI,
+com aritmética host unsigned para não introduzir overflow indefinido em C++.
+AOT continua com fronteira explícita. Testes cobrem resultados nos limites,
+overflow nos dois sentidos, alias e campos reservados. PS2Recomp special
+translator foi consultado antes; não foi copiada sua tradução sem exceções.

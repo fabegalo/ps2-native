@@ -67,6 +67,7 @@ std::optional<unsigned> MipsInstruction::written_gpr() const noexcept {
         case MipsOpcode::Dsll: case MipsOpcode::Dsrl: case MipsOpcode::Dsra:
         case MipsOpcode::Dsll32: case MipsOpcode::Dsrl32: case MipsOpcode::Dsra32:
         case MipsOpcode::Dsllv: case MipsOpcode::Dsrlv: case MipsOpcode::Dsrav:
+        case MipsOpcode::Add: case MipsOpcode::Sub: case MipsOpcode::Dadd: case MipsOpcode::Dsub:
         case MipsOpcode::Addu: case MipsOpcode::Subu: case MipsOpcode::Daddu:
         case MipsOpcode::Dsubu: case MipsOpcode::And: case MipsOpcode::Or:
         case MipsOpcode::Xor: case MipsOpcode::Nor: case MipsOpcode::Slt:
@@ -80,7 +81,7 @@ std::optional<unsigned> MipsInstruction::written_gpr() const noexcept {
         case MipsOpcode::Psubb: case MipsOpcode::Plzcw:
             target = rd;
             break;
-        case MipsOpcode::Addi: case MipsOpcode::Addiu: case MipsOpcode::Daddiu: case MipsOpcode::Slti:
+        case MipsOpcode::Addi: case MipsOpcode::Daddi: case MipsOpcode::Addiu: case MipsOpcode::Daddiu: case MipsOpcode::Slti:
         case MipsOpcode::Sltiu: case MipsOpcode::Andi: case MipsOpcode::Ori:
         case MipsOpcode::Xori: case MipsOpcode::Lui:
         case MipsOpcode::Lb: case MipsOpcode::Lbu: case MipsOpcode::Lh:
@@ -170,7 +171,9 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
             case 0x19: if (sa == 0) return make(MipsOpcode::Multu); break;
             case 0x1a: if (rd == 0 && sa == 0) return make(MipsOpcode::Div); break;
             case 0x1b: if (rd == 0 && sa == 0) return make(MipsOpcode::Divu); break;
+            case 0x20: if (sa == 0) return make(MipsOpcode::Add); break;
             case 0x21: if (sa == 0) return make(MipsOpcode::Addu); break;
+            case 0x22: if (sa == 0) return make(MipsOpcode::Sub); break;
             case 0x23: if (sa == 0) return make(MipsOpcode::Subu); break;
             case 0x24: if (sa == 0) return make(MipsOpcode::And); break;
             case 0x25: if (sa == 0) return make(MipsOpcode::Or); break;
@@ -180,7 +183,9 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
             case 0x29: if (rt == 0 && rd == 0 && sa == 0) return make(MipsOpcode::Mtsa); break;
             case 0x2a: if (sa == 0) return make(MipsOpcode::Slt); break;
             case 0x2b: if (sa == 0) return make(MipsOpcode::Sltu); break;
+            case 0x2c: if (sa == 0) return make(MipsOpcode::Dadd); break;
             case 0x2d: if (sa == 0) return make(MipsOpcode::Daddu); break;
+            case 0x2e: if (sa == 0) return make(MipsOpcode::Dsub); break;
             case 0x2f: if (sa == 0) return make(MipsOpcode::Dsubu); break;
             case 0x38: if (rs == 0) return make(MipsOpcode::Dsll); break;
             case 0x3a: if (rs == 0) return make(MipsOpcode::Dsrl); break;
@@ -308,6 +313,7 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
             case 0x15: return make(MipsOpcode::Bnel);
             case 0x16: if (rt == 0) return make(MipsOpcode::Blezl); break;
             case 0x17: if (rt == 0) return make(MipsOpcode::Bgtzl); break;
+            case 0x18: return make(MipsOpcode::Daddi);
             case 0x19: return make(MipsOpcode::Daddiu);
             case 0x1a: return make(MipsOpcode::Ldl);
             case 0x1b: return make(MipsOpcode::Ldr);
