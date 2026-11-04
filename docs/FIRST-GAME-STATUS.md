@@ -1135,3 +1135,16 @@ parcialmente desconhecido; seis testes focados passaram (4,67 s).
 Referência comportamental consultada: PCSX2 SPU2/spu2.cpp (notificação de
 conclusão); nenhuma implementação GPL incorporada. Timing segue experimental.
 CI de `1ef95a1`, `778745c` e `e58bfea`: núcleo e launcher aprovados nos seis alvos.
+Ensaio 81: DMA normal core 1 completou 11.008 palavras de 32 bits; IOP
+alcançou `0x478EC` / 46.964.935, leitura SIO2 RECV2 (1F808270).
+EE `0x81FC4` / 360.000.000, 107,273 s; RAM igual ao 80. Ainda somente
+16 pacotes/limpeza, sem PMODE/frame. RECV2/RECV3 agora transportam amostras
+inteiramente desconhecidas, sem escolher um valor de reset ou conexão.
+Uma decisão que consuma esses bits continua recusada. Fixture própria prova
+load/store/load e parada apenas no branch consumidor. Três testes focados
+passaram (IOP knowledge, DMA SPU2, boot M20). PS2Recomp ps2_pad.cpp consultado:
+backend de controles host, sem semântica MMIO SIO2. Mapa e incerteza de RECV2/3
+consultados em PS2tek e PCSX2 Sio2.cpp; sem código copiado.
+Repetição do modo original após DMA: ROM0 `0x80007D20` / 17.690.079,
+ELF `0x80005F00` / 4.486.087, IOP `0x40B0` / 2.210.789; zero pixels/GIF;
+RAM `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.

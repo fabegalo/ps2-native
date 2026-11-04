@@ -4,9 +4,9 @@ O checkpoint experimental já produziu 16 pacotes GIF PATH3 e 1.048.576 escritas
 de pixels por IMAGE: limpeza real da VRAM comandada pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução concluída: ensaio 80, EE em espera `0x81FC4`, 360.000.000 instruções;
-IOP parou em `0x65D20`, 46.759.272, leitura STATX após 256 palavras reais de DMA normal core 1. PIO transferiu 16 palavras reais.
-Ensaio 81 liga STATX ao término real do payload por DMA normal, com barramento explícito de 16 ciclos IOP/palavra; mantém hipótese de área invertida inativa (referência comportamental, sem medição física); conserva hipótese opt-in de bits não usados ESA-high/EEA lidos como zero; preparado com hipótese opt-in de ESA interno EFFF8/FFFF8, sem readback, além de EEA E/F (PIO = 8 ciclos IOP/halfword, hipótese), com hipóteses opt-in de 7CA e janela não atribuída
+Última execução concluída: ensaio 81, EE em espera `0x81FC4`, 360.000.000 instruções;
+IOP parou em `0x478EC`, 46.964.935, leitura SIO2 RECV2 após 11.008 palavras reais de DMA normal core 1. PIO transferiu 16 palavras reais.
+Ensaio 82 transporta RECV2/RECV3 como desconhecidos, preservando recusa no consumo; liga STATX ao término real do payload por DMA normal, com barramento explícito de 16 ciclos IOP/palavra; mantém hipótese de área invertida inativa (referência comportamental, sem medição física); conserva hipótese opt-in de bits não usados ESA-high/EEA lidos como zero; preparado com hipótese opt-in de ESA interno EFFF8/FFFF8, sem readback, além de EEA E/F (PIO = 8 ciclos IOP/halfword, hipótese), com hipóteses opt-in de 7CA e janela não atribuída
 0x346..0x3FF, 0x746..0x75F, 0x7B0..0x7BF/espelhos. Modo original mantém recusas; leituras não são fabricadas.
 PMODE ainda não foi escrito; sem scanout.
 Continuar reexecutando, registrando PCs e resolvendo os bloqueios até conteúdo

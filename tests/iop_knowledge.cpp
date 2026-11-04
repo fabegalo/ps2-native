@@ -15,6 +15,17 @@ void input(m20::Assembler& a) {
 }
 }
 int main() try {
+    for(const auto address:{0xBF808270u,0xBF808274u}) {
+        m20::Assembler a(kEeResetVector);a.la(8,address);a.lw(9,0,8);a.nop();
+        a.la(8,0xA0000100u);a.sw(9,0,8);a.lw(10,0,8);a.nop();
+        a.la(11,1);a.sw(11,4,8);a.label("consume");a.beq(10,0,"idle");a.nop();
+        const auto consume=a.at("consume");
+        const auto iop=run(a);
+        require(iop.stopped() && iop.pc()==consume && iop.gpr(11)==1u,
+            "opaque SIO2 status can travel through memory but cannot choose a branch");
+        require(iop.stop_reason()->find("unknown")!=std::string::npos,
+            "unverified response status is never an invented disconnected or successful reply");
+    }
     for(const unsigned destination : {9u,10u,11u}) {
         m20::Assembler a(kEeResetVector);input(a);
         a.ori(9,9,0xFFFFu);a.lui(10,0xFFFFu);a.r(9,10,destination,0,0x25u);

@@ -1866,6 +1866,13 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         // ps2tek: disconnected response, not a successful peripheral reply.
         return 0x1D100u;
     }
+    if(physical==0x1F808270u || physical==0x1F808274u) {
+        if(bytes!=4u)throw IopStop{"SIO2 RECV2/RECV3 require word reads"};
+        // These read-only status samples have no established numeric value.
+        // Firmware may transport them; only consuming their bits must stop.
+        undefined_load_="SIO2 RECV2/RECV3 response bits are unverified";
+        undefined_known_=0;return 0;
+    }
     if(physical==0x1F808280u) {
         if(bytes!=4u || !diagnostic_sio2_timeout_cycles_)
             throw IopStop{"SIO2 interrupt status bit layout is unverified"};
