@@ -70,7 +70,7 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
         }
         const auto opcode=command>>24u,immediate=command&0xFFFFu;
         if(command&0x80000000u) refuse(" interrupt-bearing command is not modeled");
-        if(unit_==Unit::Vu0 && (opcode==2u || opcode==3u || opcode==6u || opcode==0x50u))
+        if(unit_==Unit::Vu0 && (opcode==2u || opcode==3u || opcode==6u || opcode==0x11u || opcode==0x50u || opcode==0x51u))
             refuse(" received a VIF1-only command: "+std::to_string(opcode));
         switch(opcode) {
             case 0: break; // NOP ignores NUM and IMMEDIATE.
@@ -83,10 +83,26 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
                 programmed_[5]=immediate&3u;break;
             case 6: gif.set_vif_path3_mask((immediate&0x8000u)!=0u);break;
             case 7: mark_=immediate;mark_detected_=true;break;
+            case 0x10: // FLUSHE: both micro engines are Ready; every start is refused.
+                break;
+            case 0x11:
+                // EE manual: FLUSH waits for VU1 and PATH1/2, not PATH3.
+                // No microprogram/XGKICK can start in this runtime. An
+                // incomplete DIRECT packet still requires actual GIF data;
+                // refuse its unmodeled stall instead of discarding it.
+                if(((gif.read_stat()>>10u)&3u)==2u)
+                    refuse(" FLUSH waits for an incomplete GIF PATH2 transfer; stall is not modeled");
+                break;
             case 0x20: pending_=Pending::Mask;break;
             case 0x30: pending_=Pending::Row;break;
             case 0x31: pending_=Pending::Col;break;
             case 0x50:
+            case 0x51:
+                // DIRECTHL cannot interrupt a PATH3 IMAGE transfer. This
+                // synchronous parser accepts the idle path only; concurrent
+                // graphics DMA is also refused by the shared DMA engine.
+                if(opcode==0x51u && ((gif.read_stat()>>10u)&3u)==3u)
+                    refuse(" DIRECTHL waits for GIF PATH3; stall is not modeled");
                 direct_left_=immediate ? immediate : 65536u;
                 code_=command;
                 return; // Remaining bytes before qword alignment are padding.

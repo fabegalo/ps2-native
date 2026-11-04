@@ -1,12 +1,17 @@
 # Próxima execução — Super Bust-A-Move (SLUS-20115)
 
-O checkpoint experimental já produziu 88 pacotes GIF e 1.819.120 escritas
-de pixels por IMAGE: limpeza real da VRAM comandada pelo jogo. Ainda nenhum
+O checkpoint experimental já produziu 255 pacotes GIF e 1.948.160 escritas
+comprovadas: limpeza e uploads de texturas/paletas comandados pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução concluída: ensaio 95, EE `0x1DD778`, 481.038.854 instruções,
-PSUBW ausente nessa execução; agora implementado com semântica compartilhada. IOP `0x4CCBC` / 64.181.944,
-sem parada registrada. DMA VIF passou. Profundidade, scanout INT+FFMD e propagação de incerteza passaram. PSMT8 passou com os 26.624 índices reais. DMA GIF source-chain passou. PSMT4 passou. PSUBW implementado, cinco testes focados aprovados; ensaio 96 em andamento.
+Última execução concluída: ensaio 99, EE `0x1CE460`, 1.263.225.943 instruções;
+IOP `0xAE98` / 161.955.330 ativo. DMA VIF/GIF, profundidade,
+scanout INT+FFMD, propagação de incerteza, uploads PSMT8/PSMT4, PSUBW,
+sondagem de Memory Card vazia e FLUSH/DIRECTHL passaram.
+Próximo bloqueio: sprite UV com PSMT4, CLUT CT32 CSM1, nearest,
+MODULATE e alpha blending. Implementação em validação no ensaio 100.
+Slots de Memory Card explicitamente vazios na API diagnóstica existente
+(máscara 12, timeout 8192); nenhum save montado ou alterado.
 D-cache funcional explícito desde reset passou por DXLTG: conteúdo separado
 da RAM, LRF e writeback reais; sem latência adicional, I-cache não modelado.
 Hipótese separada permite operações hit usando alias uncached da RAM.
@@ -25,8 +30,9 @@ licença e não pode ter código copiado, adaptado ou incorporado.
 Após a correção, repetir o jogo, registrar novo PC/contagens e continuar pelos
 próximos bloqueios. O harness local está em `out/game-first/gs-iop-experiment-probe.cpp`,
 build isolado `out/gs-iop-build`. O limite de parada após novos pacotes foi removido;
-executa até recusa ou orçamento de 1 bilhão. Diagnóstico de scanout/registradores
-GS está ativo. Os logs e artefatos comerciais continuam ignorados.
+executa até recusa, 4 bilhões de instruções, 20 minutos ou três scanouts
+distintos não pretos capturados no VBLANK. Diagnóstico GS e contadores SIF
+estão ativos. Os logs e artefatos comerciais continuam ignorados.
 
 O modo original foi preservado em todas as verificações: ROM0/NVM param no encoder
 não medido, `0x80007D20`, 17.690.079 instruções. ELF injetado nesse estado para em

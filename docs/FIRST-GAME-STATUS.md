@@ -1370,3 +1370,51 @@ PS2tek antes de implementar PSUBW. Semântica compartilhada AOT/interpretador:
 quatro lanes de 32 bits, módulo 2^32, sem carry/borrow entre lanes ou exceção
 signed. Testes próprios de limites, alias do destino e zero register;
 cinco testes focados de contexto/cache/DMA/frame AOT aprovados.
+Ensaio 96: PSUBW passou e o orçamento de 1.000.000.000 instruções foi
+atingido sem recusa: EE `0x81FC4`, IOP `0xAE98` / 129.052.087 ativo;
+393,907 s. 193 pacotes GIF novos, 1.819.120 escritas comprovadas.
+O framebuffer de desenho mudou, mas o scanout 640x224 continua preto,
+com o mesmo digest. RAM
+`a37033d2bdd36ad6c14c5dd17e0931cd127962dc0624d90946dcaf4c7dc32d26`,
+um doubleword parcialmente desconhecido. Nenhuma imagem de jogo declarada.
+Ensaio 97 amplia a janela acompanhada para até 4 bilhões de instruções
+ou 20 minutos, com captura de até três scanouts distintos e não pretos
+no VBLANK modelado. As hipóteses anteriores continuam explícitas.
+CI b6ea81f: núcleo e launcher aprovados nos seis alvos. CI 259346e:
+launcher aprovado nos seis; núcleo com cinco aprovados e macOS ARM64
+ainda em fila na última consulta.
+Regressão do modo original repetida após DMA compartilhado, PSMT4 e PSUBW:
+ROM0 `0x80007D20` / 17.690.079; ELF `0x80005F00` / 4.486.087;
+IOP `0x40B0` / 2.210.789, zero GIF/pixels e RAM canônica
+`cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
+Ensaio 97: EE `0x81FDC` / 1.260.000.000; IOP `0x47850` /
+159.520.606 parou numa sondagem SIO2 de Memory Card (`81 11`), pois
+a presença do periférico nessa porta não estava estabelecida. 551,305 s,
+246 novos pacotes GIF, 1.819.120 escritas e scanout ainda preto.
+RAM `a0b3e17bb39ec7f51e54af0372e72369eb69f079035926bcee0965482a47259a`,
+um doubleword parcialmente desconhecido. Nenhum frame não preto capturado.
+Ensaio 98 configura explicitamente os slots de Memory Card vazios no
+harness, usando a API de portas desconectadas já existente (máscara 12,
+timeout 8192). Consultado PS2Recomp mcserv: usa serviços HLE, não adotados.
+Três testes SIO2 pad/DMA/idle aprovados; nenhum save montado ou modificado.
+CI 259346e: núcleo e launcher aprovados nos seis alvos.
+Ensaio 98: portas vazias passaram. EE `0x108AE0` / 1.263.217.757,
+IOP `0xB4D0` / 161.954.306 ativo, 512,774 s. Recusa VIF1 FLUSH
+(`0x11`); 248 pacotes novos e scanout ainda preto. RAM
+`99860af9ab8f84a4523484ef213acb721e51af3321a49690808bf99252d8bf67`,
+um doubleword parcialmente desconhecido.
+Consultados PS2Recomp VIF interpreter e EE User's Manual FLUSH/DIRECTHL.
+FLUSHE aceita o estado Ready comprovado (todos os inícios micro continuam
+recusados); FLUSH verifica PATH2 e não aguarda PATH3. Esperas de caminho
+ocupado continuam recusadas. DIRECTHL usa os bytes reais de PATH2 somente
+com PATH3 ocioso, sem descartar pacotes ou inventar execução VU.
+Quatro testes VIF/GIF/AOT/setup aprovados, incluindo payload parcial,
+timing de END, caminhos ocupados e rejeição dos comandos exclusivos no VIF0.
+Ensaio 99 confirmou FLUSH/DIRECTHL: EE `0x1CE460` / 1.263.225.943,
+IOP `0xAE98` / 161.955.330 ativo; 534,413 s, sem alegação de desempenho
+(compilação concorrente durante parte desse ensaio). 255 pacotes novos e
+1.948.160 escritas comprovadas. Bloqueio: sprite UV texturizado/blended,
+PRIM=156, PSMT4, CLUT CT32 CSM1, filtro nearest, MODULATE e alpha 44.
+Scanout continua preto; RAM com o mesmo digest do ensaio 98.
+Replay local da cadeia isolou o mesmo comando, mas usa estado GS/VRAM
+incompleto e não constitui execução do jogo ou evidência de frame.

@@ -57,6 +57,17 @@
   PSMZ16S. Profundidade e scanout INT+FFMD implementados: ensaio 91 no mesmo PC, agora SCANMSK não escrito; scanout 640x224 preto da limpeza real, sem menu/gameplay. Bits SCANMSK/FBA desconhecidos passam a propagar incerteza, sem valor de reset inventado. Seis testes GS/VIF/frames AOT focados passaram; CI d033f16 e 0570023 aprovada nos seis alvos de núcleo/launcher. Sete testes
   focados DMA/cache/GS/AOT passaram. CI dos controles `938ed35` e
   `833004c` aprovada nos seis alvos de núcleo e launcher.
+- Ensaios 92–97: uploads PSMT8/PSMT4, DMA GIF source-chain pelo motor
+  compartilhado do VIF e PSUBW passaram. O ensaio 97 alcançou
+  1.260.000.000 instruções EE (`0x81FDC`), 246 pacotes GIF e
+  1.819.120 escritas comprovadas; scanout 640x224 ainda inteiramente preto.
+  IOP `0x47850` / 159.520.606 recusou uma sondagem de Memory Card cuja
+  presença não estava configurada. O ensaio seguinte usa explicitamente
+  slots vazios na API diagnóstica existente; nenhum save é montado.
+  Captura no VBLANK está ativa, mas ainda sem imagem não preta.
+  CI de `f6344e4`, `950cfd8`, `df1203c`, `b6ea81f` e `259346e`
+  aprovada nos seis alvos de núcleo e launcher. Regressão BIOS original
+  mantém PCs, contagens e hash canônicos após essas mudanças.
 - Sequência, hipóteses, testes e referências:
   [primeiro jogo](docs/FIRST-GAME-STATUS.md#continuação-experimental--subsistemas-exercitados-pelo-jogo).
 

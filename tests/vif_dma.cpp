@@ -75,7 +75,38 @@ void direct_and_failures() {
     Fixture overflow;overflow.tag(0x100,0x0000FFFFu,0x1000);overflow.start();
     rejects([&]{overflow.advance(2);},"payload outside");
 }
+void idle_flush_and_directhl() {
+    Fixture f;
+    f.tag(0x100,0x10000000u,0,0x11000000u,0); // CNT: FLUSH
+    f.tag(0x110,0x30000002u,0x300,0,0x51000002u); // REF: DIRECTHL
+    f.tag(0x120,0x70000000u,0);
+    f.tag(0x300,0x8001u,0x10000000u,0xEu,0);
+    f.tag(0x310,0x12345678u,0xFFFFFFFFu,0x62u,0);
+    f.start();f.advance(2);
+    require(f.gif.packets().empty() && (f.dma.ee_dma_read(0x10009000u)&0x100u),
+            "idle FLUSH does not complete the remaining source chain");
+    f.advance(4);require(f.v1.direct_remaining()==2,"DIRECTHL waits for both real payload qwords");
+    f.advance(6);require(f.gif.packets().empty(),"partial DIRECTHL has no completed GIF packet");
+    f.advance(10);require(f.gif.packets().size()==1 && f.gs.read(kGsSiglblid+4,4)==0x12345678u &&
+                         !(f.dma.ee_dma_read(0x10009000u)&0x100u),"DIRECTHL reaches PATH2 and completes after END");
+
+    Fixture paths;
+    paths.gif.write_fifo(0x1000000000008001ull,0xEu,paths.gs);
+    paths.v1.write_dma_tag(0x11000000u,paths.gif,paths.gs);
+    require(((paths.gif.read_stat()>>10)&3u)==3u,"FLUSH does not discard or wait for PATH3");
+    rejects([&]{paths.v1.write_dma_tag(0x51000001u,paths.gif,paths.gs);},"waits for GIF PATH3");
+    paths.gif.write_fifo(7,0x62,paths.gs);
+    paths.gif.write_path2(0x1000000000008001ull,0xEu,paths.gs);
+    rejects([&]{paths.v1.write_dma_tag(0x11000000u,paths.gif,paths.gs);},"incomplete GIF PATH2");
+    paths.v1.write_dma_tag(0x10ABCDEFu,paths.gif,paths.gs);
+    require(((paths.gif.read_stat()>>10)&3u)==2u,"FLUSHE does not consume pending GIF work");
+    paths.gif.write_path2(8,0x62,paths.gs);
+    paths.v1.write_dma_tag(0x11000000u,paths.gif,paths.gs);
+    paths.v0.write_dma_tag(0x10000000u,paths.gif,paths.gs);
+    rejects([&]{paths.v0.write_dma_tag(0x11000000u,paths.gif,paths.gs);},"VIF1-only");
+    rejects([&]{paths.v0.write_dma_tag(0x51000001u,paths.gif,paths.gs);},"VIF1-only");
 }
-int main() try {empty_and_timing();tags_and_payload();direct_and_failures();
+}
+int main() try {empty_and_timing();tags_and_payload();direct_and_failures();idle_flush_and_directhl();
     std::cout<<"VIF DMA normal/chain/TTE, source bytes, timing, IRQ and fail-closed paths passed\n";
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
