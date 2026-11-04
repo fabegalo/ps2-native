@@ -49,6 +49,10 @@ public:
 
     void mfc0(unsigned rt, unsigned rd) {
         switch (static_cast<Cop0>(rd)) {
+            case Cop0::TagLo:
+                s_.set_reg64_observed(rt,ee::sx32(s_.cop0[rd]),
+                    (s_.taglo_unknown&0x80000000u) ? (0xFFFFFFFF00000000ull|s_.taglo_unknown) : s_.taglo_unknown);
+                return;
             case Cop0::Random:
                 stop(StopKind::NotModeled, "MFC0 Random: its per-cycle decrement is not modeled");
             case Cop0::Count:
@@ -61,7 +65,7 @@ public:
             case Cop0::Index: case Cop0::EntryLo0: case Cop0::EntryLo1: case Cop0::Context:
             case Cop0::PageMask: case Cop0::Wired: case Cop0::BadVAddr: case Cop0::EntryHi:
             case Cop0::Compare: case Cop0::Status: case Cop0::Cause: case Cop0::Epc: case Cop0::PRid:
-            case Cop0::Config: case Cop0::BadPAddr: case Cop0::TagLo: case Cop0::TagHi: case Cop0::ErrorEpc:
+            case Cop0::Config: case Cop0::BadPAddr: case Cop0::TagHi: case Cop0::ErrorEpc:
                 s_.set_reg32_sign_extended(rt, s_.cop0[rd]);
                 return;
         }
@@ -69,6 +73,11 @@ public:
     }
 
     void mtc0(unsigned rt, unsigned rd) {
+        if(rd==static_cast<unsigned>(Cop0::TagLo)) {
+            s_.taglo_unknown=static_cast<std::uint32_t>(s_.unknown_gpr_bits[rt]);
+            s_.cop0[rd]=static_cast<std::uint32_t>(ee::raw_gpr64(s_,rt))&~s_.taglo_unknown;
+            return;
+        }
         if(rd==static_cast<unsigned>(Cop0::Debug) || rd==static_cast<unsigned>(Cop0::Perf)) {
             const bool debug=rd==static_cast<unsigned>(Cop0::Debug);
             const auto value=static_cast<std::uint32_t>(ee::raw_gpr64(s_,rt));
@@ -122,6 +131,7 @@ public:
                 stop(StopKind::Undefined, std::string("MTC0 to reserved COP0 register ") + cop0_name(rd));
         }
         s_.cop0[rd] = stored;
+        if(rd==static_cast<unsigned>(Cop0::Config)) m_.set_cache_config(stored);
         event(std::string("MTC0 ") + cop0_name(rd) + " <- " + hex32(value) +
               (stored != value ? " (stored " + hex32(stored) + ")" : std::string()));
         if (rd == static_cast<unsigned>(Cop0::Status) || rd == static_cast<unsigned>(Cop0::EntryHi)) apply_status();
@@ -190,6 +200,17 @@ public:
     void cache(std::uint32_t word) {
         const auto op = ee::rt(word);
         const auto address = ee::effective_address(s_, word);
+        if(m_.data_cache_enabled() && op>=0x10u) {
+            ObservedWord result;
+            try {result=m_.data_cache_operation(op,address,{s_.cp0(Cop0::TagLo),s_.taglo_unknown});}
+            catch(const DeviceRefusal& error) {stop(StopKind::NotModeled,error.what());}
+            if(op==0x10 || op==0x11) {
+                s_.set_cp0(Cop0::TagLo,result.value);
+                s_.taglo_unknown=result.unknown;
+            }
+            event("CACHE data operation "+hex32(op)+" "+hex32(address));
+            return;
+        }
         const char* name = nullptr;
         switch (op) {
             case 0x07: name = "IXIN"; break;
@@ -201,7 +222,7 @@ public:
             case 0x1C: name = "DHWOIN"; break;
             case 0x04: case 0x12:
                 // Index Store Tag with a zero TagLo writes an invalid line: an invalidation.
-                if (s_.cp0(Cop0::TagLo) != 0u)
+                if (s_.cp0(Cop0::TagLo) != 0u || s_.taglo_unknown)
                     stop(StopKind::NotModeled, "CACHE Index Store Tag with TagLo " + hex32(s_.cp0(Cop0::TagLo)) +
                          " (cache tags are not modeled)");
                 name = op == 0x04 ? "IXSTG (TagLo 0)" : "DXSTG (TagLo 0)";
@@ -284,7 +305,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
     state.instruction_pc=state.pc;
     state.instruction_in_delay_slot=state.delay_pending;
     (void)poll_ee_interrupts(state,memory);
-    memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi));
+    memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi)); memory.set_cache_config(state.cp0(Cop0::Config));
     const auto pc = state.pc;
     state.instruction_pc = pc;
     state.instruction_in_delay_slot = state.delay_pending;
@@ -315,7 +336,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
             if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Interpreter);
             if (overflow) {
                 enter_ee_exception(state, 12u, pc, state.delay_pending);
-                memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi));
+                memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi)); memory.set_cache_config(state.cp0(Cop0::Config));
                 cpu.event(std::string(mips_opcode_name(op))+" overflow exception -> " + hex32(state.pc));
                 ++ctx.executed;
                 ++state.retired_instructions;
@@ -331,7 +352,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         case MipsOpcode::Syscall: case MipsOpcode::Break: {
             if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Interpreter);
             enter_ee_exception(state, instruction.opcode == MipsOpcode::Syscall ? 8u : 9u, pc, state.delay_pending);
-            memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi));
+            memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi)); memory.set_cache_config(state.cp0(Cop0::Config));
             cpu.event(std::string(instruction.opcode == MipsOpcode::Syscall ? "SYSCALL" : "BREAK") +
                       " exception -> " + hex32(state.pc) + " EPC=" + hex32(state.cp0(Cop0::Epc)) +
                       " Cause=" + hex32(state.cp0(Cop0::Cause)));
@@ -363,7 +384,9 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         case MipsOpcode::Ei: cpu.interrupt_enable(true); break;
         case MipsOpcode::Di: cpu.interrupt_enable(false); break;
         case MipsOpcode::Cache: cpu.cache(word); break;
-        case MipsOpcode::Pref: break; // A hint: no architectural effect.
+        case MipsOpcode::Pref:
+            if(memory.data_cache_enabled()) cpu.stop(StopKind::NotModeled,"PREF with observable D-cache state is not modeled");
+            break;
         case MipsOpcode::Lwc1: cpu.cop1_transfer(false, word); break;
         case MipsOpcode::Swc1: cpu.cop1_transfer(true, word); break;
         case MipsOpcode::Mfc1: case MipsOpcode::Mtc1: case MipsOpcode::Cfc1: case MipsOpcode::Ctc1:

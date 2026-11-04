@@ -147,12 +147,20 @@ public:
                                  Privilege privilege = Privilege::Kernel) noexcept;
     // Synchronize ASID, ERL and effective privilege after COP0/exception changes.
     void set_cpu_context(std::uint32_t status, std::uint32_t entry_hi) noexcept;
+    void set_cache_config(std::uint32_t config) noexcept { cache_config_ = config; }
+    // Explicit functional D-cache experiment; no additional bus latency yet.
+    // Enable before execution. Reset/load removes it; the default stays coherent.
+    void diagnostic_data_cache(bool translate_uncached_hits = false);
+    [[nodiscard]] bool data_cache_enabled() const noexcept { return data_cache_model_; }
+    [[nodiscard]] ObservedWord data_cache_operation(unsigned op, std::uint32_t address, ObservedWord tag);
     void set_observer(BusObserver* observer) noexcept { observer_ = observer; }
     // EE cycle counter used by the timed EE registers (boot mapping only).
-    void set_clock(const std::uint64_t* ee_cycles,const std::uint64_t* stalls=nullptr) noexcept { registers_.set_clock(ee_cycles,stalls); }
+    void set_clock(const std::uint64_t* ee_cycles,const std::uint64_t* stalls=nullptr) noexcept { registers_.set_clock(ee_cycles,stalls); cache_clock_=ee_cycles; }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return registers_.gs(); }
     [[nodiscard]] const Gif& gif() const noexcept { return registers_.gif(); }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
+    void diagnostic_dev9_control_latches() { registers_.diagnostic_dev9_control_latches(); }
+    void diagnostic_dev9_power_settle_cycles(std::uint32_t cycles) { registers_.diagnostic_dev9_power_settle_cycles(cycles); }
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles) { registers_.diagnostic_sio2_infrared_timeout(cycles); }
     void diagnostic_sio2_port_timing(unsigned bits) { registers_.diagnostic_sio2_port_timing(bits); }
     void diagnostic_sio2_digital_pad(unsigned port,std::uint16_t buttons,std::uint32_t cycles) { registers_.diagnostic_sio2_digital_pad(port,buttons,cycles); }
@@ -204,22 +212,38 @@ private:
         std::uint32_t physical{};
         BusRegion region{BusRegion::Unmapped};
         std::uint32_t offset{}; // into RAM, ROM or scratchpad storage
+        unsigned cache_mode{2};
     };
     [[nodiscard]] static std::size_t physical_address(std::uint32_t guest_address, std::size_t size);
     [[nodiscard]] Target resolve(std::uint32_t guest_address, std::size_t size, bool write,
                                  const char* what) const;
     [[nodiscard]] std::uint32_t translate_tlb(std::uint32_t guest_address, std::size_t size, bool write,
-                                              bool& scratchpad) const;
+                                              bool& scratchpad, unsigned& cache_mode) const;
     [[nodiscard]] std::uint64_t read_le(std::uint32_t guest_address, std::size_t size, const char* what,
                                         bool notify, std::uint64_t* unknown = nullptr) const;
     void write_le(std::uint32_t guest_address, std::size_t size, std::uint64_t value, const char* what,
                   std::uint64_t unknown = 0u);
     [[nodiscard]] std::uint64_t storage_unknown(const Target& target, std::size_t size) const;
-    void set_storage_unknown(const Target& target, std::size_t size, std::uint64_t unknown);
-    std::vector<std::uint8_t> ram_;
+    void set_storage_unknown(const Target& target, std::size_t size, std::uint64_t unknown) const;
+    struct DataCacheLine {
+        std::uint32_t tag{};
+        bool pfn_known{};
+        std::array<std::uint8_t,64> bytes{};
+        std::array<std::uint8_t,64> unknown{};
+    };
+    void reset_data_cache();
+    [[nodiscard]] bool uses_data_cache(const Target& target) const;
+    [[nodiscard]] DataCacheLine& data_cache_line(std::uint32_t address, const Target& target) const;
+    void writeback_data_cache(DataCacheLine& line, unsigned index) const;
+    mutable std::array<std::array<DataCacheLine,2>,64> data_cache_{};
+    bool data_cache_model_{};
+    bool data_cache_uncached_hits_{};
+    std::uint32_t cache_config_{};
+    const std::uint64_t* cache_clock_{};
+    mutable std::vector<std::uint8_t> ram_;
     // Physical aligned word -> symbolic bits. Scratchpad keys have bit 31 set;
     // aliases share metadata, ordinary known RAM pays no per-byte allocation.
-    std::unordered_map<std::uint32_t, std::uint32_t> unknown_words_;
+    mutable std::unordered_map<std::uint32_t, std::uint32_t> unknown_words_;
     // EE register reads can have side effects (timers sample the clock).
     mutable EeRegisters registers_;
     std::vector<std::uint8_t> rom_;

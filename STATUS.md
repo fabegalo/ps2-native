@@ -46,6 +46,14 @@
   `94230de` e a correção de fixture FPU `dd6ed41` aprovados nos seis do núcleo.
   ADD.S/SUB.S (`1ddd0d1`) também aprovado nos seis do launcher.
   BSD e modo original preservados.
+- Ensaio 89: controles digitais completaram polls/timeouts e IOP segue
+  executando (`0xAE94` / 48.228.327). D-cache funcional opcional superou
+  DXLTG com tags/dados reais e escrita de volta; sem latência adicional e
+  com hipótese separada para hit via alias uncached. EE `0x108AD8` /
+  353.409.922: próximo bloqueio é DMA VIF1 source-chain/TTE. Seis testes
+  focados passaram, incluindo coerência observável pelo DMA/GIF. Ainda
+  16 pacotes de limpeza, sem PMODE/frame. CI dos controles `938ed35` e
+  `833004c` aprovada nos seis alvos de núcleo e launcher.
 - Sequência, hipóteses, testes e referências:
   [primeiro jogo](docs/FIRST-GAME-STATUS.md#continuação-experimental--subsistemas-exercitados-pelo-jogo).
 

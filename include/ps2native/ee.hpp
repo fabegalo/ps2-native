@@ -68,6 +68,7 @@ struct EEState {
     // EE Core User's Manual pp.80/84: enables reset clear, configuration
     // fields are undefined. Context save/restore must retain that distinction.
     std::uint32_t bpc_unknown{0x17BF8007u}, pccr_unknown{0x000FFBFEu};
+    std::uint32_t taglo_unknown{}; // populated by explicit D-cache diagnostic reads
     // COP0 Count advances once per EE cycle: it reads as cop0[Count] plus the
     // elapsed cycles since the last MTC0 Count (count_anchor).
     std::uint64_t count_anchor{};
@@ -95,6 +96,7 @@ struct EEState {
         cop0[static_cast<unsigned>(reg)] = value;
         if(reg==Cop0::Debug)bpc_unknown=0;
         if(reg==Cop0::Perf)pccr_unknown=0;
+        if(reg==Cop0::TagLo)taglo_unknown=0;
     }
 };
 

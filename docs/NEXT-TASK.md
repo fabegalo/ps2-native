@@ -4,10 +4,15 @@ O checkpoint experimental já produziu 16 pacotes GIF PATH3 e 1.048.576 escritas
 de pixels por IMAGE: limpeza real da VRAM comandada pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução concluída: ensaio 86, EE `0x81FD0`, 360.000.000 instruções,
-em espera após FIELD; IOP `0x47850`, 48.196.722, comandos 01/43 de configuração nas duas portas SIO2.
-31.584 palavras reais DMA normal core 1 e 16 halfwords PIO. Ensaio 87 rejeita configuração com falta de ACK e mantém dois pads digitais com botões soltos; prazo serial 8192 ciclos e DMA SIO2 4 ciclos/palavra são hipóteses. RECV2.4/.5=0 explícitos para timing PADMAN, além da
-hipótese FIELD inicial=1 e GS-vsync 7/6 half-lines após VBON NTSC/PAL.
+Última execução concluída: ensaio 89, EE `0x108AD8`, 353.409.922 instruções,
+início DMA1/VIF1 source-chain com TTE (CHCR=145). IOP `0xAE94` / 48.228.327,
+sem parada. Implementar DMA VIF a partir das tags/dados reais e repetir.
+D-cache funcional explícito desde reset passou por DXLTG: conteúdo separado
+da RAM, LRF e writeback reais; sem latência adicional, I-cache não modelado.
+Hipótese separada permite operações hit usando alias uncached da RAM.
+Pads digitais 0/1 com botões soltos; comandos desconhecidos não recebem ACK.
+Prazo serial 8192 ciclos, DMA SIO2 4 ciclos/palavra, RECV2.4/.5=0, FIELD=1
+e fase GS-vsync 7/6 half-lines NTSC/PAL permanecem hipóteses.
 Permanecem explícitas as hipóteses SPU2 (barramento 16 ciclos/palavra,
 PIO 8 ciclos/halfword, ESA/EEA iniciais, área invertida inativa e readback
 reservado), além de encoder/SYNCV e latches não atribuídos. Os demais bits RECV2 e RECV3 continuam opacos; nenhum valor de conexão é fabricado.

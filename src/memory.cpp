@@ -146,6 +146,7 @@ std::size_t Memory::physical_address(std::uint32_t address, std::size_t size) {
 }
 
 void Memory::load(const ElfImage& elf) {
+    reset_data_cache();
     unknown_words_.clear();
     privilege_ = Privilege::Kernel;
     mapping_ = Mapping::ElfProgram;
@@ -166,6 +167,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
     if (rom0.size() != kBiosRomBytes)
         throw std::runtime_error("BIOS ROM0 must be exactly 4 MiB to be mapped at 0x1FC00000");
     mapping_ = Mapping::HardwareReset;
+    reset_data_cache();
     unknown_words_.clear();
     std::fill(ram_.begin(), ram_.end(), std::uint8_t{0});
     rom_.assign(rom0.begin(), rom0.end());
@@ -246,7 +248,7 @@ std::optional<unsigned> Memory::tlb_probe(std::uint32_t entry_hi) const {
 }
 
 std::uint32_t Memory::translate_tlb(std::uint32_t address, std::size_t size, bool write,
-                                    bool& scratchpad) const {
+                                    bool& scratchpad, unsigned& cache_mode) const {
     const auto bytes = static_cast<std::uint8_t>(size);
     auto fail = [&](BusFault fault, const std::string& detail) -> BusError {
         return BusError(fault, write, bytes, address, std::nullopt, BusRegion::Unmapped,
@@ -281,6 +283,7 @@ std::uint32_t Memory::translate_tlb(std::uint32_t address, std::size_t size, boo
     }
     const auto half = ((e.page_mask | 0x1FFFu) + 1u) >> 1;
     const auto lo = (address & half) != 0u ? e.entry_lo1 : e.entry_lo0;
+    cache_mode = (lo >> 3u) & 7u;
     if ((lo & 2u) == 0u) throw fail(BusFault::TlbInvalid, "entry " + std::to_string(*match));
     if (write && (lo & 4u) == 0u) throw fail(BusFault::TlbModified, "entry " + std::to_string(*match));
     const auto frame = ((lo >> 6) & 0xFFFFFu) << 12;
@@ -303,20 +306,23 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
         return {static_cast<std::uint32_t>(offset), BusRegion::MainRam, static_cast<std::uint32_t>(offset)};
     }
     std::uint32_t physical = 0;
+    unsigned cache_mode = 2;
     if (mapping_ == Mapping::DirectElf && address < kMainRamBytes) {
         physical = address;
+        cache_mode = 3;
     } else if (mapping_ == Mapping::DirectElf && address >= 0x70000000u &&
                address - 0x70000000u < kScratchpadBytes) {
         return {address - 0x70000000u, BusRegion::Scratchpad, address - 0x70000000u};
     } else if (address >= 0x80000000u && address < 0xC0000000u) {
         physical = address & 0x1FFFFFFFu; // KSEG0 (cached) / KSEG1 (uncached): unmapped.
+        if(address < 0xA0000000u) cache_mode = cache_config_ & 7u;
     } else if (address < 0x80000000u && error_level_) {
         // Level-2 error handling uses identity-mapped, uncached kuseg. Do not
         // apply a 29-bit alias mask: the entire 2 GiB segment is unmapped.
         physical = address;
     } else {
         bool scratchpad = false;
-        physical = translate_tlb(address, size, write, scratchpad);
+        physical = translate_tlb(address, size, write, scratchpad, cache_mode);
         if (scratchpad) return {physical, BusRegion::Scratchpad, physical};
     }
     const auto region = classify_physical(physical);
@@ -325,23 +331,23 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
     };
     switch (region) {
         case BusRegion::MainRam:
-            return {physical, region, physical};
+            return {physical, region, physical, cache_mode};
         case BusRegion::VuMemory:
-            return {physical, region, 0u};
+            return {physical, region, 0u, cache_mode};
         case BusRegion::BiosRom:
             if (rom_.empty()) throw refuse(BusFault::Unmapped);
             if (write) throw refuse(BusFault::RomWrite);
-            return {physical, region, physical - kBiosRomPhysical};
+            return {physical, region, physical - kBiosRomPhysical, cache_mode};
         case BusRegion::Rom1: {
             const auto offset=physical-0x1E000000u;
             if(offset>rom1_.size() || size>rom1_.size()-offset)throw refuse(BusFault::Unmapped);
             if(write)throw refuse(BusFault::RomWrite);
-            return {physical,region,offset};
+            return {physical,region,offset,cache_mode};
         }
         case BusRegion::Unmapped:
             throw refuse(BusFault::Unmapped);
         default:
-            if (is_ee_register_region(region)) return {physical, region, 0u};
+            if (is_ee_register_region(region)) return {physical, region, 0u, cache_mode};
             throw refuse(BusFault::Device);
     }
 }
@@ -358,7 +364,7 @@ std::uint64_t Memory::storage_unknown(const Target& target, std::size_t size) co
     }
     return unknown;
 }
-void Memory::set_storage_unknown(const Target& target, std::size_t size, std::uint64_t unknown) {
+void Memory::set_storage_unknown(const Target& target, std::size_t size, std::uint64_t unknown) const {
     if (!unknown && unknown_words_.empty()) return;
     const auto base = target.offset | (target.region == BusRegion::Scratchpad ? 0x80000000u : 0u);
     for (std::size_t i = 0; i < size; ++i) {
@@ -377,7 +383,18 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
     if(registers_.dma_writes_ram())registers_.sync_iop();
     if (unknown) *unknown = 0;
     std::uint64_t value = 0;
-    if (target.region==BusRegion::VuMemory) {
+    try {
+    if (notify && data_cache_model_ && uses_data_cache(target)) {
+        const auto& line = data_cache_line(address,target);
+        std::uint64_t symbolic=0;
+        for(std::size_t i=0;i<size;++i) {
+            const auto offset=(address&63u)+i;
+            value |= std::uint64_t{line.bytes[offset]}<<(8u*i);
+            symbolic |= std::uint64_t{line.unknown[offset]}<<(8u*i);
+        }
+        if(symbolic && !unknown) throw DeviceRefusal("read consumes unknown D-cache bits");
+        if(unknown) *unknown=symbolic;
+    } else if (target.region==BusRegion::VuMemory) {
         try {
             if(!notify) throw DeviceRefusal("EE instruction fetch from VU memory is not modeled");
             const auto observed=registers_.read_vu_memory(target.physical,size);
@@ -424,6 +441,9 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
         for (std::size_t i = 0; i < size; ++i)
             value |= static_cast<std::uint64_t>(storage[target.offset + i]) << (8u * i);
     }
+    } catch(const DeviceRefusal& error) {
+        throw device_refusal(BusFault::Device,false,size,address,target.physical,target.region,what,error.what());
+    }
     if (notify && observer_ != nullptr)
         observer_->on_bus_access({false, static_cast<std::uint8_t>(size), address, target.physical,
                                   target.region, value, unknown ? *unknown : 0u});
@@ -439,7 +459,16 @@ void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t val
         throw device_refusal(BusFault::Device, true, size, address, target.physical, target.region, what,
                              "unknown MMIO bits cannot be stored in this device");
     value &= ~std::uint64_t{unknown};
-    if (target.region==BusRegion::VuMemory) {
+    try {
+    if (data_cache_model_ && uses_data_cache(target)) {
+        auto& line = data_cache_line(address,target);
+        for(std::size_t i=0;i<size;++i) {
+            const auto offset=(address&63u)+i;
+            line.bytes[offset]=static_cast<std::uint8_t>(value>>(8u*i));
+            line.unknown[offset]=static_cast<std::uint8_t>(unknown>>(8u*i));
+        }
+        if(!(line.tag&8u)) line.tag|=64u;
+    } else if (target.region==BusRegion::VuMemory) {
         try {registers_.write_vu_memory(target.physical,size,{value,unknown});}
         catch(const DeviceRefusal& refusal) {
             throw device_refusal(BusFault::Device,true,size,address,target.physical,target.region,what,refusal.what());
@@ -458,6 +487,9 @@ void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t val
         for (std::size_t i = 0; i < size; ++i)
             storage[target.offset + i] = static_cast<std::uint8_t>(value >> (8u * i));
         set_storage_unknown(target, size, unknown);
+    }
+    } catch(const DeviceRefusal& error) {
+        throw device_refusal(BusFault::Device,true,size,address,target.physical,target.region,what,error.what());
     }
     if (observer_ != nullptr)
         observer_->on_bus_access({true, static_cast<std::uint8_t>(size), address, target.physical,

@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(ps2n_core STATIC
-    src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/ee.cpp src/mips.cpp
+    src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/memory_cache.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
     src/interpreter.cpp src/boot.cpp src/ee_registers.cpp
     src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp src/nvm.cpp

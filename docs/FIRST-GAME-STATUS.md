@@ -1217,4 +1217,51 @@ padrão e os botões reaparecem no poll seguinte, comprovados por teste próprio
 Três testes SIO2 aprovados. Consulta adicional comportamental:
 https://github.com/stenzek/duckstation/blob/master/src/core/digital_controller.cpp
 Sem código copiado, adaptado ou vinculado; implementação/testes BSD próprios.
-Modo original repetido após os pads: PCs/contagens/hash canônicos preservados.
+Modo original repetido após os pads: PCs/contagens/hash canônicos preservados.Ensaio 87: comandos incompatíveis com pad digital terminaram por timeout;
+IOP continuou, PC `0x477C` / 48.198.520 instruções, sem parada. EE chegou a
+`0x1E39F4` / 353.171.462, CACHE DXLTG. 104,139 s; RAM
+`e6e96f95509b7f492a2a5f8ed952ee2c3fa0799d013f36a9834600e498b04374`.
+16 pacotes / 1.048.576 pixels de limpeza, sem PMODE/scanout.
+
+Ensaio 88 ativa desde o reset um modelo funcional opcional de D-cache: linhas
+com dados e conhecimento próprios, escrita de volta e DMA sem coerência
+implícita. Config.DCE/K0 e C da TLB determinam uso; modo 3 suportado,
+modo 0 e PREF ainda recusam. Reset remove a opção. TagLo preserva bits
+indefinidos; não devolve tag zero para pular a rotina do convidado.
+O modelo mantém a hipótese temporal anterior: refill/writeback síncronos,
+sem latência adicional ou contenção de RDRAM. Não simula I-cache.
+A injeção host descarrega/invalida o cache antes dos segmentos novos,
+escritos pelo alias uncached; dumps leem RAM pelo mesmo alias sem alterar tags.
+Checkpoint ROM0 idêntico, 32.416.676 instruções em `0x82000`.
+O jogo parou antes em CACHE DHWBIN `0x1E55D0` (PC seguinte reportado
+`0x1E55D4`), 4.510.892 instruções: alias RAM uncached usado para operação
+hit, uso indefinido na especificação. 1,301 s; zero GIF/pixels nesta execução.
+RAM `614a120fc246a7513698b334d88e0491e7b6b5cb1d1bd78a8637a541c24408fa`.
+Ensaio 89 habilita separadamente a hipótese de traduzir esse alias e procurar
+a linha pelo PFN real; descarrega seus dados reais, sem resposta de sucesso
+fabricada. Fora dessa hipótese, a operação continua recusada.
+
+Referências comportamentais consultadas antes da implementação: PS2Recomp
+`instruction_translator.cpp` em e5636981a1c9de368f6b71e819c3dc188dfedbf4
+ignora CACHE, portanto não fornece um modelo de tags; PCSX2 `Cache.cpp`
+consultado sem reutilizar seu workaround de DXLTG. Contratos do EE em
+https://docs.alexrp.com/mips/ee.pdf (pp.78,86,132–138) e
+https://docs.alexrp.com/mips/ee_insns.pdf (pp.298–306).
+Cache de 64 conjuntos, duas vias de 64 bytes, PFN físico e LRF; invalidação
+preserva PFN/LRF. Tags de reset têm estado zero e PFN indefinido. Código e
+fixtures originais BSD; nenhum código GPL, firmware ou trecho comercial
+incorporado. CI `938ed35` e `833004c`: núcleo e launcher, seis alvos aprovados.
+Ensaio 89: DXLTG e manutenção real do cache passaram; próximo bloqueio EE
+`0x108AD8`, início DMA1/VIF1 source-chain com TTE (CHCR=145), após
+353.409.922 instruções. A primeira tag real em RAM é END com QWC=0;
+não é autorização para simular conclusão das transferências seguintes.
+IOP `0xAE94` / 48.228.327 continua sem parada. 101,643 s; sem ganho de
+performance alegado (estados finais e modelo de memória diferentes).
+16 pacotes/1.048.576 pixels de limpeza; ainda sem PMODE/frame. RAM
+`b042f6cb2f0eb92a06c4114a0c8f78f21a76d24540661498edb4751a6b84ddd9`.
+Seis testes focados aprovados. Fixture de cache verifica tags/estados,
+visibilidade entre aliases, LRF, bits desconhecidos, mapeamento, lock,
+instruções COP0 e semântica AOT compartilhada. Um pacote real sintético
+GIF/LABEL permanece invisível ao DMA até a escrita de volta e depois
+chega ao GS com o valor original. Esse fixture não é frame do jogo.
+Modo original repetido após o cache: PCs, contagens e hash canônicos preservados; zero GIF/pixels.

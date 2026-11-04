@@ -54,7 +54,7 @@ std::uint64_t run_aot_module(const AotModule& module, EEState& state, Memory& me
         if (executed >= max_instructions)
             throw std::runtime_error("Guest instruction budget exhausted");
         (void)poll_ee_interrupts(state,memory);
-        memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi));
+        memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi)); memory.set_cache_config(state.cp0(Cop0::Config));
         const auto* block = find_aot_block(module, state.pc);
         if (block == nullptr)
             throw std::runtime_error("AOT target not compiled (indirect jump/dynamic code) at " +
