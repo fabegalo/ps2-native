@@ -1001,6 +1001,20 @@ void Iop::shift_left(unsigned destination, unsigned source, unsigned amount) {
     if(known==~0u)return set_reg(destination,value);
     write_=PendingLoad{destination,value,false,gpr_origin_[source],known};
 }
+void Iop::add_sub_unsigned(unsigned destination,unsigned left,unsigned right,bool subtract) {
+    if(!destination)return;
+    if(subtract && left==right)return set_reg(destination,0u);
+    const auto ka=(gpr_defined_&(1u<<left)) ? ~0u : gpr_known_[left];
+    const auto kb=(gpr_defined_&(1u<<right)) ? ~0u : gpr_known_[right];
+    const auto value=subtract ? gpr_[left]-gpr_[right] : gpr_[left]+gpr_[right];
+    const auto unknown=~ka|~kb;
+    if(!unknown)return set_reg(destination,value);
+    // Carry and borrow only travel upwards. Every bit below the first
+    // unknown input bit is exact, including wrap of the retained field.
+    // Higher bits remain conservative even when a carry could be proved.
+    const auto known=(unknown&(0u-unknown))-1u;
+    write_=PendingLoad{destination,value&known,false,ka!=~0u ? gpr_origin_[left] : gpr_origin_[right],known};
+}
 void Iop::copy_reg(unsigned destination, unsigned source) {
     if (!destination) return;
     if (gpr_defined_ & (1u << source)) return set_reg(destination, gpr_[source]);
@@ -2439,7 +2453,7 @@ void Iop::step() {
                 case 0x21: // ADDU; either $zero operand makes this an exact move.
                     if (!rs) copy_reg(rd, rt);
                     else if (!rt) copy_reg(rd, rs);
-                    else set_reg(rd, reg(rs) + reg(rt));
+                    else add_sub_unsigned(rd,rs,rt,false);
                     break;
                 case 0x22: {                                                                    // SUB
                     const auto a = reg(rs), b = reg(rt), r = a - b;
@@ -2447,7 +2461,7 @@ void Iop::step() {
                     set_reg(rd, r);
                     break;
                 }
-                case 0x23: set_reg(rd, reg(rs) - reg(rt)); break;                               // SUBU
+                case 0x23: add_sub_unsigned(rd,rs,rt,true); break;                              // SUBU
                 case 0x24: and_regs(rd, rs, rt); break;                                          // AND
                 case 0x25: or_value(rd,rs,gpr_[rt],(gpr_defined_&(1u<<rt)) ? ~0u : gpr_known_[rt],gpr_origin_[rt]); break;
                 case 0x26: set_reg(rd, reg(rs) ^ reg(rt)); break;

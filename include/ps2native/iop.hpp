@@ -240,6 +240,7 @@ private:
     void copy_reg(unsigned destination, unsigned source);
     void shift_right(unsigned destination, unsigned source, unsigned amount);
     void shift_left(unsigned destination, unsigned source, unsigned amount);
+    void add_sub_unsigned(unsigned destination,unsigned left,unsigned right,bool subtract);
     void load_reg(unsigned index, std::uint32_t value);
     [[nodiscard]] Access translate(std::uint32_t address, std::size_t bytes, bool write, const char* what) const;
     [[nodiscard]] std::uint32_t fetch(std::uint32_t address) const;

@@ -4,9 +4,9 @@ O checkpoint experimental já produziu 16 pacotes GIF PATH3 e 1.048.576 escritas
 de pixels por IMAGE: limpeza real da VRAM comandada pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução concluída: ensaio 65, EE em espera `0x81FD0`, 360.000.000 instruções;
-IOP parou em `0x603B0`, 46.630.497, deslocando um readback EEA com reservados desconhecidos. PIO transferiu 16 palavras reais.
-Ensaio 66 preparado com SLL/SLLV/SRLV preservando incerteza e hipótese inicial EEA E/F (PIO = 8 ciclos IOP/halfword, hipótese), com hipóteses opt-in de 7CA e janela não atribuída
+Última execução concluída: ensaio 66, EE em espera `0x81FD0`, 360.000.000 instruções;
+IOP parou em `0x669D8`, 46.630.506, subtraindo o tamanho de efeitos de EEA. PIO transferiu 16 palavras reais.
+Ensaio 67 preparado com SUBU/ADDU preservando incerteza e hipótese inicial EEA E/F (PIO = 8 ciclos IOP/halfword, hipótese), com hipóteses opt-in de 7CA e janela não atribuída
 0x346..0x3FF, 0x746..0x75F, 0x7B0..0x7BF/espelhos. Modo original mantém recusas; leituras não são fabricadas.
 PMODE ainda não foi escrito; sem scanout.
 Continuar reexecutando, registrando PCs e resolvendo os bloqueios até conteúdo

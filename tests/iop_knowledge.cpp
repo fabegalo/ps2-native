@@ -120,5 +120,30 @@ int main() try {
         a.r(0,9,9,3,0x00u);a.sw(9,0x100,8);const auto iop=run(a);
         require(!iop.stopped() && iop.ee_read(0x100,4)==0x400u,"SLL preserves the old load-delay source and overrides the pending aliased load");
     }
+    for(const unsigned bits:{1u,4u,16u,21u,31u})for(const bool subtract:{false,true})
+    for(const unsigned destination:{9u,10u,11u})for(const std::uint32_t low:{0u,0xA5u}) {
+        const auto mask=(1u<<bits)-1u;
+        m20::Assembler a(kEeResetVector);input(a);a.la(10,~mask);a.r(9,10,9,0,0x24u);
+        a.la(10,low&mask);a.r(9,10,9,0,0x25u);a.la(10,1u);
+        a.r(9,10,destination,0,subtract ? 0x23u : 0x21u);
+        a.la(12,mask);a.r(destination,12,12,0,0x24u);a.sw(12,0x100,8);
+        const auto iop=run(a);const auto expected=(subtract ? (low&mask)-1u : (low&mask)+1u)&mask;
+        require(!iop.stopped() && iop.ee_read(0x100,4)==expected,
+            "ADDU/SUBU preserve exact low address bits across carry, borrow and either operand alias");
+    }
+    for(const bool subtract:{false,true}) {
+        m20::Assembler a(kEeResetVector);input(a);a.la(10,1u);
+        a.r(9,10,11,0,subtract ? 0x23u : 0x21u);a.r(11,0,12,0,0x2Bu);
+        const auto iop=run(a);require(iop.stopped(),"unsigned arithmetic cannot invent high bits for a later comparison");
+    }
+    {
+        m20::Assembler a(kEeResetVector);input(a);a.r(9,9,9,0,0x23u);a.sw(9,0x100,8);
+        const auto iop=run(a);require(!iop.stopped() && iop.ee_read(0x100,4)==0u,"x minus the same unknown x is exactly zero");
+    }
+    {
+        m20::Assembler a(kEeResetVector);a.lui(8,0xA000u);a.la(9,0u);a.la(10,1u);a.lw(9,0x300,8);
+        a.r(9,10,9,0,0x23u);a.sw(9,0x100,8);const auto iop=run(a);
+        require(!iop.stopped() && iop.ee_read(0x100,4)==0xFFFFFFFFu,"SUBU reads the old load-delay operand, wraps, and overrides the pending load");
+    }
     std::cout<<"R3000A bit knowledge preserves aliases, unknown consumption and load delay\n";
 } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

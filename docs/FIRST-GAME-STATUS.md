@@ -950,3 +950,15 @@ CI `04d26de` e `1556c86` concluída com sucesso no núcleo/launcher, seis alvos.
 A regressão da sobreposição `9150a3c` falhou no núcleo e foi reparada em `1556c86`.
 
 RAM EE do ensaio 65: `774ccf4ff6dac8da93b7367fc8a5738804bb36e5d7d3c03a6554ea2b24bc61c0`.
+
+Ensaio 66: SLL passou; IOP `0x669D8` / 46.630.506, SUBU do endereço EEA
+menos o tamanho de efeitos. EE `0x81FD0` / 360.000.000, 107,865 s;
+RAM/GIF/PMODE iguais ao 65. SUBU/ADDU agora preservam o prefixo baixo conhecido:
+carry/borrow só propagam para cima, sem permitir inferir os bits altos.
+Operandos inteiramente conhecidos mantêm caminho direto; x-x é zero exato.
+Testes próprios cobrem limites 1/4/16/21/31 bits, carry, borrow, aliases,
+wrap, load delay e recusa posterior quando uma comparação exige bits ausentes.
+O patch SLL inicialmente não entrou em `2a6445a` por uma quebra de linha na
+seleção parcial; `5965b89` publicou imediatamente o código validado, sem
+reescrever histórico. CI da cópia ENDX `91d0197`: ambos workflows aprovados
+nos seis alvos. As execuções locais sempre usaram o código efetivamente testado.
