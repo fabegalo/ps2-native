@@ -36,6 +36,11 @@ inline Program program() {
     a.ori(t1,zero,0x1234u); a.raw((0x12u<<26)|(6u<<21)|(t1<<16)|(18u<<11));
     a.la(t1,0xABCDEF21u);
     for(const auto index : {20u,21u,22u,27u}) a.raw((0x12u<<26)|(6u<<21)|(t1<<16)|(index<<11));
+    a.la(t0,0xB0002010u); a.la(t1,0x40000000u); a.sw(t1,0,t0);
+    a.label("ipu_poll"); a.lw(t1,0,t0); a.bltz(t1,"ipu_poll"); a.nop();
+    a.la(t2,0x80000000u); a.r(t1,t2,t1,0,0x24u);
+    a.la(t0,0x80001014u); a.sw(t1,0,t0);
+    a.la(t0,0xB0002000u); a.ori(t1,zero,31); a.sw(t1,0,t0); // BCLR establishes real BP.
     a.la(t0, 0xB2000010u); a.la(t1, 1u << 17); a.sd(t1, 0, t0); // SINT held
     a.la(t0, 0xB2001000u); a.ori(t1, zero, 31u); a.sw(t1, 0, t0);
     a.la(t0, 0xB000F000u); a.ori(t1, zero, 0x7FFFu); a.sw(t1, 0, t0);

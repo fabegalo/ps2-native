@@ -491,6 +491,60 @@ void vif_control() {
             (memory.read32(0xB0003020u)&2u),"VIF0 reset preserves VIF1 configuration and its GIF PATH3 mask");
 }
 
+void ipu_control() {
+    const auto fixture=gs_events_test::program();
+    EEState state; Memory memory;
+    prepare_ee_boot(load_bios_rom0(fixture.rom),nullptr,state,memory);
+    const auto before=memory.load32_observed(0xB0002010u);
+    require(before.unknown==(IpuRegisters::kSettings|0x4000FF00u),"IPU configuration and status are not guessed at power-on");
+    memory.write32(0xB0002010u,0x40000000u);
+    const auto reset=memory.load32_observed(0xB0002010u);
+    require(reset.value==0 && reset.unknown==0x4000FF00u,
+            "idle reset clears BUSY/FIFO counts and writes settings without inventing CBP/ECD/SCD");
+    device_refused([&] {(void)memory.read32(0xB0002010u);},"unverified status/reset bits");
+    state.set_reg64(8,0xB0002010u);
+    ee::exec<MipsOpcode::Lw>(state,memory,0,0x8D090000u);
+    state.set_reg64(10,0x80000000u);
+    ee::exec<MipsOpcode::And>(state,memory,0,(9u<<21)|(10u<<16)|(9u<<11)|0x24u);
+    require(state.reg64(9)==0,"CPU can prove that reset left IPU idle without consuming unrelated unknown flags");
+    state.set_reg64_observed(9,0,0x7FFFFFFFFFFFFFFFull);
+    ee::exec<MipsOpcode::Bgez>(state,memory,0x1000u,(1u<<26)|(9u<<21)|(1u<<16)|3u);
+    require(state.delay_pending && state.delay_target==0x1010u,"BGEZ consumes only a known positive sign bit");
+    state.delay_pending=false;
+    state.set_reg64_observed(9,0x8000000000000000ull,0x7FFFFFFFFFFFFFFFull);
+    ee::exec<MipsOpcode::Bltzl>(state,memory,0x1000u,(1u<<26)|(9u<<21)|(2u<<16)|3u);
+    require(state.delay_pending && state.delay_target==0x1010u,"BLTZL consumes only a known negative sign bit");
+    state.delay_pending=false;state.set_reg64(31,0x1234u);
+    state.set_reg64_observed(9,0,0x8000000000000000ull);
+    rejects([&] {ee::exec<MipsOpcode::Bgezal>(state,memory,0x1000u,(1u<<26)|(9u<<21)|(17u<<16)|3u);},"unknown sign bit");
+    require(!state.delay_pending && state.reg64(31)==0x1234u,"unknown sign cannot select a branch or update its link");
+    memory.write32(0xB0002010u,0x07F2FFFFu);
+    require(memory.load32_observed(0xB0002010u).value==0x07F20000u &&
+            memory.load32_observed(0xB0002010u).unknown==reset.unknown,"CTRL ignores writes to read-only flags and retains settings");
+    device_refused([&] {memory.write32(0xB0002010u,0x40040000u);},"reserved bits");
+    require(memory.load32_observed(0xB0002010u).value==0x07F20000u,"invalid reset write is atomic");
+    device_refused([&] {memory.write64(0xB0002010u,0x40000000u);},"32-bit");
+    device_refused([&] {memory.write32(0xB0002000u,0x40000000u);},"decode command is not modeled");
+    require(!(memory.load32_observed(0xB000F000u).value&0x100u),"idle reset and refused command do not fabricate IPU completion IRQ");
+    device_refused([&] {(void)memory.read32(0xB0002020u);},"requires BCLR");
+    memory.write64(0xB0002000u,0xFFFFFFFF0000007Full);
+    require(memory.read32(0xB0002020u)==127 && memory.load32_observed(0xB0002010u).unknown==0x40003F00u &&
+            (memory.load32_observed(0xB000F000u).value&0x100u),"BCLR sets BP, clears ECD/SCD and requests a real completion interrupt");
+    require(!memory.intc_interrupt_pending(),"masked IPU completion remains latched without interrupt delivery");
+    memory.write32(0xB000F010u,0x100u);
+    require(memory.intc_interrupt_pending(),"unmasking the actual IPU source enables interrupt delivery");
+    memory.write32(0xB0002010u,0x40000000u);
+    require(memory.load32_observed(0xB000F000u).value&0x100u,"IPU reset preserves the independent INTC latch");
+    memory.write32(0xB000F000u,0x100u);
+    require(!(memory.load32_observed(0xB000F000u).value&0x100u) && !memory.intc_interrupt_pending(),
+            "INTC acknowledges the completed command once");
+    device_refused([&] {memory.write32(0xB0002000u,0x80u);},"reserved option");
+    device_refused([&] {(void)memory.read32(0xB0002000u);},"no register model");
+    device_refused([&] {(void)memory.read32(0xB0002020u);},"requires BCLR");
+    memory.write32(0xB0002000u,0);
+    require(memory.read32(0xB0002020u)==0,"new BCLR explicitly initializes bit position zero");
+}
+
 void guest(const std::filesystem::path& rom_path) {
     const auto fixture = gs_events_test::program();
     const auto bios = load_bios_rom0(read_file(rom_path));
@@ -522,6 +576,9 @@ void guest(const std::filesystem::path& rom_path) {
         require(memory.read32(0xB0003820u)==2 && memory.read32(0xB0003840u)==0x402u &&
                 memory.read32(0xB0003890u)==0x3FFu && memory.read32(0xB0003830u)==0x4321u,
                 "guest initializes VIF0 from actual MMIO and FIFO transfers in both engines");
+        require(memory.read32(0x80001014u)==0 && memory.load32_observed(0xB0002010u).unknown==0x40003F00u &&
+                memory.read32(0xB0002020u)==31,
+                "guest polls actual IPU BUSY after reset without resolving unrelated unknown bits");
         require(state.cp0(Cop0::Epc) != 0 && !(state.cp0(Cop0::Status) & kStatusEXL), "IRQ delivered and ERET restored state");
         if (run) require(report.aot_instructions > 0 && report.retired == retired, "AOT executed with identical instruction count");
         else retired = report.retired;
@@ -575,6 +632,7 @@ int main(int argc, char** argv) {
         else if (mode == "ram-knowledge") ram_knowledge();
         else if (mode == "vu-control") vu_control();
         else if (mode == "vif-control") vif_control();
+        else if (mode == "ipu-control") ipu_control();
         else if (mode == "held-counter") held_counter();
         else if (mode == "dma-setup") dma_setup();
         else if (mode == "guest") guest(argv[2]); else throw std::runtime_error("unknown GS events test");

@@ -46,6 +46,13 @@ constexpr std::uint64_t zimm(std::uint32_t word) { return word & 0xffffu; }
 inline std::uint64_t raw_gpr64(const EEState& state, unsigned index) {
     return index == 0 ? 0u : state.gpr[index].low;
 }
+inline bool negative_gpr64(const EEState& state,unsigned index) {
+    // EE core BGEZ/BLTZ test bit 63; unrelated payload bits need not be known.
+    constexpr auto sign=1ull<<63;
+    if(index && (state.unknown_gpr_bits[index]&sign))
+        throw std::runtime_error("EE branch consumes unknown sign bit");
+    return (raw_gpr64(state,index)&sign)!=0;
+}
 // Effective address: lower 32 bits of rs plus the sign-extended offset.
 inline std::uint32_t effective_address(const EEState& state, std::uint32_t word) {
     return state.reg32(rs(word)) + simm32(word);
@@ -436,11 +443,11 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     } else if constexpr (Op == O::Bgtz || Op == O::Bgtzl) {
         branch(s, s64(s.reg64(s_)) > 0, pc, w, Op == O::Bgtzl);
     } else if constexpr (Op == O::Bltz || Op == O::Bltzl || Op == O::Bltzal || Op == O::Bltzall) {
-        const bool taken = s64(s.reg64(s_)) < 0;
+        const bool taken = negative_gpr64(s,s_);
         if constexpr (Op == O::Bltzal || Op == O::Bltzall) s.set_reg32_sign_extended(31u, pc + 8u);
         branch(s, taken, pc, w, Op == O::Bltzl || Op == O::Bltzall);
     } else if constexpr (Op == O::Bgez || Op == O::Bgezl || Op == O::Bgezal || Op == O::Bgezall) {
-        const bool taken = s64(s.reg64(s_)) >= 0;
+        const bool taken = !negative_gpr64(s,s_);
         if constexpr (Op == O::Bgezal || Op == O::Bgezall) s.set_reg32_sign_extended(31u, pc + 8u);
         branch(s, taken, pc, w, Op == O::Bgezl || Op == O::Bgezall);
     } else if constexpr (Op == O::J) {

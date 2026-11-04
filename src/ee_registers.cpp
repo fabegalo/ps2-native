@@ -70,6 +70,7 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
     gif_.reset();
     vif0_.reset();
     vif1_.reset();
+    ipu_.reset();
     vu_control_.reset();
     video_encoder_.reset(assumptions);
     encoder_master_190x_.reset();
@@ -244,6 +245,14 @@ std::uint32_t EeRegisters::read_timer(unsigned index, unsigned reg) {
 }
 
 std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
+    if(physical==IpuRegisters::kPosition) {
+        if(bytes!=4u) throw DeviceRefusal("IPU_BP requires a 32-bit access");
+        return ipu_.read_position();
+    }
+    if(physical==IpuRegisters::kControl) {
+        if(bytes!=4u) throw DeviceRefusal("IPU_CTRL requires a 32-bit access");
+        return ipu_.read_control();
+    }
     if((physical>=0x10003800u && physical<0x10003A00u) || (physical>=0x10003C00u && physical<0x10003E00u)) {
         if(bytes!=4u || (physical&15u)) throw DeviceRefusal("VIF registers require aligned 32-bit accesses");
         auto& vif=(physical&0x400u) ? vif1_ : vif0_;
@@ -350,6 +359,16 @@ void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint6
 }
 
 void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value) {
+    if(physical==IpuRegisters::kCommand) {
+        if(bytes!=4u && bytes!=8u) throw DeviceRefusal("IPU_CMD requires a 32/64-bit access");
+        ipu_.write_command(static_cast<std::uint32_t>(value));
+        intc_stat_|=1u<<8; // Completed BCLR, EE manual 8.1.2 INT_IPU.
+        return;
+    }
+    if(physical==IpuRegisters::kControl) {
+        if(bytes!=4u) throw DeviceRefusal("IPU_CTRL requires a 32-bit access");
+        ipu_.write_control(static_cast<std::uint32_t>(value));return;
+    }
     if((physical>=0x10003800u && physical<0x10003A00u) || (physical>=0x10003C00u && physical<0x10003E00u)) {
         if(bytes!=4u || (physical&15u)) throw DeviceRefusal("VIF registers require aligned 32-bit accesses");
         auto& vif=(physical&0x400u) ? vif1_ : vif0_;

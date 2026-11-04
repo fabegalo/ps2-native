@@ -12,6 +12,7 @@
 #include "ps2native/gif.hpp"
 #include "ps2native/gs_registers.hpp"
 #include "ps2native/iop.hpp"
+#include "ps2native/ipu.hpp"
 #include "ps2native/mch.hpp"
 #include "ps2native/video_encoder.hpp"
 #include "ps2native/vif.hpp"
@@ -72,6 +73,7 @@ public:
     [[nodiscard]] const MchRegisters& mch() const noexcept { return mch_; }
     [[nodiscard]] const Iop& iop() const noexcept { return iop_; }
     [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return video_encoder_; }
+    [[nodiscard]] ObservedWord observe_ipu_control() const noexcept {return ipu_.observe_control();}
     [[nodiscard]] std::uint32_t read_vu_control(unsigned index) const {
         if (index==29u && (vif0_.processing() || vif1_.processing()))
             throw DeviceRefusal("VU status with active VIF processing is not modeled");
@@ -162,6 +164,7 @@ private:
     std::uint64_t vertical_sample_{};
     Gif gif_;
     Vif vif0_{Vif::Unit::Vu0},vif1_{Vif::Unit::Vu1};
+    IpuRegisters ipu_;
     VuControl vu_control_;
     // Video encoder serial bus and its two masters.
     VideoEncoderBus video_encoder_;
