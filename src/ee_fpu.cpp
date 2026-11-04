@@ -99,7 +99,7 @@ std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std
         // cannot change it. This applies to every multiplicand/sign/exponent,
         // not just the physical 1 * 129.5 example. See FIRST-GAME-STATUS.md.
         product-=std::uint64_t{1}<<15u;
-    } else if(b&0x3FFFFu) {
+    } else if(b&0xFFFFu) {
         // Certify a result without guessing the R5900's low-column tree.
         // A 24-bit radix-4 Booth array has 13 partial rows and at most 13
         // separate sign corrections. Reducing 26 rows to two needs at most
@@ -116,6 +116,9 @@ std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std
         const auto precision=(product&(1ull<<47u)) ? 24u : 23u;
         if((lower>>precision)!=(product>>precision))return std::nullopt;
     }
+    // With at least 16 trailing multiplier zeroes, the first nonzero Booth
+    // digit and its sign correction start at column 16 or above. No partial
+    // row reaches the discarded columns, so the integer product is exact.
     fcr31&=~0xC000u;
     int exponent=static_cast<int>(ea)+static_cast<int>(eb)-127;
     const auto shift=(product&(1ull<<47u)) ? 24u : 23u;

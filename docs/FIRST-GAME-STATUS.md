@@ -637,3 +637,16 @@ enquanto a ordem inversa preserva `43018000`:
 O teste também cobre sinal, multiplicando não unitário e produto cuja mantissa
 retida não muda apesar da perda. Os resultados físicos citados são VU; o modelo
 comum EE/VU é a referência comportamental, sem alegar nova medição de COP1 local.
+
+Ensaio 48: passou o MUL.S anterior e duas DIV.S, alcançando EE `0x100998`,
+339.415.369 instruções, IOP `0xAE94` / 46.479.005. Ainda 16 pacotes e
+1.048.576 escritas de pixels, apenas a limpeza. Tempo local 97,9671 s;
+RAM SHA-256 `74118d79b7f299f540c08869a19a0ceb05a5dda4ff128be9a1f27ff0bdd70e28`.
+A nova multiplicação usa `44FA0000 * 447A0000` (2000 × 1000). O limite esparso
+anterior exigia 18 zeros baixos, embora 16 sejam suficientes: o primeiro dígito
+Booth não nulo, inclusive complemento/correção de sinal, começa na coluna 16
+ou superior, sem contribuição nas colunas descartadas 0–14. A implementação
+passa a aceitar essa classe pelo produto inteiro exato; a classe de 15 zeros
+continua com perda de carry, e os demais casos continuam sujeitos à prova de
+intervalo ou recusa. Regressões incluem 16/17 zeros e multiplicando não inteiro.
+O harness local agora continua além do primeiro pacote, até recusa ou orçamento.

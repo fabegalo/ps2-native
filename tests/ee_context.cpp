@@ -393,6 +393,10 @@ void divider() {
             "column-15 proof applies across signs and non-unit multiplicands");
     require(ee_fpu_multiply(0x3F800001,0x3F808000,fcr)==0x3F808001,
             "a discarded carry need not change the retained output mantissa");
+    require(ee_fpu_multiply(0x44FA0000,0x447A0000,fcr)==0x49F42400 &&
+            ee_fpu_multiply(0x3F800001,0x3F810000,fcr)==0x3F810001 &&
+            ee_fpu_multiply(0x3F800001,0x3F820000,fcr)==0x3F820001,
+            "Booth digits entirely above discarded columns need no correction");
     // Exact integer mantissa product is 0x68DB8B5DCC64. Even the conservative
     // maximum low-column loss cannot cross the retained 24-bit boundary.
     require(ee_fpu_multiply(0x3C23D70A,0x3C23D70A,fcr)==0x38D1B716,
