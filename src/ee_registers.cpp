@@ -396,8 +396,11 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
         iop_.ee_dma_write(physical, static_cast<std::uint32_t>(value));
         return;
     }
-    if (physical >= kIopRamEePhysical && physical < kIopRamEePhysical + 0x00800000u)
-        throw DeviceRefusal("EE write to IOP RAM is not modeled (the IOP model owns its RAM)");
+    if (physical >= kIopRamEePhysical && physical < kIopRamEePhysical + 0x00800000u) {
+        sync_iop();
+        iop_.ee_write(physical-kIopRamEePhysical,bytes,value);
+        return;
+    }
     if (physical >= kTimersBase && physical < kTimersEnd) {
         const auto offset = physical & 0x7FFu;
         if (bytes != 4u || offset % 16u != 0u || offset >= 0x40u)

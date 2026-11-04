@@ -66,6 +66,7 @@ public:
     // Throws DeviceRefusal when the bytes were never written by the IOP, or
     // when the IOP stopped before this time (its later state is unknown).
     [[nodiscard]] std::uint64_t ee_read(std::uint32_t offset, std::size_t bytes) const;
+    void ee_write(std::uint32_t offset,std::size_t bytes,std::uint64_t value);
     // SIF register `index` (0 MSCOM, 1 SMCOM, 2 MSFLG, 3 SMFLG, 4 CTRL, 6 BD6;
     // EE 0x1000F200 + index * 0x10) as the EE reads or writes it; the IOP must
     // have been run up to now. Throws DeviceRefusal for what is not modeled.
@@ -157,7 +158,8 @@ private:
     [[nodiscard]] std::optional<bool> interrupt_line() const;
     [[nodiscard]] const std::optional<std::uint32_t>* latch(std::uint32_t physical) const;
     void tick_timers();
-    void tick_video(const GsRegisters& video);
+    void refresh_video(const GsRegisters& video);
+    void tick_video();
     // I_STAT bits whose state is modeled: the timers, and VBLANK once the GS
     // vertical clock is known.
     [[nodiscard]] std::uint32_t modeled_irqs() const noexcept;

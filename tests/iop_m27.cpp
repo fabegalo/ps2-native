@@ -286,6 +286,25 @@ void check_vblank_interrupts() {
     blocked.reset(rom, &kProfile);
     blocked.run_until(100u, &unknown);
     require_stop(blocked, "VBLANK: GS SYNCV not written since reset");
+    auto changed=video(kSmode1Ntsc,std::nullopt);
+    Iop resumed;resumed.reset(rom,&kProfile);
+    const auto enabled=index_of(a,"spin");
+    resumed.run_until(enabled,&changed);
+    require(!resumed.stopped(),"unknown video timing is not consumed while interrupts are disabled");
+    changed.write(kGsSmode1,8,kSmode1Held,enabled*kEeCyclesPerIopCycle,{});
+    resumed.run_until(enabled+1u,&changed);
+    require(!resumed.stopped() && resumed.cycle()==enabled+1u,
+            "held timing is visible before the first enabled interrupt decision");
+    const auto boundary=resumed.cycle();
+    const auto boundary_pc=resumed.pc();
+    changed.write(kGsSmode1,8,kSmode1Ntsc,boundary*kEeCyclesPerIopCycle,{});
+    resumed.run_until(boundary+1u,&changed);
+    require_stop(resumed,"VBLANK: GS SYNCV not written since reset");
+    require(resumed.cycle()==boundary && resumed.pc()==boundary_pc,
+            "invalidated timing cannot retire an instruction using the previous clock");
+    changed.write(kGsSmode1,8,kSmode1Held,boundary*kEeCyclesPerIopCycle,{});
+    resumed.run_until(boundary+10u,&changed);
+    require(resumed.stopped() && resumed.cycle()==boundary,"later initialization cannot erase an unknown past interrupt decision");
 }
 
 // AND and BEQ on values with unknown bits; SIF_BD6; the DMA IRQ bit.

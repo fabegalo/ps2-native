@@ -545,6 +545,36 @@ void ipu_control() {
     require(memory.read32(0xB0002020u)==0,"new BCLR explicitly initializes bit position zero");
 }
 
+void iop_memory() {
+    m20::Assembler program(0xBFC00000u);
+    program.la(8,0xA0000100u);program.lw(9,0,8);program.nop();
+    program.addiu(9,9,1);program.sw(9,4,8);
+    program.label("spin");program.beq(0,0,"spin");program.nop();
+    const auto words=program.finish();const auto bytes=m20::le_words(words);
+    auto rom=m20::build_firmware().rom;
+    std::copy(bytes.begin(),bytes.end(),rom.begin());
+    EEState state;Memory memory;
+    const ConsoleHardware profile{"SYNTHETIC","TEST","0100XD20261103",std::nullopt,
+                                  ProfileEvidence::Measured,"authored shared-RAM test"};
+    prepare_ee_boot(load_bios_rom0(rom),nullptr,state,memory,&profile);
+    device_refused([&] {(void)memory.read32(0xBC000100u);},"has not been written");
+    memory.write32(0xBC000100u,0x11223344u);
+    require(memory.read32(0x9C000100u)==0x11223344u,"EE aliases share actual IOP RAM bytes");
+    state.retired_instructions=words.size()*kEeCyclesPerIopCycle;
+    require(memory.read32(0xBC000104u)==0x11223345u,
+            "IOP executes a load, add and store using actual data written by the EE");
+    memory.write64(0xBC000200u,0x1122334455667788ull);
+    memory.write8(0xBC000203u,0xAAu);memory.write16(0xBC000206u,0xBEEFu);
+    require(memory.read64(0x9C000200u)==0xBEEF3344AA667788ull,"byte/halfword overwrites preserve adjacent IOP RAM bytes");
+    device_refused([&] {memory.write32(0xBC200000u,0);},"outside the 2 MiB");
+    device_refused([&] {(void)memory.read32(0xBC000300u);},"has not been written");
+    Iop stopped;std::fill(rom.begin(),rom.begin()+4u,0xFFu);
+    stopped.reset(rom,&profile);stopped.run_until(1);
+    require(stopped.stopped(),"invalid IOP instruction establishes an actual stop");
+    rejects([&] {stopped.ee_write(0x100u,4,1);},"after the IOP stopped");
+    rejects([&] {stopped.ee_write(0,16,0);},"requires 1/2/4/8");
+}
+
 void diagnostic_boundary() {
     DiagnosticAssumptions assumptions;
     require(assumptions.empty(),"unselected experiments do not affect original boot classification");
@@ -667,6 +697,7 @@ int main(int argc, char** argv) {
         else if (mode == "vif-control") vif_control();
         else if (mode == "ipu-control") ipu_control();
         else if (mode == "diagnostic-boundary") diagnostic_boundary();
+        else if (mode == "iop-memory") iop_memory();
         else if (mode == "held-counter") held_counter();
         else if (mode == "dma-setup") dma_setup();
         else if (mode == "guest") guest(argv[2]); else throw std::runtime_error("unknown GS events test");

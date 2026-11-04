@@ -176,7 +176,9 @@ void check_ee_view(const IopRom& rom) {
     require(registers.read(kIopRamEePhysical + 0x108u, 4u) == 0x1234u, "EE reads IOP RAM at the EE time");
     require(registers.iop().cycle() == rom.before_dma, "IOP caught up to EE time / 8");
     rejects([&] { (void)registers.read(kIopRamEePhysical + 0x200u, 4u); }, "has not been written by the IOP");
-    rejects([&] { registers.write(kIopRamEePhysical + 0x100u, 4u, 0u); }, "EE write to IOP RAM is not modeled");
+    registers.write(kIopRamEePhysical+0x100u,4u,0xAABBCCDDu);
+    require(registers.read(kIopRamEePhysical+0x100u,4u)==0xAABBCCDDu &&
+            registers.iop().cycle()==rom.before_dma,"EE writes update shared RAM at the synchronized IOP time");
     ee_cycles += 100u * kEeCyclesPerIopCycle;
     rejects([&] { (void)registers.read(kIopRamEePhysical + 0x108u, 4u); }, "read after the IOP stopped");
 

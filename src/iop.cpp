@@ -596,6 +596,8 @@ void Iop::pump_sif0() {
 }
 
 void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
+    // A GS write at this boundary must affect the next interrupt decision.
+    if(video) refresh_video(*video);
     if (video == nullptr && video_generation_) {
         // Detached: the VBLANK sources are unknown again.
         video_generation_.reset();
@@ -611,7 +613,7 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
             step();
             ++cycle_;
             if (timers_running_) tick_timers();
-            if (video != nullptr) tick_video(*video);
+            if (video != nullptr) tick_video();
         } catch (const IopStop& stop) {
             pc_ = pc;
             branch_target_ = saved_target;
@@ -639,6 +641,18 @@ std::uint64_t Iop::ee_read(std::uint32_t offset, std::size_t bytes) const {
     std::uint64_t value = 0;
     for (std::size_t i = 0; i < bytes; ++i) value |= static_cast<std::uint64_t>(ram_[offset + i]) << (8u * i);
     return value;
+}
+
+void Iop::ee_write(std::uint32_t offset,std::size_t bytes,std::uint64_t value) {
+    if(bytes!=1u && bytes!=2u && bytes!=4u && bytes!=8u)
+        throw DeviceRefusal("EE write to IOP RAM requires 1/2/4/8 bytes");
+    if(offset>=kIopRamBytes || bytes>kIopRamBytes-offset)
+        throw DeviceRefusal("EE write outside the 2 MiB of IOP RAM");
+    if(stop_) throw DeviceRefusal("EE write to IOP RAM after the IOP stopped: "+*stop_);
+    for(std::size_t i=0;i<bytes;++i) {
+        ram_[offset+i]=static_cast<std::uint8_t>(value>>(8u*i));
+        ram_written_[offset+i]=1;
+    }
 }
 
 std::uint32_t Iop::reg(unsigned index) const {
@@ -1122,13 +1136,11 @@ std::uint32_t Iop::modeled_irqs() const noexcept {
            (video_.state != GsRegisters::VerticalClock::State::Unknown ? kVblankStartIrq | kVblankEndIrq : 0u);
 }
 
-void Iop::tick_video(const GsRegisters& video) {
-    const auto now = cycle_ * kEeCyclesPerIopCycle; // EE cycle at the end of this IOP cycle
+void Iop::refresh_video(const GsRegisters& video) {
     if (video_generation_ != video.timing_generation()) {
-        // The timing changed during this IOP cycle (the EE syncs the IOP
-        // before every GS write): edges of the new timing from the start of
-        // the cycle on belong to it (IOP-cycle granularity).
-        const auto from = now - kEeCyclesPerIopCycle;
+        // The EE synchronizes the IOP before changing GS timing. Process the
+        // new generation from this boundary, using the shared IOP time unit.
+        const auto from = cycle_ * kEeCyclesPerIopCycle;
         video_generation_ = video.timing_generation();
         video_ = video.vertical_clock();
         if (video_.state == GsRegisters::VerticalClock::State::Running) {
@@ -1136,6 +1148,10 @@ void Iop::tick_video(const GsRegisters& video) {
             next_vblank_end_ = video_.next_edge(from, true);
         }
     }
+}
+
+void Iop::tick_video() {
+    const auto now = cycle_ * kEeCyclesPerIopCycle;
     if (video_.state != GsRegisters::VerticalClock::State::Running) return;
     const auto period = video_.half_line * video_.field;
     for (; next_vblank_start_ <= now; next_vblank_start_ += period) istat_ |= kVblankStartIrq;
