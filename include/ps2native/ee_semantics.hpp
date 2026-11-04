@@ -140,7 +140,7 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     (void)m;
     (void)pc;
     // Host execution is sequential: guest memory accesses are already ordered (SYNC).
-    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::VaddBc || Op == O::VsubBc || Op == O::Vopmula || Op == O::Vopmsub || Op == O::Vsqrt || Op == O::Vdiv || Op == O::Vwaitq || Op == O::VaddQ || Op == O::VmulQ) {
+    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::VaddBc || Op == O::VsubBc || Op == O::Vopmula || Op == O::Vopmsub || Op == O::Vsqrt || Op == O::Vdiv || Op == O::Vwaitq || Op == O::VaddQ || Op == O::VmulQ || Op == O::Vmove) {
         if (!(s.cp0(Cop0::Status) & (1u<<30)))
             throw std::runtime_error("COP2 transfer with Status.CU2 = 0; coprocessor unusable vectoring is not modeled");
         // Implemented ALU macros complete synchronously in the shared instruction
@@ -187,6 +187,18 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             m.vu_add(a_,d_,t_,(w>>21u)&15u,w&3u,Op==O::VsubBc);
         else if constexpr (Op == O::Vopmula || Op == O::Vopmsub)
             m.vu_product(a_,d_,t_,14,4,Op==O::Vopmsub,Op==O::Vopmula,true);
+        else if constexpr (Op == O::Vmove) {
+            const auto source=m.observe_vu_vector(d_);
+            auto destination=m.observe_vu_vector(t_);
+            const auto mask=(w>>21u)&15u;
+            const auto low_mask=((mask&8u) ? 0xFFFFFFFFull : 0ull)|((mask&4u) ? 0xFFFFFFFF00000000ull : 0ull);
+            const auto high_mask=((mask&2u) ? 0xFFFFFFFFull : 0ull)|((mask&1u) ? 0xFFFFFFFF00000000ull : 0ull);
+            destination.low.value=(destination.low.value&~low_mask)|(source.low.value&low_mask);
+            destination.low.unknown=(destination.low.unknown&~low_mask)|(source.low.unknown&low_mask);
+            destination.high.value=(destination.high.value&~high_mask)|(source.high.value&high_mask);
+            destination.high.unknown=(destination.high.unknown&~high_mask)|(source.high.unknown&high_mask);
+            m.write_vu_vector(t_,destination);
+        }
         else if constexpr (Op == O::Vmr32) m.vu_rotate(t_,d_,(w>>21u)&15u);
         else if constexpr (Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc ||
                            Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc) {

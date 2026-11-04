@@ -781,3 +781,8 @@ Sem novos pacotes/pixels ou PMODE. Quatro testes focados aprovados, incluindo
 Q antigo antes da conclusão, espera sem aposentadorias extras, flags I/D,
 reset, incerteza, Compare atravessado e timer BUSCLK. Original repetido:
 mesmos PCs/contagens e hash canônico, zero pixels.
+
+VMOVE implementado após consulta à tradução VU de PS2Recomp: cópia crua
+por componente selecionado, sem alterar flags; VF00 permanece constante.
+Implementação BSD por máscaras inteiras, preservando alias e bits desconhecidos.
+Os quatro testes focados passaram; ensaio 56 iniciado para observar a continuação.
