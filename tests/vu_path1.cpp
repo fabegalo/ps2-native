@@ -46,6 +46,44 @@ int main() try {
         vu.advance_micro(16,&gif,&gs);require(!vu.path1_transfer_pending() && gif.packets().size()==1,"GIF restart completes all actual remaining qwords");
     }
     {
+        VuControl vu;Gif gif;GsRegisters gs;gs.reset(0);
+        vu.write_vector(31,{{8,0},{0,0}});vu.write(2,0x421);vu.vector_store_increment(31,2,8);
+        pair(vu,0,0x800006FC);pair(vu,1,0x80000EFC,(15u<<21u)|(3u<<6u)|0x1Bu);
+        pair(vu,2,0x10010064,(15u<<21u)|(4u<<6u)|0x1Bu);pair(vu,3,0x8000033C,0x400002FF);pair(vu,4,0x8000033C);
+        qword(vu,0,(1ull<<60)|0x8003u,0xE);
+        for(unsigned n=1;n<=3;++n)qword(vu,n,0xFFFFFFFF00000000ull|n,0x62);
+        qword(vu,8,(1ull<<60)|0x8001u,0xE);qword(vu,9,0xFFFFFFFFAABBCCDDull,0x62);
+        vu.start_micro(1,0,0);vu.advance_micro(8,&gif,&gs);
+        require(vu.diagnostic_micro_instructions(1)==2 && vu.observe_data(0x403C).value==0x3F800000 &&
+            !vu.observe_data(0x403C).unknown && vu.observe_data(0x404C).unknown==~0u && vu.observe_data(0x4210).value==8,
+            "a second XGKICK executes its paired upper exactly once while the next LIW stalls and earlier writebacks keep progressing");
+        vu.advance_micro(9,&gif,&gs);require(vu.diagnostic_micro_instructions(1)==2 && gif.packets().size()==1 &&
+            vu.path1_transfer_pending() && (gif.read_stat()&0x100u),"the first actual EOP releases the queued request without inline delivery of the second packet");
+        vu.advance_micro(12,&gif,&gs);require(vu.diagnostic_micro_instructions(1)==5 && gif.packets().size()==1,
+            "the following LIW resumes after the first EOP while the second packet still streams independently");
+        vu.advance_micro(16,&gif,&gs);require(!vu.micro_running(1) && !vu.path1_transfer_pending() && gif.packets().size()==2 &&
+            gs.read(kGsSiglblid+4u,4)==0xAABBCCDD && vu.observe_data(0x4210).value==100 && vu.observe_data(0x404C).value==0x3F800000,
+            "the queued transfer uses its latched VI source despite a later VI change and preserves both real packets and upper results");
+    }
+    {
+        VuControl vu;Gif gif;GsRegisters gs;gs.reset(0);
+        vu.write_vector(31,{{8,0},{0,0}});vu.write(2,0x421);vu.vector_store_increment(31,2,8);
+        pair(vu,0,0x800006FC);pair(vu,1,0x80000EFC,(15u<<21u)|(3u<<6u)|0x1Bu);
+        pair(vu,2,0x8000033C,0x400002FF);pair(vu,3,0x8000033C);
+        qword(vu,0,(1ull<<60)|0x8001u,0xE);qword(vu,1,0xFFFFFFFF11223344ull,0x62);
+        qword(vu,8,(1ull<<60)|0x8005u,0xE);for(unsigned n=9;n<=13;++n)qword(vu,n,0xFFFFFFFFAABBCC00ull|n,0x62);
+        gif.write_ctrl(8);vu.start_micro(1,0,0);vu.advance_micro(8,&gif,&gs);
+        require(vu.diagnostic_micro_instructions(1)==2 && !vu.observe_data(0x403C).unknown && gif.packets().empty(),
+            "GIF pause keeps both real requests pending while the second upper result still retires");
+        gif.write_ctrl(0);vu.advance_micro(17,&gif,&gs);
+        require(!vu.micro_running(1) && vu.path1_transfer_pending() && gif.packets().size()==1,
+            "VU E can finish after queue release while the resumed second packet is still transferring");
+        Vif vif;vif.write_fifo(0x11000000,0,gif,gs,&vu,17);require((vif.observe_status().value&15u)==10u,"FLUSH waits for the actual queued packet tail after VU Ready");
+        advance_vpus(23,&vif,nullptr,&vu,gif,gs);
+        require(!vif.processing() && !vu.path1_transfer_pending() && gif.packets().size()==2 && gs.read(kGsSiglblid+4u,4)==0xAABBCC0D,
+            "only the second real EOP releases FLUSH after a paused queued launch");
+    }
+    {
         VuControl vu;Gif gif;GsRegisters gs;gs.reset(0);pair(vu,0,0x800006FC);pair(vu,1,0x8000033C);
         pair(vu,2,0x8000033C,0x400002FF);pair(vu,3,0x8000033C);
         vu.start_micro(1,0,0);vu.advance_micro(1,&gif,&gs);

@@ -17,6 +17,7 @@ public:
     void reset() {
         micro_={};
         path1_.reset();
+        queued_path1_.reset();
         pending_q_.reset();
         pending_q1_.reset();
         registers_ = {};
@@ -106,7 +107,7 @@ public:
     }
     [[nodiscard]] bool micro_running(unsigned unit) const {return micro_.at(unit).running;}
     [[nodiscard]] bool path1_transfer_pending() const noexcept {return path1_.has_value();}
-    [[nodiscard]] bool path1_end_on_kick() const noexcept {return path1_ && path1_->end_on_kick;}
+    [[nodiscard]] bool path1_end_on_kick() const noexcept {return (path1_ && path1_->end_on_kick) || (queued_path1_ && queued_path1_->end_on_kick);}
     [[nodiscard]] std::optional<std::uint64_t> next_micro_cycle() const noexcept {
         std::optional<std::uint64_t> result;
         for(const auto& unit:micro_)if(unit.running && (!result || unit.next<*result))result=unit.next;
@@ -327,6 +328,7 @@ private:
         std::optional<std::string> failure;
     };
     std::optional<Path1> path1_;
+    std::optional<Path1> queued_path1_;
     struct PendingQ { std::uint64_t ready; std::uint32_t value,flags; };
     std::optional<PendingQ> pending_q_;
     std::optional<PendingQ> pending_q1_;

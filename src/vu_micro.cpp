@@ -204,6 +204,10 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper(unsigned unit,std::uint32_t
 }
 void VuControl::step_micro(unsigned unit,Gif* gif,GsRegisters* gs) {
     auto& state=micro_[unit];retire_micro_integers(unit);
+    // VU manual 3.4.9: the second XGKICK's upper half executes normally.
+    // Its following LIW stalls until the preceding PATH1 transfer ends;
+    // already issued FMAC/integer/store writebacks keep progressing.
+    if(unit && queued_path1_){++state.next;return;}
     if(state.drain) {
         if(state.next>=*state.drain) {
             state.running=false;*registers_[29]&=~(unit ? 256u : 1u);
@@ -395,7 +399,6 @@ void VuControl::step_micro(unsigned unit,Gif* gif,GsRegisters* gs) {
         if(state.end_delay)throw DeviceRefusal("XGKICK in the E delay slot is invalid");
         if((lo&0x01E00000u) || it)throw DeviceRefusal("XGKICK reserved fields are nonzero");
         if(!gif || !gs)throw DeviceRefusal("XGKICK requires the shared GIF/GS devices");
-        if(path1_)throw DeviceRefusal("second XGKICK during PATH1: queued launch timing is not modeled");
         kick=reg(is)&1023u;
     } else if(op==0x40u && ((lo&63u)==0x30u || (lo&63u)==0x31u || (lo&63u)==0x32u || (lo&63u)==0x34u || (lo&63u)==0x35u)) {
         const auto function=lo&63u;
@@ -422,11 +425,12 @@ void VuControl::step_micro(unsigned unit,Gif* gif,GsRegisters* gs) {
     if(fmac.changes_flags && state.flag_writes==state.flags.size())throw DeviceRefusal("VU flag writeback queue is full");
     if(store_result && state.store_writes==state.stores.size())throw DeviceRefusal("VU memory store queue is full");
     if(kick) {
-        gif->request_path1();
         // PATH1 transfers 128 bits per BUSCLK (EE manual p.148). As with
         // the other bus engines, delivery opens the next functional bus slot;
         // this phase is not a measured pin-level XGKICK latency.
-        path1_=Path1{*kick,state.next+kEeCyclesPerBusCycle,0,ending,std::nullopt};
+        const auto request=Path1{*kick,state.next+kEeCyclesPerBusCycle,0,ending,std::nullopt};
+        if(path1_)queued_path1_=request;
+        else {gif->request_path1();path1_=request;}
     }
     if(q_result)(unit ? pending_q1_ : pending_q_)=*q_result;
     if(result && result->first) {
@@ -457,7 +461,14 @@ void VuControl::step_path1(Gif* gif,GsRegisters* gs) {
         }
         gif->write_path1(words[0]|(std::uint64_t{words[1]}<<32u),words[2]|(std::uint64_t{words[3]}<<32u),*gs);
         ++transfer.qwords;transfer.address=(transfer.address+1u)&1023u;transfer.next+=kEeCyclesPerBusCycle;
-        if(!gif->path1_requested())path1_.reset();
+        if(!gif->path1_requested()) {
+            if(queued_path1_) {
+                // Open the next bus beat for the latched second packet.
+                // Never drain either packet inline or snapshot future data.
+                gif->request_path1();queued_path1_->next=transfer.next;
+                path1_=*queued_path1_;queued_path1_.reset();
+            } else path1_.reset();
+        }
     } catch(const DeviceRefusal& error) {
         transfer.failure="VU1 PATH1 at data address "+hexword(transfer.address*16u,4)+" after "+
             std::to_string(transfer.qwords)+" qwords: "+error.what();
