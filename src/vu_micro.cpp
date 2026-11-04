@@ -276,12 +276,15 @@ void VuControl::step_micro(unsigned unit,Gif* gif,GsRegisters* gs) {
             if(it>=16u)throw DeviceRefusal("BAL link register is outside VI00..VI15");
             result=std::pair{it,(state.pc/8u+2u)&(slots-1u)};
         }
-    } else if(op==0x28u || op==0x29u) {
+    } else if(op==0x28u || op==0x29u || (op>=0x2Cu && op<=0x2Fu)) {
         if(state.branch || state.end_delay)throw DeviceRefusal("branch in a branch/E delay slot is not modeled");
-        if(lo&0x01E00000u)throw DeviceRefusal("IBEQ/IBNE reserved fields are nonzero");
+        if((lo&0x01E00000u) || (op>=0x2Cu && it))throw DeviceRefusal("conditional branch reserved fields are nonzero");
         const auto bits=lo&0x7FFu,slots=unit ? 2048u : 512u;
         const auto offset=static_cast<std::int32_t>(bits)-((bits&0x400u) ? 2048 : 0);
-        const auto equal=reg(is,2)==reg(it,2),take=op==0x28u ? equal : !equal;
+        const auto source=reg(is,2);
+        const bool negative=(source&0x8000u)!=0u;
+        const bool take=op==0x28u ? source==reg(it,2) : op==0x29u ? source!=reg(it,2) :
+            op==0x2Cu ? negative : op==0x2Du ? !negative && source!=0u : op==0x2Eu ? negative || source==0u : !negative;
         // Even an untaken conditional branch has one delay instruction.
         branch=((state.pc/8u+(take ? 1u+static_cast<std::uint32_t>(offset) : 2u))&(slots-1u))*8u;
     } else if(op==0x24u || op==0x25u) {

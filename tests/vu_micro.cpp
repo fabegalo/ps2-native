@@ -312,6 +312,29 @@ int main() try {
         instruction(vu,unit,3,nop);vu.start_micro(unit,0,0);vu.advance_micro(8);
         require(integer(vu,unit,1).value==0 && !integer(vu,unit,1).unknown && integer(vu,unit,3).unknown==0xFFFFu && integer(vu,unit,4).unknown==1,
             "MAC flag checks preserve uncertain source bits, prove AND with zero, and cannot fabricate an equality result");
+        for(unsigned op=0x2Cu;op<=0x2Fu;++op)for(const auto input : {0u,1u,0x7FFFu,0x8000u,0xFFFFu}) {
+            vu.reset();seed_integer(vu,unit,1,{input,0});
+            instruction(vu,unit,0,(op<<25u)|(1u<<11u)|2u);instruction(vu,unit,1,addiu(2,0,7));
+            instruction(vu,unit,2,addiu(2,0,99));instruction(vu,unit,3,nop,upper_nop|0x40000000u);instruction(vu,unit,4,nop);
+            vu.start_micro(unit,0,0);vu.advance_micro(12);
+            const auto signed_input=input<0x8000u ? static_cast<int>(input) : static_cast<int>(input)-65536;
+            const bool taken=op==0x2Cu ? signed_input<0 : op==0x2Du ? signed_input>0 : op==0x2Eu ? signed_input<=0 : signed_input>=0;
+            require(integer(vu,unit,2).value==(taken ? 7u : 99u),"signed VU branches distinguish negative, positive, zero and both sixteen-bit boundaries and execute the true delay slot");
+        }
+        vu.reset();seed_integer(vu,unit,1,{0xFFFFu,0});instruction(vu,unit,0,addiu(1,0,1));
+        instruction(vu,unit,1,(0x2Cu<<25u)|(1u<<11u)|2u);instruction(vu,unit,2,addiu(2,0,7));
+        instruction(vu,unit,3,addiu(2,0,99));instruction(vu,unit,4,nop,upper_nop|0x40000000u);instruction(vu,unit,5,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(14);require(integer(vu,unit,1).value==1 && integer(vu,unit,2).value==7,
+            "signed branch operands retain the documented one-instruction integer gap");
+        vu.reset();seed_integer(vu,unit,2,{3,0});seed_integer(vu,unit,3,{});
+        instruction(vu,unit,0,0x80000032u|(2u<<16u)|(2u<<11u)|(31u<<6u));instruction(vu,unit,1,nop);
+        instruction(vu,unit,2,(0x2Du<<25u)|(2u<<11u)|0x7FDu);instruction(vu,unit,3,addiu(3,3,1));
+        instruction(vu,unit,4,nop,upper_nop|0x40000000u);instruction(vu,unit,5,nop);vu.start_micro(unit,0,0);vu.advance_micro(22);
+        require(integer(vu,unit,2).value==0 && integer(vu,unit,3).value==3 && vu.diagnostic_micro_instructions(unit)==14,
+            "IBGTZ sign-extends a backward displacement, tests updated loop data after its required gap, and retains each delay instruction");
+        vu.reset();instruction(vu,unit,0,(0x2Eu<<25u)|(1u<<11u)|2u,upper(0x1B,5,0,0));vu.start_micro(unit,0,0);
+        rejects([&]{vu.advance_micro(1);},"contains unknown bits");require(vector_lane(vu,unit,5,0).unknown==~0u && vu.diagnostic_micro_instructions(unit)==0,
+            "an unknown signed branch condition cannot fabricate a direction or commit the paired upper result");
     }
     VuControl cold;cold.start_micro(1,0,0);rejects([&]{cold.advance_micro(1);},"unwritten micro memory");
     std::cout<<"Clocked VU integer LIW, bypass/S visibility, BAL delay, E drain, reset and refusals passed\n";
