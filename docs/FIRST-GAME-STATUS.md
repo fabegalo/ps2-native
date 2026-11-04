@@ -432,6 +432,47 @@ completa 107 iniciada após build coerente: 90 minutos/16 bilhões, controles
 em `superbust-pad107.txt`, mesmo cenário de press/release do 105. Processo
 supervisionado; continuar até menu/navegação ou próximo bloqueio real.
 
+### Aritmética VU com incerteza preservada
+
+Novos helpers próprios conservam um intervalo de produtos Booth em vez de
+escolher um último bit não provado. A representação `ObservedWord` guarda
+os bits comuns e uma máscara que cobre TODO o intervalo, incluindo bits
+intermediários que coincidem nos extremos. Sinais/expoentes desconhecidos,
+fronteiras de exceção ou cancelamento não certificado continuam recusados.
+Só frações com sinal/expoente/flags conhecidos podem seguir simbolicamente.
+ADD usa alinhamento inteiro monotônico com os expoentes fixos; produtos
+com entradas incertas usam um limite global de perda, sem supor que o
+arredondamento Booth seja monotônico. Nenhuma aproximação float do host.
+
+SQRT enumera até oito bits de fração incertos e preserva o conjunto de
+resultados possível. Domínios maiores ou inválidos recusam com trabalho
+limitado. Q pendente mantém sua máscara, latência de sete ciclos e flags;
+leitura que exige valor conhecido ainda falha. VMUL/ACC/VADD/VADDq podem
+eliminar a incerteza somente quando provam que os bits não afetam a saída.
+Estados opacos continuam recusados, e o commit de lanes/flags é atômico.
+O caminho escalar estrito de MUL continua recusando produtos ambíguos.
+PS2Recomp FPU/macros foi consultado previamente; sua operação de host não
+oferece esse contrato simbólico e não foi usada como base de código.
+
+Validação externa separada, quatro milhões de produtos conhecidos: zero
+falhas de contenção, 39.185 saídas com fração explicitamente incerta.
+Outras quatro milhões de amostras com bits de entrada desconhecidos:
+81.440 domínios recusados, zero falhas de contenção nos aceitos; 3.993.948
+somas aceitas, zero divergências de contenção/flags. Amostras não são prova
+exhaustiva dos conjuntos; os limites têm fundamento algébrico descrito acima.
+Oito testes focados e seis regressões VU/VIF/PATH1/frame passaram. BIOS
+original preservou PCs, contagens e RAM canônicos. Replay da rotina com
+158 entradas sintéticas agora retorna em todas, com VF05.x conhecido em
+todas; isso não comprova execução completa, pixels ou controle do jogo.
+
+Microbenchmark de VMUL de quatro lanes já conhecido, mesmas 100 mil
+entradas/10 repetições/cinco amostras, incluiu gravação das fontes e leitura
+do destino/MAC. Medianas 154,024 ns antes e 153,383 ns depois, checksums
+iguais; variação observada de -0,4%, sem ganho relevante demonstrado e com
+carga host concorrente. Fontes BSD de cada versão compiladas com ABI
+coerente. Próxima rodada preparada em `superbust-menu108-*`, ainda sem
+afirmar passagem por um novo bloqueio completo. O 107 continua supervisionado.
+
 BIN Mode2/2352: SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`;
 ELF `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`.
 Seis arquivos IOP/IOPRP202, com hashes locais em `out/game-first/superbust-irx-manifest.json`.

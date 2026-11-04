@@ -478,7 +478,7 @@ void VuControl::step_path1(Gif* gif,GsRegisters* gs) {
 void VuControl::advance_micro_q(std::uint64_t cycle) {
     advance_q(cycle);
     if(!pending_q1_ || pending_q1_->ready>cycle)return;
-    vu1_controls_[6]={pending_q1_->value,0};
+    vu1_controls_[6]={pending_q1_->value,pending_q1_->unknown};
     const auto flags=pending_q1_->flags;auto& status=vu1_controls_[0];
     status.value=(status.value&~0x30u)|flags|(flags<<6u);
     status.unknown&=~(0x30u|(flags<<6u));pending_q1_.reset();

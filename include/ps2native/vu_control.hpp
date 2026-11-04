@@ -1,6 +1,7 @@
 #pragma once
 #include "ps2native/device_timing.hpp"
 #include "ps2native/ee_fpu.hpp"
+#include "ps2native/vu_float.hpp"
 #include <array>
 #include <optional>
 #include <vector>
@@ -169,7 +170,7 @@ public:
     [[nodiscard]] std::uint64_t q_ready_cycle() const noexcept { return pending_q_ ? pending_q_->ready : 0; }
     void advance_q(std::uint64_t cycle) {
         if(!pending_q_ || cycle<pending_q_->ready)return;
-        registers_[22]=pending_q_->value;unknown_[22]=0;
+        registers_[22]=pending_q_->value;unknown_[22]=pending_q_->unknown;
         const auto flags=pending_q_->flags;
         registers_[16]=(*registers_[16]&~0x30u)|flags|(flags<<6u);
         unknown_[16]&=~(0x30u|(flags<<6u));
@@ -178,17 +179,23 @@ public:
     void issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,bool square_root) {
         if(pending_q_)throw DeviceRefusal("VU FDIV pipeline is still occupied");
         const auto a=vectors_.at(left)[left_lane],b=vectors_.at(right)[right_lane];
-        if(b.unknown || (!square_root && a.unknown))throw DeviceRefusal("VU Q consumes unknown operands");
-        std::uint32_t value,flags=0;
+        if(!square_root && (b.unknown || a.unknown))throw DeviceRefusal("VU Q consumes unknown operands");
+        std::uint32_t value,flags=0,unknown=0;
         if(square_root) {
-            const auto root=ee_fpu_sqrt(b.value);
-            if(!root)throw DeviceRefusal("VU SQRT negative input flags are not modeled");
-            value=*root;
+            if(b.unknown) {
+                const auto root=vu_float_sqrt(b);
+                if(!root)throw DeviceRefusal("VU Q consumes unknown operands with unproven SQRT fraction/flags");
+                value=root->word.value;unknown=root->word.unknown;
+            } else {
+                const auto root=ee_fpu_sqrt(b.value);
+                if(!root)throw DeviceRefusal("VU SQRT negative input flags are not modeled");
+                value=*root;
+            }
         } else {
             value=ee_fpu_divide(a.value,b.value,flags);
             flags=((flags>>13u)&0x10u)|((flags>>11u)&0x20u);
         }
-        pending_q_=PendingQ{cycle+7u,value,flags};
+        pending_q_=PendingQ{cycle+7u,value,flags,unknown};
     }
     void add(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast=4,bool subtract=false) {
         auto result=vectors_.at(destination);
@@ -198,12 +205,16 @@ public:
             if(!(mask&bit))continue;
             const auto a=vectors_.at(left)[lane];
             const auto b=broadcast==5u ? observe(22) : vectors_.at(right)[broadcast<4 ? broadcast : lane];
-            if(a.unknown || b.unknown)throw DeviceRefusal("VU ADD consumes unknown operands");
             std::uint32_t flags=0;
-            const auto value=ee_fpu_add(a.value,b.value^(subtract ? 0x80000000u : 0u),flags);
-            result[lane]={value,0};
-            if(!(value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
-            if(value&0x80000000u){mac|=bit<<4u;status|=2u;}
+            ObservedWord value;
+            if(a.unknown || b.unknown) {
+                const auto sum=vu_float_add(a,{b.value^(subtract ? 0x80000000u : 0u),b.unknown});
+                if(!sum)throw DeviceRefusal("VU ADD consumes unknown operands with unproven fraction/flags");
+                value=sum->word;flags=sum->flags;
+            } else value={ee_fpu_add(a.value,b.value^(subtract ? 0x80000000u : 0u),flags),0};
+            result[lane]=value;
+            if(!(value.value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
+            if(value.value&0x80000000u){mac|=bit<<4u;status|=2u;}
             if(flags&0x4000u){mac|=bit<<8u;status|=4u;}
             if(flags&0x8000u){mac|=bit<<12u;status|=8u;}
         }
@@ -222,22 +233,31 @@ public:
             if(!(mask&bit))continue;
             const auto a=vectors_.at(left)[outer ? (lane+1u)%3u : lane];
             const auto b=broadcast==5u ? observe(22) : vectors_.at(right)[outer ? (lane+2u)%3u : broadcast<4 ? broadcast : lane];
-            if(a.unknown || b.unknown)throw DeviceRefusal("VU multiply consumes unknown operands");
             std::uint32_t flags=0;
-            const auto multiplied=ee_fpu_multiply(a.value,b.value,flags,diagnostic_power_two_carry_);
-            if(!multiplied)throw DeviceRefusal("VU multiply ambiguous low-column Booth rounding");
+            const auto multiplied=a.unknown || b.unknown ? std::nullopt :
+                ee_fpu_multiply(a.value,b.value,flags,diagnostic_power_two_carry_);
+            ObservedWord value;
+            if(multiplied)value={*multiplied,0};
+            else {
+                const auto range=vu_float_product(a,b,diagnostic_power_two_carry_);
+                if(!range)throw DeviceRefusal("VU multiply consumes unknown operands or ambiguous fraction/flags");
+                value=range->word;flags=range->flags;
+            }
             // ACC has extra exception state on real VU hardware. Until that
             // state is modeled, refuse any exceptional product/sum atomically.
             if(flags&0xC000u)throw DeviceRefusal("VU multiply exception/ACC state is not modeled");
-            auto value=*multiplied;
             if(accumulate) {
-                if(accumulator_[lane].unknown)throw DeviceRefusal("VU multiply-add consumes unknown ACC");
-                value=ee_fpu_add(accumulator_[lane].value,value^(outer ? 0x80000000u : 0u),flags);
+                const auto acc=accumulator_[lane];
+                if(acc.unknown || value.unknown) {
+                    const auto sum=vu_float_add(acc,{value.value^(outer ? 0x80000000u : 0u),value.unknown});
+                    if(!sum)throw DeviceRefusal("VU multiply-add consumes unknown ACC or unproven fraction/flags");
+                    value=sum->word;flags=sum->flags;
+                } else value={ee_fpu_add(acc.value,value.value^(outer ? 0x80000000u : 0u),flags),0};
                 if(flags&0xC000u)throw DeviceRefusal("VU accumulation exception/ACC state is not modeled");
             }
-            result[lane]={value,0};
-            if(!(value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
-            if(value&0x80000000u){mac|=bit<<4u;status|=2u;}
+            result[lane]=value;
+            if(!(value.value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
+            if(value.value&0x80000000u){mac|=bit<<4u;status|=2u;}
         }
         if(to_accumulator)accumulator_=result;
         else if(destination)vectors_.at(destination)=result;
@@ -335,7 +355,7 @@ private:
     };
     std::optional<Path1> path1_;
     std::optional<Path1> queued_path1_;
-    struct PendingQ { std::uint64_t ready; std::uint32_t value,flags; };
+    struct PendingQ { std::uint64_t ready; std::uint32_t value,flags; std::uint32_t unknown{}; };
     std::optional<PendingQ> pending_q_;
     std::optional<PendingQ> pending_q1_;
     ObservedWord& memory_word(std::uint32_t address) {

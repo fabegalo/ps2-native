@@ -16,6 +16,13 @@ sete testes e BIOS original passaram. Negativos continuam recusados.
 Rodada `out/game-first/superbust-menu107-run.cmd` ativa com as correções.
 Acompanhar até o menu, corrigindo novos bloqueios. Só pixels reais.
 Entrada de 107 em `superbust-pad107.txt`, isolada das rodadas anteriores.
+107 já reproduziu aviso, créditos e Acclaim. Propagação simbólica de
+frações VU/ACC/Q preparada para eventual próxima recusa: oito testes e
+seis regressões passaram; 158 entradas da rotina isolada retornam com
+VF05.x conhecido, sem prova de jogo completo. `superbust-menu108-*`
+preparado, ainda não executado. Arquivo `superbust-capture108.txt` permite
+capturar cada VBLANK distinto (1) ou a cadência econômica (0), sem efeito
+convidado. Não declarar menu antes de observar e testar seus controles.
 Entrada supervisionada em `out/game-first/superbust-pad.txt`, palavra
 hex ativa baixa; `FFFF` solto, `BFFF` Cross, `FFF7` Start, `DFFF` Circle;
 `10000` encerra voluntariamente no próximo VBLANK conhecido.

@@ -18,6 +18,14 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **VU preserva incertezas de fração:** intervalos conservadores de MUL,
+  ADD e SQRT limitada propagam máscaras conhecidas/desconhecidas por VF,
+  ACC e Q; só eliminam incerteza quando provam irrelevância. Sem escolher
+  bits arbitrários. Oito testes focados, seis regressões VU/VIF/PATH1 e BIOS
+  original passaram. Replay isolado retorna nas 158 entradas sintéticas,
+  VF05.x conhecido; isso não comprova menu. Ensaio 107 em Acclaim, ainda
+  supervisionado; 108 preparado com a nova cobertura. Evidências no
+  [relatório](docs/FIRST-GAME-STATUS.md#aritmética-vu-com-incerteza-preservada).
 - **Continuação do menu em execução:** limite conservador do multiplicador
   refinado por conservação de peso das colunas baixas. Quatro milhões de
   pares sintéticos: 3.953.261 aceitos, 46.739 recusados, zero divergências
