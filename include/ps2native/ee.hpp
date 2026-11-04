@@ -9,6 +9,10 @@ struct Register128 {
     std::uint64_t low{};
     std::uint64_t high{};
 };
+struct GprCandidates {
+    std::uint64_t value{},unknown{};
+    std::shared_ptr<const std::vector<std::uint64_t>> values;
+};
 // COP0 register numbers used by the boot path (EE Core User's Manual).
 enum class Cop0 : unsigned {
     Index = 0, Random = 1, EntryLo0 = 2, EntryLo1 = 3, Context = 4, PageMask = 5,
@@ -38,6 +42,10 @@ struct EEState {
     std::array<std::uint64_t, 32> unknown_gpr_high_bits{};
     std::uint32_t unknown_gprs{};
     std::array<Register128, 32> gpr{};
+    // Small certified domains retain correlations lost by independent bit
+    // masks. Absent on ordinary known data; bounded to 512 possible words.
+    std::array<GprCandidates,32> gpr_candidates{};
+    std::uint32_t candidate_gprs{};
     // LO/HI are 128 bits: lo/hi are the lower halves (pipeline 0), lo1/hi1 the
     // upper halves written by the MMI pipeline-1 instructions (MULT1, DIV1, ...).
     std::uint64_t lo{};
@@ -93,6 +101,9 @@ struct EEState {
     void set_reg32_sign_extended(unsigned index, std::uint32_t value);
     void set_reg64(unsigned index, std::uint64_t value);
     void set_reg64_observed(unsigned index, std::uint64_t value, std::uint64_t unknown);
+    [[nodiscard]] std::shared_ptr<const std::vector<std::uint64_t>> reg64_candidates(unsigned index) const;
+    void set_reg64_candidates(unsigned index,std::vector<std::uint64_t> values);
+    void forget_reg_candidates(unsigned index) noexcept;
     void set_reg128(unsigned index, std::uint64_t low, std::uint64_t high);
     void set_reg128_observed(unsigned index, std::uint64_t low, std::uint64_t high,
                              std::uint64_t unknown_low, std::uint64_t unknown_high);

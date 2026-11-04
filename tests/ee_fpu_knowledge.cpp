@@ -7,9 +7,68 @@ using namespace ps2native;
 using namespace boot_checks;
 namespace {
 constexpr std::uint32_t math(unsigned fn,unsigned fd,unsigned fs,unsigned ft){return 0x46000000u|(ft<<16u)|(fs<<11u)|(fd<<6u)|fn;}
+void integer_domains(Memory& memory) {
+    for(const bool interpreted:{false,true}) {
+        EEState s;s.set_cp0(Cop0::Status,kStatusCU1);
+        const auto run=[&](std::uint32_t word) {
+            s.pc=0x80001000;memory.write32(s.pc,word);std::uint64_t count=0;
+            ExecutionContext ctx{s,memory,count,100,0xFFFFFFFFu};
+            if(interpreted || word==0x44020000u || word==0x44852000u)interpret_instruction(ctx);
+            else switch(word) {
+                case 0x00021DC2u:ee::exec<MipsOpcode::Srl>(s,memory,0,word);break;
+                case 0x306300FFu:ee::exec<MipsOpcode::Andi>(s,memory,0,word);break;
+                case 0x00831823u:ee::exec<MipsOpcode::Subu>(s,memory,0,word);break;
+                case 0x28620009u:ee::exec<MipsOpcode::Slti>(s,memory,0,word);break;
+                case 0xAC220000u:ee::exec<MipsOpcode::Sw>(s,memory,0,word);break;
+                case 0x8C250000u:ee::exec<MipsOpcode::Lw>(s,memory,0,word);break;
+                case 0x9C250000u:ee::exec<MipsOpcode::Lwu>(s,memory,0,word);break;
+                default:throw std::runtime_error("unexpected finite-domain test instruction");
+            }
+        };
+        s.set_reg128(3,0,0xAABBCCDDEEFF0011ull);
+        s.fpr[0]=0x30222000u;s.unknown_fpr_bits[0]=0x87999F00u;
+        s.fpr_affine[0]={memory.allocate_fpu_origin(),0,0,false,s.fpr[0],s.unknown_fpr_bits[0],0x33BBBE00u,0xB4222100u,
+            std::make_shared<const std::vector<std::uint32_t>>(std::initializer_list<std::uint32_t>{0x33BBBE00u,0xB4222100u})};
+        run(0x44020000u);require(s.reg64_candidates(2) && s.reg64_candidates(2)->size()==2,
+            "MFC1 preserves the two raw residuals and their correlated 64-bit sign extension");
+        s.set_reg64(1,0x80002200);run(0xAC220000u);run(0x8C250000u);
+        require(*s.reg64_candidates(2)==*s.reg64_candidates(5),"SW/LW moves every real word and its finite domain through aliased RAM");
+        run(0x9C250000u);require(s.reg64_candidates(5)->back()==0xB4222100ull,"LWU establishes upper zeros for every possible signed source word");
+        run(0x44852000u);require(s.fpr_affine[4].candidates && s.fpr_affine[4].candidates->size()==2,
+            "MTC1 restores the raw finite domain without converting its integer payload");
+        run(0x00021DC2u);run(0x306300FFu);s.set_reg64(4,128);run(0x00831823u);
+        require(*s.reg64_candidates(3)==std::vector<std::uint64_t>{24,25} && s.gpr[3].high==0xAABBCCDDEEFF0011ull,
+            "shift, mask and subtraction retain exactly both exponents and preserve the upper GPR half");
+        run(0x28620009u);require(s.reg64(2)==0,"both finite exponent differences prove the same branch input despite their coarse bit hull");
+        s.set_reg64_candidates(3,{8,9});s.set_reg64(2,0xCAFE);
+        rejects([&]{run(0x28620009u);},"comparison depends");require(s.reg64(2)==0xCAFE,"different candidate comparisons refuse before changing the destination");
+        s.set_reg64_candidates(3,{24,25});s.set_reg64_observed(3,s.gpr[3].low,s.unknown_gpr_bits[3]);
+        require(!s.reg64_candidates(3),"a new identical opaque register write discards the old finite restriction");
+        s.set_reg64(1,0xA0002200);const auto word=memory.load32_observed(0x80002200);
+        memory.store32_observed(0xA0002200,word);run(0x8C250000u);
+        require(!s.reg64_candidates(5),"an aliased overwrite of identical RAM bits invalidates the candidate sidecar");
+        s.set_reg64_candidates(0,{8,9});require(!s.reg64_candidates(0) && !s.unknown_gpr_bits[0],"the zero register cannot acquire a symbolic domain");
+        s.set_reg64_candidates(3,{0xFFFFFFFFull,0x7FFFFFFFull});s.set_reg64(4,1);
+        ee::exec<MipsOpcode::Addu>(s,memory,0,(3u<<21u)|(4u<<16u)|(3u<<11u));
+        require(*s.reg64_candidates(3)==std::vector<std::uint64_t>{0,0xFFFFFFFF80000000ull},
+            "aliased 32-bit addition maps both wrapping/sign-extending candidates exactly");
+        ee::exec<MipsOpcode::Xor>(s,memory,0,(3u<<21u)|(3u<<16u)|(3u<<11u));
+        require(!s.reg64(3) && !s.reg64_candidates(3),"a same-register XOR proves zero without an impossible cross-product");
+        s.set_reg64_candidates(3,{0xFFFFFFFFFFFFFFFFull,0xFFFFFFFFFFFFFFFEull});s.set_reg64(4,0);
+        ee::exec<MipsOpcode::Slt>(s,memory,0,(3u<<21u)|(4u<<16u)|(2u<<11u));
+        require(s.reg64(2)==1,"signed candidate ordering compares both negative values correctly");
+        std::vector<std::uint64_t> large;for(unsigned n=0;n<17;++n)large.push_back(n*16u);
+        s.set_reg64_candidates(3,large);s.set_reg64_candidates(4,large);
+        ee::exec<MipsOpcode::Addu>(s,memory,0,(3u<<21u)|(4u<<16u)|(2u<<11u));
+        require(!s.reg64_candidates(2),"exceeding the pair budget falls back to the sound bit hull rather than silently omitting candidates");
+        for(const auto a:large)for(const auto b:large)require(!(((a+b)^s.gpr[2].low)&~s.unknown_gpr_bits[2]),
+            "every pair remains represented after the finite-work fallback");
+    }
+}
 }
 int main() try {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    integer_domains(memory);
     EEState state;state.set_cp0(Cop0::Status,kStatusCU1);
     std::uint64_t executed=0;ExecutionContext context{state,memory,executed,1000,0xFFFFFFFFu};
     const auto step=[&](std::uint32_t word){state.pc=0x80001000;memory.write32(state.pc,word);interpret_instruction(context);};

@@ -2,6 +2,7 @@
 #include "ps2native/memory.hpp"
 
 #include <cstddef>
+#include <algorithm>
 #include <stdexcept>
 
 namespace ps2native {
@@ -76,11 +77,13 @@ Register128 EEState::reg128(unsigned index) const {
 }
 void EEState::set_reg32(unsigned index, std::uint32_t value) {
     check_index(index, gpr.size());
+    forget_reg_candidates(index);
     if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
     if (index != 0) gpr[index].low = value;
 }
 void EEState::set_reg32_sign_extended(unsigned index, std::uint32_t value) {
     check_index(index, gpr.size());
+    forget_reg_candidates(index);
     if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
     if (index != 0) {
         const auto signed_value = value < 0x80000000u
@@ -91,6 +94,7 @@ void EEState::set_reg32_sign_extended(unsigned index, std::uint32_t value) {
 }
 void EEState::set_reg64(unsigned index, std::uint64_t value) {
     check_index(index, gpr.size());
+    forget_reg_candidates(index);
     if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
     if (index != 0) gpr[index].low = value;
 }
@@ -103,9 +107,34 @@ void EEState::set_reg64_observed(unsigned index, std::uint64_t value, std::uint6
 }
 void EEState::set_reg128(unsigned index, std::uint64_t low, std::uint64_t high) {
     check_index(index, gpr.size());
+    forget_reg_candidates(index);
     if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
     unknown_gpr_high_bits[index] = 0;
     if (index != 0) gpr[index] = {low, high};
+}
+void EEState::forget_reg_candidates(unsigned index) noexcept {
+    if(candidate_gprs&(1u<<index)) {
+        gpr_candidates[index]={};candidate_gprs&=~(1u<<index);
+    }
+}
+std::shared_ptr<const std::vector<std::uint64_t>> EEState::reg64_candidates(unsigned index) const {
+    check_index(index,gpr.size());
+    if(!index || !(candidate_gprs&(1u<<index)))return {};
+    const auto& domain=gpr_candidates[index];
+    if(domain.value!=gpr[index].low || domain.unknown!=unknown_gpr_bits[index])return {};
+    return domain.values;
+}
+void EEState::set_reg64_candidates(unsigned index,std::vector<std::uint64_t> values) {
+    check_index(index,gpr.size());
+    if(values.empty() || values.size()>512u)throw std::invalid_argument("EE finite integer domain exceeds its work bound");
+    std::sort(values.begin(),values.end());values.erase(std::unique(values.begin(),values.end()),values.end());
+    std::uint64_t all=~0ull,any=0;
+    for(const auto value:values){all&=value;any|=value;}
+    set_reg64_observed(index,all,all^any);
+    if(index && values.size()>1u) {
+        gpr_candidates[index]={all,all^any,std::make_shared<const std::vector<std::uint64_t>>(std::move(values))};
+        candidate_gprs|=1u<<index;
+    }
 }
 void EEState::set_reg128_observed(unsigned index, std::uint64_t low, std::uint64_t high,
                                   std::uint64_t unknown_low, std::uint64_t unknown_high) {

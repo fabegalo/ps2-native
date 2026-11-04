@@ -248,7 +248,7 @@ public:
         if(unknown && relation.candidates && relation.origin && relation.value==value && relation.unknown==unknown)return relation;
         if(!unknown || (unknown&0xFF800000u) || !(value&0x7F800000u)){relation={};return {};}
         if(!relation.origin || relation.value!=value || relation.unknown!=unknown)
-            relation={m_.allocate_fpu_origin(),0,(value>>23u)&255u,false,value,unknown,value,value|unknown};
+            relation={m_.allocate_fpu_origin(),0,(value>>23u)&255u,false,value,unknown,value,value|unknown,{}};
         return relation;
     }
     static void transform_candidates(FpuAffine& relation,bool absolute=false) {
@@ -358,7 +358,7 @@ public:
             }
         }
         if(result->word.unknown && !relation.origin)
-            relation={m_.allocate_fpu_origin(),0,(result->word.unknown&0xFF800000u) ? 0u : (result->word.value>>23u)&255u,false,0,0};
+            relation={m_.allocate_fpu_origin(),0,(result->word.unknown&0xFF800000u) ? 0u : (result->word.value>>23u)&255u,false,0,0,0,0,{}};
         relation.value=result->word.value;relation.unknown=result->word.unknown;
         relation.minimum=result->bounded ? result->bounds[0] : result->word.value;
         relation.maximum=result->bounded ? result->bounds[1] : result->word.value|result->word.unknown;
@@ -384,11 +384,21 @@ public:
         const auto rt=ee::rt(word),fs=ee::rd(word);
         if(op==MipsOpcode::Mfc1) {
             const auto mask=s_.unknown_fpr_bits[fs];
+            if(mask) {
+                const auto values=fpu_candidates({s_.fpr[fs],mask},fpu_relation(fs));
+                if(!values.empty()) {
+                    std::vector<std::uint64_t> words;words.reserve(values.size());
+                    for(const auto value:values)words.push_back(ee::sx32(value));
+                    s_.set_reg64_candidates(rt,std::move(words));return;
+                }
+            }
             s_.set_reg64_observed(rt,ee::sx32(s_.fpr[fs]),std::uint64_t{mask}|((mask&0x80000000u) ? 0xFFFFFFFF00000000ull : 0ull));
         } else if(op==MipsOpcode::Mtc1) {
             s_.fpr_affine[fs]={};
             s_.unknown_fpr_bits[fs]=static_cast<std::uint32_t>(s_.unknown_gpr_bits[rt]);
             s_.fpr[fs]=static_cast<std::uint32_t>(s_.gpr[rt].low)&~s_.unknown_fpr_bits[fs];
+            if(s_.unknown_fpr_bits[fs])if(const auto values=s_.reg64_candidates(rt))
+                s_.fpr_affine[fs]=ee::finite_word_relation(m_,{s_.fpr[fs],s_.unknown_fpr_bits[fs]},*values);
         }
         else {
             if(fs!=31)stop(StopKind::NotModeled,"FPU control register "+std::to_string(fs)+" not modeled");

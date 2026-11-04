@@ -9,6 +9,7 @@
 #include "ps2native/ee_fpu.hpp"
 
 #include <cstdint>
+#include <algorithm>
 #include <bit>
 #include <tuple>
 
@@ -48,14 +49,56 @@ constexpr std::uint64_t zimm(std::uint32_t word) { return word & 0xffffu; }
 inline std::uint64_t raw_gpr64(const EEState& state, unsigned index) {
     return index == 0 ? 0u : state.gpr[index].low;
 }
-inline bool less_observed(std::uint64_t a,std::uint64_t ua,std::uint64_t b,std::uint64_t ub,bool signed_order) {
-    const auto sign=signed_order ? 1ull<<63u : 0ull;
+inline bool less_observed(std::uint64_t a,std::uint64_t ua,std::uint64_t b,std::uint64_t ub,bool signed_order,
+    const std::vector<std::uint64_t>* av=nullptr,const std::vector<std::uint64_t>* bv=nullptr) {
+    const std::uint64_t sign=signed_order ? 1ull<<63u : 0ull;
     a=(a^sign)&~ua;b=(b^sign)&~ub;
     // Every concrete word lies within these unsigned ordered intervals.
     // Their disjointness can prove a comparison without guessing low bits.
-    if((a|ua)<b)return true;
-    if(a>=(b|ub))return false;
+    const auto bounds=[sign](std::uint64_t value,std::uint64_t unknown,const auto* candidates) {
+        std::uint64_t low=value,high=value|unknown;
+        if(candidates) {
+            low=~0ull;high=0;
+            for(const auto candidate:*candidates){low=std::min(low,candidate^sign);high=std::max(high,candidate^sign);}
+        }
+        return std::pair{low,high};
+    };
+    const auto [amin,amax]=bounds(a,ua,av);const auto [bmin,bmax]=bounds(b,ub,bv);
+    if(amax<bmin)return true;
+    if(amin>=bmax)return false;
     throw std::runtime_error("EE comparison depends on unknown operand bits");
+}
+template<class Function>
+inline bool finite_unary(EEState& state,unsigned dest,unsigned source,Function function) {
+    if(!(state.candidate_gprs&(1u<<source)))return false;
+    const auto candidates=state.reg64_candidates(source);if(!candidates)return false;
+    std::vector<std::uint64_t> values;values.reserve(candidates->size());
+    for(const auto value:*candidates)values.push_back(function(value));
+    state.set_reg64_candidates(dest,std::move(values));return true;
+}
+template<class Function>
+inline bool finite_binary(EEState& state,unsigned dest,unsigned a,unsigned b,Function function) {
+    if(!(state.candidate_gprs&((1u<<a)|(1u<<b))))return false;
+    const auto av=state.reg64_candidates(a),bv=state.reg64_candidates(b);
+    if((state.unknown_gpr_bits[a]&&!av) || (state.unknown_gpr_bits[b]&&!bv))return false;
+    const auto ac=av ? av->size() : 1u,bc=a==b ? 1u : bv ? bv->size() : 1u;
+    if(ac*bc>256u)return false;
+    std::vector<std::uint64_t> values;values.reserve(ac*bc);
+    for(std::size_t i=0;i<ac;++i)for(std::size_t j=0;j<bc;++j) {
+        const auto x=av ? (*av)[i] : raw_gpr64(state,a);
+        const auto y=a==b ? x : bv ? (*bv)[j] : raw_gpr64(state,b);
+        values.push_back(function(x,y));
+    }
+    state.set_reg64_candidates(dest,std::move(values));return true;
+}
+inline FpuAffine finite_word_relation(Memory& memory,ObservedWord word,const std::vector<std::uint64_t>& candidates) {
+    std::vector<std::uint32_t> values;values.reserve(candidates.size());
+    for(const auto value:candidates)values.push_back(static_cast<std::uint32_t>(value));
+    std::sort(values.begin(),values.end());values.erase(std::unique(values.begin(),values.end()),values.end());
+    // Raw word domains use the same generation-checked RAM sidecar as COP1.
+    // No affine scaling is inferred from an arbitrary integer computation.
+    return {memory.allocate_fpu_origin(),0,0,false,word.value,word.unknown,values.front(),values.back(),
+        std::make_shared<const std::vector<std::uint32_t>>(std::move(values))};
 }
 inline ObservedDoubleword add_observed(std::uint64_t a,std::uint64_t ua,std::uint64_t b,std::uint64_t ub,
                                       unsigned width,bool subtract) {
@@ -257,6 +300,15 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             count=static_cast<unsigned>(raw_gpr64(s,s_))&(width-1u);
         } else if constexpr(Op==O::Dsll32 || Op==O::Dsrl32 || Op==O::Dsra32) count+=32u;
         constexpr auto mask=wide ? ~0ull : 0xFFFFFFFFull;
+        if(finite_unary(s,d_,t_,[count](std::uint64_t input) {
+            auto value=input&mask;
+            if constexpr(left)value=(value<<count)&mask;
+            else {
+                const auto fill=count ? mask^(mask>>count) : 0ull;
+                value=(value>>count)|((arithmetic && (value&(1ull<<(width-1u)))) ? fill : 0ull);
+            }
+            return wide ? value : sx32(static_cast<std::uint32_t>(value));
+        }))return;
         auto value=raw_gpr64(s,t_)&mask, unknown=s.unknown_gpr_bits[t_]&mask;
         if constexpr(left) {value=(value<<count)&mask;unknown=(unknown<<count)&mask;}
         else {
@@ -273,6 +325,10 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     } else if constexpr (Op==O::Addu || Op==O::Subu || Op==O::Daddu || Op==O::Dsubu) {
         constexpr bool wide=Op==O::Daddu || Op==O::Dsubu,subtract=Op==O::Subu || Op==O::Dsubu;
         constexpr auto mask=wide ? ~0ull : 0xFFFFFFFFull;
+        if(finite_binary(s,d_,s_,t_,[](std::uint64_t a,std::uint64_t b) {
+            const auto value=subtract ? a-b : a+b;
+            return wide ? value : sx32(static_cast<std::uint32_t>(value));
+        }))return;
         const auto a=raw_gpr64(s,s_)&mask,b=raw_gpr64(s,t_)&mask;
         const auto ua=s.unknown_gpr_bits[s_]&mask,ub=s.unknown_gpr_bits[t_]&mask;
         std::uint64_t value=0,unknown=0;
@@ -294,25 +350,29 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         }
         s.set_reg64_observed(d_,value,unknown);
     } else if constexpr (Op == O::And) {
+        if(finite_binary(s,d_,s_,t_,[](auto a,auto b){return a&b;}))return;
         const auto a = raw_gpr64(s, s_), b = raw_gpr64(s, t_);
         const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];
         const auto unknown = (ua | ub) & ~((~a & ~ua) | (~b & ~ub));
         s.set_reg64_observed(d_, a & b, unknown);
     } else if constexpr (Op == O::Or) {
+        if(finite_binary(s,d_,s_,t_,[](auto a,auto b){return a|b;}))return;
         const auto a = raw_gpr64(s, s_), b = raw_gpr64(s, t_);
         const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];
         s.set_reg64_observed(d_, a | b, (ua | ub) & ~((a & ~ua) | (b & ~ub)));
     } else if constexpr (Op == O::Xor) {
+        if(finite_binary(s,d_,s_,t_,[](auto a,auto b){return a^b;}))return;
         s.set_reg64_observed(d_, raw_gpr64(s, s_) ^ raw_gpr64(s, t_),
                             s_ == t_ ? 0u : s.unknown_gpr_bits[s_] | s.unknown_gpr_bits[t_]);
     } else if constexpr (Op == O::Nor) {
+        if(finite_binary(s,d_,s_,t_,[](auto a,auto b){return ~(a|b);} ))return;
         const auto a = raw_gpr64(s, s_), b = raw_gpr64(s, t_);
         const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];
         s.set_reg64_observed(d_, ~(a | b), (ua | ub) & ~((a & ~ua) | (b & ~ub)));
     } else if constexpr (Op == O::Slt) {
-        s.set_reg64(d_,s_!=t_ && less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],raw_gpr64(s,t_),s.unknown_gpr_bits[t_],true));
+        s.set_reg64(d_,s_!=t_ && less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],raw_gpr64(s,t_),s.unknown_gpr_bits[t_],true,s.reg64_candidates(s_).get(),s.reg64_candidates(t_).get()));
     } else if constexpr (Op == O::Sltu) {
-        s.set_reg64(d_,s_!=t_ && less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],raw_gpr64(s,t_),s.unknown_gpr_bits[t_],false));
+        s.set_reg64(d_,s_!=t_ && less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],raw_gpr64(s,t_),s.unknown_gpr_bits[t_],false,s.reg64_candidates(s_).get(),s.reg64_candidates(t_).get()));
     } else if constexpr (Op == O::Movz) {
         if (s.reg64(t_) == 0u) s.set_reg64(d_, s.reg64(s_));
     } else if constexpr (Op == O::Movn) {
@@ -430,19 +490,24 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         };
         s.set_reg128(d_, op(a.low, b.low), op(a.high, b.high));
     } else if constexpr (Op == O::Addiu) {
+        if(finite_unary(s,t_,s_,[w](auto value){return sx32(static_cast<std::uint32_t>(value)+simm32(w));}))return;
         s.set_reg32_sign_extended(t_, s.reg32(s_) + simm32(w));
     } else if constexpr (Op == O::Daddiu) {
+        if(finite_unary(s,t_,s_,[w](auto value){return value+simm64(w);}))return;
         s.set_reg64(t_, s.reg64(s_) + simm64(w));
     } else if constexpr (Op == O::Slti) {
-        s.set_reg64(t_,less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],simm64(w),0,true));
+        s.set_reg64(t_,less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],simm64(w),0,true,s.reg64_candidates(s_).get()));
     } else if constexpr (Op == O::Sltiu) {
-        s.set_reg64(t_,less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],simm64(w),0,false));
+        s.set_reg64(t_,less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],simm64(w),0,false,s.reg64_candidates(s_).get()));
     // Logical immediates are zero-extended and act on all 64 bits.
     } else if constexpr (Op == O::Andi) {
+        if(finite_unary(s,t_,s_,[w](auto value){return value&zimm(w);}))return;
         s.set_reg64_observed(t_, raw_gpr64(s, s_) & zimm(w), s.unknown_gpr_bits[s_] & zimm(w));
     } else if constexpr (Op == O::Ori) {
+        if(finite_unary(s,t_,s_,[w](auto value){return value|zimm(w);}))return;
         s.set_reg64_observed(t_, raw_gpr64(s, s_) | zimm(w), s.unknown_gpr_bits[s_] & ~zimm(w));
     } else if constexpr (Op == O::Xori) {
+        if(finite_unary(s,t_,s_,[w](auto value){return value^zimm(w);}))return;
         s.set_reg64_observed(t_, raw_gpr64(s, s_) ^ zimm(w), s.unknown_gpr_bits[s_]);
     } else if constexpr (Op == O::Lui) {
         s.set_reg32_sign_extended(t_, (w & 0xffffu) << 16);
@@ -510,13 +575,18 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
                 m.write8(aligned+i,static_cast<std::uint8_t>(value>>(source*8u)));
             }
         }
-    } else if constexpr (Op == O::Lw) {
-        const auto word = m.load32_observed(effective_address(s, w));
+    } else if constexpr (Op == O::Lw || Op == O::Lwu) {
+        const auto address=effective_address(s,w);const auto word=m.load32_observed(address);
+        if(word.unknown) {
+            const auto relation=m.fpu_relation(address,word);
+            if(relation.candidates) {
+                std::vector<std::uint64_t> values;values.reserve(relation.candidates->size());
+                for(const auto value:*relation.candidates)values.push_back(Op==O::Lw ? sx32(value) : value);
+                s.set_reg64_candidates(t_,std::move(values));return;
+            }
+        }
         const auto unknown = std::uint64_t{word.unknown} | ((word.unknown & 0x80000000u) ? 0xFFFFFFFF00000000ull : 0u);
-        s.set_reg64_observed(t_, sx32(word.value), unknown);
-    } else if constexpr (Op == O::Lwu) {
-        const auto word = m.load32_observed(effective_address(s, w));
-        s.set_reg64_observed(t_, word.value, word.unknown);
+        s.set_reg64_observed(t_,Op==O::Lw ? sx32(word.value) : word.value,Op==O::Lw ? unknown : word.unknown);
     } else if constexpr (Op == O::Ld) {
         const auto word=m.load64_observed(effective_address(s,w));
         s.set_reg64_observed(t_,word.value,word.unknown);
@@ -531,7 +601,12 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         m.store16_observed(effective_address(s,w),{static_cast<std::uint32_t>(raw_gpr64(s,t_)),static_cast<std::uint32_t>(s.unknown_gpr_bits[t_])});
     } else if constexpr (Op == O::Sw) {
         const auto unknown = static_cast<std::uint32_t>(s.unknown_gpr_bits[t_]);
-        if (unknown) m.store32_observed(effective_address(s, w), {static_cast<std::uint32_t>(raw_gpr64(s,t_)),unknown});
+        if (unknown) {
+            const auto address=effective_address(s,w);const ObservedWord word{static_cast<std::uint32_t>(raw_gpr64(s,t_)),unknown};
+            const auto candidates=s.reg64_candidates(t_);
+            m.store32_observed(address,word);
+            if(candidates)m.remember_fpu_relation(address,word,finite_word_relation(m,word,*candidates));
+        }
         else m.write32(effective_address(s, w), s.reg32(t_));
     } else if constexpr (Op == O::Sd) {
         const auto unknown=s.unknown_gpr_bits[t_];
