@@ -73,6 +73,7 @@ public:
     [[nodiscard]] const GsRegisters& gs() const noexcept { return gs_; }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return mch_; }
     [[nodiscard]] const Iop& iop() const noexcept { return iop_; }
+    void diagnostic_spu2_7ca_latch() { iop_.diagnostic_spu2_7ca_latch(); }
     void mount_disc(std::shared_ptr<DiscImage> disc,Iop::DiscMedium medium,bool diagnostic_cav_nominal_timing=false) {
         iop_.mount_disc(std::move(disc),medium,diagnostic_cav_nominal_timing);
     }

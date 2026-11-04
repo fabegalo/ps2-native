@@ -786,3 +786,31 @@ VMOVE implementado após consulta à tradução VU de PS2Recomp: cópia crua
 por componente selecionado, sem alterar flags; VF00 permanece constante.
 Implementação BSD por máscaras inteiras, preservando alias e bits desconhecidos.
 Os quatro testes focados passaram; ensaio 56 iniciado para observar a continuação.
+
+Ensaio 56: VMOVE passou; EE em espera `0x81FCC`, 340.000.000 instruções;
+IOP parou em delay slot `0x65330` / 46.490.573, SH de 8 em `0x1F9007CA`.
+95,0408 s; 22 ciclos de stall. RAM SHA-256
+`dab444eaa2bfea43d016b3710d5321c72e8f640c88f1c757ee2269861a8b404e`.
+SIF1 6.528 bytes/SIF0 3.696; ainda apenas limpeza GIF, sem PMODE.
+
+Investigação de 0x7CA: PS2Recomp `ps2_audio.cpp` fornece áudio host e não
+um modelo desse MMIO. PS2SDK `spu2_mmio_hwport.h` o nomeia `m_unknown7ca`;
+`libsd/src/freesd.c`, InitSpdif, escreve 8 depois de MODE/MEDIA. Não é
+SPDIF_PROTECT, que fica em 0x7CC. PCSX2 `SPU2/RegTable.cpp` o guarda como
+Unknown2, referência de comportamento e não prova física. Nenhum código
+externo foi incorporado.
+
+Adicionado experimento **opt-in** de retenção de escritas halfword conhecidas
+em 0x7CA, omitindo efeitos desconhecidos; leituras continuam recusadas.
+O reset desabilita a hipótese, e o modo original recusa a escrita com causa.
+A hipótese é registrada pelo harness, não convertida em comportamento padrão
+nem em evidência de áudio correto. O ensaio seguinte usa essa hipótese extra
+para investigar os bloqueios posteriores.
+
+Ensaio 57, com hipótese 7CA: IOP avançou até `0x65948` / 46.490.611,
+SH de zero em `0x1F900B60`; EE espera `0x81FCC`, 340.000.000 instruções,
+22 stalls, 98,0444 s. RAM e contadores GIF iguais ao ensaio 56. Cinco testes
+focados passaram; modo original repetido manteve PCs, contagens e hash canônico.
+A CI encontrou no commit Q uma diferença do patch publicado: advance_q ficou
+após return ao selecionar hunks sem contexto. `da867c6` publica a ordem correta
+já testada localmente; nova CI acompanhada. Não foi relaxada a regressão.

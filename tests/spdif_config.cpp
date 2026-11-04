@@ -54,5 +54,18 @@ int main() try {
                          "SPDIF PCM output retains guest configuration and explicit disable without fabricating samples");
         else require(iop.stopped(),"SPDIF reset, bypass, streaming and unsupported access widths remain explicit");
     }
+    for(unsigned mode=0;mode<5;++mode) {
+        m20::Assembler a(kEeResetVector);a.la(8,0xBF9007CAu);a.la(9,8);
+        if(mode==2)a.sw(9,0,8);else a.sh(9,0,8);
+        if(mode==3){a.raw((0x25u<<26)|(8u<<21)|(9u<<16));a.nop();}
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> rom(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);
+        if(mode)iop.diagnostic_spu2_7ca_latch();
+        if(mode==4)iop.reset(rom,nullptr);
+        iop.run_until(40);
+        if(mode==1)require(!iop.stopped(),"explicit unknown-output latch experiment permits only a known halfword write");
+        else require(iop.stopped(),"unknown output effects, reads, word writes and reset remain fail-closed");
+    }
     std::cout<<"SPDIF configuration retained; core, status, DMA and audio generation remain explicit\n";
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

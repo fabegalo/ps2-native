@@ -4,9 +4,10 @@ O checkpoint experimental já produziu 16 pacotes GIF PATH3 e 1.048.576 escritas
 de pixels por IMAGE: limpeza real da VRAM comandada pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução concluída: ensaio 55, EE `0x1CD310`, 339.417.122 instruções;
-IOP ativo `0xAE94`, 46.479.227. VSQRT/VDIV/Q passaram; 22 ciclos de espera.
-Nova recusa VMOVE. PMODE ainda não foi escrito; sem scanout.
+Última execução concluída: ensaio 56, EE em espera `0x81FCC`, 340.000.000 instruções;
+IOP parou em `0x65330`, 46.490.573, escrevendo SPU2 `0x1F9007CA`.
+VMOVE passou. Experimento opt-in de latch 7CA preparado, sem alterar modo original.
+PMODE ainda não foi escrito; sem scanout.
 Continuar reexecutando, registrando PCs e resolvendo os bloqueios até conteúdo
 real exibido. Não trocar por float host nem criar exceções por título/PC.
 Consultar PS2Recomp antes de implementar subsistemas; PS2Float não declara

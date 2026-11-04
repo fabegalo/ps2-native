@@ -112,6 +112,9 @@ public:
     void set_ee_dma_suspended(bool suspended) noexcept { ee_dma_suspended_=suspended; }
     [[nodiscard]] bool ee_dma_suspended() const noexcept { return ee_dma_suspended_; }
 
+    // Unknown SPDIF 0x7CA write side effects: explicit diagnostic hypothesis
+    // of a configuration latch only. Reads remain unsupported; reset disables it.
+    void diagnostic_spu2_7ca_latch() { diagnostic_spu2_7ca_latch_=true; }
     struct Spu2Sample { std::uint64_t cycle; std::int16_t left,right; };
     [[nodiscard]] const std::optional<Spu2Sample>& spu2_last_sample(unsigned core) const { return spu2_last_sample_.at(core); }
     [[nodiscard]] std::uint64_t spu2_sample_count(unsigned core) const { return spu2_sample_count_.at(core); }
@@ -272,6 +275,7 @@ private:
     std::uint8_t cdvd_type_{}, cdvd_status_{}, cdvd_sticky_{};
     bool diagnostic_cav_nominal_timing_{};
     bool diagnostic_spu2_quiescent_{};
+    bool diagnostic_spu2_7ca_latch_{};
     std::array<std::optional<ObservedWord>,2> spu2_control_;
     // Quiet clocks are available only under the explicit cold-state
     // experiment: no active voices, inputs, effects or transfers.

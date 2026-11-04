@@ -212,6 +212,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     istat_ = 0u;
     sio2_irq_acknowledged_=diagnostic_sio2_irq_clear;
     diagnostic_spu2_quiescent_=diagnostic_spu2_quiescent;
+    diagnostic_spu2_7ca_latch_=false;
     spu2_control_={};
     spu2_next_sample_={};spu2_last_sample_={};spu2_sample_count_={};spu2_clock_active_=false;
     gif_dma_cycle_=0;
@@ -1393,6 +1394,13 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         return;
     }
     const auto name = std::string("store ") + what + " of IOP register " + hex(physical);
+    if(physical==0x1F9007CAu) {
+        if(!diagnostic_spu2_7ca_latch_ || bytes!=2u || !value)
+            throw IopStop{"SPU2 0x7CA write side effects are unknown (diagnostic latch hypothesis disabled or invalid access)"};
+        for(auto& [address,stored]:latches_)if(address==physical){stored=*value&0xFFFFu;return;}
+        latches_.push_back({physical,*value&0xFFFFu});
+        return;
+    }
     if(physical==0x1F90019Au || physical==0x1F90059Au) {
         if(bytes!=2u || !value)throw IopStop{"SPU2 control requires a known or observed halfword write"};
         write_spu2_control(physical,ObservedWord{*value,0u});return;
