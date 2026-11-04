@@ -262,6 +262,7 @@ private:
     // Hardware timer (ps2tek "IOP Timers"): 0-2 are 16-bit, 3-5 32-bit.
     struct Timer {
         bool configured{};                  // mode written since power-on
+        bool hblank{}; // Timer 1/3 external source, never the CPU prescaler
         std::optional<std::uint32_t> count; // empty: never written
         std::uint32_t mode{};
         std::optional<std::uint32_t> target;
@@ -276,6 +277,7 @@ private:
     [[nodiscard]] std::optional<bool> interrupt_line() const;
     [[nodiscard]] const std::optional<std::uint32_t>* latch(std::uint32_t physical) const;
     void tick_timers();
+    void schedule_iop_hblank() noexcept;
     void refresh_video(const GsRegisters& video);
     void tick_video();
     // I_STAT bits whose state is modeled: the timers, and VBLANK once the GS
@@ -400,6 +402,11 @@ private:
     std::optional<OpenConfig> config_;
     std::array<Timer, 6> timers_{};
     bool timers_running_{};
+    std::uint32_t hblank_timer_mask_{};
+    std::optional<GsRegisters::LineClock> hblank_clock_;
+    bool hblank_held_{};
+    std::string hblank_reason_{"no GS attached"};
+    std::uint64_t next_hblank_ee_{},next_hblank_iop_{};
     void write_dev9_power(ObservedWord word);
     [[nodiscard]] bool dev9_power_ready() const;
     bool diagnostic_dev9_controls_{},dev9_initial_power_ready_{};

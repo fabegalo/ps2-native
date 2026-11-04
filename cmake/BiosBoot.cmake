@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-iop-hblank tests/iop_hblank.cpp)
+    target_link_libraries(ps2n-iop-hblank PRIVATE ps2n_core)
+    add_test(NAME native-iop-hblank COMMAND ps2n-iop-hblank)
+    set_tests_properties(native-iop-hblank PROPERTIES TIMEOUT 30)
     add_executable(ps2n-speed-eeprom tests/speed_eeprom.cpp)
     target_link_libraries(ps2n-speed-eeprom PRIVATE ps2n_core)
     add_test(NAME native-speed-eeprom COMMAND ps2n-speed-eeprom)

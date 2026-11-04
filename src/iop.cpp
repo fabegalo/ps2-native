@@ -236,6 +236,8 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     ilink_bus_reset_ = false;
     timers_ = {};
     timers_running_ = false;
+    hblank_timer_mask_=0;hblank_clock_.reset();hblank_held_=false;hblank_reason_="no GS attached";
+    next_hblank_ee_=next_hblank_iop_=std::numeric_limits<std::uint64_t>::max();
     istat_ = 0u;
     sio2_irq_acknowledged_=diagnostic_sio2_irq_clear;
     diagnostic_spu2_quiescent_=diagnostic_spu2_quiescent;
@@ -2978,6 +2980,13 @@ std::uint32_t Iop::modeled_irqs() const noexcept {
            (video_.state != GsRegisters::VerticalClock::State::Unknown ? kVblankStartIrq | kVblankEndIrq : 0u);
 }
 
+void Iop::schedule_iop_hblank() noexcept {
+    if(!hblank_clock_) {next_hblank_ee_=next_hblank_iop_=std::numeric_limits<std::uint64_t>::max();return;}
+    const auto& clock=*hblank_clock_;const auto from=cycle_*kEeCyclesPerIopCycle;
+    const auto lines=from>=clock.epoch ? (from-clock.epoch)/clock.period+1u : 1u;
+    next_hblank_ee_=clock.epoch+lines*clock.period;
+    next_hblank_iop_=(next_hblank_ee_+kEeCyclesPerIopCycle-1u)/kEeCyclesPerIopCycle;
+}
 void Iop::refresh_video(const GsRegisters& video) {
     if (video_generation_ != video.timing_generation()) {
         // Retain the existing IOP-cycle granularity: the next tick processes
@@ -2985,6 +2994,11 @@ void Iop::refresh_video(const GsRegisters& video) {
         const auto from = cycle_ * kEeCyclesPerIopCycle;
         video_generation_ = video.timing_generation();
         video_ = video.vertical_clock();
+        hblank_held_=video_.state==GsRegisters::VerticalClock::State::Held;
+        hblank_clock_.reset();hblank_reason_.clear();
+        try {hblank_clock_=video.line_clock();}
+        catch(const DeviceRefusal& error){hblank_reason_=error.what();}
+        schedule_iop_hblank();
         if (video_.state == GsRegisters::VerticalClock::State::Running) {
             next_vblank_start_ = video_.next_edge(from, false);
             next_vblank_end_ = video_.next_edge(from, true);
@@ -3040,9 +3054,17 @@ void Iop::ee_sif_write(unsigned index, std::uint32_t value) {
 }
 
 void Iop::tick_timers() {
+    bool hblank_edge=false;
+    if(hblank_timer_mask_) {
+        if(!hblank_clock_ && !hblank_held_)throw IopStop{"IOP timer HBLANK source unknown: "+hblank_reason_};
+        if(hblank_clock_ && cycle_>=next_hblank_iop_) {
+            hblank_edge=true;next_hblank_ee_+=hblank_clock_->period;
+            next_hblank_iop_=(next_hblank_ee_+kEeCyclesPerIopCycle-1u)/kEeCyclesPerIopCycle;
+        }
+    }
     for (unsigned i = 0; i < timers_.size(); ++i) {
         auto& t = timers_[i];
-        if (!t.configured) continue;
+        if (!t.configured || (t.hblank && !hblank_edge)) continue;
         if (++t.phase < t.prescale) continue;
         t.phase = 0;
         const auto width = i < 3u ? 0xFFFFu : 0xFFFFFFFFu;
@@ -3109,8 +3131,11 @@ void Iop::timer_write(unsigned index, std::uint32_t reg, std::optional<std::uint
         case 0x4u: {
             const auto mode = *value & 0xFFFFu;
             if ((mode & kModeGate) != 0u) throw IopStop{shown + ": timer gates are not modeled"};
-            if ((mode & kModeExternal) != 0u && (index == 0u || index == 1u || index == 3u))
-                throw IopStop{shown + ": the pixel clock and HBLANK timer sources are not modeled"};
+            if ((mode & kModeExternal) != 0u && index == 0u)
+                throw IopStop{shown + ": the pixel clock source is not modeled"};
+            const bool hblank=(mode&kModeExternal) && (index==1u || index==3u);
+            if(hblank && !hblank_clock_ && !hblank_held_)
+                throw IopStop{shown+": HBLANK source unknown: "+hblank_reason_};
             if (!t.target && (mode & (kModeZeroReturn | kModeCompareIrq)) != 0u)
                 throw IopStop{shown + ": compare against a target never written"};
             // Writes reset the count and set bit 10 (ps2tek); clearing the
@@ -3121,6 +3146,9 @@ void Iop::timer_write(unsigned index, std::uint32_t reg, std::optional<std::uint
             t.prescale = 1u;
             if (index == 2u && (mode & (1u << 9)) != 0u) t.prescale = 8u;
             if (index >= 4u) t.prescale = std::array<std::uint32_t, 4>{1u, 8u, 16u, 256u}[(mode >> 13) & 3u];
+            t.hblank=hblank;
+            hblank_timer_mask_=(hblank_timer_mask_&~(1u<<index))|(hblank ? 1u<<index : 0u);
+            if(hblank)schedule_iop_hblank();
             t.configured = true;
             timers_running_ = true;
             return;

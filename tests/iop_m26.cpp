@@ -292,7 +292,7 @@ void check_timers() {
     require_stop(iop, "I_STAT bits of sources other than the timers");
 
     refuses([](Assembler& p) { p.ori(a0, zero, 1u); p.sw(a0, 0x1484, t1); }, kProfile, "timer gates are not modeled");
-    refuses([](Assembler& p) { p.ori(a0, zero, 0x100u); p.sw(a0, 0x1114, t1); }, kProfile, "HBLANK timer sources");
+    refuses([](Assembler& p) { p.ori(a0, zero, 0x100u); p.sw(a0, 0x1114, t1); }, kProfile, "HBLANK source unknown");
     refuses([](Assembler& p) { p.ori(a0, zero, 0x10u); p.sw(a0, 0x1104, t1); }, kProfile, "target never written");
     refuses([](Assembler& p) { p.lw(a0, 0x1100, t1); p.nop(); p.addiu(v0, a0, 1); }, kProfile,
             "timer count before any write");
