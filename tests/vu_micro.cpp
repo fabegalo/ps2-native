@@ -164,6 +164,70 @@ int main() try {
         vu.start_micro(unit,0,0);vu.advance_micro(20);
         require(vu.diagnostic_micro_instructions(unit)==7 && integer(vu,unit,1).value==5 && integer(vu,unit,2).value==8,
             "JALR snapshots an aliased target before saving its return index and executing its delay pair");
+        vu.reset();vu.write_memory(data,4,{0x1234,0xFFFF0000u});
+        instruction(vu,unit,0,0x8001037Cu|(8u<<21u));
+        instruction(vu,unit,1,0x800103FCu|(1u<<11u));instruction(vu,unit,2,addiu(2,1,1));
+        instruction(vu,unit,3,nop,upper_nop|0x40000000u);instruction(vu,unit,4,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(4);
+        require(vu.diagnostic_micro_instructions(unit)==1,"MTIR stalls for the real selected VF source field");
+        vu.advance_micro(12);
+        require(integer(vu,unit,1).value==0x1234 && !integer(vu,unit,1).unknown && integer(vu,unit,2).value==0x1235,
+            "MTIR transfers only low sixteen bits and forwards them to the next IALU operation without consuming unknown upper bits");
+        vu.reset();vu.write_memory(data,4,{0x1234,0xF0});
+        instruction(vu,unit,0,0x8001037Cu|(8u<<21u));instruction(vu,unit,1,0x800103FCu|(1u<<11u));
+        instruction(vu,unit,2,nop,upper_nop|0x40000000u);instruction(vu,unit,3,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(11);
+        require(integer(vu,unit,1).unknown==0xF0 && integer(vu,unit,1).value==0x1204,
+            "MTIR preserves exact low-bit uncertainty rather than fabricating a numeric operand");
+        vu.reset();seed_vector(vu,unit,1,{0x11223344,0,0,0});seed_vector(vu,unit,2,{0x3F800000,0,0,0});
+        instruction(vu,unit,0,0x800103FCu|(1u<<11u),upper(0x1B,1,2,0,8)|0x40000000u);instruction(vu,unit,1,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(6);
+        require(integer(vu,unit,1).value==0x3344 && vector_lane(vu,unit,1,0).value==0x3F800000,
+            "MTIR and an upper write in the same pair read old data and commit their independent actual destinations");
+        vu.reset();instruction(vu,unit,0,addiu(1,0,2));instruction(vu,unit,1,addiu(2,0,0));
+        instruction(vu,unit,2,(9u<<25u)|(1u<<16u)|(1u<<11u)|1u);instruction(vu,unit,3,nop);
+        instruction(vu,unit,4,(0x29u<<25u)|(1u<<16u)|0x7FDu);instruction(vu,unit,5,addiu(2,2,1));
+        instruction(vu,unit,6,nop,upper_nop|0x40000000u);instruction(vu,unit,7,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(30);
+        require(integer(vu,unit,1).value==0 && integer(vu,unit,2).value==2 && vu.diagnostic_micro_instructions(unit)==12,
+            "IBNE takes a signed backward offset, observes the integer gap and executes both taken/untaken delay instructions");
+        vu.reset();instruction(vu,unit,0,addiu(1,0,1));instruction(vu,unit,1,nop);instruction(vu,unit,2,addiu(1,0,0));
+        instruction(vu,unit,3,(0x28u<<25u)|(1u<<16u)|2u);instruction(vu,unit,4,addiu(2,0,7));
+        instruction(vu,unit,5,nop,upper_nop|0x40000000u);instruction(vu,unit,6,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(20);
+        require(integer(vu,unit,1).value==0 && integer(vu,unit,2).value==7 && vu.diagnostic_micro_instructions(unit)==7,
+            "IBEQ uses the pre-gap condition instead of a too-new adjacent IALU result");
+        vu.reset();instruction(vu,unit,0,0x800106BDu);instruction(vu,unit,1,nop,upper_nop|0x40000000u);instruction(vu,unit,2,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(7);
+        require(integer(vu,unit,1).unknown==(unit ? 0x3FFu : 0xFFu),
+            "XITOP without established VIF input transfers unknown address bits and known zero-extension without fabricating a pointer");
+        vu.reset();vu.write_memory(data+8u,4,{0x7ABC,0xFFFF0000u});
+        instruction(vu,unit,0,0x800103FEu|(2u<<21u));
+        instruction(vu,unit,1,addiu(2,1,1),upper(0x1B,5,0,0,8));
+        instruction(vu,unit,2,nop,upper_nop|0x40000000u);instruction(vu,unit,3,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(4);
+        require(vu.diagnostic_micro_instructions(unit)==1 && integer(vu,unit,1).unknown==0xFFFFu &&
+            vector_lane(vu,unit,5,0).unknown==~0u,"an ILWR-dependent integer instruction interlocks both halves and cannot use the early IALU bypass");
+        vu.advance_micro(11);
+        require(integer(vu,unit,1).value==0x7ABC && !integer(vu,unit,1).unknown && integer(vu,unit,2).value==0x7ABD &&
+            vector_lane(vu,unit,5,0).value==0 && !vector_lane(vu,unit,5,0).unknown,"the true S-stage load value releases the dependent pair exactly once");
+        vu.reset();vu.write_memory(data+16u+4u,4,{0xABCD,0xFF00});
+        instruction(vu,unit,0,(4u<<25u)|(4u<<21u)|(1u<<16u)|1u);
+        instruction(vu,unit,1,nop,upper_nop|0x40000000u);instruction(vu,unit,2,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(7);
+        require(integer(vu,unit,1).unknown==0xFF00 && integer(vu,unit,1).value==0xCD,"ILW offset selects the actual memory field and preserves low-bit uncertainty");
+        vu.reset();vu.write_memory(data+16u,4,{0x11223344,0});vu.write_memory(data+28u,4,{0xFEDCBA98,0x00FF0000});
+        for(unsigned lane=0;lane<4;++lane)vu.write_memory(data+48u+lane*4u,4,{0x55555555,0});
+        instruction(vu,unit,0,addiu(1,0,2));instruction(vu,unit,1,(15u<<21u)|(6u<<16u)|(1u<<11u)|0x7FFu);
+        instruction(vu,unit,2,(1u<<25u)|(9u<<21u)|(1u<<16u)|(6u<<11u)|1u);
+        instruction(vu,unit,3,nop,upper_nop|0x40000000u);instruction(vu,unit,4,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(5);
+        require(vu.diagnostic_micro_instructions(unit)==2 && vu.read_memory(data+48u,4).value==0x55555555,
+            "offset SQ waits for the real LQ vector fields before issuing");
+        vu.advance_micro(12);
+        require(vu.read_memory(data+48u,4).value==0x11223344 && vu.read_memory(data+52u,4).value==0x55555555 &&
+            vu.read_memory(data+60u,4).value==0xFE00BA98 && vu.read_memory(data+60u,4).unknown==0x00FF0000 && integer(vu,unit,1).value==2,
+            "signed LQ/SQ offsets transfer exact selected bits while retaining masks and the unmodified VI base");
     }
     VuControl cold;cold.start_micro(1,0,0);rejects([&]{cold.advance_micro(1);},"unwritten micro memory");
     std::cout<<"Clocked VU integer LIW, bypass/S visibility, BAL delay, E drain, reset and refusals passed\n";

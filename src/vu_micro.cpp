@@ -1,19 +1,22 @@
 // Independent implementation of VU manual 6.0 integer LIW/pipeline behavior.
 #include "ps2native/vu_control.hpp"
+#include "ps2native/gif.hpp"
 #include <iomanip>
 #include <limits>
 #include <sstream>
 namespace ps2native {
 namespace {
+struct MicroPipelineStall {};
 std::string hexword(std::uint32_t value,unsigned width=8) {
     std::ostringstream out;out<<"0x"<<std::hex<<std::uppercase<<std::setw(static_cast<int>(width))<<std::setfill('0')<<value;return out.str();
 }
 }
 void VuControl::reset_micro(unsigned unit) {
+    if(unit && path1_)throw DeviceRefusal("VU1 reset during an active PATH1 transfer is not modeled");
     micro_.at(unit)={};
     if(registers_[29])*registers_[29]&=~(unit ? 256u : 1u);
 }
-void VuControl::start_micro(unsigned unit,std::uint32_t address,std::uint64_t cycle) {
+void VuControl::start_micro(unsigned unit,std::uint32_t address,std::uint64_t cycle,ObservedWord itop,ObservedWord top) {
     if(unit>1u)throw DeviceRefusal("VU micro unit must be 0 or 1");
     auto& state=micro_[unit];
     if(state.running)throw DeviceRefusal("VU micro start while the selected engine is busy");
@@ -22,12 +25,19 @@ void VuControl::start_micro(unsigned unit,std::uint32_t address,std::uint64_t cy
     // Open the next issue slot after delivery. This is functional event
     // scheduling, not a measured VIF-to-VU physical start latency.
     state={};state.running=true;state.pc=address*8u;state.next=cycle+1u;
+    const auto mask=unit ? 0x3FFu : 0xFFu;
+    state.itop={itop.value&~itop.unknown&mask,itop.unknown&mask};
+    state.top={top.value&~top.unknown&0x3FFu,top.unknown&0x3FFu};
     *registers_[29]|=unit ? 256u : 1u;
 }
 ObservedWord VuControl::micro_integer(unsigned unit,unsigned index,bool forwarded,unsigned bypass_delay) const {
     if(index>=16u)throw DeviceRefusal("VU micro integer register is outside VI00..VI15");
     if(!index)return {};
     const auto& state=micro_[unit];
+    // VU manual 3.4.1: integer memory loads interlock dependent uses until
+    // S. They do not receive the one-cycle IALU result bypass.
+    if(forwarded)for(unsigned n=0;n<state.writes;++n)
+        if(state.pending[n].index==index && state.pending[n].memory_load)throw MicroPipelineStall{};
     // Integer results bypass X/y/z/S to the next T stage. External COP2
     // transfers see the committed S-stage register, not this bypass.
     if(forwarded)for(unsigned n=state.writes;n>0;--n) {
@@ -137,7 +147,7 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper(unsigned unit,std::uint32_t
     }
     return result;
 }
-void VuControl::step_micro(unsigned unit) {
+void VuControl::step_micro(unsigned unit,Gif* gif,GsRegisters* gs) {
     auto& state=micro_[unit];retire_micro_integers(unit);
     if(state.drain) {
         if(state.next>=*state.drain) {
@@ -156,8 +166,11 @@ void VuControl::step_micro(unsigned unit) {
     if(state.end_delay && ending)throw DeviceRefusal("E bit in the termination delay slot is not supported");
     const auto op=lo>>25u,is=(lo>>11u)&31u,it=(lo>>16u)&31u,id=(lo>>6u)&31u;
     std::optional<std::pair<unsigned,std::uint32_t>> result;
+    std::uint32_t integer_unknown=0;
+    bool integer_load=false;
     std::optional<MicroVectorWrite> vector_result;
     std::optional<MicroVectorWrite> store_result;
+    std::optional<std::uint32_t> kick;
     std::optional<std::uint32_t> branch;
     const auto reg=[&](unsigned r,unsigned bypass_delay=1) {
         const auto word=micro_integer(unit,r,true,bypass_delay);
@@ -178,6 +191,14 @@ void VuControl::step_micro(unsigned unit) {
             if(it>=16u)throw DeviceRefusal("BAL link register is outside VI00..VI15");
             result=std::pair{it,(state.pc/8u+2u)&(slots-1u)};
         }
+    } else if(op==0x28u || op==0x29u) {
+        if(state.branch || state.end_delay)throw DeviceRefusal("branch in a branch/E delay slot is not modeled");
+        if(lo&0x01E00000u)throw DeviceRefusal("IBEQ/IBNE reserved fields are nonzero");
+        const auto bits=lo&0x7FFu,slots=unit ? 2048u : 512u;
+        const auto offset=static_cast<std::int32_t>(bits)-((bits&0x400u) ? 2048 : 0);
+        const auto equal=reg(is,2)==reg(it,2),take=op==0x28u ? equal : !equal;
+        // Even an untaken conditional branch has one delay instruction.
+        branch=((state.pc/8u+(take ? 1u+static_cast<std::uint32_t>(offset) : 2u))&(slots-1u))*8u;
     } else if(op==0x24u || op==0x25u) {
         if(state.branch || state.end_delay)throw DeviceRefusal("branch in a branch/E delay slot is not modeled");
         if((lo&0x01E007FFu) || (op==0x24u && it))throw DeviceRefusal("JR/JALR reserved fields are nonzero");
@@ -188,29 +209,75 @@ void VuControl::step_micro(unsigned unit) {
             if(it>=16u)throw DeviceRefusal("JALR link register is outside VI00..VI15");
             result=std::pair{it,(state.pc/8u+2u)&(unit ? 2047u : 511u)};
         }
-    } else if(op==0x40u && (lo&0x7FFu)==0x37Cu) { // LQI, VU manual p.179, 1/4.
+    } else if(op==0u || (op==0x40u && (lo&0x7FFu)==0x37Cu)) { // LQ/LQI, 1/4.
         if(state.end_delay)throw DeviceRefusal("VU memory load in the E delay slot is invalid");
-        const auto address=reg(is),mask=(lo>>21u)&15u;
-        MicroVectorWrite load{it,mask,{},state.next+4u};
-        if(mask) {
-            if(address>=(unit ? 1024u : 256u))
-                throw DeviceRefusal("LQI address outside direct VU data RAM; mirrors/register windows are not modeled");
-            const auto& memory=unit ? data1_ : data_;
-            for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane))load.words[lane]=memory[address*4u+lane];
+        const bool increment=op!=0u;
+        const auto mask=(lo>>21u)&15u;
+        if(is>=16u)throw DeviceRefusal("LQ/LQI address requires VI00..VI15");
+        if(mask || increment) {
+            const auto bits=lo&0x7FFu;
+            const auto offset=increment ? 0 : static_cast<std::int32_t>(bits)-((bits&0x400u) ? 2048 : 0);
+            const auto address=(reg(is)+static_cast<std::uint32_t>(offset))&0xFFFFu;
+            MicroVectorWrite load{it,mask,{},state.next+4u};
+            if(mask) {
+                if(address>=(unit ? 1024u : 256u))
+                    throw DeviceRefusal("LQ/LQI address outside direct VU data RAM; mirrors/register windows are not modeled");
+                const auto& memory=unit ? data1_ : data_;
+                for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane))load.words[lane]=memory[address*4u+lane];
+            }
+            vector_result=load;
+            if(increment)result=std::pair{is,(address+1u)&0xFFFFu};
         }
-        vector_result=load;
-        result=std::pair{is,(address+1u)&0xFFFFu};
-    } else if(op==0x40u && (lo&0x7FFu)==0x37Du) { // SQI, VU manual p.192, 1/4.
+    } else if(op==1u || (op==0x40u && (lo&0x7FFu)==0x37Du)) { // SQ/SQI, 1/4.
         if(state.end_delay)throw DeviceRefusal("VU memory store in the E delay slot is invalid");
-        const auto address=reg(it),mask=(lo>>21u)&15u;
-        if(mask) {
-            if(address>=(unit ? 1024u : 256u))
-                throw DeviceRefusal("SQI address outside direct VU data RAM; mirrors/register windows are not modeled");
-            for(unsigned n=0;n<state.vector_writes;++n)
-                if(is && state.vectors[n].index==is && (state.vectors[n].mask&mask)) {++state.next;return;}
-            store_result=MicroVectorWrite{address,mask,unit ? vu1_vectors_[is] : vectors_[is],state.next+4u};
+        const bool increment=op!=1u;
+        const auto mask=(lo>>21u)&15u;
+        if(it>=16u)throw DeviceRefusal("SQ/SQI address requires VI00..VI15");
+        if(mask || increment) {
+            const auto bits=lo&0x7FFu;
+            const auto offset=increment ? 0 : static_cast<std::int32_t>(bits)-((bits&0x400u) ? 2048 : 0);
+            const auto address=(reg(it)+static_cast<std::uint32_t>(offset))&0xFFFFu;
+            if(mask) {
+                if(address>=(unit ? 1024u : 256u))
+                    throw DeviceRefusal("SQ/SQI address outside direct VU data RAM; mirrors/register windows are not modeled");
+                for(unsigned n=0;n<state.vector_writes;++n)
+                    if(is && state.vectors[n].index==is && (state.vectors[n].mask&mask)) {++state.next;return;}
+                store_result=MicroVectorWrite{address,mask,unit ? vu1_vectors_[is] : vectors_[is],state.next+4u};
+            }
+            if(increment)result=std::pair{it,(address+1u)&0xFFFFu};
         }
-        result=std::pair{it,(address+1u)&0xFFFFu};
+    } else if(op==4u || (op==0x40u && (lo&0x7FFu)==0x3FEu)) {
+        if(state.end_delay)throw DeviceRefusal("integer memory load in the E delay slot is invalid");
+        const auto mask=(lo>>21u)&15u;
+        if(it>=16u || !mask || (mask&(mask-1u)))throw DeviceRefusal("ILW/ILWR requires one selected field and a VI00..VI15 destination");
+        const auto bits=lo&0x7FFu;
+        const auto offset=op==4u ? static_cast<std::int32_t>(bits)-((bits&0x400u) ? 2048 : 0) : 0;
+        const auto address=(reg(is)+static_cast<std::uint32_t>(offset))&0xFFFFu;
+        if(address>=(unit ? 1024u : 256u))throw DeviceRefusal("integer load outside direct VU RAM; mirrors/register windows are not modeled");
+        const auto lane=mask==8u ? 0u : mask==4u ? 1u : mask==2u ? 2u : 3u;
+        const auto word=(unit ? data1_ : data_)[address*4u+lane];
+        result=std::pair{it,word.value&0xFFFFu};integer_unknown=word.unknown&0xFFFFu;integer_load=true;
+    } else if(op==0x40u && ((lo&0x7FFu)==0x6BCu || (lo&0x7FFu)==0x6BDu)) {
+        const auto xtop=(lo&0x7FFu)==0x6BCu;
+        if(xtop && !unit)throw DeviceRefusal("XTOP exists only on VU1");
+        if(it>=16u || is || (lo&0x01E00000u))throw DeviceRefusal("XTOP/XITOP destination/reserved fields are invalid");
+        if(state.end_delay)throw DeviceRefusal("XTOP/XITOP in the E delay slot is invalid");
+        const auto word=xtop ? state.top : state.itop;
+        result=std::pair{it,word.value};integer_unknown=word.unknown;
+    } else if(op==0x40u && (lo&0x7FFu)==0x3FCu) { // MTIR, VU manual p.184, 1/1.
+        if(it>=16u || (lo&0x01800000u))throw DeviceRefusal("MTIR destination/reserved fields are invalid");
+        const auto lane=(lo>>21u)&3u;
+        for(unsigned n=0;n<state.vector_writes;++n)
+            if(is && state.vectors[n].index==is && (state.vectors[n].mask&(8u>>lane))) {++state.next;return;}
+        const auto word=(unit ? vu1_vectors_ : vectors_)[is][lane];
+        result=std::pair{it,word.value&0xFFFFu};integer_unknown=word.unknown&0xFFFFu;
+    } else if(op==0x40u && (lo&0x7FFu)==0x6FCu) {
+        if(!unit)throw DeviceRefusal("XGKICK exists only on VU1");
+        if(state.end_delay)throw DeviceRefusal("XGKICK in the E delay slot is invalid");
+        if((lo&0x01E00000u) || it)throw DeviceRefusal("XGKICK reserved fields are nonzero");
+        if(!gif || !gs)throw DeviceRefusal("XGKICK requires the shared GIF/GS devices");
+        if(path1_)throw DeviceRefusal("second XGKICK during PATH1: queued launch timing is not modeled");
+        kick=reg(is)&1023u;
     } else if(lo==0x8000033Cu) { // MOVE with no fields and VF00 operands: lower NOP
     } else if(op==0x40u && ((lo&63u)==0x30u || (lo&63u)==0x31u || (lo&63u)==0x32u || (lo&63u)==0x34u || (lo&63u)==0x35u)) {
         const auto function=lo&63u;
@@ -236,8 +303,15 @@ void VuControl::step_micro(unsigned unit) {
         throw DeviceRefusal("VU vector writeback queue is full");
     if(fmac.active && state.flag_writes==state.flags.size())throw DeviceRefusal("VU flag writeback queue is full");
     if(store_result && state.store_writes==state.stores.size())throw DeviceRefusal("VU memory store queue is full");
+    if(kick) {
+        gif->request_path1();
+        // PATH1 transfers 128 bits per BUSCLK (EE manual p.148). As with
+        // the other bus engines, delivery opens the next functional bus slot;
+        // this phase is not a measured pin-level XGKICK latency.
+        path1_=Path1{*kick,state.next+kEeCyclesPerBusCycle,0,ending,std::nullopt};
+    }
     if(result && result->first) {
-        state.pending[state.writes++]={result->first,{result->second,0},state.next+4u};
+        state.pending[state.writes++]={result->first,{result->second,integer_unknown},state.next+4u,integer_load};
     }
     if(lower_write)state.vectors[state.vector_writes++]=*vector_result;
     if(upper_write)state.vectors[state.vector_writes++]=fmac.output;
@@ -249,15 +323,41 @@ void VuControl::step_micro(unsigned unit) {
     state.end_delay=ending;
     ++state.next;
 }
-void VuControl::advance_micro(std::uint64_t cycle) {
+void VuControl::step_path1(Gif* gif,GsRegisters* gs) {
+    auto& transfer=*path1_;
+    if(transfer.failure)throw DeviceRefusal(*transfer.failure);
+    try {
+        if(!gif || !gs)throw DeviceRefusal("active PATH1 requires the shared GIF/GS devices");
+        if(!gif->path1_requested())throw DeviceRefusal("GIF reset interrupted the active VU1 PATH1 transfer");
+        if(!gif->path1_ready()){transfer.next+=kEeCyclesPerBusCycle;return;}
+        std::array<std::uint32_t,4> words{};
+        for(unsigned lane=0;lane<4u;++lane) {
+            const auto word=data1_[transfer.address*4u+lane];
+            if(word.unknown)throw DeviceRefusal("PATH1 consumes unknown VU1 packet bits");
+            words[lane]=word.value;
+        }
+        gif->write_path1(words[0]|(std::uint64_t{words[1]}<<32u),words[2]|(std::uint64_t{words[3]}<<32u),*gs);
+        ++transfer.qwords;transfer.address=(transfer.address+1u)&1023u;transfer.next+=kEeCyclesPerBusCycle;
+        if(!gif->path1_requested())path1_.reset();
+    } catch(const DeviceRefusal& error) {
+        transfer.failure="VU1 PATH1 at data address "+hexword(transfer.address*16u,4)+" after "+
+            std::to_string(transfer.qwords)+" qwords: "+error.what();
+        throw DeviceRefusal(*transfer.failure);
+    }
+}
+void VuControl::advance_micro(std::uint64_t cycle,Gif* gif,GsRegisters* gs) {
     for(;;) {
         unsigned unit=2;
         for(unsigned n=0;n<2u;++n)if(micro_[n].running && micro_[n].next<=cycle &&
             (unit==2u || micro_[n].next<micro_[unit].next))unit=n;
+        if(path1_ && path1_->next<=cycle && (unit==2u || path1_->next<micro_[unit].next)) {
+            step_path1(gif,gs);continue;
+        }
         if(unit==2u)return;
         auto& state=micro_[unit];
         if(state.failure)throw DeviceRefusal(*state.failure);
-        try {step_micro(unit);}
+        try {step_micro(unit,gif,gs);}
+        catch(const MicroPipelineStall&) {++state.next;}
         catch(const DeviceRefusal& error) {
             state.failure="VU"+std::to_string(unit)+" micro PC "+hexword(state.pc,4)+" after "+std::to_string(state.instructions)+" instructions: "+error.what();
             throw DeviceRefusal(*state.failure);

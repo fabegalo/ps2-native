@@ -25,6 +25,7 @@ void Gif::reset() {
     ctrl_ = 0u;
     mode_ = 0u;
     vif_path3_mask_ = false;
+    path1_requested_ = false;
     in_packet_ = false;
     end_of_packet_ = false;
     loops_left_ = 0u;
@@ -41,6 +42,7 @@ std::uint32_t Gif::read_stat() const {
     // Hypothesis: while a PATH3 packet still expects quadwords, PATH3 is the
     // active path and the GIF is outputting (APATH = 3, OPH = 1).
     if (in_packet_) stat |= kStatOph | (path_ << kStatApathShift);
+    if(path1_requested_ && !(in_packet_ && path_==1u))stat|=1u<<8u;
     return stat; // FQC = 0: the FIFO never holds data here
 }
 
@@ -54,6 +56,7 @@ void Gif::write_ctrl(std::uint32_t value) {
         in_packet_ = false;
         end_of_packet_ = false;
         loops_left_ = 0u;
+        path1_requested_ = false;
     }
     ctrl_ = value & kCtrlStop;
 }
@@ -70,9 +73,16 @@ void Gif::write_fifo(std::uint64_t low, std::uint64_t high, GsRegisters& gs) {
 void Gif::write_path2(std::uint64_t low, std::uint64_t high, GsRegisters& gs) {
     write_path(low, high, gs, 2u);
 }
+void Gif::write_path1(std::uint64_t low,std::uint64_t high,GsRegisters& gs) {
+    if(!path1_requested_)throw DeviceRefusal("GIF PATH1 transfer without a VU1 request");
+    write_path(low,high,gs,1u);
+    if(!in_packet_)path1_requested_=false; // real EOP, including a zero-NLOOP terminal tag
+}
 void Gif::write_path(std::uint64_t low, std::uint64_t high, GsRegisters& gs, unsigned path) {
     const auto shown = [&] { return "GIF FIFO quadword " + hex(high, 16) + "_" + hex(low, 16); };
     if ((ctrl_ & kCtrlStop) != 0u) throw DeviceRefusal(shown() + " while GIF_CTRL.PSE stops the GIF: not modeled");
+    if(path!=1u && path1_requested_ && !(in_packet_ && path_==path))
+        throw DeviceRefusal("GIF new packet waits for pending PATH1; CPU FIFO backpressure is not modeled");
     if (path == 3u && ((mode_ & kModeMaskPath3) != 0u || vif_path3_mask_) && !(in_packet_ && path_==3u))
         throw DeviceRefusal(shown() + " with PATH3 masked (GIF_MODE.M3R or VIF.MSKPATH3): FIFO backpressure not modeled");
     if (in_packet_ && path_ != path) throw DeviceRefusal("GIF concurrent paths: arbitration not modeled");

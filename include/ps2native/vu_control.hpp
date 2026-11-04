@@ -6,6 +6,8 @@
 #include <vector>
 
 namespace ps2native {
+class Gif;
+class GsRegisters;
 // VU User's Manual 6.0, sections 1.3 and 5.1.3: control transfers and
 // reset of idle VUs and a shared, clocked microinstruction engine. Unsupported
 // instructions stop with their real micro PC; they never finish successfully.
@@ -14,6 +16,7 @@ public:
     VuControl() { reset(); }
     void reset() {
         micro_={};
+        path1_.reset();
         pending_q_.reset();
         registers_ = {};
         unknown_ = {};
@@ -88,17 +91,21 @@ public:
         registers_[28] = value & 0x0C0Cu;
         registers_[29] = (micro_[0].running ? 1u : 0u)|(micro_[1].running ? 256u : 0u);
     }
-    void start_micro(unsigned unit,std::uint32_t instruction_address,std::uint64_t ee_cycle);
-    void advance_micro(std::uint64_t ee_cycle);
-    void resume_micro(unsigned unit,std::uint64_t ee_cycle) {
+    void start_micro(unsigned unit,std::uint32_t instruction_address,std::uint64_t ee_cycle,
+                     ObservedWord itop={0,0x3FFu},ObservedWord top={0,0x3FFu});
+    void advance_micro(std::uint64_t ee_cycle,Gif* gif=nullptr,GsRegisters* gs=nullptr);
+    void resume_micro(unsigned unit,std::uint64_t ee_cycle,ObservedWord itop={0,0x3FFu},ObservedWord top={0,0x3FFu}) {
         const auto& previous=micro_.at(unit);
         if(previous.running || !previous.instructions)throw DeviceRefusal("VU MSCNT requires an established Ready termination PC");
-        start_micro(unit,previous.pc/8u,ee_cycle);
+        start_micro(unit,previous.pc/8u,ee_cycle,itop,top);
     }
     [[nodiscard]] bool micro_running(unsigned unit) const {return micro_.at(unit).running;}
+    [[nodiscard]] bool path1_transfer_pending() const noexcept {return path1_.has_value();}
+    [[nodiscard]] bool path1_end_on_kick() const noexcept {return path1_ && path1_->end_on_kick;}
     [[nodiscard]] std::optional<std::uint64_t> next_micro_cycle() const noexcept {
         std::optional<std::uint64_t> result;
         for(const auto& unit:micro_)if(unit.running && (!result || unit.next<*result))result=unit.next;
+        if(path1_ && (!result || path1_->next<*result))result=path1_->next;
         return result;
     }
     [[nodiscard]] std::uint32_t diagnostic_micro_pc(unsigned unit) const {return micro_.at(unit).pc;}
@@ -275,7 +282,7 @@ public:
         }
     }
 private:
-    struct MicroIntegerWrite {unsigned index{};ObservedWord word{};std::uint64_t ready{};};
+    struct MicroIntegerWrite {unsigned index{};ObservedWord word{};std::uint64_t ready{};bool memory_load{};};
     struct MicroVectorWrite {
         unsigned index{},mask{};
         std::array<ObservedWord,4> words{};
@@ -287,6 +294,7 @@ private:
         bool running{},end_delay{};
         std::uint32_t pc{};
         std::uint64_t next{},instructions{};
+        ObservedWord itop{0,0x3FFu},top{0,0x3FFu};
         std::optional<std::uint32_t> branch;
         std::optional<std::uint64_t> drain;
         std::array<MicroIntegerWrite,4> pending{};
@@ -300,11 +308,19 @@ private:
         std::optional<std::string> failure;
     };
     void reset_micro(unsigned unit);
-    void step_micro(unsigned unit);
+    void step_micro(unsigned unit,Gif* gif,GsRegisters* gs);
+    void step_path1(Gif* gif,GsRegisters* gs);
     [[nodiscard]] ObservedWord micro_integer(unsigned unit,unsigned index,bool forwarded,unsigned bypass_delay=1) const;
     void retire_micro_integers(unsigned unit);
     [[nodiscard]] MicroFmac evaluate_micro_upper(unsigned unit,std::uint32_t instruction) const;
     std::array<MicroState,2> micro_{};
+    struct Path1 {
+        std::uint32_t address{};
+        std::uint64_t next{},qwords{};
+        bool end_on_kick{};
+        std::optional<std::string> failure;
+    };
+    std::optional<Path1> path1_;
     struct PendingQ { std::uint64_t ready; std::uint32_t value,flags; };
     std::optional<PendingQ> pending_q_;
     ObservedWord& memory_word(std::uint32_t address) {

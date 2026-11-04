@@ -1,6 +1,10 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
     add_executable(ps2n-vu-micro tests/vu_micro.cpp)
+    add_executable(ps2n-vu-path1 tests/vu_path1.cpp)
+    target_link_libraries(ps2n-vu-path1 PRIVATE ps2n_core)
+    add_test(NAME native-vu-path1 COMMAND ps2n-vu-path1)
+    set_tests_properties(native-vu-path1 PROPERTIES TIMEOUT 30)
     add_executable(ps2n-vif-micro tests/vif_micro.cpp)
     target_link_libraries(ps2n-vif-micro PRIVATE ps2n_core)
     add_test(NAME native-vif-micro COMMAND ps2n-vif-micro)

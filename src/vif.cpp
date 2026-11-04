@@ -113,9 +113,9 @@ void advance_vpus(std::uint64_t cycle,Vif* vif0,Vif* vif1,VuControl* vu,Gif& gif
         while((vif0 && vif0->waiting_) || (vif1 && vif1->waiting_)) {
             const auto next=vu->next_micro_cycle();
             if(!next || *next>cycle)break;
-            vu->advance_micro(*next);drain(*next);
+            vu->advance_micro(*next,&gif,&gs);drain(*next);
         }
-        vu->advance_micro(cycle);
+        vu->advance_micro(cycle,&gif,&gs);
     }
     drain(cycle);
 }
@@ -127,7 +127,7 @@ void Vif::write_words(std::span<const std::uint32_t> words,unsigned first_lane,G
     drain(cycle,vu,gif,gs);
 }
 void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
-    waiting_=false;
+    waiting_=gif_waiting_=false;
     for(;;) {
         if(input_index_==input_count_) {
             if(fifo_.empty())return;
@@ -140,6 +140,10 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
         if(!payload && !(command&0x80000000u) && vu && vu->micro_running(unit_==Unit::Vu1) &&
             (op==0x10u || (op==0x11u && unit_==Unit::Vu1) || op==0x14u || op==0x17u || op==0x4Au)) {
             code_=command;waiting_=true;return;
+        }
+        if(!payload && op==0x11u && unit_==Unit::Vu1 && vu && vu->path1_transfer_pending()) {
+            if(vu->path1_end_on_kick())refuse(" FLUSH completion after an E-bit XGKICK is not verified");
+            code_=command;waiting_=gif_waiting_=true;return;
         }
         ++input_index_;
         if(direct_left_) {
@@ -199,8 +203,9 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
             case 0x17: {
                 if(!vu)refuse(" MSCAL requires the shared VU micro engine");
                 const auto unit=unit_==Unit::Vu1 ? 1u : 0u;
-                if(opcode==0x17u)vu->resume_micro(unit,cycle);
-                else vu->start_micro(unit,immediate,cycle);
+                const auto observed=[&](unsigned index){return programmed_[index] ? ObservedWord{*programmed_[index],0} : ObservedWord{0,0x3FFu};};
+                if(opcode==0x17u)vu->resume_micro(unit,cycle,observed(9),observed(12));
+                else vu->start_micro(unit,immediate,cycle,observed(9),observed(12));
                 programmed_[13]=programmed_[9]; // Unknown ITOPS remains unknown.
                 if(unit) {
                     programmed_[14]=programmed_[12];

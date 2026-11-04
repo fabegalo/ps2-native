@@ -31,9 +31,15 @@ int main() try {
         require(!vu.micro_running(unit) && !vif.processing(),"FLUSHE completes only after the true E delay and pipeline drain");
         const auto vi=unit ? vu.observe_data(0x4210) : vu.observe(1);
         require(vi.value==7 && !vi.unknown,"the loaded program produced the actual integer result");
+        vu.write_memory(unit ? 0x11008000u : 0x11000000u,8,
+            {(unit ? 0x800406BCull : 0x800406BDull)|(0x2FFull<<32u),0});
         vif.write_fifo(0x14000000,0,gif,gs,&vu,110);
         if(unit)require(vif.read_register(0xE0)==5 && vif.read_register(0xC0)==0x3FC && vif.read_register(0)==0,
             "second start alternates the actual buffers back to BASE");
+        advance_vpus(117,&vif,nullptr,&vu,gif,gs);
+        const auto pointer=unit ? vu.observe_data(0x4240) : vu.observe(4);
+        require(!pointer.unknown && pointer.value==(unit ? 5u : 0x23u),
+            "XTOP sees the old TOPS latched into TOP and VU0 XITOP zero-extends only its actual low eight bits");
     }
     {
         Iop dma;VuControl vu;Vif v0(Vif::Unit::Vu0),v1;Gif gif;GsRegisters gs;gs.reset(0);dma.reset({},nullptr);program(vu,1);

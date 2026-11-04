@@ -7,8 +7,8 @@
 // Timing: the GS takes each quadword as it arrives, so the FIFO never holds
 // data (FQC = 0; hypothesis: no back-pressure is modeled, and the firmware
 // polls FQC = 0 before refilling). VIF1 DIRECT also uses this parser as PATH2;
-// interleaving paths is refused until arbitration is implemented. PATH1/VU1
-// XGKICK is not implemented.
+// interleaving packets is refused until arbitration is implemented. PATH1
+// requests wait for a current packet and consume real VU1 memory qwords.
 #include "ps2native/device_timing.hpp"
 #include "ps2native/gs_registers.hpp"
 
@@ -32,6 +32,14 @@ public:
     // One quadword written to the GIF FIFO (PATH3).
     void write_fifo(std::uint64_t low, std::uint64_t high, GsRegisters& gs);
     void write_path2(std::uint64_t low, std::uint64_t high, GsRegisters& gs);
+    void request_path1() {
+        if(path1_requested_)throw DeviceRefusal("GIF already has an active PATH1 request");
+        path1_requested_=true;
+    }
+    [[nodiscard]] bool path1_requested() const noexcept {return path1_requested_;}
+    [[nodiscard]] bool path1_ready() const noexcept {return !(ctrl_&8u) && (!in_packet_ || path_==1u);}
+    [[nodiscard]] bool path1_packet_active() const noexcept {return in_packet_ && path_==1u;}
+    void write_path1(std::uint64_t low,std::uint64_t high,GsRegisters& gs);
     // One line per completed GIF packet (for traces and tests).
     [[nodiscard]] const std::vector<std::string>& packets() const noexcept { return packets_; }
 
@@ -42,6 +50,7 @@ private:
     void packed(unsigned descriptor, std::uint64_t low, std::uint64_t high, GsRegisters& gs);
     std::uint32_t ctrl_{}, mode_{};
     bool vif_path3_mask_{};
+    bool path1_requested_{};
     // Current PATH3 packet: a GIFtag was taken and loops remain.
     bool in_packet_{};
     bool end_of_packet_{};
