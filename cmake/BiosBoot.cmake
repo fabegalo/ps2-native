@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-sio2-idle tests/sio2_idle.cpp)
+    target_link_libraries(ps2n-sio2-idle PRIVATE ps2n_core)
+    add_test(NAME native-sio2-idle COMMAND ps2n-sio2-idle)
+    set_tests_properties(native-sio2-idle PROPERTIES TIMEOUT 30)
     add_executable(ps2n-cdvd-bus tests/cdvd_bus.cpp)
     target_link_libraries(ps2n-cdvd-bus PRIVATE ps2n_core)
     add_test(NAME native-cdvd-bus COMMAND ps2n-cdvd-bus)

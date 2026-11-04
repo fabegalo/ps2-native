@@ -182,6 +182,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     timers_ = {};
     timers_running_ = false;
     istat_ = 0u;
+    sio2_irq_acknowledged_=false;
     ee_dma_suspended_=hardware && hardware->d_enabler && (*hardware->d_enabler&0x10000u);
     // SIF: the communication registers are unknown until written. The flags
     // are 0 (hypothesis: SIFMAN and the EE kernel each wait for the other side
@@ -866,6 +867,7 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         return iop_sif1_read(physical);
     }
     const auto name = std::string("load ") + what + " of IOP register " + hex(physical);
+    if(physical==0x1F808268u)throw IopStop{"SIO2 control reset/status readback is not verified"};
     if(physical==0x1F803800u) {
         if(bytes!=2u) throw IopStop{name+": MPU board ID requires a 16-bit read"};
         if(!hardware_ || !hardware_->mpu_board_id) throw IopStop{name+": MPU board ID has not been measured for this profile"};
@@ -1048,9 +1050,15 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         // Acknowledge: clears the pending bits written as 0.
         if (!value) throw IopStop{name + ": unknown value"};
         istat_ &= *value;
+        if(!(*value&(1u<<17u)))sio2_irq_acknowledged_=true;
         return;
     }
     if (is_latch(physical)) {
+        if(physical==0x1F808268u) {
+            if(!value || (*value&1u))throw IopStop{"SIO2 transfer is not modeled"};
+            if(*value!=0u && *value!=0xCu && *value!=0x3BCu)
+                throw IopStop{"SIO2 control configuration is not verified"};
+        }
         if (bytes != 4u) throw IopStop{name + ": only 32-bit accesses are modeled"};
         if (dma_channel_field(physical) == 2u && (!value || (*value & kChcrStart) != 0u))
             throw IopStop{name + " = " + (value ? hex(*value) : std::string("(unknown)")) +
@@ -1223,7 +1231,9 @@ std::optional<bool> Iop::interrupt_line() const {
 }
 
 std::uint32_t Iop::modeled_irqs() const noexcept {
-    return kTimerIrqs | kDmaIrq |
+    // SIO2 IRQ17 is idle until a serial command starts. All FIFO/DMA
+    // starts remain refused; CTRL accepts only documented idle/reset setup.
+    return kTimerIrqs | kDmaIrq | (sio2_irq_acknowledged_ ? (1u<<17u) : 0u) |
            (video_.state != GsRegisters::VerticalClock::State::Unknown ? kVblankStartIrq | kVblankEndIrq : 0u);
 }
 

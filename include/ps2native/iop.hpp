@@ -235,6 +235,7 @@ private:
     std::array<Timer, 6> timers_{};
     bool timers_running_{};
     std::uint32_t istat_{}; // I_STAT bits of the modeled sources
+    bool sio2_irq_acknowledged_{};
     bool ee_dma_suspended_{};
     // SIF registers shared with the EE (ps2tek "SIF Registers"): MSCOM is
     // written by the EE, SMCOM by the IOP (empty: never written); MSFLG bits
