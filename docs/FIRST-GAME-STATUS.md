@@ -836,3 +836,37 @@ Modo original repetido mantém o hash canônico. A tabela de referência marca
 também 0x746..0x75F e 0x7B0..0x7BF como regiões não atribuídas; o experimento
 foi estendido a essas lacunas e seus espelhos, sem aceitar leituras ou
 registradores funcionais. Isso segue sendo hipótese, não medição do hardware.
+
+Ensaio 59: IOP `0x66B68` / 46.497.781, preparando FIFO SPU2 em 0x1F9001AC;
+o caminho PIO do workspace recusa sem taxa explícita. EE espera `0x81FCC`,
+340.000.000 instruções, 22 stalls; 94,4362 s. RAM/GIF/PMODE iguais ao 58.
+A continuação seleciona 8 ciclos IOP por halfword como hipótese não medida.
+O caminho transfere os bytes reais FIFO→RAM e só encerra busy ao drenar;
+não fabrica DMA, IRQ ou conteúdo. Teste de PIO próprio existente exercita
+latências 3/17, payloads, wrap, busy, compartilhamento de RAM e recusas;
+seis testes focados passaram antes do ensaio 60. A escolha 8 não comprova
+timing físico nem fidelidade de áudio; contadores/palavras transferidas foram
+acrescentados ao diagnóstico local. PS2Recomp áudio consultado antes do uso,
+sem incorporar código. O trabalho PIO paralelo é preservado, não reimplementado.
+
+Ensaio 60: o guest enviou 16 halfwords reais por PIO core 0, gravadas em
+RAM SPU2 0x2800..0x280F: oito 0x0707 e oito zero. Core 1 não transferiu.
+IOP avançou até `0x66C10` / 46.498.128, escrita em VOLL da voz 0/core 1,
+0x1F900400. EE espera `0x81FCC` / 340.000.000, 22 stalls, 92,5297 s.
+RAM EE e GIF iguais ao ensaio 59; ainda sem PMODE/frame.
+
+Próxima extensão funcional: VOLL/VOLR constantes, PITCH, ADSR1/2 e SSA
+para vozes estabelecidas inativas. Referências prévias PS2Recomp áudio,
+PS2SDK `spu2_mmio_hwport.h` e comportamento de registradores em PCSX2
+`RegWrite_VoiceParams`/`RegWrite_VoiceAddr`; implementação BSD independente.
+SSA só consome quatro bits altos e os bits baixos 15..3; readback reservado
+continua simbólico e pode ser copiado para outro SSA sem consumir incerteza.
+KON, volume sweep e processamento ENVX permanecem recusados, não simulados
+por sucesso. Nenhuma voz é iniciada por escrever parâmetros.
+
+Sete testes focados passaram para parâmetros/SSA; ensaio 61 iniciado.
+CI da correção publicada de Q `da867c6`: núcleo 41799523668 e launcher
+41799523720 aprovados nos seis alvos. `be450b1` também passou nos seis do
+núcleo (41800073863); demais pipelines continuam acompanhados. O caminho
+PIO paralelo foi registrado em `387aabe`; seu conteúdo não foi incluído nos
+commits de configuração de vozes deste trabalho.

@@ -186,5 +186,32 @@ int main() try {
             iop.ee_read(0x114u+core*8u,4)==0xF012u+core,"effect workspace start halves retain word-address bits without clearing RAM");
         if(mode)require(iop.stopped(),"unknown workspace reset, effect-enable state and reserved readback bits stay explicit");
     }
+    for(unsigned mode=0;mode<6;++mode) {
+        m20::Assembler a(kEeResetVector);a.la(10,0xA0000100u);
+        for(unsigned core=0;core<2;++core) {
+            const auto base=0xBF900000u+core*0x400u;
+            for(unsigned field=0;field<5;++field) {
+                a.la(8,base+23u*16u+field*2u);a.la(9,field==2 ? 0x3FFFu : field==3 ? 0x1234u : 0u);
+                if(mode==2 && field==0)a.la(9,0x8000u);
+                if(mode!=5)a.sh(9,0,8);
+                a.lhu(9,0,8);a.nop();a.sw(9,core*32u+field*4u,10);
+            }
+            a.la(8,base+0x1C0u);a.la(9,0xAu);a.sh(9,0,8);a.la(9,0x2803u);a.sh(9,2,8);
+            // Copy unknown reserved readback bits into another SSA: only
+            // the documented address bits are consumed by the destination.
+            a.la(11,base+0x1CCu);a.lhu(9,0,8);a.nop();a.sh(9,0,11);
+            a.andi(9,9,0xFu);a.sw(9,core*32u+20u,10);
+            a.lhu(9,2,8);a.nop();a.sh(9,2,11);a.andi(9,9,0xFFF8u);a.sw(9,core*32u+24u,10);
+            if(mode==3){a.la(8,base+0xAu);a.sh(0,0,8);}
+            if(mode==4){a.la(8,base+0x1A0u);a.la(9,1);a.sh(9,0,8);}
+        }
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,mode!=1);iop.run_until(400);
+        if(!mode)for(unsigned core=0;core<2;++core)require(!iop.stopped() && iop.ee_read(0x108u+core*32u,4)==0x3FFFu &&
+            iop.ee_read(0x10Cu+core*32u,4)==0x1234u && iop.ee_read(0x114u+core*32u,4)==0xAu &&
+            iop.ee_read(0x118u+core*32u,4)==0x2800u,"inactive voices retain independent pitch, envelope configuration and aligned start addresses");
+        else require(iop.stopped(),"voice startup, envelope processing, sweeps, unknown reset and active configuration remain explicit");
+    }
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

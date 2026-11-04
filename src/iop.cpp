@@ -153,7 +153,17 @@ bool is_spu2_effect_address(std::uint32_t address) {
     const auto reg=(address-0x1F900000u)&0x3FFu;
     return reg==0x2E0u || reg==0x2E2u || reg==0x33Cu;
 }
+bool is_spu2_voice_parameter(std::uint32_t address) {
+    return address>=0x1F900000u && address<0x1F900800u &&
+        (address&0x3FFu)<0x180u && (address&15u)<=8u && !(address&1u);
+}
+bool is_spu2_voice_start(std::uint32_t address) {
+    if(address<0x1F900000u || address>=0x1F900800u)return false;
+    const auto reg=address&0x3FFu;
+    return reg>=0x1C0u && reg<0x2E0u && (reg-0x1C0u)%12u<=2u && !(reg&1u);
+}
 bool is_spu2_boot_config(std::uint32_t address) {
+    if(is_spu2_voice_parameter(address) || is_spu2_voice_start(address))return true;
     if(is_spu2_voice_routing(address) || is_spu2_effect_address(address))return true;
     if(address==0x1F9001B0u || address==0x1F9005B0u)return true;
     if(address==0x1F9007C0u || address==0x1F9007C6u || address==0x1F9007C8u)return true;
@@ -1181,6 +1191,11 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
     if((a.physical==0x1F90019Au || a.physical==0x1F90059Au) && bytes==2u && observed) {
         write_spu2_control(a.physical,*observed);return;
     }
+    if(is_spu2_voice_start(a.physical) && bytes==2u && observed) {
+        const auto mask=(a.physical&2u) ? 0xFFF8u : 0xFu;
+        if(observed->unknown&mask)throw IopStop{"SPU2 voice start address consumes unknown address bits"};
+        io_write(a.physical,bytes,observed->value&mask,what);return;
+    }
     if(a.physical==0x1F808268u && bytes==4u && observed) {
         reset_sio2_observed(*observed,sio2_epoch);return;
     }
@@ -1247,6 +1262,12 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         if(bytes!=2u)throw IopStop{"SPU2 output configuration requires halfword reads"};
         const auto value=latch(physical);
         if(!value || !*value)throw IopStop{name+": SPU2 output configuration before a known halfword write"};
+        if(is_spu2_voice_start(physical)) {
+            const auto mask=(physical&2u) ? 0xFFF8u : 0xFu;
+            undefined_load_="SPU2 voice start address: reserved readback bits are unknown";
+            undefined_known_=mask|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
+            return **value&mask;
+        }
         if(is_spu2_effect_address(physical) && !(physical&2u)) {
             // ESA high and EEA identify the high four bits of a 20-bit
             // word address. Reserved readback bits have not been measured.
@@ -1500,6 +1521,12 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
     }
     if(is_spu2_boot_config(physical)) {
         if(bytes!=2u || !value)throw IopStop{"SPU2 output configuration requires a known halfword write"};
+        if(is_spu2_voice_parameter(physical) || is_spu2_voice_start(physical)) {
+            if(!diagnostic_spu2_quiescent_)throw IopStop{"SPU2 voice configuration requires established inactive voices"};
+            if(is_spu2_voice_parameter(physical) && (physical&15u)<4u && (*value&0x8000u))
+                throw IopStop{"SPU2 voice volume sweep is not modeled"};
+            if(is_spu2_voice_start(physical))*value&=(physical&2u) ? 0xFFF8u : 0xFu;
+        }
         if(is_spu2_effect_address(physical)) {
             const auto core=(physical-0x1F900000u)/0x400u;
             const auto control=spu2_control_[core];
