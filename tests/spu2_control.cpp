@@ -364,7 +364,7 @@ int main() try {
             "two linear release steps prove ENVX zero and permit gain changes without inventing decoded audio");
         else require(iop.stopped(),"early ENVX, exponential/slow/changed release and a new attack cannot reuse a silence proof");
     }
-    for(unsigned effect_core=0;effect_core<2u;++effect_core)for(unsigned mode=0;mode<17u;++mode) {
+    for(unsigned effect_core=0;effect_core<2u;++effect_core)for(unsigned mode=0;mode<20u;++mode) {
         m20::Assembler a(kEeResetVector);
         const auto sh=[&](std::uint32_t address,std::uint32_t value){a.la(8,address);a.la(9,value);a.sh(9,0,8);};
         const auto base=0xBF900000u+effect_core*0x400u,volume=0xBF900764u+effect_core*0x28u;
@@ -387,6 +387,12 @@ int main() try {
         if(mode==14u)sh(base+0x2E2u,0x2000u);
         if(mode==15u)sh(base+0x2E0u,1u);
         if(mode==16u)sh(base+0x2E2u,0xFFF0u);
+        if(mode>=17u) {
+            for(unsigned offset=0x2E4u;offset<=0x33Au;offset+=2u)sh(base+offset,0xFFFFu-offset);
+            for(unsigned offset=0x14u;offset<0x28u;offset+=2u)sh(volume-4u+offset,0x8000u+offset);
+            if(mode==18u){a.la(8,base+0x2E4u);a.lhu(9,0,8);a.nop();}
+            if(mode==19u){a.la(8,base+0x2E4u);a.sw(0,0,8);}
+        }
         if(mode==12u){a.la(8,base+0x2E0u);a.lhu(9,0,8);a.nop();}
         a.label("idle");a.beq(0,0,"idle");a.nop();
         const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
@@ -401,7 +407,7 @@ int main() try {
         iop.run_until(1536u);
         if(mode==13u)require(!iop.spu2_ram_halfword(0x1FFF8u),"extending active EEA invalidates newly reachable RAM");
         else require(iop.spu2_ram_halfword(0x1FFF8u)==0x5678u,"rejected or disjoint workspace writes preserve unrelated RAM");
-        if(mode==0u || mode==8u || mode==9u || mode==10u || mode==13u || mode==16u)require(!iop.stopped() && !iop.spu2_ram_halfword(0xFFF8u) &&
+        if(mode==0u || mode==8u || mode==9u || mode==10u || mode==13u || mode==16u || mode==17u)require(!iop.stopped() && !iop.spu2_ram_halfword(0xFFF8u) &&
             iop.spu2_last_sample(effect_core)->left==0 && iop.spu2_last_sample(effect_core)->right==0,
             "zero effect gains prove output while workspace bytes become unknown, including after disable");
         else {

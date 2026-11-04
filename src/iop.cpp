@@ -166,8 +166,12 @@ bool is_spu2_effect_coefficient(std::uint32_t address) {
     return address>=0x1F900760u && address<0x1F9007B0u && !(address&1u) &&
            (address-0x1F900760u)%0x28u>=0x14u;
 }
+bool is_spu2_effect_offset(std::uint32_t address) {
+    return address>=0x1F900000u && address<0x1F900800u && !(address&1u) &&
+           (address&0x3FFu)>=0x2E4u && (address&0x3FFu)<=0x33Au;
+}
 bool is_spu2_boot_config(std::uint32_t address) {
-    if(is_spu2_effect_coefficient(address))return true;
+    if(is_spu2_effect_coefficient(address) || is_spu2_effect_offset(address))return true;
     if(is_spu2_voice_parameter(address) || is_spu2_voice_start(address))return true;
     if(is_spu2_voice_routing(address) || is_spu2_effect_address(address))return true;
     if(address==0x1F9007C0u || address==0x1F9007C6u || address==0x1F9007C8u)return true;
@@ -1604,6 +1608,7 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
     if(is_spu2_boot_config(physical)) {
         // PS2SDK spu2regs.h: digital-output and constant level configuration.
         // This does not establish core state, IRQ status or audio samples.
+        if(is_spu2_effect_offset(physical))throw IopStop{"SPU2 effect-offset readback is not verified"};
         if(bytes!=2u)throw IopStop{"SPU2 output configuration requires halfword reads"};
         const auto value=latch(physical);
         if((physical==0x1F90033Cu || physical==0x1F90073Cu) && (!value || !*value) && diagnostic_spu2_effect_end_)
@@ -1930,11 +1935,14 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         if((physical==0x1F900764u || physical==0x1F900766u || physical==0x1F90078Cu || physical==0x1F90078Eu) &&
            *value && spu2_effects_active((physical-0x1F900764u)/0x28u))
             throw IopStop{"SPU2 effect gain cannot expose an uncomputed DSP output"};
-        if(is_spu2_effect_coefficient(physical)) {
-            const auto core=(physical-0x1F900760u)/0x28u;
+        if(is_spu2_effect_coefficient(physical) || is_spu2_effect_offset(physical)) {
+            const auto core=is_spu2_effect_offset(physical) ? (physical>>10u)&1u : (physical-0x1F900760u)/0x28u;
             const auto control=spu2_control_[core];
-            if(!control || ((control->value|control->unknown)&0x80u))
-                throw IopStop{"SPU2 effect coefficients require effects explicitly disabled"};
+            if(!control || (control->unknown&0x80u))
+                throw IopStop{"SPU2 effect parameters require a known effect-enable state"};
+            // Active DSP state is already unknown throughout its circular
+            // workspace, and its output gain is proven zero. Parameter
+            // changes neither restore RAM knowledge nor produce audible data.
         }
         if(is_spu2_voice_parameter(physical) || is_spu2_voice_start(physical)) {
             if(!diagnostic_spu2_quiescent_)throw IopStop{"SPU2 voice configuration requires established inactive voices"};

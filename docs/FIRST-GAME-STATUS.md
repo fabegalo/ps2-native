@@ -1057,3 +1057,14 @@ escrita conhecida do endereço. Não fornece reset de ESA, não se estende a
 SSA, não muda IRQ/DMA/RAM/áudio. Testes mantêm recusas por padrão e após reset.
 PS2Recomp IOP/áudio e mapa SPU2 consultados; implementação independente BSD.
 `e116c8a`: núcleo e launcher aprovados nos seis alvos.
+
+Ensaio 75: formatação do argumento EEA passou; IOP `0x666C0` / 46.736.104,
+SH de zero em 0x1F9002E4, primeiro deslocamento APF. EE `0x81FD4` /
+341.472.144, 104,185 s; mesmo hash RAM/16 pacotes, sem PMODE. Original repetido:
+PCs 80007D20/80005F00, contagens e hash canônico inalterados.
+
+Configurados agora os halfwords dos 22 deslocamentos de taps SPU2 (2E4..33A)
+e coeficientes com efeito ativo de saída zero. Toda a área circular continua
+com conteúdo desconhecido; mudar offsets/coeficientes não revalida RAM ou
+inventa DSP. Leituras de offset e larguras não estabelecidas recusam. PS2Recomp
+áudio e referência comportamental da área circular SPU2 consultados novamente.
