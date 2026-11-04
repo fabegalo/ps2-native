@@ -10,7 +10,7 @@ std::uint64_t GsRegisters::required(std::uint8_t index) const {
     return *general_[index];
 }
 void GsRegisters::reset_drawing() {
-    general_ = {}; display_ = {}; first_vertex_.reset(); transfer_ = {};
+    general_ = {}; display_ = {}; first_vertex_.reset(); triangle_vertices_count_=0; transfer_ = {};
     general_[0x22]=diagnostic_reset_scanmask_;
     clut_={};clut_base_={};sampled_pages_={};transfer_generation_=0;texture_flush_generation_.reset();
     imr_ = 0x7F00u;
@@ -159,21 +159,46 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     const auto control = required(0x1A);
     const auto mode = (control & 1u) ? prim : required(0x1B);
     const auto type = static_cast<unsigned>(prim & 7u);
-    if (type != 0u && type != 6u) throw DeviceRefusal("GS primitive is not modeled (point/sprite only)");
-    if (mode & (8u | 32u | 128u))
-        throw DeviceRefusal("GS shading, fog or antialiasing is not modeled");
+    const bool triangle=type>=3u && type<=5u;
+    if (type != 0u && type != 6u && !triangle) throw DeviceRefusal("GS line/reserved primitive is not modeled");
     const bool textured=(mode&16u)!=0u,blended=(mode&64u)!=0u;
-    if(textured && (!(mode&256u) || type!=6u))
+    if(textured && !triangle && (type!=6u || !(mode&256u)))
         throw DeviceRefusal("GS texture drawing supports UV sprites only");
     const auto context = static_cast<std::uint8_t>((mode >> 9) & 1u);
     const auto offset = required(static_cast<std::uint8_t>(0x18u + context));
-    const auto uv=textured ? required(3) : 0;
+    const auto uv=textured && !triangle ? required(3) : general_[3].value_or(0);
     const Vertex v{static_cast<int>(value & 0xFFFFu) - static_cast<int>(offset & 0xFFFFu),
                    static_cast<int>((value >> 16) & 0xFFFFu) - static_cast<int>((offset >> 32) & 0xFFFFu),
-                   static_cast<int>(uv&0x3FFFu),static_cast<int>((uv>>16)&0x3FFFu)};
+                   static_cast<int>(uv&0x3FFFu),static_cast<int>((uv>>16)&0x3FFFu),
+                   static_cast<std::uint32_t>(value>>32u)&((index&7u)==4u ? 0xFFFFFFu : 0xFFFFFFFFu),general_[1],general_[2],general_[3]};
+    std::array<Vertex,3> vertices{};
+    const auto finish_triangle=[&] {
+        if(type==3u)triangle_vertices_count_=0;
+        else {
+            if(type==4u)triangle_vertices_[0]=triangle_vertices_[1];
+            triangle_vertices_[1]=v;triangle_vertices_count_=2;
+        }
+    };
+    const auto edge=[](const Vertex& a,const Vertex& b,std::int64_t x,std::int64_t y) {
+        return std::int64_t{b.x-a.x}*(y-a.y)-std::int64_t{b.y-a.y}*(x-a.x);
+    };
+    std::int64_t area=0;
+    if(triangle) {
+        // GS manual 3.2.3-3.2.5: every vertex kick snapshots the latches.
+        // XYZ3 suppresses only this drawing kick and still advances the queue.
+        if(triangle_vertices_count_<2u){triangle_vertices_[triangle_vertices_count_++]=v;return;}
+        vertices={triangle_vertices_[0],triangle_vertices_[1],v};
+        if(index==0x0Cu || index==0x0Du){finish_triangle();return;}
+        area=edge(vertices[0],vertices[1],v.x,v.y);
+        if(!area){finish_triangle();return;}
+        if(area<0){std::swap(vertices[0],vertices[1]);area=-area;}
+    }
     if (type == 6u && !first_vertex_) { first_vertex_ = v; return; }
     // XYZ3/XYZF3 advance the vertex queue without a drawing kick.
     if (index == 0x0Cu || index == 0x0Du) { first_vertex_.reset(); return; }
+    if (mode & (32u | 128u) || (!triangle && (mode&8u)))
+        throw DeviceRefusal("GS shading, fog or antialiasing is not modeled");
+    if(textured && !(mode&256u))throw DeviceRefusal("GS STQ texture drawing precision is not established");
     const auto frame = required(static_cast<std::uint8_t>(0x4Cu + context));
     const auto scissor = required(static_cast<std::uint8_t>(0x40u + context));
     const auto test = required(static_cast<std::uint8_t>(0x47u + context));
@@ -197,18 +222,22 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     const bool ztest = (test & (1u << 16)) != 0u;
     const auto zfunc = static_cast<unsigned>((test >> 17) & 3u);
     const bool zwrite = ztest && !(zbuf & (1ull << 32));
-    const auto z = static_cast<std::uint32_t>(value >> 32) & (index == 4u ? 0xFFFFFFu : 0xFFFFFFFFu);
+    const auto z = v.z;
     if (zwrite || (ztest && zfunc >= 2u)) {
         (void)GsVram::depth_address(zbase, bw, zpsm, 0u, 0u);
         if (zpsm == 2u) throw DeviceRefusal("GS PSMZ16 cannot share a drawing layout with PSMCT32/24");
         const auto zmax = zpsm == 0u ? 0xFFFFFFFFu : zpsm == 1u ? 0xFFFFFFu : 0xFFFFu;
         if (z > zmax) throw DeviceRefusal("GS out-of-range vertex depth is not modeled");
+        if(triangle)for(const auto& source : vertices)if(source.z>zmax)throw DeviceRefusal("GS out-of-range vertex depth is not modeled");
     }
     const auto ceil16 = [](int n) { return n >= 0 ? (n + 15) / 16 : n / 16; };
     const auto floor16 = [](int n) { return n >= 0 ? n / 16 : (n - 15) / 16; };
     int left, top, right, bottom;
     if (type == 0u) {
         left = floor16(v.x); top = floor16(v.y); right = left + 1; bottom = top + 1;
+    } else if(triangle) {
+        left=ceil16(std::min({vertices[0].x,vertices[1].x,v.x}));right=ceil16(std::max({vertices[0].x,vertices[1].x,v.x}));
+        top=ceil16(std::min({vertices[0].y,vertices[1].y,v.y}));bottom=ceil16(std::max({vertices[0].y,vertices[1].y,v.y}));
     } else {
         left = ceil16(std::min(first_vertex_->x, v.x)); top = ceil16(std::min(first_vertex_->y, v.y));
         right = ceil16(std::max(first_vertex_->x, v.x)); bottom = ceil16(std::max(first_vertex_->y, v.y));
@@ -238,17 +267,62 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         const auto fixed=num/den;
         return static_cast<int>(fixed>=0 ? fixed/16 : (fixed-15)/16);
     };
+    const auto inclusive=[](const Vertex& a,const Vertex& b){return b.y<a.y || (b.y==a.y && b.x>a.x);};
+    const auto interpolate=[&](const std::array<std::int64_t,3>& weights,const std::array<std::uint32_t,3>& attribute) {
+        const auto ab=std::int64_t{attribute[1]}-attribute[0],ac=std::int64_t{attribute[2]}-attribute[0];
+        const auto dx=(ab*(vertices[2].y-vertices[0].y)-ac*(vertices[1].y-vertices[0].y))*16;
+        const auto dy=((vertices[1].x-vertices[0].x)*ac-(vertices[2].x-vertices[0].x)*ab)*16;
+        // Whole-number per-pixel gradients need no fractional DDA rounding.
+        // An isolated integral barycentric result is insufficient proof when
+        // either plane gradient itself would have been rounded by hardware.
+        if(dx%area || dy%area)throw DeviceRefusal("GS fractional triangle attribute DDA precision is not established");
+        std::uint64_t sum=0;
+        for(unsigned n=0;n<3u;++n) {
+            const auto weight=static_cast<std::uint64_t>(weights[n]);
+            if(attribute[n] && weight>(UINT64_MAX-sum)/attribute[n])throw DeviceRefusal("GS triangle interpolation exceeds exact integer range");
+            sum+=weight*attribute[n];
+        }
+        // Exact attribute results are independent of undocumented fractional
+        // DDA precision. Keep fractional cases explicit until established.
+        if(sum%static_cast<std::uint64_t>(area))throw DeviceRefusal("GS fractional triangle attribute DDA precision is not established");
+        return static_cast<std::uint32_t>(sum/static_cast<std::uint64_t>(area));
+    };
     for (int y = top; y < bottom; ++y) {
         if ((scanmask == 2u && !(y & 1)) || (scanmask == 3u && (y & 1))) continue;
         for (int x = left; x < right; ++x) {
+            std::array<std::int64_t,3> weights{};
+            auto pixel_z=z;
+            if(triangle) {
+                bool covered=true;
+                for(unsigned n=0;n<3u;++n) {
+                    const auto& a=vertices[(n+1u)%3u];const auto& b=vertices[(n+2u)%3u];
+                    weights[n]=edge(a,b,x*16,y*16);
+                    if(weights[n]<0 || (!weights[n] && !inclusive(a,b))){covered=false;break;}
+                }
+                if(!covered)continue;
+                if(zwrite || (ztest && zfunc>=2u))pixel_z=interpolate(weights,{vertices[0].z,vertices[1].z,vertices[2].z});
+            }
             auto color=fragment;
+            if(triangle && (mode&8u)) {
+                color=0;
+                for(unsigned n=0;n<3u;++n)if(!vertices[n].rgbaq)throw DeviceRefusal("GS Gouraud consumes unwritten vertex color");
+                for(unsigned c=0;c<4u;++c)color|=interpolate(weights,{
+                    static_cast<std::uint32_t>((*vertices[0].rgbaq>>(c*8u))&255u),static_cast<std::uint32_t>((*vertices[1].rgbaq>>(c*8u))&255u),
+                    static_cast<std::uint32_t>((*vertices[2].rgbaq>>(c*8u))&255u)})<<(c*8u);
+            }
             if(textured) {
+                int u=0,tv=0;
+                if(triangle) {
+                    for(unsigned n=0;n<3u;++n)if(!vertices[n].uv)throw DeviceRefusal("GS triangle consumes unwritten UV coordinates");
+                    u=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].u),static_cast<std::uint32_t>(vertices[1].u),static_cast<std::uint32_t>(vertices[2].u)}))/16;
+                    tv=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].v),static_cast<std::uint32_t>(vertices[1].v),static_cast<std::uint32_t>(vertices[2].v)}))/16;
+                } else {u=uv_at(x,first_vertex_->x,v.x,first_vertex_->u,v.u);tv=uv_at(y,first_vertex_->y,v.y,first_vertex_->v,v.v);}
                 const auto sampled=sample_texture(tex,clamp,
-                    uv_at(x,first_vertex_->x,v.x,first_vertex_->u,v.u),
-                    uv_at(y,first_vertex_->y,v.y,first_vertex_->v,v.v));
+                    u,tv);
+                const auto shaded=color;
                 color=0;
                 for(unsigned c=0;c<4;++c) {
-                    const auto f=(fragment>>(8u*c))&255u,t=(sampled>>(8u*c))&255u;
+                    const auto f=(shaded>>(8u*c))&255u,t=(sampled>>(8u*c))&255u;
                     const auto component=c==3u && !(tex&(1ull<<34)) ? f :
                         tfx==1u ? t : std::min(255u,(f*t)>>7u);
                     color|=component<<(8u*c);
@@ -281,7 +355,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
             if (ztest && zfunc == 0u) continue;
             if (ztest && zfunc >= 2u) {
                 const auto old = vram_.read_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y));
-                if (z < old || (zfunc == 3u && z == old)) continue;
+                if (pixel_z < old || (zfunc == 3u && pixel_z == old)) continue;
             }
             if(color_write) {
                 bool blend=blended;
@@ -313,11 +387,11 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
             }
             if (depth_write) {
                 texture_write_guard(GsVram::depth_address(zbase,bw,zpsm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
-                vram_.write_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y), z, conditional);
+                vram_.write_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y), pixel_z, conditional);
             }
         }
     }
-    first_vertex_.reset();
+    if(triangle)finish_triangle();else first_vertex_.reset();
 }
 Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     if (!display_[0]) throw DeviceRefusal("GS scanout: PMODE not written");

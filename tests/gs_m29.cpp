@@ -365,7 +365,7 @@ void check_drawing_scanout() {
     require(gs.vram().read(0,64,0,2,2)==0x80554433u,"PACKED ADC suppresses kick");
     gs.general_write(0,6); gs.general_write(5,32u|(32ull<<16)); gs.general_write(0x0D,64u|(64ull<<16));
     require(gs.vram().read(0,64,0,2,2)==0x80554433u,"XYZ3 suppresses kick");
-    gs.general_write(0,3); rejects([&]{gs.general_write(5,0);},"point/sprite only");
+    gs.general_write(0,1); rejects([&]{gs.general_write(5,0);},"line/reserved primitive");
     gs.general_write(0,6u|16u); rejects([&]{gs.general_write(5,0);},"texture");
     configure_draw(gs); gs.general_write(0x47,1u<<14); gs.general_write(5,0);
     rejects([&]{gs.general_write(5,64u|(64ull<<16));},"alpha/depth");

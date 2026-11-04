@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-gs-triangles tests/gs_triangles.cpp)
+    target_link_libraries(ps2n-gs-triangles PRIVATE ps2n_core)
+    add_test(NAME native-gs-triangles COMMAND ps2n-gs-triangles)
+    set_tests_properties(native-gs-triangles PROPERTIES TIMEOUT 30)
     add_executable(ps2n-vu-micro tests/vu_micro.cpp)
     add_executable(ps2n-vu-div tests/vu_div.cpp)
     target_link_libraries(ps2n-vu-div PRIVATE ps2n_core)

@@ -1,0 +1,89 @@
+// Original register streams; no BIOS packets or firmware data.
+#include "boot_checks.hpp"
+#include "ps2native/gs_registers.hpp"
+#include <iostream>
+using namespace ps2native;
+using namespace boot_checks;
+namespace {
+void setup(GsRegisters& gs,unsigned type=3) {
+    gs.reset(0);gs.general_write(0,type);gs.general_write(1,0x80201008);
+    gs.general_write(0x18,0);gs.general_write(0x1A,1);gs.general_write(0x4C,1u<<16u);
+    gs.general_write(0x40,(7ull<<16u)|(7ull<<48u));gs.general_write(0x47,3u<<16u);
+    gs.general_write(0x4E,1ull<<32u);gs.general_write(0x22,0);gs.general_write(0x4A,0);
+    gs.general_write(0x50,(1ull<<16u)<<32u);gs.general_write(0x51,0);gs.general_write(0x52,(8ull<<32u)|8u);gs.general_write(0x53,0);
+    for(unsigned n=0;n<16;++n)gs.image_write(0x8000000080000000ull,0x8000000080000000ull);
+}
+void vertex(GsRegisters& gs,unsigned x,unsigned y,unsigned z=0,bool draw=true) {
+    gs.general_write(draw ? 5u : 0xDu,(x*16u)|(std::uint64_t{y*16u}<<16u)|(std::uint64_t{z}<<32u));
+}
+}
+int main() try {
+    for(const bool reverse : {false,true}) {
+        GsRegisters gs;setup(gs);const auto before=gs.vram().pixel_writes();
+        vertex(gs,0,0);vertex(gs,reverse ? 0u : 4u,reverse ? 4u : 0u);
+        require(gs.vram().pixel_writes()==before,"two vertex kicks do not draw a triangle");
+        vertex(gs,reverse ? 4u : 0u,reverse ? 0u : 4u);
+        require(gs.vram().pixel_writes()==before+10u,"triangle coverage uses the top/left rule in both windings");
+        gs.general_write(1,0x80402010);vertex(gs,4,0);vertex(gs,4,4);vertex(gs,0,4);
+        require(gs.vram().pixel_writes()==before+16u,"two adjacent triangles cover their rectangle exactly once with no shared-edge overdraw");
+        for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x)
+            require(gs.vram().read(0,64,0,x,y)==(x<4u && y<4u ? x+y<4u ? 0x80201008u : 0x80402010u : 0x80000000u),
+                "triangle writes match independently enumerated interior and shared-edge pixels");
+    }
+    {
+        GsRegisters gs;setup(gs);const auto before=gs.vram().pixel_writes();
+        const auto fixed=[&](unsigned x,unsigned y){gs.general_write(5,x|(std::uint64_t{y}<<16u));};
+        fixed(8,8);fixed(72,8);fixed(8,72);fixed(72,8);fixed(72,72);fixed(8,72);
+        require(gs.vram().pixel_writes()==before+16u,"fractional vertex positions retain exact fixed-point coverage at integer pixel centers");
+        for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x)
+            require(gs.vram().read(0,64,0,x,y)==(x>=1u && x<=4u && y>=1u && y<=4u ? 0x80201008u : 0x80000000u),
+                "subpixel edges cover exactly the independently enumerated shifted rectangle");
+    }
+    {
+        GsRegisters gs;setup(gs,4);const auto before=gs.vram().pixel_writes();
+        vertex(gs,0,0,0,false);vertex(gs,4,0,0,false);vertex(gs,0,4);vertex(gs,4,4,0,false);vertex(gs,0,8);
+        require(gs.vram().pixel_writes()==before+20u,"XYZ3 advances strip vertices while suppressing only that triangle's drawing kick");
+        require(gs.vram().read(0,64,0,1,5)==0x80201008u && gs.vram().read(0,64,0,3,3)==0x80000000u,
+            "a strip retains the actual previous two vertices after a suppressed middle triangle");
+    }
+    {
+        GsRegisters gs;setup(gs,5);const auto before=gs.vram().pixel_writes();vertex(gs,4,4);
+        for(const auto p : {std::pair{0u,0u},{4u,0u},{8u,0u},{8u,4u},{8u,8u},{4u,8u},{0u,8u},{0u,4u},{0u,0u}})vertex(gs,p.first,p.second);
+        require(gs.vram().pixel_writes()==before+64u,"a fan retains its central vertex and covers the eight triangles without gaps or overlap");
+    }
+    {
+        GsRegisters gs;setup(gs);vertex(gs,0,0);vertex(gs,4,0);gs.general_write(0,3);const auto before=gs.vram().pixel_writes();
+        vertex(gs,0,4);vertex(gs,0,0);require(gs.vram().pixel_writes()==before,"writing PRIM resets the real vertex queue");
+        vertex(gs,4,0);require(gs.vram().pixel_writes()==before+10u,"new PRIM vertices assemble independently from the old partial triangle");
+    }
+    {
+        GsRegisters gs;setup(gs,3u|8u);gs.general_write(1,0x80000000);vertex(gs,0,0);
+        gs.general_write(1,0x80000040);vertex(gs,4,0);gs.general_write(1,0x80004000);vertex(gs,0,4);
+        require(gs.vram().read(0,64,0,1,1)==0x80001010u,"Gouraud interpolation uses snapshotted per-vertex colors rather than the last RGBA latch for all vertices");
+    }
+    {
+        GsRegisters gs;setup(gs);gs.general_write(0x4E,1);vertex(gs,0,0,0);vertex(gs,4,0,4);vertex(gs,0,4,8);
+        require(gs.vram().read_depth(8192,64,0,1,1)==3u,"triangle depth is interpolated from all three actual vertex depths");
+    }
+    {
+        GsRegisters gs;setup(gs,3u|16u|256u);
+        gs.general_write(0x50,(32ull|(1ull<<16u))<<32u);gs.general_write(0x51,0);gs.general_write(0x52,(8ull<<32u)|8u);gs.general_write(0x53,0);
+        for(unsigned n=0;n<16;++n) {
+            const auto a=0x80000000u|((n*4u)<<8u),b=a+0x100u,c=a+0x200u,d=a+0x300u;
+            gs.image_write(a|(std::uint64_t{b}<<32u),c|(std::uint64_t{d}<<32u));
+        }
+        gs.general_write(0x3F,0);gs.general_write(6,32ull|(1ull<<14u)|(3ull<<26u)|(3ull<<30u)|(1ull<<34u)|(1ull<<35u));
+        gs.general_write(8,0);gs.general_write(0x14,0);
+        gs.general_write(3,0);vertex(gs,0,0);gs.general_write(3,64);vertex(gs,4,0);gs.general_write(3,64ull<<16u);vertex(gs,0,4);
+        require(gs.vram().read(0,64,0,1,1)==0x80000900u && gs.vram().read(0,64,0,3,0)==0x80000300u,
+            "UV triangles interpolate actual snapshotted texel coordinates and use the shared texture decoder and DECAL operation");
+    }
+    {
+        GsRegisters gs;setup(gs);gs.general_write(0,3u|8u);gs.general_write(1,0x80000000);vertex(gs,0,0);
+        gs.general_write(1,0x80000001);vertex(gs,3,0);gs.general_write(1,0x80000000);
+        const auto before=gs.vram().pixel_writes();
+        rejects([&]{vertex(gs,0,3);},"fractional triangle attribute DDA precision");
+        require(gs.vram().pixel_writes()==before,"a fractional gradient is refused even where its first barycentric sample happens to be integral");
+    }
+    std::cout<<"Triangle/strip/fan queues, winding, top-left coverage, ADC, PRIM reset, exact Gouraud/depth and explicit precision limits passed\n";
+}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

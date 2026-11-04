@@ -155,8 +155,14 @@ private:
     std::array<std::optional<std::uint64_t>, 256> general_{};
     std::array<std::optional<std::uint64_t>, 15> display_{};
     GsVram vram_;
-    struct Vertex { int x{}, y{}, u{}, v{}; };
+    struct Vertex {
+        int x{}, y{}, u{}, v{};
+        std::uint32_t z{};
+        std::optional<std::uint64_t> rgbaq,st,uv;
+    };
     std::optional<Vertex> first_vertex_;
+    std::array<Vertex,2> triangle_vertices_{};
+    unsigned triangle_vertices_count_{};
     std::array<std::optional<std::uint32_t>,256> clut_{};
     std::array<std::optional<unsigned>,2> clut_base_{};
     std::array<bool,512> sampled_pages_{};

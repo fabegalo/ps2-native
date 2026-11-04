@@ -343,6 +343,7 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
         case 0x00:
             if (value & ~0x7FFull) throw DeviceRefusal(shown + ": PRIM reserved bits set");
             first_vertex_.reset();
+            triangle_vertices_count_=0;
             general_[index] = value;
             return;
         case 0x06: case 0x07:
