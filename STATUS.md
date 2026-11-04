@@ -29,6 +29,9 @@
   de boot permanece separado; nenhum firmware ou jogo real foi reexecutado nesta etapa.
 - **Escopo M3.0 ainda parcial:** IRX/linking, execução VU0/VU1 e INTC/serviços completos não foram
   implementados. O frame atual não atravessa VU. Evidências, medições, comandos e CI: [M3.0](docs/M3.0-STATUS.md).
+- **Validação:** 36 verificações locais e CI do núcleo nos seis alvos aprovadas para `e80c6f2`;
+  a workflow separada do launcher tem falhas de instalação Qt no Windows e de teste QML no macOS ARM64,
+  registradas no relatório, sem alteração da GUI neste incremento.
 
 ## Evidência anterior: M2.9
 
