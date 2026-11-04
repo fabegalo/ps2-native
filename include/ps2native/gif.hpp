@@ -45,10 +45,12 @@ public:
     [[nodiscard]] const std::vector<std::string>& packets() const noexcept { return packets_; }
 
 private:
-    void write_path(std::uint64_t low, std::uint64_t high, GsRegisters& gs, unsigned path);
+    void write_path(std::uint64_t low, std::uint64_t high, GsRegisters& gs, unsigned path,
+                    std::uint64_t unknown_low=0,std::uint64_t unknown_high=0);
     unsigned path_{3};
     void consume();
-    void packed(unsigned descriptor, std::uint64_t low, std::uint64_t high, GsRegisters& gs);
+    void packed(unsigned descriptor, std::uint64_t low, std::uint64_t high, GsRegisters& gs,
+                std::uint64_t unknown_low=0,std::uint64_t unknown_high=0);
     std::uint32_t ctrl_{}, mode_{};
     bool vif_path3_mask_{};
     bool path1_requested_{};

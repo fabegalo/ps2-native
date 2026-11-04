@@ -18,6 +18,20 @@ void setup(VuControl& vu) {
 }
 }
 int main() try {
+    {
+        Gif gif;GsRegisters gs;gif.reset();gs.reset(0);gif.request_path1();
+        gif.write_path1((1ull<<60)|0x8001u,1,gs);
+        gif.write_path1_observed({0x0000005000000050ull,0x0000000F0000000Full},
+                                 {0x0000000000000000ull,0x0000007F0000007Full},gs);
+        const auto color=gs.general_observed(1);
+        require(color && color->value==0x3F80000000005050ull && color->unknown==0x7F7F0F0Full && gif.packets().size()==1,
+            "PACKED RGBA transfers the exact unknown byte bits into the GS latch without selecting a color or losing real EOP");
+        gs.general_write(1,0x3F80000080402010ull);
+        require(gs.general_observed(1)->unknown==0,"known color writes replace previous opacity");
+        gs.general_write_observed(2,{0xBF8000FF3F8000FFull,0xFF000000FFull});
+        require(gs.general_observed(2)->unknown==0 && gs.general(2)==0xBF8000003F800000ull,
+            "documented ST mantissa truncation also proves observed raw GS writes");
+    }
     for(unsigned bit=0;bit<8u;++bit) {
         VuControl vu;Gif gif;GsRegisters gs;gs.reset(0);
         pair(vu,0,0x800006FC);pair(vu,1,0x8000033C,0x400002FF);pair(vu,2,0x8000033C);

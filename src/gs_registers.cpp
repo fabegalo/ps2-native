@@ -333,11 +333,21 @@ std::uint64_t GsRegisters::VerticalClock::next_edge(std::uint64_t from, bool end
     return first + fields * period;
 }
 
+void GsRegisters::general_write_observed(std::uint8_t index,ObservedDoubleword word) {
+    if(!word.unknown){general_write(index,word.value);return;}
+    // Color/coordinate latches carry raw data; no numeric operation or vertex
+    // kick takes place on these stores. Retained unknown bits stay opaque.
+    if(index!=1u && index!=2u)throw DeviceRefusal("GS unknown register data requires a modeled opaque latch");
+    const auto precision=index==1u ? ~(0xFFull<<32u) : ~0x000000FF000000FFull;
+    general_[index]=word.value&~word.unknown&precision;
+    general_unknown_[index]=word.unknown&precision;
+}
 void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
     // GS manual v6 pp.52/119/123: all three STQ mantissas lose their
     // low eight bits on input, through PACKED, REGLIST and A+D alike.
     if(index==1u)value&=~(0xFFull<<32u);
     if(index==2u)value&=~0x000000FF000000FFull;
+    if(index==1u || index==2u)general_unknown_[index]=0;
     const auto shown = "GS general register " + hex(index, 2) + " = " + hex(value, 16);
     switch (index) {
         // State registers (ps2sdk gs_gp.h addresses): PRIM, RGBAQ, ST, UV, TEX0,

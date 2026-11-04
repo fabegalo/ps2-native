@@ -74,27 +74,33 @@ void Gif::write_path2(std::uint64_t low, std::uint64_t high, GsRegisters& gs) {
     write_path(low, high, gs, 2u);
 }
 void Gif::write_path1(std::uint64_t low,std::uint64_t high,GsRegisters& gs) {
-    if(!path1_requested_)throw DeviceRefusal("GIF PATH1 transfer without a VU1 request");
-    write_path(low,high,gs,1u);
-    if(!in_packet_)path1_requested_=false; // real EOP, including a zero-NLOOP terminal tag
+    write_path1_observed({low,0},{high,0},gs);
 }
 void Gif::write_path1_observed(ObservedDoubleword low,ObservedDoubleword high,GsRegisters& gs) {
+    if(!path1_requested_)throw DeviceRefusal("GIF PATH1 transfer without a VU1 request");
     if(low.unknown || high.unknown) {
-        std::uint64_t discarded_low=0,discarded_high=0;
+        std::uint64_t allowed_low=0,allowed_high=0;
+        if(in_packet_ && loops_left_ && format_==0u && ((regs_>>(reg_index_*4u))&15u)==1u) {
+            // PACKED RGBA's byte fields remain opaque in the GS color latch.
+            // Every other bit in its four words is padding (EE manual 7.2.2).
+            allowed_low=allowed_high=~0ull;
+        }
         if(in_packet_ && loops_left_ && format_==0u &&
            ((regs_>>(reg_index_*4u))&15u)==2u) {
             // GS manual v6 3.4.4, RGBAQ/ST (pp.52,119,123): the low
             // eight mantissa bits of S, T AND Q are discarded on input.
             // PACKED STQ's fourth word is unused (EE manual 7.2.2).
-            discarded_low=0x000000FF000000FFull;
-            discarded_high=0xFFFFFFFF000000FFull;
+            allowed_low=0x000000FF000000FFull;
+            allowed_high=0xFFFFFFFF000000FFull;
         }
-        if((low.unknown&~discarded_low) || (high.unknown&~discarded_high))
+        if((low.unknown&~allowed_low) || (high.unknown&~allowed_high))
             throw DeviceRefusal("PATH1 consumes unknown VU1 packet bits in a retained GIF/GS field");
     }
-    write_path1(low.value&~low.unknown,high.value&~high.unknown,gs);
+    write_path(low.value&~low.unknown,high.value&~high.unknown,gs,1u,low.unknown,high.unknown);
+    if(!in_packet_)path1_requested_=false;
 }
-void Gif::write_path(std::uint64_t low, std::uint64_t high, GsRegisters& gs, unsigned path) {
+void Gif::write_path(std::uint64_t low, std::uint64_t high, GsRegisters& gs, unsigned path,
+                     std::uint64_t unknown_low,std::uint64_t unknown_high) {
     const auto shown = [&] { return "GIF FIFO quadword " + hex(high, 16) + "_" + hex(low, 16); };
     if ((ctrl_ & kCtrlStop) != 0u) throw DeviceRefusal(shown() + " while GIF_CTRL.PSE stops the GIF: not modeled");
     if(path!=1u && path1_requested_ && !(in_packet_ && path_==path))
@@ -142,7 +148,7 @@ void Gif::write_path(std::uint64_t low, std::uint64_t high, GsRegisters& gs, uns
         return;
     }
     if (format_ == 0u) {
-        packed(static_cast<unsigned>((regs_ >> (reg_index_ * 4u)) & 15u), low, high, gs);
+        packed(static_cast<unsigned>((regs_ >> (reg_index_ * 4u)) & 15u), low, high, gs,unknown_low,unknown_high);
         consume();
         return;
     }
@@ -164,14 +170,17 @@ void Gif::consume() {
         }
     }
 }
-void Gif::packed(unsigned d, std::uint64_t lo, std::uint64_t hi, GsRegisters& gs) {
+void Gif::packed(unsigned d, std::uint64_t lo, std::uint64_t hi, GsRegisters& gs,
+                 std::uint64_t unknown_low,std::uint64_t unknown_high) {
     if (d == 0xEu) {
         if (hi & ~0xFFull) throw DeviceRefusal("GIF A+D bits 72-127 set; their effect is not documented");
         gs.general_write(static_cast<std::uint8_t>(hi), lo);
     } else if (d == 1u) {
         const auto rgba = (lo & 255u) | (((lo >> 32) & 255u) << 8) |
                           ((hi & 255u) << 16) | (((hi >> 32) & 255u) << 24);
-        gs.general_write(1u, rgba | (std::uint64_t{q_} << 32));
+        const auto unknown=(unknown_low&255u)|(((unknown_low>>32)&255u)<<8)|
+                           ((unknown_high&255u)<<16)|(((unknown_high>>32)&255u)<<24);
+        gs.general_write_observed(1u, {rgba | (std::uint64_t{q_} << 32),unknown});
     } else if (d == 2u) {
         gs.general_write(2u, lo); q_ = static_cast<std::uint32_t>(hi)&0xFFFFFF00u;
     } else if (d == 3u) {

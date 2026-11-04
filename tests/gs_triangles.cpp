@@ -18,6 +18,17 @@ void vertex(GsRegisters& gs,unsigned x,unsigned y,unsigned z=0,bool draw=true) {
 }
 }
 int main() try {
+    {
+        GsRegisters gs;setup(gs);
+        gs.general_write_observed(1,{0x80201000u,15u});vertex(gs,0,0,0,false);vertex(gs,4,0,0,false);vertex(gs,0,4,0,false);
+        require(gs.vram().read(0,64,0,0,0)==0x80000000u,"ADC-suppressed vertices transport opaque colors without drawing or fabricating bits");
+        gs.general_write(0,3);vertex(gs,0,0);vertex(gs,4,0);const auto before=gs.vram().pixel_writes();
+        rejects([&]{vertex(gs,0,4);},"unknown fragment color bits");
+        require(gs.vram().pixel_writes()==before,"a real drawing kick refuses retained color uncertainty before any fragment write");
+        gs.general_write(0,3u|8u);vertex(gs,0,0);gs.general_write(1,0x80402010u);vertex(gs,4,0);
+        rejects([&]{vertex(gs,0,4);},"unknown vertex color bits");
+        require(gs.vram().pixel_writes()==before,"Gouraud retains each old vertex's uncertainty after a known current color overwrite");
+    }
     for(const bool reverse : {false,true}) {
         GsRegisters gs;setup(gs);const auto before=gs.vram().pixel_writes();
         vertex(gs,0,0);vertex(gs,reverse ? 0u : 4u,reverse ? 4u : 0u);

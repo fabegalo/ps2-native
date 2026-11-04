@@ -112,6 +112,7 @@ public:
     [[nodiscard]] InterruptRequest take_interrupt_request(std::uint64_t now);
     // GS general register writes from GIF. Unsupported effects fail at use.
     void general_write(std::uint8_t index, std::uint64_t value);
+    void general_write_observed(std::uint8_t index,ObservedDoubleword word);
     void image_write(std::uint64_t low, std::uint64_t high);
     [[nodiscard]] const GsVram& vram() const noexcept { return vram_; }
     // Snapshot of a single progressive read circuit. No scaling or invented
@@ -119,6 +120,10 @@ public:
     [[nodiscard]] Framebuffer scanout(std::uint64_t ee_cycle) const;
     // Value last written to general register `index` since reset.
     [[nodiscard]] std::optional<std::uint64_t> general(std::uint8_t index) const { return general_[index]; }
+    [[nodiscard]] std::optional<ObservedDoubleword> general_observed(std::uint8_t index) const {
+        if(!general_[index])return {};
+        return ObservedDoubleword{*general_[index],general_unknown_[index]};
+    }
     // Last value written to a modeled register since reset (for traces and tests).
     [[nodiscard]] std::optional<std::uint64_t> latched(std::uint32_t physical) const;
 
@@ -153,12 +158,14 @@ private:
     std::optional<unsigned> diagnostic_reset_scanmask_;
     std::optional<std::uint64_t> csr_written_;
     std::array<std::optional<std::uint64_t>, 256> general_{};
+    std::array<std::uint64_t,256> general_unknown_{};
     std::array<std::optional<std::uint64_t>, 15> display_{};
     GsVram vram_;
     struct Vertex {
         int x{}, y{}, u{}, v{};
         std::uint32_t z{};
         std::optional<std::uint64_t> rgbaq,st,uv;
+        std::uint64_t rgbaq_unknown{};
     };
     std::optional<Vertex> first_vertex_;
     std::array<Vertex,2> triangle_vertices_{};

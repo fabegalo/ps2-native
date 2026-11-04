@@ -10,7 +10,7 @@ std::uint64_t GsRegisters::required(std::uint8_t index) const {
     return *general_[index];
 }
 void GsRegisters::reset_drawing() {
-    general_ = {}; display_ = {}; first_vertex_.reset(); triangle_vertices_count_=0; transfer_ = {};
+    general_ = {}; general_unknown_={}; display_ = {}; first_vertex_.reset(); triangle_vertices_count_=0; transfer_ = {};
     general_[0x22]=diagnostic_reset_scanmask_;
     clut_={};clut_base_={};sampled_pages_={};transfer_generation_=0;texture_flush_generation_.reset();
     imr_ = 0x7F00u;
@@ -170,7 +170,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     const Vertex v{static_cast<int>(value & 0xFFFFu) - static_cast<int>(offset & 0xFFFFu),
                    static_cast<int>((value >> 16) & 0xFFFFu) - static_cast<int>((offset >> 32) & 0xFFFFu),
                    static_cast<int>(uv&0x3FFFu),static_cast<int>((uv>>16)&0x3FFFu),
-                   static_cast<std::uint32_t>(value>>32u)&((index&7u)==4u ? 0xFFFFFFu : 0xFFFFFFFFu),general_[1],general_[2],general_[3]};
+                   static_cast<std::uint32_t>(value>>32u)&((index&7u)==4u ? 0xFFFFFFu : 0xFFFFFFFFu),general_[1],general_[2],general_[3],general_unknown_[1]};
     std::array<Vertex,3> vertices{};
     const auto finish_triangle=[&] {
         if(type==3u)triangle_vertices_count_=0;
@@ -306,10 +306,12 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
             if(triangle && (mode&8u)) {
                 color=0;
                 for(unsigned n=0;n<3u;++n)if(!vertices[n].rgbaq)throw DeviceRefusal("GS Gouraud consumes unwritten vertex color");
+                for(const auto& source:vertices)if(source.rgbaq_unknown&0xFFFFFFFFull)
+                    throw DeviceRefusal("GS Gouraud consumes unknown vertex color bits");
                 for(unsigned c=0;c<4u;++c)color|=interpolate(weights,{
                     static_cast<std::uint32_t>((*vertices[0].rgbaq>>(c*8u))&255u),static_cast<std::uint32_t>((*vertices[1].rgbaq>>(c*8u))&255u),
                     static_cast<std::uint32_t>((*vertices[2].rgbaq>>(c*8u))&255u)})<<(c*8u);
-            }
+            } else if(general_unknown_[1]&0xFFFFFFFFull)throw DeviceRefusal("GS drawing consumes unknown fragment color bits");
             if(textured) {
                 int u=0,tv=0;
                 if(triangle) {
