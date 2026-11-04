@@ -62,6 +62,8 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
         iop_.diagnostic_spu2_pio_word_cycles(*assumptions->spu2_pio_word_cycles);
     if(assumptions && assumptions->spu2_effect_end_reset)
         iop_.diagnostic_spu2_effect_end_reset(*assumptions->spu2_effect_end_reset);
+    if(assumptions && assumptions->spu2_effect_start_reset)
+        iop_.diagnostic_spu2_effect_start_reset(*assumptions->spu2_effect_start_reset);
     // Hypothesis: counters, modes (disabled) and the latch are zero/unset after reset.
     timers_ = {};
     f500_.reset();

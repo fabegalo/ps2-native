@@ -232,6 +232,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     spu2_endx_.fill(ObservedWord{0u,0xFFFFFFu});
     spu2_release_upper_={};spu2_release_pending_={};
     diagnostic_spu2_effect_end_.reset();
+    diagnostic_spu2_effect_start_.reset();
     spu2_next_sample_={};spu2_last_sample_={};spu2_sample_count_={};spu2_clock_active_=false;
     spu2_transfer_={};spu2_ram_.clear();spu2_ram_written_.clear();diagnostic_spu2_pio_cycles_=0;
     spu2_adma_={};diagnostic_spu2_adma_cycles_=0;diagnostic_spu2_admas_control_latch_=false;
@@ -1273,15 +1274,23 @@ bool Iop::tick_spu2_adma(unsigned core) {
     }
     return true;
 }
+void Iop::diagnostic_spu2_effect_start_reset(std::array<std::uint32_t,2> values) {
+    if(cycle_ || values[0]>0xFFFFFu || values[1]>0xFFFFFu || (values[0]&7u) || (values[1]&7u))
+        throw DeviceRefusal("SPU2 initial ESA experiment requires aligned 20-bit addresses before execution");
+    diagnostic_spu2_effect_start_=values;
+}
 bool Iop::spu2_effects_active(unsigned core) const {
     return spu2_control_[core] && (spu2_control_[core]->value&0x8080u)==0x8080u;
 }
 std::pair<std::uint32_t,std::uint32_t> Iop::spu2_effect_area(unsigned core) const {
     const auto base=0x1F900000u+core*0x400u;
     const auto high=latch(base+0x2E0u),low=latch(base+0x2E2u),end=latch(base+0x33Cu);
-    if(!high || !*high || !low || !*low || ((!end || !*end) && !diagnostic_spu2_effect_end_))
+    if((((!high || !*high) || (!low || !*low)) && !diagnostic_spu2_effect_start_) ||
+       ((!end || !*end) && !diagnostic_spu2_effect_end_))
         throw IopStop{"SPU2 effects require a known workspace start and end"};
-    const auto first=((**high&0xFu)<<16u)|(**low&0xFFFFu);
+    const auto initial=diagnostic_spu2_effect_start_ ? (*diagnostic_spu2_effect_start_)[core] : 0u;
+    const auto first=((((high && *high) ? **high : initial>>16u)&0xFu)<<16u)|
+                     (((low && *low) ? **low : initial)&0xFFFFu);
     const auto last=(((end && *end) ? **end : (*diagnostic_spu2_effect_end_)[core])&0xFu)<<16u|0xFFFFu;
     if((first&7u) || first>last || first<0x2800u)
         throw IopStop{"SPU2 effect workspace alignment, wrap or overlap with capture/input buffers is not modeled"};

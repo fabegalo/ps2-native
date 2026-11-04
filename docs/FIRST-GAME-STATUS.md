@@ -1012,3 +1012,16 @@ IRQ, área desconhecida/sobreposta aos buffers dinâmicos e arbitragem PIO/ADMA
 recusam. Desabilitar efeitos não recupera dados de RAM já tornados desconhecidos.
 Isso é execução conservadora de estado parcial, não implementação de áudio
 reverberado. Referências comportamentais SPU2 já consultadas, código BSD próprio.
+
+Ensaio 71: core 0 habilitou efeitos com saída provadamente zero; core 1 parou
+em `0x65768` / 46.715.099 por ESA ainda desconhecido. EE `0x81FD0` /
+360.000.000, 99,1884 s; RAM/GIF/PMODE iguais ao 70. Seis testes focados
+(SPU2 controle/PIO/ADMA, SPDIF, boot e conhecimento IOP) passaram.
+`8bdb0ca` e `6d49893`: núcleo e launcher aprovados nos seis alvos.
+
+Próximo experimento: ESA interno inicial EFFF8/FFFF8, como na referência
+comportamental, mas sem medição do console. Opção separada, desativada por
+padrão e removida no reset; não fornece readback. Cada metade escrita pelo
+guest substitui a parte correspondente da hipótese. Endereços inválidos,
+mudança tardia e leituras não comprovadas recusam. PS2Recomp áudio consultado;
+a referência de inicialização SPU2 não é prova de valores físicos de reset.
