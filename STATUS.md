@@ -18,10 +18,12 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
-- Super Bust-A-Move alcançou 154.883.782 instruções, EE `0x80005F00`,
-  IOP `0x1AEE8`, 1.664 bytes SIF1 e 1.536 bytes SIF0. Após contexto COP0,
-  IRQ de DMA pendente, ROM1 validada e SIO2 ocioso, chega ao status CDVD.
-  A montagem explícita da imagem local está sendo exercitada no ensaio seguinte.
+- Super Bust-A-Move transferiu setores reais do CD, incluindo os LBAs
+  15637–15691 de IOPRP202, por ReadCd/DMA3. Após a tag SIF1 NEXT,
+  alcançou IOP `0x1F458` / 31.828.183 instruções, consulta MECHACON `03:00`;
+  1.920 bytes SIF1 e 1.696 SIF0. A consulta agora usa a versão medida do
+  perfil do console, com reexecução em andamento. CAV nominal é hipótese
+  explícita de diagnóstico; não houve loader de módulos pelo host.
 - DMA/IRQ SIF nos dois sentidos, pacotes parciais, PLZCW e salvamento simbólico
   de BPC/PCCR exercitados por código convidado. Nenhuma resposta RPC fabricada.
 - Modo original repetido após ROM1/CDVD: mesmos PCs `0x80007D20`/`0x80005F00`,

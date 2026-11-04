@@ -38,6 +38,16 @@ int main() try {
     device_refused([&]{(void)memory.read32(0xBF402004u);},"device not implemented");
     device_refused([&]{memory.write32(0xBF402014u,0);},"device not implemented");
     device_refused([&]{(void)memory.read8(0xBF40201Fu);},"device not implemented");
+    // The query returns this exact profile, without a generic emulator version
+    // or a synthetic success byte before its four version bytes.
+    memory.write8(0xBF402017u,0);memory.write8(0xBF402016u,3);
+    for(const auto byte:profile.mechacon->version)
+        require(memory.read8(0xBF402018u)==byte,"MECHACON version follows the selected profile in byte order");
+    require(memory.read8(0xBF402017u)==0x40u,"version response is exactly four bytes");
+    Iop unknown;unknown.reset(rom,nullptr);unknown.ee_cdvd_write(0x1F402017u,1,0);
+    rejects([&]{unknown.ee_cdvd_write(0x1F402016u,1,3);},"no measured MECHACON version");
+    unknown.reset(rom,&profile);unknown.ee_cdvd_write(0x1F402017u,1,0x30u);
+    rejects([&]{unknown.ee_cdvd_write(0x1F402016u,1,3);},"only the parameter-free MechaconVersion");
     prepare_ee_boot(bios,nullptr,state,memory,&profile);
     memory.write8(0xBF402017u,0);memory.write8(0xBF402017u,0x20);
     device_refused([&]{memory.write8(0xBF402016u,0x0A);},"no NVM image is supplied");

@@ -377,3 +377,63 @@ seus serviços HLE não foram incorporados. Registradores seguem ps2tek.
 Cinco testes ROM1/IOP/CDVD/SIO2 e o teste de disco ISO/Mode1/Mode2 passaram.
 O modo BIOS original foi repetido sem as opções: mesmos PCs e hash anteriores
 (`gs-iop-original-final.log`, ignorado), zero pacotes/pixels do jogo.
+
+### CDVD ReadCd e DMA3 — continuação
+
+- Ensaio 35: 154.886.806 instruções, EE `0x80005F00`, IOP `0x1B470` /
+  23.412.925; escrita HOWTO `0x80` em `0x1F402006`. UpdateStickyFlags foi
+  executado pelo convidado. Zero pacotes GIF/pixels.
+- Ensaios 36–37: 154.888.934 instruções, IOP `0x1ADF4` / 23.413.191;
+  ReadCd do LBA 16, um setor, retry `0x10`, spindle `0x85`, formato 2048.
+  Zero pacotes GIF/pixels; ainda nenhum setor transferido nesses ensaios.
+- ReadCd CLV/2048 e DMA3 request-mode transferem setores reais da imagem,
+  com buffer de um setor, backpressure, DPCR/DMACEN, BCR/MADR, flag DMA e
+  IRQ CDVD apenas depois dos bytes entregues. Tamanhos, modos, endereços e
+  comandos não cobertos continuam recusados. Sem execução host de IRX/RPC.
+- Testes próprios validam dois setores byte a byte, ausência de IRQ antes
+  dos dados, recepção curta que mantém o comando ocupado, canal desabilitado
+  e ACK independente. Seis testes IOP/SIF/CDVD passaram.
+- HOWTO `0x80` foi relacionado ao caminho de dados de 2048 bytes em
+  [ps2sdk CDVDMAN](https://github.com/ps2dev/ps2sdk/blob/master/iop/cdvd/cdvdman/src/cdvdman.c)
+  e ao [mapa DEV5](https://github.com/ps2dev/ps2sdk/blob/master/common/include/dev5_mmio_hwport.h).
+  PS2Recomp CDVD foi consultado previamente; implementação BSD independente,
+  sem copiar nem adaptar seus serviços HLE ou código de outras licenças.
+- Latência de setor CLV e seek de 30/100 ms são hipóteses funcionais baseadas
+  em ps2tek, não timing medido. CAV radial continua recusado no default.
+  A montagem pode habilitar explicitamente o experimento CAV com tempo
+  nominal CLV; ele é registrado no log e não é evidência de fidelidade temporal.
+- CI do commit `d4f5803`: seis alvos do núcleo aprovados no
+  [run 41781003115](https://github.com/fabegalo/ps2-native/actions/runs/41781003115).
+  Isso cobre o checkpoint ROM1/CDVD media, ainda não o DMA3 acrescentado depois.
+
+### Setores reais e continuação do SIF1
+
+O ensaio 38 transferiu os LBAs 16, 18, 24 e 15637–15691 da imagem local;
+a última faixa contém IOPRP202. O convidado voltou a executar configuração
+MECHACON e inicialização SIF depois dessas leituras. Não houve loader IRX host.
+O IOP parou em `0xAE98`, ciclo 31.825.435, na tag SIF1 `NEXT` de QWC zero
+em `0x21570`, destino `0x21380`. O harness continuou indevidamente o EE até
+um bilhão de instruções, no loop `0x81FC0–0x81FDC`: isso não é progresso.
+A continuação local agora termina também quando o IOP está parado.
+
+Implementado `NEXT` genérico: payload adjacente à tag, próximo TADR fornecido
+por ADDR, QWC zero sem fabricar dados ou conclusão. Testes próprios cobrem
+payload, salto vazio, endereço inválido e regressões REFE/REF/IRQ.
+Consultado previamente [PS2Recomp DMA](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/ps2xRuntime/src/lib/Kernel/Stubs/DMA.cpp)
+e conferida a semântica na [documentação DMA](https://psi-rockin.github.io/ps2tek/#dmac).
+
+Ensaio 39: `NEXT` executado; 1.920 bytes SIF1 / 1.696 SIF0. Novo bloqueio
+IOP `0x1F458`, 31.828.183 instruções: comando MECHACON `03:00`, leitura
+da versão. EE amostrado em `0x81FD0`, orçamento acumulado 240 milhões,
+62,7584 s; RAM canônica `e2811c37c7ba28af796ae54231016dbf6e23f3db0e0a254f655de966dd04976d`,
+um doubleword parcialmente desconhecido. Zero pacotes GIF/pixels do jogo.
+
+A consulta `03:00` usa agora os quatro bytes já medidos do perfil selecionado,
+sem versão universal ou byte de sucesso acrescentado; perfil desconhecido e
+outros subcomandos continuam recusados. PS2Recomp CDVD foi novamente consultado.
+O IRQ de ReadCd passou de `3` nos ensaios 38–39 a `2` (conclusão de comando),
+conforme o comportamento de referência examinado em
+[PCSX2 CDVD](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/CDVD/CDVD.cpp);
+a menção de ps2tek a ambos os bits é incerta. Sem medição física reivindicada.
+Sete testes focados IOP/SIF/CDVD/SIO2 passaram; após a consulta de versão,
+três testes diretamente afetados passaram. Reexecução do jogo em andamento.

@@ -148,7 +148,9 @@ public:
     [[nodiscard]] const Gif& gif() const noexcept { return registers_.gif(); }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
     [[nodiscard]] const Iop& iop() const noexcept { return registers_.iop(); }
-    void mount_disc(std::shared_ptr<DiscImage> disc,Iop::DiscMedium medium) { registers_.mount_disc(std::move(disc),medium); }
+    void mount_disc(std::shared_ptr<DiscImage> disc,Iop::DiscMedium medium,bool diagnostic_cav_nominal_timing=false) {
+        registers_.mount_disc(std::move(disc),medium,diagnostic_cav_nominal_timing);
+    }
     [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return registers_.video_encoder(); }
     [[nodiscard]] std::uint32_t read_vu_control(unsigned index) const { return registers_.read_vu_control(index); }
     void write_vu_control(unsigned index, std::uint32_t value) { registers_.write_vu_control(index,value); }

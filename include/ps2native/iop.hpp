@@ -78,7 +78,7 @@ public:
     enum class DiscMedium { Ps2Cd, Ps2Dvd };
     // Explicit host insertion before execution, already detected and paused.
     // No filesystem service or IRX loader is installed in the guest.
-    void mount_disc(std::shared_ptr<DiscImage> disc, DiscMedium medium);
+    void mount_disc(std::shared_ptr<DiscImage> disc, DiscMedium medium, bool diagnostic_cav_nominal_timing = false);
     // SIF register `index` (0 MSCOM, 1 SMCOM, 2 MSFLG, 3 SMFLG, 4 CTRL, 6 BD6;
     // EE 0x1000F200 + index * 0x10) as the EE reads or writes it; the IOP must
     // have been run up to now. Throws DeviceRefusal for what is not modeled.
@@ -123,6 +123,7 @@ private:
     void pump_sif0();
     void finish_iop_sif0();
     void update_dma_irq();
+    void pump_cdvd();
     std::uint32_t iop_sif0_read(std::uint32_t address) const;
     void iop_sif0_write(std::uint32_t address, std::uint32_t value);
     std::uint32_t iop_sif1_read(std::uint32_t address) const;
@@ -258,6 +259,13 @@ private:
     std::optional<std::uint64_t> cdvd_complete_at_;
     std::shared_ptr<DiscImage> disc_;
     std::uint8_t cdvd_type_{}, cdvd_status_{}, cdvd_sticky_{};
+    bool diagnostic_cav_nominal_timing_{};
+    std::optional<std::uint8_t> cdvd_howto_;
+    std::vector<std::uint8_t> cdvd_params_;
+    std::uint32_t cdvd_lba_{}, cdvd_sectors_{}, cdvd_sector_cycles_{};
+    std::uint64_t cdvd_sector_at_{};
+    std::array<std::uint8_t,2048> cdvd_sector_{};
+    unsigned cdvd_sector_offset_{2048};
     // SIF registers shared with the EE (ps2tek "SIF Registers"): MSCOM is
     // written by the EE, SMCOM by the IOP (empty: never written); MSFLG bits
     // are set by the EE and cleared by the IOP, SMFLG the other way round.

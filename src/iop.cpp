@@ -194,6 +194,9 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     // Only NOP/NOPsync completion is modeled; other commands fail before issue.
     cdvd_irq_=0; cdvd_ncommand_.reset(); cdvd_complete_at_.reset();
     disc_.reset();cdvd_type_=cdvd_status_=cdvd_sticky_=0;
+    diagnostic_cav_nominal_timing_=false;
+    cdvd_howto_.reset();cdvd_params_.clear();cdvd_lba_=cdvd_sectors_=0;
+    cdvd_sector_cycles_=0;cdvd_sector_at_=0;cdvd_sector_offset_=2048;
     ee_dma_suspended_=hardware && hardware->d_enabler && (*hardware->d_enabler&0x10000u);
     // SIF: the communication registers are unknown until written. The flags
     // are 0 (hypothesis: SIFMAN and the EE kernel each wait for the other side
@@ -450,13 +453,18 @@ void Iop::pump_sif1() {
             std::uint32_t tag=0,address=0;
             for(unsigned b=0;b<4;++b) {tag|=std::uint32_t{ee_ram_[*tadr+b]}<<(8*b);address|=std::uint32_t{ee_ram_[*tadr+4+b]}<<(8*b);}
             const auto id=(tag>>28u)&7u, qwc=tag&0xFFFFu;
-            if((id!=0u && id!=3u) || (tag&0x0C000000u))
-                throw IopStop{"EE SIF1 source chain: only REFE/REF without priority change modeled"};
-            if((address&15u) || address>ee_ram_.size() || std::uint64_t{qwc}*16u>ee_ram_.size()-address)
+            if((id!=0u && id!=2u && id!=3u) || (tag&0x0C000000u))
+                throw IopStop{"EE SIF1 source chain: only REFE/NEXT/REF without priority change modeled"};
+            // NEXT sends the qwords following this tag, then fetches the tag
+            // at ADDR. A zero-QWC NEXT still changes TADR without completion.
+            const auto source=id==2u ? *tadr+16u : address;
+            if((source&15u) || source>ee_ram_.size() || std::uint64_t{qwc}*16u>ee_ram_.size()-source)
                 throw IopStop{"EE SIF1 referenced source outside aligned main RAM"};
+            if(id==2u && ((address&15u) || address>ee_ram_.size() || ee_ram_.size()-address<16u))
+                throw IopStop{"EE SIF1 NEXT tag outside aligned main RAM"};
             ee_sif1_chain_end_=id==0u || ((tag&0x80000000u) && (ee_sif1_chcr_&0x80u));
             ee_sif1_chcr_=(ee_sif1_chcr_&0xFFFFu)|(tag&0xFFFF0000u);
-            ee_sif1_madr_=address; ee_sif1_qwc_=qwc; *tadr+=16u;
+            ee_sif1_madr_=source; ee_sif1_qwc_=qwc; *tadr=id==2u ? address : *tadr+16u;
             events_.push_back({cycle_,"SIF1 EE source tag id="+std::to_string(id)+" qwc="+std::to_string(qwc)});
         }
         if (ee_sif1_qwc_ && sif1_fifo_.size() <= 28u) {
@@ -705,7 +713,7 @@ void Iop::pump_sif0() {
     }
 }
 
-void Iop::mount_disc(std::shared_ptr<DiscImage> disc,DiscMedium medium) {
+void Iop::mount_disc(std::shared_ptr<DiscImage> disc,DiscMedium medium,bool diagnostic_cav_nominal_timing) {
     if(cycle_ || stop_ || !disc)throw DeviceRefusal("CDVD mount requires an active reset state and a disc image");
     if(medium!=DiscMedium::Ps2Cd && medium!=DiscMedium::Ps2Dvd)
         throw DeviceRefusal("CDVD medium is unsupported");
@@ -714,6 +722,48 @@ void Iop::mount_disc(std::shared_ptr<DiscImage> disc,DiscMedium medium) {
     // Host explicitly supplies a detected disc: tray closed, spindle on,
     // paused. Spin-up/detection latency is outside this mount operation.
     cdvd_status_=cdvd_sticky_=0x0Au;
+    diagnostic_cav_nominal_timing_=diagnostic_cav_nominal_timing;
+}
+
+void Iop::pump_cdvd() {
+    if(!cdvd_sectors_)return;
+    if(cdvd_sector_offset_==2048) {
+        if(cycle_<cdvd_sector_at_)return;
+        try {disc_->read_sector(cdvd_lba_,cdvd_sector_);}
+        catch(const std::exception& error){throw IopStop{std::string("CDVD sector read: ")+error.what()};}
+        cdvd_sector_offset_=0;cdvd_status_=6u;cdvd_sticky_|=cdvd_status_;
+    }
+    const auto regptr=[&](std::uint32_t address)->std::optional<std::uint32_t>& {
+        for(auto& item:latches_)if(item.first==address)return item.second;
+        throw IopStop{"CDVD DMA register has not been initialized"};
+    };
+    auto& chcr=regptr(0x1F8010B8u);
+    if(!chcr || !(*chcr&kChcrStart))return; // A real sector waits for its receiver.
+    const auto enable=latch(0x1F801578u),priority=latch(0x1F8010F0u);
+    if(!enable || !*enable || !priority || !*priority)throw IopStop{"CDVD DMA enable/priority is unknown"};
+    if(!(**enable&1u) || !(**priority&(1u<<15u)))return;
+    auto& madr=regptr(0x1F8010B0u);auto& bcr=regptr(0x1F8010B4u);
+    if(!madr || !bcr)throw IopStop{"CDVD DMA address/block control is unknown"};
+    const auto bytes=(*bcr&0xFFFFu)*4u,blocks=*bcr>>16u;
+    if(!bytes || !blocks || bytes>2048u || (2048u%bytes) ||
+       *madr>ram_.size() || bytes>ram_.size()-*madr)
+        throw IopStop{"CDVD DMA block size/count/address is unsupported"};
+    auto& dicr=regptr(kDicr);
+    if(blocks==1u && !dicr)throw IopStop{"CDVD DMA interrupt mask is unknown"};
+    std::copy_n(cdvd_sector_.begin()+cdvd_sector_offset_,bytes,ram_.begin()+*madr);
+    std::fill_n(ram_written_.begin()+*madr,bytes,std::uint8_t{1});
+    *madr+=bytes;*bcr-=0x10000u;cdvd_sector_offset_+=bytes;
+    if(blocks==1u) {
+        *chcr&=~kChcrStart;
+        if(*dicr&(1u<<19u))*dicr|=1u<<27u;
+        update_dma_irq();events_.push_back({cycle_,"CDVD DMA3 complete"});
+    }
+    if(cdvd_sector_offset_==2048) {
+        events_.push_back({cycle_,"CDVD sector "+std::to_string(cdvd_lba_)+" transferred (2048 bytes)"});
+        ++cdvd_lba_;--cdvd_sectors_;
+        if(cdvd_sectors_)cdvd_sector_at_=cycle_+cdvd_sector_cycles_;
+        else {cdvd_irq_|=2u;cdvd_status_=0xAu;cdvd_sticky_|=cdvd_status_;}
+    }
 }
 
 void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
@@ -733,6 +783,7 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
         try {
             pump_sif1();
             pump_sif0();
+            pump_cdvd();
             if(cdvd_complete_at_ && cycle_>=*cdvd_complete_at_) {
                 cdvd_complete_at_.reset(); cdvd_irq_|=2u;
                 events_.push_back({cycle_,"CDVD N command completion"});
@@ -1052,7 +1103,11 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
     }
     if (physical == kCdvdNStatus) {
         if (bytes != 1u) throw IopStop{name + ": only 8-bit reads are modeled"};
-        return cdvd_complete_at_ ? ((kCdvdNStatusIdle&~0x40u)|0x80u) : kCdvdNStatusIdle;
+        return (cdvd_complete_at_ || cdvd_sectors_) ? ((kCdvdNStatusIdle&~0x40u)|0x80u) : kCdvdNStatusIdle;
+    }
+    if(physical==0x1F402006u) {
+        if(bytes!=1u || !disc_)throw IopStop{name+": CDVD error requires an explicit disc and byte access"};
+        return 0; // No media error: invalid/unimplemented operations refuse before issue.
     }
     if(physical==0x1F40200Au || physical==0x1F40200Bu || physical==0x1F40200Fu) {
         if(bytes!=1u || !disc_)throw IopStop{name+": requires a byte access and an explicitly mounted disc"};
@@ -1154,10 +1209,50 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         cdvd_irq_&=static_cast<std::uint8_t>(~*value);
         return;
     }
+    if(physical==0x1F402006u) {
+        if(bytes!=1u || !value || *value!=0x80u || cdvd_sectors_)
+            throw IopStop{name+": CDVD HOWTO supports idle 2048-byte data mode 0x80 only"};
+        cdvd_howto_=std::uint8_t{0x80};return;
+    }
+    if(physical==0x1F402005u) {
+        if(bytes!=1u || !value || cdvd_complete_at_ || cdvd_sectors_ || cdvd_params_.size()>=16u)
+            throw IopStop{name+": CDVD parameter FIFO overflow, unknown byte or busy drive"};
+        cdvd_params_.push_back(static_cast<std::uint8_t>(*value));return;
+    }
     if(physical==0x1F402004u) {
-        if(bytes!=1u || !value || *value>1u)
-            throw IopStop{name+": only parameter-free CDVD NOP/NOPsync commands modeled"};
-        if(cdvd_complete_at_) throw IopStop{name+": CDVD command issued while busy"};
+        if(bytes!=1u || !value)throw IopStop{name+": CDVD command requires a known byte"};
+        if(cdvd_complete_at_ || cdvd_sectors_)throw IopStop{name+": CDVD command issued while busy"};
+        if(*value==6u && disc_) {
+            if(cdvd_type_!=0x12u || cdvd_howto_!=0x80u || cdvd_params_.size()!=11u ||
+               cdvd_params_[10]!=0u || (cdvd_params_[9]&0x7Fu)>5u) {
+                std::string params;for(const auto byte:cdvd_params_)params+=" "+hex(byte,2);
+                throw IopStop{name+": ReadCd requires CD media, HOWTO 0x80, 11 parameters and 2048-byte sectors; params"+params};
+            }
+            const bool cav=(cdvd_params_[9]&0x80u)!=0;
+            if(cav && !diagnostic_cav_nominal_timing_)
+                throw IopStop{name+": CAV radial timing is not verified (explicit diagnostic nominal timing required)"};
+            const auto word=[&](unsigned at){return std::uint32_t{cdvd_params_[at]} |
+                (std::uint32_t{cdvd_params_[at+1]}<<8u) | (std::uint32_t{cdvd_params_[at+2]}<<16u) |
+                (std::uint32_t{cdvd_params_[at+3]}<<24u);};
+            const auto lba=word(0),count=word(4);
+            if(!count || std::uint64_t{lba}+count>0xFFFFFFFFull)
+                throw IopStop{name+": ReadCd invalid sector range"};
+            // Functional timing hypothesis from ps2tek: CD 1/2/4/12/24x,
+            // 30/100 ms seeks. No IRQ until real sectors reach guest memory.
+            constexpr unsigned speed[]={24,1,2,4,12,24};
+            cdvd_sector_cycles_=491520u/speed[cdvd_params_[9]&0x7Fu];
+            if(cav)events_.push_back({cycle_,"DIAGNOSTIC CAV uses nominal CLV sector time; radial speed unverified"});
+            const auto delta=lba>cdvd_lba_ ? lba-cdvd_lba_ : cdvd_lba_-lba;
+            const std::uint64_t seek=delta<8u ? std::uint64_t{delta}*cdvd_sector_cycles_ :
+                                      delta<4371u ? 1105920u : 3686400u;
+            cdvd_sector_at_=cycle_+seek+cdvd_sector_cycles_;cdvd_sector_offset_=2048;
+            cdvd_lba_=lba;cdvd_sectors_=count;cdvd_status_=delta ? 0x12u : 6u;cdvd_sticky_|=cdvd_status_;
+            cdvd_ncommand_=std::uint8_t{6};cdvd_params_.clear();
+            events_.push_back({cycle_,"CDVD ReadCd lba="+std::to_string(lba)+" count="+std::to_string(count)});
+            return;
+        }
+        if(*value>1u || !cdvd_params_.empty())
+            throw IopStop{name+": only parameter-free CDVD NOP/NOPsync or mounted ReadCd commands modeled"};
         cdvd_ncommand_=static_cast<std::uint8_t>(*value);
         // Functional scheduling hypothesis: completion after one IOP cycle,
         // never an inline success reply or a synthesized media read.
@@ -1234,6 +1329,20 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
     }
     if (is_latch(physical)) {
         if (bytes != 4u) throw IopStop{name + ": only 32-bit accesses are modeled"};
+        if(physical>=0x1F8010B0u && physical<=0x1F8010B8u) {
+            const auto old=latch(0x1F8010B8u);
+            if(old && *old && (**old&kChcrStart))throw IopStop{name+": CDVD DMA registers written while busy"};
+            if(physical==0x1F8010B8u && value && (*value&kChcrStart)) {
+                if((*value!=0x41000200u && *value!=0x01000200u) || cdvd_howto_!=0x80u || !disc_)
+                    throw IopStop{name+": CDVD DMA requires request-mode device-to-RAM and HOWTO 0x80"};
+                const auto addr=latch(0x1F8010B0u),count=latch(0x1F8010B4u);
+                if(!addr || !*addr || !count || !*count)throw IopStop{name+": CDVD DMA address/count unknown"};
+                const auto nbytes=(**count&0xFFFFu)*4u,blocks=**count>>16u;
+                if(!nbytes || !blocks || nbytes>2048u || 2048u%nbytes || (**addr&3u) ||
+                   **addr>ram_.size() || std::uint64_t{nbytes}*blocks>ram_.size()-**addr)
+                    throw IopStop{name+": CDVD DMA block size/count/address is unsupported"};
+            }
+        }
         // SIO2 CTRL bit 0 starts a transfer (ps2tek SIO2). Idle setup was
         // already latched here; do not silently accept a command start.
         if(physical==0x1F808268u && (!value || (*value&1u)))
@@ -1241,7 +1350,7 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         if(physical==0x1F808268u && *value!=0u && *value!=0xCu && *value!=0x3BCu)
             throw IopStop{"SIO2 control configuration is not verified"};
         if(physical==0x1F808268u)++sio2_control_epoch_;
-        if (dma_channel_field(physical) == 2u && (!value || (*value & kChcrStart) != 0u))
+        if (dma_channel_field(physical) == 2u && (!value || ((*value & kChcrStart) != 0u && physical!=0x1F8010B8u)))
             throw IopStop{name + " = " + (value ? hex(*value) : std::string("(unknown)")) +
                           ": DMA transfers are not modeled"};
         if (physical == kICtrl && value) value = *value & 1u;
@@ -1274,9 +1383,16 @@ void Iop::mechacon_command(std::uint8_t command, const char* what) {
     s_results_.clear();
     s_command_ = command;
     switch (command) {
+        case 0x03: // MechaconVersion: four bytes from this console profile.
+            if(s_params_.size()!=1u || s_params_[0]!=0u)
+                throw IopStop{name+": only the parameter-free MechaconVersion subcommand is modeled"};
+            if(!hardware_ || !hardware_->mechacon)
+                throw IopStop{name+": no measured MECHACON version in this console profile"};
+            for(const auto byte:hardware_->mechacon->version)s_results_.push_back(byte);
+            break;
         case 0x05: // UpdateStickyFlags: actual latch update, not a stub.
             if(!s_params_.empty() || !disc_)throw IopStop{name+": requires no parameters and an explicit disc"};
-            if(cdvd_complete_at_)s_results_.push_back(1u);
+            if(cdvd_complete_at_ || cdvd_sectors_)s_results_.push_back(1u);
             else {cdvd_sticky_=cdvd_status_;s_results_.push_back(0u);}
             break;
         case 0x0A: { // ReadNVM: address high, low -> status, data high, data low (ps2sdk)

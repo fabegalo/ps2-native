@@ -92,11 +92,32 @@ void source_chain() {
         else received(iop,true,true);
     }
 }
+void next_source_chain() {
+    for(const bool inline_payload : {false,true}) {
+        auto ram=packet();
+        put(ram,0,0x20000000u|(inline_payload ? 1u : 0u));put(ram,4,0x200u);
+        if(inline_payload)std::copy_n(ram.begin()+0x100u,16,ram.begin()+16u);
+        put(ram,0x200u,inline_payload ? 1u : 2u);put(ram,0x204u,inline_payload ? 0x110u : 0x100u);
+        Iop iop;iop.reset(receiver(1u<<19),nullptr);arm(iop,ram,0,true);
+        iop.run_until(1);
+        require(!iop.stopped() && iop.ee_dma_read(0x1000C430u)==0x200u && !(iop.ee_dma_read(0x1000E010u)&0x40u),
+                "NEXT selects its actual target without premature source completion");
+        iop.run_until(400);received(iop,true,true);
+        require(iop.ee_dma_read(0x1000C430u)==0x210u,"NEXT follows its address, not adjacent payload or sequential bytes");
+    }
+    for(const auto target : {0x201u,0x800u,0x80000200u}) {
+        auto ram=packet();put(ram,0,0x20000000u);put(ram,4,target);
+        Iop iop;iop.reset(receiver(1u<<19),nullptr);arm(iop,ram,0,true);iop.run_until(10);
+        require(iop.stopped() && iop.stop_reason()->find("NEXT tag outside")!=std::string::npos &&
+                !iop.sif1_metrics().bytes && !(iop.ee_dma_read(0x1000E010u)&0x40u),
+                "invalid NEXT address fails before exposing bytes or successful completion");
+    }
+}
 void refused_packets() {
     for(const auto tag : {0x10000002u,0x04000002u}) {
         auto ram=packet();put(ram,0,tag);put(ram,4,0x100u);
         Iop iop;iop.reset(receiver(1u<<19),nullptr);arm(iop,ram,0,true);iop.run_until(400);
-        require(iop.stopped() && iop.stop_reason()->find("only REFE/REF")!=std::string::npos,"unsupported source tag fails explicitly");
+        require(iop.stopped() && iop.stop_reason()->find("only REFE/NEXT/REF")!=std::string::npos,"unsupported source tag fails explicitly");
         require(!iop.sif1_metrics().bytes && !(iop.ee_dma_read(0x1000E010u)&0x40u),"unsupported tag cannot produce bytes or completion");
     }
     std::unordered_map<std::uint32_t,std::uint32_t> unknown{{0,1}};
@@ -200,6 +221,6 @@ void idle_iop_receiver_stop() {
 }
 }
 int main() try {
-    transfer_masks();incomplete_packet();source_chain();refused_packets();block_control_halfwords();partial_sif0_packets();idle_sif0_receiver_stop();idle_iop_receiver_stop();
+    transfer_masks();incomplete_packet();source_chain();next_source_chain();refused_packets();block_control_halfwords();partial_sif0_packets();idle_sif0_receiver_stop();idle_iop_receiver_stop();
     std::cout<<"SIF1 source chains, exact payload, END/IRQ masks and incomplete packets passed\n";
 } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

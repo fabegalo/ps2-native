@@ -73,7 +73,9 @@ public:
     [[nodiscard]] const GsRegisters& gs() const noexcept { return gs_; }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return mch_; }
     [[nodiscard]] const Iop& iop() const noexcept { return iop_; }
-    void mount_disc(std::shared_ptr<DiscImage> disc,Iop::DiscMedium medium) { iop_.mount_disc(std::move(disc),medium); }
+    void mount_disc(std::shared_ptr<DiscImage> disc,Iop::DiscMedium medium,bool diagnostic_cav_nominal_timing=false) {
+        iop_.mount_disc(std::move(disc),medium,diagnostic_cav_nominal_timing);
+    }
     [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return video_encoder_; }
     [[nodiscard]] ObservedWord observe_ipu_control() const noexcept {return ipu_.observe_control();}
     [[nodiscard]] std::uint32_t read_vu_control(unsigned index) const {
