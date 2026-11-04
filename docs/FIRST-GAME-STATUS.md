@@ -1359,3 +1359,14 @@ blocos 32x16, colunas alternadas, seleção de nibble e payload IMAGE/HWREG.
 Fixtures verificam bijeção por nibble em quatro páginas, vetores físicos,
 preservação de vizinhos, incerteza, alinhamento e padding. Seis testes
 focados GS/GIF/AOT aprovados; ensaio 95 em andamento.
+Ensaio 95: PSMT4 passou; 88 pacotes GIF novos, 1.819.120 escritas
+comprovadas, ainda scanout preto. EE `0x1DD778` / 481.038.854,
+IOP `0x4CCBC` / 64.181.944 ativo, 183,966 s. Recusa de PSUBW
+0x70433848 numa rotina convidada de comparação de memória/strings.
+RAM `f2358e67943f7f0ce52500a595e7a31afccc0325b409e8ba4da6967ec31a74d7`,
+um doubleword parcialmente desconhecido.
+Consultado PS2Recomp mmi_translation_helpers.cpp no mesmo ref e tabela MMI0
+PS2tek antes de implementar PSUBW. Semântica compartilhada AOT/interpretador:
+quatro lanes de 32 bits, módulo 2^32, sem carry/borrow entre lanes ou exceção
+signed. Testes próprios de limites, alias do destino e zero register;
+cinco testes focados de contexto/cache/DMA/frame AOT aprovados.

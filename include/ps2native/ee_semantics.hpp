@@ -361,12 +361,14 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         const auto uy=Op==O::Pextlw?s.unknown_gpr_bits[t_]:s.unknown_gpr_high_bits[t_];
         s.set_reg128_observed(d_,(y&0xFFFFFFFFu)|(x<<32u),(y>>32u)|(x&0xFFFFFFFF00000000ull),
                              (uy&0xFFFFFFFFu)|(ux<<32u),(uy>>32u)|(ux&0xFFFFFFFF00000000ull));
-    } else if constexpr (Op == O::Psubb) {
+    } else if constexpr (Op == O::Psubb || Op == O::Psubw) {
         const auto x=s.reg128(s_),y=s.reg128(t_);
         const auto subtract=[](std::uint64_t a,std::uint64_t b) {
             std::uint64_t result=0;
-            for(unsigned bit=0;bit<64;bit+=8)
-                result|=(((a>>bit)-(b>>bit))&0xFFu)<<bit;
+            constexpr unsigned width=Op==O::Psubw ? 32u : 8u;
+            constexpr std::uint64_t mask=Op==O::Psubw ? 0xFFFFFFFFu : 0xFFu;
+            for(unsigned bit=0;bit<64;bit+=width)
+                result|=(((a>>bit)-(b>>bit))&mask)<<bit;
             return result;
         };
         s.set_reg128(d_,subtract(x.low,y.low),subtract(x.high,y.high));

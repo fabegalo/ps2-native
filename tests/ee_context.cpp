@@ -192,6 +192,16 @@ void packed_copy() {
     ee::exec<MipsOpcode::Psubb>(state,memory,0,sub);
     require(state.reg128(8).low==0xFF10213243546576ull && state.reg128(8).high==0x7EFD7DFEFEFFFEFDull,
             "PSUBB wraps each byte independently without cross-lane borrow");
+    const auto subw=0x70000048u|(8u<<21u)|(9u<<16u)|(8u<<11u);
+    require(decode_mips(0,subw).opcode==MipsOpcode::Psubw && decode_mips(0,subw).written_gpr()==8,
+            "PSUBW decoder and destination metadata");
+    state.set_reg128(8,0x8000000000000000ull,0xFFFFFFFF7FFFFFFFull);
+    state.set_reg128(9,0x0000000100000001ull,0xFFFFFFFFFFFFFFFFull);
+    ee::exec<MipsOpcode::Psubw>(state,memory,0,subw);
+    require(state.reg128(8).low==0x7FFFFFFFFFFFFFFFull && state.reg128(8).high==0x0000000080000000ull,
+            "PSUBW independent modulo-32 lanes, signed boundaries and aliased destination");
+    ee::exec<MipsOpcode::Psubw>(state,memory,0,subw&~(31u<<11));
+    require(state.reg128(0).low==0 && state.reg128(0).high==0,"PSUBW preserves zero register");
 }
 void leading_sign_count() {
     constexpr auto word=0x70000004u|(8u<<21)|(8u<<11);

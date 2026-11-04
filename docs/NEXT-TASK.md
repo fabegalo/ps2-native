@@ -1,12 +1,12 @@
 # Próxima execução — Super Bust-A-Move (SLUS-20115)
 
-O checkpoint experimental já produziu 35 pacotes GIF e 1.075.584 escritas
+O checkpoint experimental já produziu 88 pacotes GIF e 1.819.120 escritas
 de pixels por IMAGE: limpeza real da VRAM comandada pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução concluída: ensaio 94, EE `0x1CECA0`, 392.490.598 instruções,
-Transferência PSMT4 64x96 ainda não suportada nessa execução. IOP `0x4CB18` / 53.113.412,
-sem parada registrada. DMA VIF passou. Profundidade, scanout INT+FFMD e propagação de incerteza passaram. PSMT8 passou com os 26.624 índices reais. DMA GIF source-chain passou. PSMT4 implementado, seis testes focados aprovados; ensaio 95 em andamento.
+Última execução concluída: ensaio 95, EE `0x1DD778`, 481.038.854 instruções,
+PSUBW ausente nessa execução; agora implementado com semântica compartilhada. IOP `0x4CCBC` / 64.181.944,
+sem parada registrada. DMA VIF passou. Profundidade, scanout INT+FFMD e propagação de incerteza passaram. PSMT8 passou com os 26.624 índices reais. DMA GIF source-chain passou. PSMT4 passou. PSUBW implementado, cinco testes focados aprovados; ensaio 96 em andamento.
 D-cache funcional explícito desde reset passou por DXLTG: conteúdo separado
 da RAM, LRF e writeback reais; sem latência adicional, I-cache não modelado.
 Hipótese separada permite operações hit usando alias uncached da RAM.
