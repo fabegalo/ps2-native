@@ -97,7 +97,7 @@ public:
                 break;
             case Cop0::EntryHi: stored = value & 0xFFFFE0FFu; break;
             case Cop0::Count:
-                s_.count_anchor = s_.retired_instructions;
+                s_.count_anchor = s_.cycles();
                 break;
             case Cop0::Compare:
                 s_.compare_written = true;

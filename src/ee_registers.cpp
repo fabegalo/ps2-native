@@ -93,7 +93,7 @@ void EeRegisters::sync_iop() {
 
 std::uint64_t EeRegisters::now() const {
     if (clock_ == nullptr) throw DeviceRefusal("no EE clock is attached to the EE registers");
-    return *clock_;
+    return *clock_+(stall_clock_ ? *stall_clock_ : 0);
 }
 
 std::uint16_t EeRegisters::timer_count(const Timer& timer) const {

@@ -4,11 +4,9 @@ O checkpoint experimental já produziu 16 pacotes GIF PATH3 e 1.048.576 escritas
 de pixels por IMAGE: limpeza real da VRAM comandada pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução concluída: ensaio 50, EE `0x1CDA04`, 339.416.893 instruções;
-IOP ativo `0xAE98`, 46.479.196. As multiplicações da projeção e NEG.S passaram.
-MUL.S com fs=`4A800000`, ft=`4B7FFFFF` revelou outra fronteira Booth, agora
-coberta pela prova de único dígito negativo abaixo da coluna 16. Testes locais
-passaram; ensaio 51 em andamento. PMODE ainda não foi escrito; sem scanout.
+Última execução concluída: ensaio 55, EE `0x1CD310`, 339.417.122 instruções;
+IOP ativo `0xAE94`, 46.479.227. VSQRT/VDIV/Q passaram; 22 ciclos de espera.
+Nova recusa VMOVE. PMODE ainda não foi escrito; sem scanout.
 Continuar reexecutando, registrando PCs e resolvendo os bloqueios até conteúdo
 real exibido. Não trocar por float host nem criar exceções por título/PC.
 Consultar PS2Recomp antes de implementar subsistemas; PS2Float não declara

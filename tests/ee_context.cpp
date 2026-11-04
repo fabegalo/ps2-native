@@ -429,6 +429,57 @@ void divider() {
     require(ee_fpu_multiply(0xBC23D70A,0x3C23D70A,fcr)==0xB8D1B716,
             "certified multiply preserves sign xor");
 }
+void vector_q() {
+    require(ee_fpu_sqrt_exact(0x3F800000u)==0x3F800000u &&
+            ee_fpu_sqrt_exact(0x41C80000u)==0x40A00000u &&
+            ee_fpu_sqrt_exact(0x7F800000u)==0x5F800000u &&
+            ee_fpu_sqrt_exact(0x80000001u)==0u,"physical exact SQRT vectors, extended exponent and denormal zero");
+    require(!ee_fpu_sqrt_exact(0x40000000u) && !ee_fpu_sqrt_exact(0xBF800000u),"unproved SQRT refuses");
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    EEState s;s.set_cp0(Cop0::Status,1u<<30u);s.pc=0x80001000u;
+    memory.set_clock(&s.retired_instructions,&s.stall_cycles);
+    memory.write32(0xB0000010u,0x80u); // T0 enable, BUSCLK = EE/2
+    memory.write_vu_control(22,0x40000000u);
+    memory.write_vu_vector(5,{{0x41C80000u,0},{0,0}});
+    memory.write32(s.pc,0x4A0503BDu); // sqrt Q,VF5.x
+    memory.write32(s.pc+4u,0x4A0003BFu); // waitq
+    std::uint64_t executed=0;ExecutionContext ctx{s,memory,executed,100,0xFFFFFFFFu};
+    s.compare_written=true;s.set_cp0(Cop0::Compare,4);
+    interpret_instruction(ctx);
+    require(s.retired_instructions==1 && s.cycles()==1 && memory.read_vu_control(22)==0x40000000u,"Q remains old before completion");
+    interpret_instruction(ctx);
+    require(s.retired_instructions==2 && executed==2 && s.stall_cycles==6 && s.count()==8,"WAITQ consumes cycles, not instructions");
+    require((s.cp0(Cop0::Cause)&kStatusIM7) && memory.read32(0xB0000000u)==4,"stall crosses Compare and advances device timer");
+    require(memory.read_vu_control(22)==0x40A00000u,"SQRT publishes exact result after seven cycles");
+    ee::exec<MipsOpcode::VaddQ>(s,memory,0,0x4B000160u);
+    require(memory.observe_vu_vector(5).low.value==0x40A00000u,"VADDq uses Q");
+    memory.write_vu_vector(5,{{0x40000000u,0},{0,0}});
+    ee::exec<MipsOpcode::Vdiv>(s,memory,0,0x4A6503BCu); // 1/2
+    require(memory.read_vu_control(22)==0x40A00000u,"VDIV preserves Q until completion");
+    s.stall(7);require(memory.read_vu_control(22)==0x3F000000u,"Q completion without WAITQ");
+    memory.write_vu_vector(4,{{0x40A00000u,0},{0,0}});
+    ee::exec<MipsOpcode::VmulQ>(s,memory,0,0x4B00219Cu);
+    require(static_cast<std::uint32_t>(memory.observe_vu_vector(6).low.value)==0x40200000u,"VMULq uses completed Q");
+    s.set_cp0(Cop0::Count,0xFFFFFFFEu);s.count_anchor=s.cycles();s.set_cp0(Cop0::Compare,1);s.set_cp0(Cop0::Cause,0);s.stall(4);
+    require(s.count()==2 && (s.cp0(Cop0::Cause)&kStatusIM7),"Compare latches across Count wrap during stall");
+    memory.write_vu_vector(5,{{0x40000000u,0},{0,0}});
+    rejects([&]{ee::exec<MipsOpcode::Vsqrt>(s,memory,0,0x4A0503BDu);},"non-exact");
+    require(memory.vu_q_ready_cycle()==0 && memory.read_vu_control(22)==0x3F000000u,"failed SQRT leaves pipeline unchanged");
+    require(!try_decode_r5900(0,0x4A2503BDu) && !try_decode_r5900(0,0x4A000BBFu),"reserved SQRT/WAITQ fields refuse");
+    VuControl vu;
+    vu.issue_q(0,0,0,3,0,false); // 1/0
+    require(vu.read(16)==0,"FDIV flags remain pending with Q");
+    vu.advance_q(7);
+    require(vu.read(22)==0x7FFFFFFFu && vu.read(16)==0x820u,"divide-by-zero cause and sticky map to VU STATUS");
+    vu.issue_q(7,0,0,0,0,false);vu.advance_q(14); // 0/0
+    require(vu.read(16)==0xC10u,"invalid replaces cause while preserving divide sticky");
+    vu.issue_q(14,0,0,0,3,true);vu.advance_q(21); // sqrt(1)
+    require(vu.read(16)==0xC00u && vu.read(17)==0,"SQRT clears I/D causes without changing MAC or stickies");
+    rejects([&]{vu.issue_q(21,0,1,0,0,true);},"unknown operands");
+    require(vu.q_ready_cycle()==0,"unknown operand refuses before starting FDIV");
+    vu.issue_q(21,0,0,3,3,false);vu.write(28,2);vu.advance_q(28);
+    require(vu.q_ready_cycle()==0 && vu.read(16)==0,"VU reset cancels pending FDIV flags");
+}
 void vector_setup() {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_cp0(Cop0::Status,1u<<30);
@@ -585,6 +636,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();adder();divider();vector_setup();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();adder();divider();vector_q();vector_setup();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

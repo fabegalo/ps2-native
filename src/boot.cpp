@@ -88,7 +88,7 @@ public:
 private:
     void present() {
         const auto& gs = memory_.gs();
-        const auto cycle = state_.retired_instructions;
+        const auto cycle = state_.cycles();
         if (generation_ != gs.timing_generation()) {
             generation_ = gs.timing_generation();
             const auto clock = gs.vertical_clock();
@@ -158,7 +158,7 @@ void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state
         memory.reset_for_boot(bios.rom0,hardware,nvm,assumptions,checked.bytes);
     } else memory.reset_for_boot(bios.rom0, hardware, nvm, assumptions);
     state = ee_reset_state();
-    memory.set_clock(&state.retired_instructions);
+    memory.set_clock(&state.retired_instructions,&state.stall_cycles);
     memory.set_translation_context(0, (state.cp0(Cop0::Status) & kStatusERL) != 0u);
 }
 
@@ -182,7 +182,7 @@ void prepare_direct_elf(const ElfImage& elf, const AotModule* aot, EEState& stat
     state.set_cp0(Cop0::Status, 0u);
     state.set_reg32(29u, sp);
     state.set_reg32(28u, environment.global_pointer);
-    memory.set_clock(&state.retired_instructions);
+    memory.set_clock(&state.retired_instructions,&state.stall_cycles);
     memory.set_translation_context(0, false);
 }
 

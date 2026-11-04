@@ -12,6 +12,7 @@ class VuControl {
 public:
     VuControl() { reset(); }
     void reset() {
+        pending_q_.reset();
         registers_ = {};
         unknown_ = {};
         registers_[0] = 0;
@@ -72,8 +73,10 @@ public:
             throw DeviceRefusal("VU force break transition is not modeled");
         // FB/RS are commands that always read zero; DE/TE retain settings.
         // VU0 reset initializes its flag registers, not the integer registers.
-        if (value & 2u)
+        if (value & 2u) {
+            pending_q_.reset();
             for (const auto flag : {16u,17u,18u}) {registers_[flag] = 0;unknown_[flag]=0;}
+        }
         if (value & 0x200u)
             for(unsigned index=0;index<3;++index) vu1_controls_[index]={};
         registers_[28] = value & 0x0C0Cu;
@@ -123,13 +126,38 @@ public:
                      static_cast<std::uint32_t>(half.unknown>>shift)};
         }
     }
+    [[nodiscard]] std::uint64_t q_ready_cycle() const noexcept { return pending_q_ ? pending_q_->ready : 0; }
+    void advance_q(std::uint64_t cycle) {
+        if(!pending_q_ || cycle<pending_q_->ready)return;
+        registers_[22]=pending_q_->value;unknown_[22]=0;
+        const auto flags=pending_q_->flags;
+        registers_[16]=(*registers_[16]&~0x30u)|flags|(flags<<6u);
+        unknown_[16]&=~(0x30u|(flags<<6u));
+        pending_q_.reset();
+    }
+    void issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,bool square_root) {
+        if(pending_q_)throw DeviceRefusal("VU FDIV pipeline is still occupied");
+        const auto a=vectors_.at(left)[left_lane],b=vectors_.at(right)[right_lane];
+        if(b.unknown || (!square_root && a.unknown))throw DeviceRefusal("VU Q consumes unknown operands");
+        std::uint32_t value,flags=0;
+        if(square_root) {
+            const auto root=ee_fpu_sqrt_exact(b.value);
+            if(!root)throw DeviceRefusal("VU SQRT non-exact/invalid input is not modeled");
+            value=*root;
+        } else {
+            value=ee_fpu_divide(a.value,b.value,flags);
+            flags=((flags>>13u)&0x10u)|((flags>>11u)&0x20u);
+        }
+        pending_q_=PendingQ{cycle+7u,value,flags};
+    }
     void add(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast=4,bool subtract=false) {
         auto result=vectors_.at(destination);
         std::uint32_t mac=0,status=0;
         for(unsigned lane=0;lane<4;++lane) {
             const auto bit=8u>>lane;
             if(!(mask&bit))continue;
-            const auto a=vectors_.at(left)[lane],b=vectors_.at(right)[broadcast<4 ? broadcast : lane];
+            const auto a=vectors_.at(left)[lane];
+            const auto b=broadcast==5u ? observe(22) : vectors_.at(right)[broadcast<4 ? broadcast : lane];
             if(a.unknown || b.unknown)throw DeviceRefusal("VU ADD consumes unknown operands");
             std::uint32_t flags=0;
             const auto value=ee_fpu_add(a.value,b.value^(subtract ? 0x80000000u : 0u),flags);
@@ -153,7 +181,7 @@ public:
             const auto bit=8u>>lane;
             if(!(mask&bit))continue;
             const auto a=vectors_.at(left)[outer ? (lane+1u)%3u : lane];
-            const auto b=vectors_.at(right)[outer ? (lane+2u)%3u : broadcast<4 ? broadcast : lane];
+            const auto b=broadcast==5u ? observe(22) : vectors_.at(right)[outer ? (lane+2u)%3u : broadcast<4 ? broadcast : lane];
             if(a.unknown || b.unknown)throw DeviceRefusal("VU multiply consumes unknown operands");
             std::uint32_t flags=0;
             const auto multiplied=ee_fpu_multiply(a.value,b.value,flags);
@@ -226,6 +254,8 @@ public:
         }
     }
 private:
+    struct PendingQ { std::uint64_t ready; std::uint32_t value,flags; };
+    std::optional<PendingQ> pending_q_;
     ObservedWord& memory_word(std::uint32_t address) {
         if(address>=0x11000000u && address<0x11001000u) return micro0_[(address-0x11000000u)/4u];
         if(address>=0x11004000u && address<0x11005000u) return data_[(address-0x11004000u)/4u];

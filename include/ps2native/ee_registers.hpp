@@ -63,8 +63,8 @@ public:
     void reset(const ConsoleHardware* hardware = nullptr, std::span<const std::uint8_t> rom0 = {},
                const NvmImage* nvm = nullptr, const DiagnosticAssumptions* assumptions = nullptr,
                std::span<const std::uint8_t> rom1 = {});
-    // EE cycle counter (EEState::retired_instructions during boot).
-    void set_clock(const std::uint64_t* ee_cycles) noexcept { clock_ = ee_cycles; }
+    // EE clock: base retired-instruction count plus optional modeled stalls.
+    void set_clock(const std::uint64_t* ee_cycles,const std::uint64_t* stalls=nullptr) noexcept { clock_=ee_cycles;stall_clock_=stalls; }
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes);
     void write(std::uint32_t physical, std::size_t bytes, std::uint64_t value);
     // 128-bit store (SQ): the GIF FIFO takes whole quadwords.
@@ -82,15 +82,22 @@ public:
         if (index==29u && (vif0_.processing() || vif1_.processing()))
             throw DeviceRefusal("VU status with active VIF processing is not modeled");
         return vu_control_.read(index);
+        vu_control_.advance_q(clock_ ? now() : 0);
     }
     void write_vu_control(unsigned index, std::uint32_t value) { vu_control_.write(index,value); }
     [[nodiscard]] ObservedWord observe_vu_control(unsigned index) const {
         if (index==29u && (vif0_.processing() || vif1_.processing()))
             throw DeviceRefusal("VU status with active VIF processing is not modeled");
         return vu_control_.observe(index);
+        vu_control_.advance_q(clock_ ? now() : 0);
     }
     void write_vu_control_observed(unsigned index, ObservedWord word) {vu_control_.write_observed(index,word);}
     void vu_integer_store(unsigned source,unsigned base,unsigned mask) {vu_control_.integer_store(source,base,mask);}
+    void vu_advance_q(std::uint64_t cycle) { vu_control_.advance_q(cycle); }
+    [[nodiscard]] std::uint64_t vu_q_ready_cycle() const noexcept { return vu_control_.q_ready_cycle(); }
+    void vu_issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,bool square_root) {
+        vu_control_.issue_q(cycle,left,right,left_lane,right_lane,square_root);
+    }
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return vu_control_.observe_data(address);}
     [[nodiscard]] ObservedQuadword observe_vu_vector(unsigned index) const {return vu_control_.observe_vector(index);}
     void write_vu_vector(unsigned index,ObservedQuadword word) {vu_control_.write_vector(index,word);}
@@ -179,12 +186,13 @@ private:
     Gif gif_;
     Vif vif0_{Vif::Unit::Vu0},vif1_{Vif::Unit::Vu1};
     IpuRegisters ipu_;
-    VuControl vu_control_;
+    mutable VuControl vu_control_;
     // Video encoder serial bus and its two masters.
     VideoEncoderBus video_encoder_;
     VideoEncoderMaster encoder_master_190x_{VideoEncoderMaster::Layout::Byte190x};
     VideoEncoderMaster encoder_master_1a_{VideoEncoderMaster::Layout::Halfword1A};
     const std::uint64_t* clock_{};
     const ConsoleHardware* hardware_{};
+    const std::uint64_t* stall_clock_{};
 };
 } // namespace ps2native

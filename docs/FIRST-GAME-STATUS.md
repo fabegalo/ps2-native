@@ -750,3 +750,34 @@ com um guard bit; os testes verificam produto vetorial não trivial, máscara
 fixa xyz, alias, preservação de w, broadcast e subtrações não cancelantes.
 O tempo dos ensaios é observação local, não benchmark controlado: builds e
 trabalho concorrente impedem atribuir diferenças de duração a ganho de desempenho.
+
+Ensaio 54: produto vetorial e ADD/SUB broadcast passaram. EE `0x1CD290`,
+339.417.063 instruções; IOP `0xAE94` / 46.479.217; 90,4409 s. VSQRT Q,VF05.x
+é a nova fronteira. RAM SHA-256
+`abffb5fd47843d18aeb4371116a550e8ed0eef5be84cdc41ac1baa02efb62f34`.
+Ainda somente 16 pacotes/1.048.576 escritas da limpeza, sem PMODE ou scanout.
+CI de `0482701` e `afdc202`: núcleo e launcher aprovados nos seis alvos.
+
+Implementação seguinte: VSQRT exata, VDIV, VWAITQ, VADDq e VMULq. Consulta
+prévia a PS2Recomp `vu_translator.cpp` mostrou Q resolvido imediatamente;
+o modelo aqui segue os sete ciclos de DIV/SQRT do manual VU, com Q anterior
+observável até a conclusão. Raízes somente quando o quadrado inteiro prova
+representabilidade exata; demais entradas recusam, sem sqrt do host. DIV
+reutiliza o circuito SRT inteiro existente; não houve incorporação de código
+externo. Macros ALU ainda usam o modelo síncrono anterior, não uma alegação
+de pipeline VU completo.
+
+A espera mantém contagem separada de ciclos e instruções: Count, timers,
+GS, IOP e apresentação observam instruções aposentadas + ciclos de stall.
+Compare é retido quando a espera atravessa seu valor, inclusive no wrap.
+Isso preserva a hipótese base de um ciclo por instrução e acrescenta a
+latência comprovada de Q; não declara timing superscalar completo.
+
+Ensaio 55: VSQRT/VDIV/Q passaram; 22 ciclos de stall, EE `0x1CD310` /
+339.417.122 instruções; IOP `0xAE94` / 46.479.227; 94,1727 s. Próxima recusa
+VMOVE `4BE5233C`. RAM SHA-256
+`f8f6e8821b83ca2e6510224373c289b6e14419107632f6d2aae463c49d876fa6`.
+Sem novos pacotes/pixels ou PMODE. Quatro testes focados aprovados, incluindo
+Q antigo antes da conclusão, espera sem aposentadorias extras, flags I/D,
+reset, incerteza, Compare atravessado e timer BUSCLK. Original repetido:
+mesmos PCs/contagens e hash canônico, zero pixels.

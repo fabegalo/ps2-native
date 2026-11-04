@@ -60,19 +60,25 @@ struct EEState {
     std::uint32_t instruction_pc{};
     // The instruction at instruction_pc executes in a branch delay slot.
     bool instruction_in_delay_slot{};
-    // Also the EE time base during boot: one cycle per retired instruction
-    // (see ee_registers.hpp).
+    // Base timing remains one cycle per instruction, plus modeled stalls.
     std::uint64_t retired_instructions{};
+    std::uint64_t stall_cycles{};
+    [[nodiscard]] std::uint64_t cycles() const noexcept { return retired_instructions+stall_cycles; }
     std::array<std::uint32_t, 32> cop0{};
     // EE Core User's Manual pp.80/84: enables reset clear, configuration
     // fields are undefined. Context save/restore must retain that distinction.
     std::uint32_t bpc_unknown{0x17BF8007u}, pccr_unknown{0x000FFBFEu};
     // COP0 Count advances once per EE cycle: it reads as cop0[Count] plus the
-    // cycles retired since the last MTC0 Count (count_anchor).
+    // elapsed cycles since the last MTC0 Count (count_anchor).
     std::uint64_t count_anchor{};
     bool compare_written{}; // Compare is undefined until programmed.
     [[nodiscard]] std::uint32_t count() const noexcept {
-        return cop0[9] + static_cast<std::uint32_t>(retired_instructions - count_anchor);
+        return cop0[9] + static_cast<std::uint32_t>(cycles() - count_anchor);
+    }
+    void stall(std::uint64_t elapsed) noexcept {
+        const auto distance=static_cast<std::uint32_t>(cop0[11]-count());
+        if(compare_written && (distance==0 || elapsed>=distance))cop0[13]|=kStatusIM7;
+        stall_cycles+=elapsed;
     }
     [[nodiscard]] std::uint32_t reg32(unsigned index) const;
     [[nodiscard]] std::uint64_t reg64(unsigned index) const;

@@ -143,7 +143,7 @@ public:
     void set_cpu_context(std::uint32_t status, std::uint32_t entry_hi) noexcept;
     void set_observer(BusObserver* observer) noexcept { observer_ = observer; }
     // EE cycle counter used by the timed EE registers (boot mapping only).
-    void set_clock(const std::uint64_t* ee_cycles) noexcept { registers_.set_clock(ee_cycles); }
+    void set_clock(const std::uint64_t* ee_cycles,const std::uint64_t* stalls=nullptr) noexcept { registers_.set_clock(ee_cycles,stalls); }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return registers_.gs(); }
     [[nodiscard]] const Gif& gif() const noexcept { return registers_.gif(); }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
@@ -157,6 +157,11 @@ public:
     [[nodiscard]] ObservedWord observe_vu_control(unsigned index) const {return registers_.observe_vu_control(index);}
     void write_vu_control_observed(unsigned index, ObservedWord word) {registers_.write_vu_control_observed(index,word);}
     void vu_integer_store(unsigned source,unsigned base,unsigned mask) {registers_.vu_integer_store(source,base,mask);}
+    void vu_advance_q(std::uint64_t cycle) { registers_.vu_advance_q(cycle); }
+    [[nodiscard]] std::uint64_t vu_q_ready_cycle() const noexcept { return registers_.vu_q_ready_cycle(); }
+    void vu_issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,bool square_root) {
+        registers_.vu_issue_q(cycle,left,right,left_lane,right_lane,square_root);
+    }
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return registers_.observe_vu_data(address);}
     [[nodiscard]] ObservedQuadword observe_vu_vector(unsigned index) const {return registers_.observe_vu_vector(index);}
     void write_vu_vector(unsigned index,ObservedQuadword word) {registers_.write_vu_vector(index,word);}

@@ -3,6 +3,20 @@
 #include <bit>
 
 namespace ps2native {
+std::optional<std::uint32_t> ee_fpu_sqrt_exact(std::uint32_t value) {
+    const auto exponent=(value>>23u)&255u;
+    if(!exponent)return 0u; // VU denormals and signed zero are zero.
+    if(value&0x80000000u)return std::nullopt;
+    const auto mantissa=(value&0x7FFFFFu)|0x800000u;
+    const auto radicand=std::uint64_t{mantissa}<<(23u+((exponent+1u)&1u));
+    std::uint64_t low=0,high=1ull<<24u;
+    while(low+1u<high) {
+        const auto middle=(low+high)/2u;
+        if(middle*middle<=radicand)low=middle;else high=middle;
+    }
+    if(low*low!=radicand)return std::nullopt;
+    return ((exponent+127u)/2u<<23u)|(static_cast<std::uint32_t>(low)&0x7FFFFFu);
+}
 namespace {
 using Rows=std::array<std::uint32_t,2>;
 // A column of three bits produces a sum bit and a carry in the next column.
