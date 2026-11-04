@@ -265,6 +265,11 @@ public:
     }
 private:
     struct MicroIntegerWrite {unsigned index{};ObservedWord word{};std::uint64_t ready{};};
+    struct MicroVectorWrite {
+        unsigned index{},mask{};
+        std::array<ObservedWord,4> words{};
+        std::uint64_t ready{};
+    };
     struct MicroState {
         bool running{},end_delay{};
         std::uint32_t pc{};
@@ -273,6 +278,8 @@ private:
         std::optional<std::uint64_t> drain;
         std::array<MicroIntegerWrite,4> pending{};
         unsigned writes{};
+        std::array<MicroVectorWrite,4> vectors{};
+        unsigned vector_writes{};
         std::optional<std::string> failure;
     };
     void reset_micro(unsigned unit);

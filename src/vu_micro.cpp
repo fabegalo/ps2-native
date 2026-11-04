@@ -45,6 +45,15 @@ void VuControl::retire_micro_integers(unsigned unit) {
         else {registers_[write.index]=write.word.value;unknown_[write.index]=write.word.unknown;}
     }
     state.writes=kept;
+    kept=0;
+    for(unsigned n=0;n<state.vector_writes;++n) {
+        const auto write=state.vectors[n];
+        if(write.ready>state.next){state.vectors[kept++]=write;continue;}
+        auto& vector=unit ? vu1_vectors_[write.index] : vectors_[write.index];
+        if(write.index)for(unsigned lane=0;lane<4u;++lane)
+            if(write.mask&(8u>>lane))vector[lane]=write.words[lane];
+    }
+    state.vector_writes=kept;
 }
 void VuControl::step_micro(unsigned unit) {
     auto& state=micro_[unit];retire_micro_integers(unit);
@@ -64,6 +73,7 @@ void VuControl::step_micro(unsigned unit) {
     if(state.end_delay && ending)throw DeviceRefusal("E bit in the termination delay slot is not supported");
     const auto op=lo>>25u,is=(lo>>11u)&31u,it=(lo>>16u)&31u,id=(lo>>6u)&31u;
     std::optional<std::pair<unsigned,std::uint32_t>> result;
+    std::optional<MicroVectorWrite> vector_result;
     std::optional<std::uint32_t> branch;
     const auto reg=[&](unsigned r) {
         const auto word=micro_integer(unit,r,true);
@@ -84,6 +94,18 @@ void VuControl::step_micro(unsigned unit) {
             if(it>=16u)throw DeviceRefusal("BAL link register is outside VI00..VI15");
             result=std::pair{it,(state.pc/8u+2u)&(slots-1u)};
         }
+    } else if(op==0x40u && (lo&0x7FFu)==0x37Cu) { // LQI, VU manual p.179, 1/4.
+        if(state.end_delay)throw DeviceRefusal("VU memory load in the E delay slot is invalid");
+        const auto address=reg(is),mask=(lo>>21u)&15u;
+        MicroVectorWrite load{it,mask,{},state.next+4u};
+        if(mask) {
+            if(address>=(unit ? 1024u : 256u))
+                throw DeviceRefusal("LQI address outside direct VU data RAM; mirrors/register windows are not modeled");
+            const auto& memory=unit ? data1_ : data_;
+            for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane))load.words[lane]=memory[address*4u+lane];
+        }
+        vector_result=load;
+        result=std::pair{is,(address+1u)&0xFFFFu};
     } else if(lo==0x8000033Cu) { // MOVE with no fields and VF00 operands: lower NOP
     } else if(op==0x40u && ((lo&63u)==0x30u || (lo&63u)==0x31u || (lo&63u)==0x32u || (lo&63u)==0x34u || (lo&63u)==0x35u)) {
         const auto function=lo&63u;
@@ -99,10 +121,13 @@ void VuControl::step_micro(unsigned unit) {
     } else throw DeviceRefusal("lower instruction is not modeled: "+hexword(lo));
     // No architectural effects of this pair until both decoders/operands
     // have succeeded. Integer S writeback is four cycles after T issue.
+    if(result && result->first && state.writes==state.pending.size())throw DeviceRefusal("VU integer writeback queue is full");
+    if(vector_result && vector_result->index && vector_result->mask && state.vector_writes==state.vectors.size())
+        throw DeviceRefusal("VU vector writeback queue is full");
     if(result && result->first) {
-        if(state.writes==state.pending.size())throw DeviceRefusal("VU integer writeback queue is full");
         state.pending[state.writes++]={result->first,{result->second,0},state.next+4u};
     }
+    if(vector_result && vector_result->index && vector_result->mask)state.vectors[state.vector_writes++]=*vector_result;
     const auto next=state.branch.value_or((state.pc+8u)&(unit ? 16383u : 4095u));
     state.branch=branch;state.pc=next;++state.instructions;
     if(state.end_delay)state.drain=state.next+4u; // the delay pair must reach S before Ready
