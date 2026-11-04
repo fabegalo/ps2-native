@@ -32,7 +32,7 @@ void GsRegisters::start_transfer(std::uint64_t value) {
     const auto x = static_cast<unsigned>((pos >> 32) & 2047u);
     const auto y = static_cast<unsigned>((pos >> 48) & 2047u);
     (void)GsVram::address(base, bw, psm, x, y);
-    if (width % (psm == 0u ? 2u : 8u) || (psm == 19u && (x & 1u)))
+    if (width % (psm == 0u ? 2u : 8u) || (psm == 19u && (x & 1u)) || (psm == 20u && (x & 3u)))
         throw DeviceRefusal("GS transfer rectangle violates the hardware alignment");
     const auto order = static_cast<unsigned>((pos >> 59) & 3u);
     if (direction == 0u) {
@@ -45,7 +45,8 @@ void GsRegisters::start_transfer(std::uint64_t value) {
     const auto sw = static_cast<unsigned>((buf >> 16) & 63u) * 64u;
     const auto sp = static_cast<unsigned>((buf >> 24) & 63u);
     const auto sx = static_cast<unsigned>(pos & 2047u), sy = static_cast<unsigned>((pos >> 16) & 2047u);
-    if (sp == 19u && (sx & 1u)) throw DeviceRefusal("GS PSMT8 source violates hardware alignment");
+    if ((sp == 19u && (sx & 1u)) || (sp == 20u && (sx & 3u)))
+        throw DeviceRefusal("GS indexed source violates hardware alignment");
     (void)GsVram::address(sb, sw, sp, sx, sy);
     if (sp != psm) throw DeviceRefusal("GS local-to-local mixed formats are not modeled");
     // DIR selects traversal, including overlapping source/destination regions.
@@ -62,6 +63,14 @@ void GsRegisters::transfer_data(std::uint64_t data) {
     auto& t = transfer_;
     // GS manual HWREG: outside an active host-to-local transfer, no operation.
     if (!t.active) return;
+    if (t.psm == 20u) {
+        for(unsigned i=0;i<16u && t.active;++i) {
+            vram_.write(t.base,t.bw,t.psm,(t.x+t.pixel%t.width)&2047u,
+                        (t.y+t.pixel/t.width)&2047u,static_cast<std::uint32_t>((data>>(i*4u))&15u));
+            if(++t.pixel==t.width*t.height) {t.active=false;finish_transfer();}
+        }
+        return;
+    }
     const unsigned bytes = t.psm == 19u ? 1u : t.psm == 1u ? 3u : 4u;
     for (unsigned i = 0; i < 8u && t.active; ++i) {
         t.pending |= static_cast<std::uint32_t>((data >> (8u * i)) & 255u) << (8u * t.pending_bytes++);

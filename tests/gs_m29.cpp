@@ -79,6 +79,24 @@ void check_vram() {
     for(unsigned y=0;y<128;++y)for(unsigned x=0;x<256;++x)
         require(vram.read(0,256,19,x,y)==((x+3*y)&255u),"PSMT8 adjacent byte preservation");
     rejects([&]{(void)GsVram::address(0,64,19,0,0);},"multiple of 128");
+    vram.invalidate(); addresses.clear();
+    for(unsigned y=0;y<256;++y)for(unsigned x=0;x<256;++x) {
+        const auto nibble=GsVram::address(0,256,20,x,y)*2u+((y>>1)&1u);
+        require(addresses.insert(nibble).second,"PSMT4 four-page nibble bijection");
+        vram.write(0,256,20,x,y,(x+3*y)&15u);
+    }
+    for(unsigned y=0;y<256;++y)for(unsigned x=0;x<256;++x)
+        require(vram.read(0,256,20,x,y)==((x+3*y)&15u),"PSMT4 neighboring nibble preservation");
+    constexpr std::array<std::array<unsigned,3>,10> nibble_vectors{{
+        {0,0,0},{8,0,1},{16,0,2},{24,0,3},{4,2,0},{0,4,96},
+        {32,0,512},{0,16,256},{64,0,2048},{0,128,16384}
+    }};
+    for(const auto& v:nibble_vectors)
+        require(GsVram::address(0,256,20,v[0],v[1])==v[2],"PSMT4 diagram address");
+    vram.invalidate();vram.write(0,128,20,0,0,10);
+    rejects([&]{(void)vram.read(0,128,20,4,2);},"unwritten bits");
+    vram.write(0,128,20,4,2,11);
+    require(vram.read(0,128,19,0,0)==0xBA,"PSMT4 low/high nibbles share actual physical byte");
 }
 void setup_transfer(GsRegisters& gs, unsigned psm, unsigned w, unsigned h, unsigned x=0, unsigned y=0) {
     gs.general_write(0x50, (1ull<<48) | (std::uint64_t{psm}<<56));
@@ -86,6 +104,19 @@ void setup_transfer(GsRegisters& gs, unsigned psm, unsigned w, unsigned h, unsig
     gs.general_write(0x52, w | (std::uint64_t{h}<<32)); gs.general_write(0x53,0);
 }
 void check_transfer_gif() {
+    {
+        GsRegisters indexed;indexed.reset(0);Gif stream;stream.reset();
+        indexed.general_write(0x50,(2ull<<48)|(20ull<<56));
+        indexed.general_write(0x51,(28ull<<32)|(3ull<<48));
+        indexed.general_write(0x52,8ull|(3ull<<32));indexed.general_write(0x53,0);
+        stream.write_fifo(tag(1,0,2),0,indexed);
+        stream.write_fifo(0xFEDCBA9876543210ull,0xFFFFFFFF76543210ull,indexed);
+        for(unsigned p=0;p<24;++p)
+            require(indexed.vram().read(0,128,20,28+p%8,3+p/8)==(p&15u),"IMAGE4 nibble order and final padding");
+        rejects([&]{(void)indexed.vram().read(0,128,20,28,6);},"unwritten bits");
+        indexed.general_write(0x51,30ull<<32);
+        rejects([&]{indexed.general_write(0x53,0);},"hardware alignment");
+    }
     {
         GsRegisters indexed; indexed.reset(0); Gif stream; stream.reset();
         indexed.general_write(0x50,(2ull<<48)|(19ull<<56));
@@ -127,7 +158,7 @@ void check_transfer_gif() {
     require(gs.vram().read(0,64,0,1,2)==0x77665544u && gs.vram().read(0,64,0,2,2)==0xBBAA9988u,
             "local copy preserves overlap with DIR");
     rejects([&] { gs.general_write(0x53,1u); }, "local-to-host");
-    rejects([&] { setup_transfer(gs,0x14,1,1); }, "pixel format 20");
+    rejects([&] { setup_transfer(gs,0x15,1,1); }, "pixel format 21");
     rejects([&] { setup_transfer(gs,0,3,1); }, "hardware alignment");
     rejects([&] { setup_transfer(gs,1,6,1); }, "hardware alignment");
     setup_transfer(gs,0,2,1); gs.general_write(0x53,3u);

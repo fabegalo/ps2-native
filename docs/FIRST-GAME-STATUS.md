@@ -1347,3 +1347,15 @@ Fixture GIF atravessa REF+END e CNT+IRQ; dados da tag não viram pacote.
 Diagnóstico da RAM física é leitura sem efeitos, com máscara de incerteza:
 não refaz DMA recusado, não preenche/esvazia cache nem avança dispositivos.
 Oito testes focados aprovados. CI f6344e4: núcleo e launcher nos seis alvos.
+Ensaio 94: DMA GIF source-chain passou. EE `0x1CECA0` / 392.490.598,
+IOP `0x4CB18` / 53.113.412 ativo, 134,160 s. 35 pacotes novos,
+1.075.584 escritas comprovadas, scanout ainda preto. Novo upload recusado:
+PSMT4 64x96, DBP=16FF, DBW=2. RAM
+`51f49fbd4275b5929d60dfc201d0a0d9627dfdfbab27084a533fe8d51ac89155`,
+um doubleword parcialmente desconhecido; captura sem avançar DMA.
+Continuação PSMT4: consultados os traits P4 de PS2Recomp GS memory e
+GS User's Manual 8.3.4. Implementação independente de páginas 128x128,
+blocos 32x16, colunas alternadas, seleção de nibble e payload IMAGE/HWREG.
+Fixtures verificam bijeção por nibble em quatro páginas, vetores físicos,
+preservação de vizinhos, incerteza, alinhamento e padding. Seis testes
+focados GS/GIF/AOT aprovados; ensaio 95 em andamento.
