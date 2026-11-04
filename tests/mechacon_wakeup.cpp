@@ -17,7 +17,7 @@ std::vector<std::uint8_t> program(unsigned mode) {
     }
     a.lbu(9,0x17,8);a.nop();a.sw(9,0x48,10);
     a.la(9,1);a.sw(9,0x4C,10);
-    if(mode==12){a.lbu(11,0x18,8);a.nop();a.addiu(12,11,1);}
+    if(mode==12){a.lbu(11,0x18,8);a.nop();a.addiu(12,11,1);a.beq(12,0,"idle");a.nop();}
     a.label("idle");a.beq(0,0,"idle");a.nop();const auto code=m20::le_words(a.finish());
     std::vector<std::uint8_t> rom(4u*1024u*1024u);std::copy(code.begin(),code.end(),rom.begin());return rom;
 }

@@ -14,7 +14,7 @@ std::vector<std::uint8_t> program(std::span<const std::uint8_t> input,unsigned c
     a.la(9,1);a.sw(9,16,10);
     if(consume==1 || consume==4)a.addiu(12,11,1);
     if(consume==3){a.lbu(11,0,10);a.nop();a.andi(12,11,0x80);a.addiu(12,12,1);a.sw(12,20,10);}
-    if(consume==2){a.lbu(11,0x18,8);a.nop();a.addiu(12,11,1);}
+    if(consume==2){a.lbu(11,0x18,8);a.nop();a.addiu(12,11,1);a.beq(12,0,"idle");a.nop();}
     a.label("idle");a.beq(0,0,"idle");a.nop();const auto code=m20::le_words(a.finish());
     std::vector<std::uint8_t> rom(4u*1024u*1024u);std::copy(code.begin(),code.end(),rom.begin());return rom;
 }

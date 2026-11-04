@@ -212,6 +212,14 @@ modelado. SIF1 576 bytes, SIF0 448; zero pacotes GIF/pixels/frames.
 RAM `e375f45a1fd49b0752effcf2ef435ff3b57b328d408c36d2072ce6e8b6ea26d8`.
 Logs locais `simpsons-trial-{2,3,4,5}.log`. Nenhum processo do jogo ficou ativo.
 
+Repetição `simpsons-trial-5-interpreter.log`: mesmos PC, contagens, causa
+e hash de RAM do híbrido; 93.117.072 instruções interpretadas. Amostras
+únicas: híbrido 34,762 s, interpretador 33,818 s; nenhum ganho demonstrado.
+A primeira CI de `6328bb7` revelou três fixtures MECHACON que exigiam
+recusa já na leitura vazia. Elas agora exercitam um branch sobre o byte
+opaco, preservando a prova de que ele não pode fabricar decisão numérica.
+Os três testes corrigidos e `native-ee-context` passaram localmente.
+
 Consulta prévia: PS2Recomp revisão `e5636981`, `fpu_translator.cpp` e
 `ps2xIOP/src/emulator/imports/iop_cdvd.cpp`; serviços HLE não adotados.
 Fundamentos/comparação: [pesquisa FPU](https://github.com/libretro/ps2#float-accuracy-the-ps2float-work),
