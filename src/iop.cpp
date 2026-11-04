@@ -1282,16 +1282,19 @@ void Iop::diagnostic_spu2_effect_start_reset(std::array<std::uint32_t,2> values)
 bool Iop::spu2_effects_active(unsigned core) const {
     return spu2_control_[core] && (spu2_control_[core]->value&0x8080u)==0x8080u;
 }
-std::pair<std::uint32_t,std::uint32_t> Iop::spu2_effect_area(unsigned core) const {
+std::pair<std::uint32_t,std::uint32_t> Iop::spu2_effect_area(unsigned core,
+    std::uint32_t write_address,std::uint32_t write_value) const {
     const auto base=0x1F900000u+core*0x400u;
-    const auto high=latch(base+0x2E0u),low=latch(base+0x2E2u),end=latch(base+0x33Cu);
-    if((((!high || !*high) || (!low || !*low)) && !diagnostic_spu2_effect_start_) ||
-       ((!end || !*end) && !diagnostic_spu2_effect_end_))
+    const auto field=[&](std::uint32_t address)->std::optional<std::uint32_t> {
+        if(address==write_address)return write_value;
+        const auto value=latch(address);return value ? *value : std::nullopt;
+    };
+    const auto high=field(base+0x2E0u),low=field(base+0x2E2u),end=field(base+0x33Cu);
+    if(((!high || !low) && !diagnostic_spu2_effect_start_) || (!end && !diagnostic_spu2_effect_end_))
         throw IopStop{"SPU2 effects require a known workspace start and end"};
     const auto initial=diagnostic_spu2_effect_start_ ? (*diagnostic_spu2_effect_start_)[core] : 0u;
-    const auto first=((((high && *high) ? **high : initial>>16u)&0xFu)<<16u)|
-                     (((low && *low) ? **low : initial)&0xFFFFu);
-    const auto last=(((end && *end) ? **end : (*diagnostic_spu2_effect_end_)[core])&0xFu)<<16u|0xFFFFu;
+    const auto first=((high.value_or(initial>>16u)&0xFu)<<16u)|(low.value_or(initial)&0xFFFFu);
+    const auto last=((end ? *end : (*diagnostic_spu2_effect_end_)[core])&0xFu)<<16u|0xFFFFu;
     if((first&7u) || first>last || first<0x2800u)
         throw IopStop{"SPU2 effect workspace alignment, wrap or overlap with capture/input buffers is not modeled"};
     return {first,last};
@@ -1927,10 +1930,15 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         if(is_spu2_effect_address(physical)) {
             const auto core=(physical-0x1F900000u)/0x400u;
             const auto control=spu2_control_[core];
-            if(!control || ((control->value|control->unknown)&0x80u))
-                throw IopStop{"SPU2 effect workspace configuration requires effects disabled"};
-            // Address setup alone does not clear or fabricate sound RAM.
-            // Active reverb still refuses at ATTR before reading the area.
+            if(!control || (control->unknown&0x80u))
+                throw IopStop{"SPU2 effect workspace configuration requires a known effect-enable state"};
+            if(spu2_effects_active(core)) {
+                // Validate the prospective area without changing latches. Both
+                // the prior area and every newly reachable byte stay unknown.
+                const auto area=spu2_effect_area(core,physical,*value);
+                if(!spu2_ram_written_.empty())std::fill(spu2_ram_written_.begin()+area.first,
+                    spu2_ram_written_.begin()+area.second+1u,std::uint8_t{0});
+            }
         }
         if((physical==0x1F900198u || physical==0x1F900598u) &&
            spu2_adma_[(physical-0x1F900198u)/0x400u].enabled && !spu2_input_quiet((physical-0x1F900198u)/0x400u,*value))

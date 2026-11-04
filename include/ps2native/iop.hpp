@@ -258,7 +258,8 @@ private:
     void reset_sio2_observed(ObservedWord word,std::uint64_t epoch);
     void write_spu2_control(std::uint32_t physical,ObservedWord word);
     [[nodiscard]] bool spu2_effects_active(unsigned core) const;
-    [[nodiscard]] std::pair<std::uint32_t,std::uint32_t> spu2_effect_area(unsigned core) const;
+    [[nodiscard]] std::pair<std::uint32_t,std::uint32_t> spu2_effect_area(unsigned core,
+        std::uint32_t write_address=0u,std::uint32_t write_value=0u) const;
     void tick_spu2_quiet();
     void validate_spu2_pio(unsigned core,const ObservedWord& control) const;
     void validate_spu2_adma(unsigned core) const;

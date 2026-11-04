@@ -1025,3 +1025,12 @@ padrão e removida no reset; não fornece readback. Cada metade escrita pelo
 guest substitui a parte correspondente da hipótese. Endereços inválidos,
 mudança tardia e leituras não comprovadas recusam. PS2Recomp áudio consultado;
 a referência de inicialização SPU2 não é prova de valores físicos de reset.
+
+Ensaio 72: ambos cores habilitaram efeitos; IOP `0x60388` / 46.731.259,
+delay slot SH EEA=F com efeitos ativos. EE `0x81FD4` / 360.000.000,
+97,2465 s, RAM `9a2dbb6f82838a989fea2f4e3b089f59f809b54ec328b624dcefea19cab48d90`.
+Nenhuma escrita PMODE ou novos pixels. Modo original repetido após ESA inicial:
+mesmos PCs/contagens/hash canônico. Configuração ativa de ESA/EEA agora valida
+primeiro a área prospectiva e invalida conhecimento de toda a área alcançável;
+não recupera bytes anteriores, não executa DSP nem altera amostras com ganho zero.
+Sobreposição com buffers dinâmicos, wrap e desalinhamento continuam recusados.
