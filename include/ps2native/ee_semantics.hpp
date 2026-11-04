@@ -384,9 +384,7 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     } else if constexpr (Op == O::Sh) {
         m.write16(effective_address(s, w), static_cast<std::uint16_t>(s.reg32(t_)));
     } else if constexpr (Op == O::Sw) {
-        const auto unknown = static_cast<std::uint32_t>(s.unknown_gpr_bits[t_]);
-        if (unknown) m.store32_observed(effective_address(s, w), {static_cast<std::uint32_t>(raw_gpr64(s,t_)),unknown});
-        else m.write32(effective_address(s, w), s.reg32(t_));
+        m.write32(effective_address(s, w), s.reg32(t_));
     } else if constexpr (Op == O::Sd) {
         m.write64(effective_address(s, w), s.reg64(t_));
     } else if constexpr (Op == O::Sq) {

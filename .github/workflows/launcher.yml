@@ -91,7 +91,7 @@ jobs:
           $repo = "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_683/qt6_683"
           $version = "6.8.3-0-202503201308"
           $root = Join-Path $env:RUNNER_TEMP "qt"
-          function Get-QtPackage([string]$package, [string]$suffix, [string[]]$modules) {
+          function Get-QtPackage([string]$package, [string]$suffix, [string[]]$modules, [string]$destination) {
             foreach ($module in $modules) {
               $name = "$version$module-Windows-Windows_11_23H2-MSVC2022-Windows-Windows_11_23H2-$suffix.7z"
               $url = "$repo/$package/$name"
@@ -104,20 +104,23 @@ jobs:
               if ($expected -notmatch '^[0-9a-fA-F]{40}$') { throw "Invalid SHA-1 file for $name" }
               $actual = (Get-FileHash -Algorithm SHA1 $file).Hash
               if ($actual -ne $expected.ToUpperInvariant()) { throw "SHA-1 mismatch for $name" }
-              New-Item -ItemType Directory -Force $root | Out-Null
-              if ($sevenZip) { & 7z x -y -bd "-o$root" $file | Out-Null } else { tar -xf $file -C $root }
+              New-Item -ItemType Directory -Force $destination | Out-Null
+              if ($sevenZip) { & 7z x -y -bd "-o$destination" $file | Out-Null } else { tar -xf $file -C $destination }
               if ($LASTEXITCODE -ne 0) { throw "Cannot extract $name" }
             }
           }
           $modules = @("qtbase", "qtdeclarative", "qtsvg")
+          # Official module archives have a flat prefix (bin/, lib/, include/).
+          # Keep host and ARM64 target files in distinct installation roots.
+          $x64 = Join-Path $root "msvc2022_64"
+          $arm64 = Join-Path $root "msvc2022_arm64"
           # x64 Qt: the target on x64, the host tools (moc, qmlcachegen...) on ARM64.
-          Get-QtPackage "qt.qt6.683.win64_msvc2022_64" "X86_64" $modules
-          Get-QtPackage "qt.qt6.683.addons.qtimageformats.win64_msvc2022_64" "X86_64" @("qtimageformats")
-          $x64 = Join-Path $root "6.8.3/msvc2022_64"
+          Get-QtPackage "qt.qt6.683.win64_msvc2022_64" "X86_64" $modules $x64
+          Get-QtPackage "qt.qt6.683.addons.qtimageformats.win64_msvc2022_64" "X86_64" @("qtimageformats") $x64
           if ("${{ matrix.arch }}" -eq "ARM64") {
-            Get-QtPackage "qt.qt6.683.win64_msvc2022_arm64_cross_compiled" "ARM64" $modules
-            Get-QtPackage "qt.qt6.683.addons.qtimageformats.win64_msvc2022_arm64_cross_compiled" "ARM64" @("qtimageformats")
-            "QT_PREFIX=$(Join-Path $root '6.8.3/msvc2022_arm64')" >> $env:GITHUB_ENV
+            Get-QtPackage "qt.qt6.683.win64_msvc2022_arm64_cross_compiled" "ARM64" $modules $arm64
+            Get-QtPackage "qt.qt6.683.addons.qtimageformats.win64_msvc2022_arm64_cross_compiled" "ARM64" @("qtimageformats") $arm64
+            "QT_PREFIX=$arm64" >> $env:GITHUB_ENV
             "QT_HOST=$x64" >> $env:GITHUB_ENV
           } else {
             "QT_PREFIX=$x64" >> $env:GITHUB_ENV
