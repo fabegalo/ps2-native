@@ -34,7 +34,7 @@ void GsRegisters::start_transfer(std::uint64_t value) {
     const auto x = static_cast<unsigned>((pos >> 32) & 2047u);
     const auto y = static_cast<unsigned>((pos >> 48) & 2047u);
     (void)GsVram::address(base, bw, psm, x, y);
-    if (width % (psm == 0u ? 2u : 8u) || (psm == 19u && (x & 1u)) || (psm == 20u && (x & 3u)))
+    if (width % (psm == 0u ? 2u : psm==2u || psm==10u ? 4u : 8u) || (psm == 19u && (x & 1u)) || (psm == 20u && (x & 3u)))
         throw DeviceRefusal("GS transfer rectangle violates the hardware alignment");
     const auto order = static_cast<unsigned>((pos >> 59) & 3u);
     ++transfer_generation_;
@@ -74,7 +74,7 @@ void GsRegisters::transfer_data(std::uint64_t data) {
         }
         return;
     }
-    const unsigned bytes = t.psm == 19u ? 1u : t.psm == 1u ? 3u : 4u;
+    const unsigned bytes = t.psm == 19u ? 1u : t.psm==2u || t.psm==10u ? 2u : t.psm == 1u ? 3u : 4u;
     for (unsigned i = 0; i < 8u && t.active; ++i) {
         t.pending |= static_cast<std::uint32_t>((data >> (8u * i)) & 255u) << (8u * t.pending_bytes++);
         if (t.pending_bytes != bytes) continue;

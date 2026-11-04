@@ -9,8 +9,8 @@ void GsVram::invalidate() {
     std::fill(known_.begin(), known_.end(), 0u); ++revision_; pixel_writes_ = 0u;
 }
 void GsVram::validate_format(unsigned psm) {
-    if (psm > 1u && psm != 19u && psm != 20u) throw DeviceRefusal("GS pixel format " + std::to_string(psm) +
-                                     " is not modeled (PSMCT32/PSMCT24/PSMT8/PSMT4 only)");
+    if (psm > 1u && psm != 2u && psm != 10u && psm != 19u && psm != 20u) throw DeviceRefusal("GS pixel format " + std::to_string(psm) +
+                                     " is not modeled (PSMCT32/PSMCT24/PSMCT16/PSMCT16S/PSMT8/PSMT4 only)");
 }
 std::uint32_t GsVram::address(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y) {
     validate_format(psm);
@@ -31,6 +31,17 @@ std::uint32_t GsVram::address(std::uint32_t base, unsigned width, unsigned psm, 
         const auto byte = psm == 19u ? ((x >> 2) & 2u) | ((y >> 1) & 1u) : (x >> 3) & 3u;
         return (base + page * 8192u + block * 256u + ((y >> 2) & 3u) * 64u + word * 4u + byte) & (kBytes - 1u);
     }
+    if(psm==2u || psm==10u) {
+        // GS manual 8.3.2: 64x64 pages, 16x8 blocks, 16x2 columns.
+        // PSMCT16S changes only the block permutation. X bit 3 selects
+        // the other halfword in a physical word, not the next word.
+        const auto page=(y/64u)*(width/64u)+x/64u;
+        const auto block=psm==10u
+            ? ((y>>3)&1u)|((x>>3)&2u)|((y>>3)&4u)|((y>>1)&8u)|((x>>1)&16u)
+            : ((y>>3)&1u)|((x>>3)&2u)|((y>>2)&4u)|((x>>2)&8u)|((y>>1)&16u);
+        const auto word=(x&1u)|((y&1u)<<1)|((x&6u)<<1)|((y&6u)<<3);
+        return (base+page*8192u+block*256u+word*4u+((x&8u)>>2))&(kBytes-1u);
+    }
     const auto page = (y / 32u) * (width / 64u) + x / 64u;
     const auto block = ((x >> 3) & 1u) | ((y >> 2) & 2u) | ((x >> 2) & 4u) |
                        ((y >> 1) & 8u) | ((x >> 1) & 16u);
@@ -40,7 +51,7 @@ std::uint32_t GsVram::address(std::uint32_t base, unsigned width, unsigned psm, 
 std::uint32_t GsVram::read(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y) const {
     const auto addr = address(base, width, psm, x, y);
     const auto at = addr / 4u, shift = (addr & 3u) * 8u + (psm == 20u ? (y & 2u) * 2u : 0u);
-    const auto bits = psm == 20u ? 15u : psm == 19u ? 255u : psm == 1u ? 0xFFFFFFu : 0xFFFFFFFFu;
+    const auto bits = psm == 20u ? 15u : psm == 19u ? 255u : psm==2u || psm==10u ? 0xFFFFu : psm == 1u ? 0xFFFFFFu : 0xFFFFFFFFu;
     if (((known_[at] >> shift) & bits) != bits) throw DeviceRefusal("GS VRAM read: pixel contains unwritten bits");
     return (words_[at] >> shift) & bits;
 }
@@ -51,6 +62,7 @@ void GsVram::write(std::uint32_t base, unsigned width, unsigned psm, unsigned x,
     if (psm == 1u) preserve |= 0xFF000000u;
     if (psm == 19u) preserve |= 0xFFFFFF00u;
     if (psm == 20u) preserve |= 0xFFFFFFF0u;
+    if (psm == 2u || psm == 10u) preserve |= 0xFFFF0000u;
     write_word(at, value << shift, ~preserve << shift, unknown << shift, conditional);
     if (!conditional) ++pixel_writes_; // possible writes are not claimed as proven pixels
 }
@@ -70,15 +82,10 @@ std::uint32_t GsVram::depth_address(std::uint32_t base, unsigned width, unsigned
         return (base + (address(0, width, 0, x, y) ^ 6144u)) & (kBytes - 1u);
     }
     if (psm != 2u && psm != 10u) throw DeviceRefusal("GS depth format is not modeled");
-    (void)address(base, width, 0, x, y); // common bounds and alignment
-    const auto page = (y / 64u) * (width / 64u) + x / 64u;
-    const auto block = psm == 10u
-        ? ((y >> 3) & 1u) | ((x >> 3) & 2u) | ((y >> 3) & 4u) |
-          ((y >> 1) & 8u) | ((x >> 1) & 16u)
-        : ((y >> 3) & 1u) | ((x >> 3) & 2u) | ((y >> 2) & 4u) |
-          ((x >> 2) & 8u) | ((y >> 1) & 16u);
-    const auto word = (x & 1u) | ((y & 1u) << 1) | ((x & 6u) << 1) | ((y & 6u) << 3);
-    return (base + page * 8192u + (block ^ 24u) * 256u + word * 4u + ((x & 8u) >> 2)) & (kBytes - 1u);
+    const auto color=address(base,width,psm,x,y);
+    // Z16 uses the same page/column mapping with block bits 3/4 inverted.
+    // Subtract the base before the permutation, including non-page bases.
+    return (base+((color-base)^6144u))&(kBytes-1u);
 }
 std::uint32_t GsVram::read_depth(std::uint32_t base, unsigned width, unsigned psm,
                                unsigned x, unsigned y) const {

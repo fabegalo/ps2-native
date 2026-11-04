@@ -14,7 +14,7 @@ std::vector<std::uint8_t> program(unsigned mode) {
         a.lbu(11,0x18,8);a.nop();a.sw(11,0x28+part*4,10);
         for(unsigned n=0;n<8u;++n){a.lbu(11,0x18,8);a.nop();a.sb(11,part*8+n,10);}
         a.lbu(9,0x17,8);a.nop();a.sw(9,0x30+part*4,10);
-        if(mode==11){a.lbu(11,0x18,8);a.nop();}
+        if(mode==11){a.lbu(11,0x18,8);a.nop();a.addiu(12,11,1);}
     }
     a.la(9,1);a.sw(9,0x38,10);a.label("idle");a.beq(0,0,"idle");a.nop();
     const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> rom(4u*1024u*1024u);

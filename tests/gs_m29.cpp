@@ -33,7 +33,7 @@ void check_vram() {
     require(vram.read(0,128,0,0,0)==0x80224444u, "bitwise framebuffer mask");
     require(GsVram::address(GsVram::kBytes-256,64,0,8,0)==0u, "VRAM 4 MiB wrap");
     rejects([&] { (void)GsVram::address(0,0,0,0,0); }, "buffer width");
-    rejects([&] { (void)GsVram::address(0,64,2,0,0); }, "pixel format 2");
+    rejects([&] { (void)GsVram::address(0,64,3,0,0); }, "pixel format 3");
     vram.invalidate(); rejects([&] { (void)vram.read(0,128,0,0,0); }, "unwritten bits");
     constexpr std::array<std::array<unsigned,3>,10> depth_vectors{{
         {0,0,6144},{8,0,6146},{16,0,6656},{32,0,2048},{0,8,6400},

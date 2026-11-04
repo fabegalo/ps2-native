@@ -11,6 +11,7 @@ public:
     static void validate_format(unsigned psm);
     // Base in bytes, width in pixels. PSMCT32/24: 64x32 pages, 8x8 blocks,
     // 8x2 columns. Addresses wrap at 4 MiB, including non-page-aligned bases.
+    // PSMCT16/16S: 64x64 pages, 16x8 blocks and 16x2 columns; raw halfwords.
     [[nodiscard]] static std::uint32_t address(std::uint32_t base, unsigned width,
                                              unsigned psm, unsigned x, unsigned y);
     [[nodiscard]] std::uint32_t read(std::uint32_t base, unsigned width, unsigned psm,

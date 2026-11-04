@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-gs-ct16 tests/gs_ct16.cpp)
+    target_link_libraries(ps2n-gs-ct16 PRIVATE ps2n_core)
+    add_test(NAME native-gs-ct16 COMMAND ps2n-gs-ct16)
+    set_tests_properties(native-gs-ct16 PROPERTIES TIMEOUT 30)
     add_executable(ps2n-mechacon-model-name tests/mechacon_model_name.cpp)
     target_link_libraries(ps2n-mechacon-model-name PRIVATE ps2n_core)
     add_test(NAME native-mechacon-model-name COMMAND ps2n-mechacon-model-name)
