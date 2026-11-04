@@ -245,14 +245,28 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             if(unknown&0x80000000u)unknown|=0xFFFFFFFF00000000ull;
         }
         s.set_reg64_observed(d_,value,unknown);
-    } else if constexpr (Op == O::Addu) {
-        s.set_reg32_sign_extended(d_, s.reg32(s_) + s.reg32(t_));
-    } else if constexpr (Op == O::Subu) {
-        s.set_reg32_sign_extended(d_, s.reg32(s_) - s.reg32(t_));
-    } else if constexpr (Op == O::Daddu) {
-        s.set_reg64(d_, s.reg64(s_) + s.reg64(t_));
-    } else if constexpr (Op == O::Dsubu) {
-        s.set_reg64(d_, s.reg64(s_) - s.reg64(t_));
+    } else if constexpr (Op==O::Addu || Op==O::Subu || Op==O::Daddu || Op==O::Dsubu) {
+        constexpr bool wide=Op==O::Daddu || Op==O::Dsubu,subtract=Op==O::Subu || Op==O::Dsubu;
+        constexpr auto mask=wide ? ~0ull : 0xFFFFFFFFull;
+        const auto a=raw_gpr64(s,s_)&mask,b=raw_gpr64(s,t_)&mask;
+        const auto ua=s.unknown_gpr_bits[s_]&mask,ub=s.unknown_gpr_bits[t_]&mask;
+        std::uint64_t value=0,unknown=0;
+        // A known zero is an exact arithmetic identity, including copies
+        // encoded as DADDU/ADDU. Do not numerically consume opaque payloads.
+        if(!b && !ub){value=a;unknown=ua;}
+        else if constexpr(!subtract) {
+            if(!a && !ua){value=b;unknown=ub;}
+            else if(!ua && !ub)value=a+b;
+            else throw std::runtime_error("EE addition consumes unknown carry bits");
+        } else {
+            if(!ua && !ub)value=a-b;
+            else throw std::runtime_error("EE subtraction consumes unknown borrow bits");
+        }
+        if constexpr(!wide) {
+            value=sx32(static_cast<std::uint32_t>(value));
+            if(unknown&0x80000000u)unknown|=0xFFFFFFFF00000000ull;
+        }
+        s.set_reg64_observed(d_,value,unknown);
     } else if constexpr (Op == O::And) {
         const auto a = raw_gpr64(s, s_), b = raw_gpr64(s, t_);
         const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];

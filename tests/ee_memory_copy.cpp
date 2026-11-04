@@ -15,6 +15,10 @@ void step(Memory& m,EEState& s,MipsOpcode op,std::uint32_t word,bool interpreted
         case MipsOpcode::Ldr:ee::exec<MipsOpcode::Ldr>(s,m,0,word);break;
         case MipsOpcode::Sdl:ee::exec<MipsOpcode::Sdl>(s,m,0,word);break;
         case MipsOpcode::Sdr:ee::exec<MipsOpcode::Sdr>(s,m,0,word);break;
+        case MipsOpcode::Daddu:ee::exec<MipsOpcode::Daddu>(s,m,0,word);break;
+        case MipsOpcode::Addu:ee::exec<MipsOpcode::Addu>(s,m,0,word);break;
+        case MipsOpcode::Dsubu:ee::exec<MipsOpcode::Dsubu>(s,m,0,word);break;
+        case MipsOpcode::Subu:ee::exec<MipsOpcode::Subu>(s,m,0,word);break;
         default:throw std::runtime_error("unexpected test operation");
     }
 }
@@ -80,10 +84,28 @@ void narrow_copies(Memory& m) {
     s.set_reg64(8,0xB000F200u);s.set_reg64_observed(9,0,1);
     device_refused([&]{ee::exec<MipsOpcode::Sb>(s,m,0,(8u<<21)|(9u<<16));},"unknown MMIO bits");
 }
+void neutral_arithmetic(Memory& memory) {
+    for(const bool interpreted:{false,true})for(const bool wide:{false,true})
+    for(const bool subtract:{false,true})for(const bool alias:{false,true})for(unsigned order=0;order<(subtract?1u:2u);++order) {
+        EEState state;state.set_reg128_observed(8,0xFEDCBA9876543210ull,0xABCDEF0012345678ull,0x8000000Fu,0xFu);
+        state.set_reg64(9,0);const auto dest=alias ? 8u : 10u;
+        state.set_reg128_observed(dest,state.gpr[dest].low,0xABCDEF0012345678ull,state.unknown_gpr_bits[dest],0xFu);
+        const auto op=wide ? subtract ? MipsOpcode::Dsubu : MipsOpcode::Daddu : subtract ? MipsOpcode::Subu : MipsOpcode::Addu;
+        const auto word=((order ? 9u : 8u)<<21u)|((order ? 8u : 9u)<<16u)|(dest<<11u)|(wide ? subtract ? 0x2Fu : 0x2Du : subtract ? 0x23u : 0x21u);
+        step(memory,state,op,word,interpreted);
+        require(state.gpr[dest].low==(wide ? 0xFEDCBA9876543210ull : 0x76543210ull) &&
+            state.unknown_gpr_bits[dest]==(wide ? 0x8000000Full : 0xFFFFFFFF8000000Full) &&
+            state.gpr[dest].high==0xABCDEF0012345670ull && state.unknown_gpr_high_bits[dest]==0xFu,
+            "zero arithmetic copies preserve opaque low bits, 32-bit sign extension, upper 128-bit lanes and aliased inputs in both engines");
+    }
+    EEState state;state.set_reg64_observed(8,0x12345678,1);state.set_reg64(9,1);
+    rejects([&]{ee::exec<MipsOpcode::Daddu>(state,memory,0,(8u<<21u)|(9u<<16u)|(10u<<11u)|0x2Du);},"unknown carry");
+    rejects([&]{ee::exec<MipsOpcode::Dsubu>(state,memory,0,(8u<<21u)|(9u<<16u)|(10u<<11u)|0x2Fu);},"unknown borrow");
+}
 }
 int main() try {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
-    doubleword_copies(memory);narrow_copies(memory);
+    doubleword_copies(memory);narrow_copies(memory);neutral_arithmetic(memory);
     std::cout<<"EE opaque payload copies, all alignments/orders, template/interpreter and narrow sign extension passed\n";
     return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
