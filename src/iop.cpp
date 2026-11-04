@@ -528,14 +528,14 @@ void Iop::iop_sif1_write(std::uint32_t address, std::uint32_t value) {
     iop_sif1_[field] = value;
 }
 
-void Iop::advance_vif_dma(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs) {
-    advance_graphics_dma(0,ee_cycle,&vif0,gif,gs);
-    advance_graphics_dma(1,ee_cycle,&vif1,gif,gs);
+void Iop::advance_vif_dma(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl* vu) {
+    advance_graphics_dma(0,ee_cycle,&vif0,gif,gs,vu);
+    advance_graphics_dma(1,ee_cycle,&vif1,gif,gs,vu);
 }
 void Iop::advance_gif_dma(std::uint64_t ee_cycle,Gif& gif,GsRegisters& gs) {
     advance_graphics_dma(2,ee_cycle,nullptr,gif,gs);
 }
-void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif,Gif& gif,GsRegisters& gs) {
+void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif,Gif& gif,GsRegisters& gs,VuControl* vu) {
     auto& transfer=graphics_dma_[channel];auto& regs=ee_dma_setup_[channel];
     auto& chcr=regs[0];auto& madr=regs[1];auto& qwc=regs[2];auto& tadr=regs[3];
     if(transfer.stop) throw DeviceRefusal(*transfer.stop);
@@ -577,7 +577,7 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif,
                     if((next&15u) || next>ee_ram_.size() || ee_ram_.size()-next<16u)
                         throw DeviceRefusal("EE graphics NEXT target outside aligned main RAM");
                 }
-                if(*chcr&0x40u) vif->write_dma_tag(std::uint64_t{tag[2]}|(std::uint64_t{tag[3]}<<32),gif,gs);
+                if(*chcr&0x40u) vif->write_dma_tag(std::uint64_t{tag[2]}|(std::uint64_t{tag[3]}<<32),gif,gs,vu);
                 transfer.end=id==0u || id==7u || ((tag[0]&0x80000000u) && (*chcr&0x80u));
                 transfer.inline_data=id==1u;
                 *chcr=(*chcr&0xFFFFu)|(tag[0]&0xFFFF0000u);
@@ -586,7 +586,7 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif,
                 const auto data=read(*madr,4);
                 const auto low=std::uint64_t{data[0]}|(std::uint64_t{data[1]}<<32);
                 const auto high=std::uint64_t{data[2]}|(std::uint64_t{data[3]}<<32);
-                if(vif) vif->write_fifo(low,high,gif,gs);
+                if(vif) vif->write_fifo(low,high,gif,gs,vu);
                 else gif.write_fifo(low,high,gs);
                 *madr+=16u;--*qwc;
                 if(transfer.inline_data) *tadr=*madr;

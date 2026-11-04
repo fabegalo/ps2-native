@@ -1,16 +1,17 @@
 #include "ps2native/vif.hpp"
+#include "ps2native/vu_control.hpp"
 #include <string>
 
 namespace ps2native {
 std::uint32_t Vif::read_register(std::uint32_t offset) const {
     // EE User's Manual v6, pp.136 and 143-146. With synchronous FIFO
     // acceptance, DIRECT can wait for data but no qwords remain queued.
-    if(offset==0) return ((direct_left_ || pending_!=Pending::None) ? 1u : 0u)|(mark_detected_ ? 0x40u : 0u);
+    if(offset==0) return (processing() ? 1u : 0u)|(mark_detected_ ? 0x40u : 0u);
     if(offset&15u) refuse(" registers require aligned 32-bit accesses");
     if(unit_==Unit::Vu0 && (offset==0xA0u || offset==0xB0u || offset==0xC0u || offset==0xE0u))
         refuse(" register is reserved (double buffering exists only on VIF1)");
     if(offset==0x10u) refuse("_FBRST is write-only");
-    if(offset==0x60u) return direct_left_&0xFFu; // VIF1_NUM, EE manual p.138.
+    if(offset==0x60u) return (mpg_left_ ? mpg_left_ : direct_left_)&0xFFu; // VIFn_NUM, EE manual pp.137-138.
     const auto* value=offset==0x20u ? &error_mask_ : offset==0x30u ? &mark_ : offset==0x80u ? &code_ :
         (offset==0x40u || offset==0x50u || offset==0x70u || (offset>=0x90u && offset<=0xE0u) ||
          (offset>=0x100u && offset<=0x170u)) ? &programmed_.at(offset/16u) : nullptr;
@@ -42,17 +43,18 @@ void Vif::write_register(std::uint32_t offset,std::uint32_t value,Gif& gif) {
     if(offset==0x30u) {mark_=value&0xFFFFu;mark_detected_=false;return;}
     refuse(" register write is not modeled");
 }
-void Vif::write_fifo(std::uint64_t low, std::uint64_t high, Gif& gif, GsRegisters& gs) {
+void Vif::write_fifo(std::uint64_t low, std::uint64_t high, Gif& gif, GsRegisters& gs,VuControl* vu) {
     const std::array<std::uint32_t,4> words{static_cast<std::uint32_t>(low), static_cast<std::uint32_t>(low >> 32),
         static_cast<std::uint32_t>(high), static_cast<std::uint32_t>(high >> 32)};
-    write_words(words,gif,gs);
+    write_words(words,gif,gs,vu);
 }
-void Vif::write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs) {
+void Vif::write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs,VuControl* vu) {
     const std::array<std::uint32_t,2> words{static_cast<std::uint32_t>(data),static_cast<std::uint32_t>(data>>32)};
-    write_words(words,gif,gs);
+    write_words(words,gif,gs,vu);
 }
-void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters& gs) {
-    for (const auto command:words) {
+void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters& gs,VuControl* vu) {
+    for (std::size_t lane=0;lane<words.size();++lane) {
+        const auto command=words[lane];
         if(direct_left_) {
             direct_buffer_[direct_words_]=command;
             if(direct_words_==3u) {
@@ -60,6 +62,17 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
                                 std::uint64_t{direct_buffer_[2]}|(std::uint64_t{direct_buffer_[3]}<<32),gs);
                 direct_words_=0;--direct_left_;
             } else ++direct_words_;
+            continue;
+        }
+        if(mpg_left_) {
+            if(!vu)refuse(" MPG requires the shared VU micro memory");
+            if(!mpg_low_)mpg_low_=command;
+            else {
+                const auto bytes=unit_==Unit::Vu0 ? 4096u : 16384u;
+                const auto base=unit_==Unit::Vu0 ? 0x11000000u : 0x11008000u;
+                vu->write_memory(base+mpg_address_,8,{std::uint64_t{*mpg_low_}|(std::uint64_t{command}<<32),0});
+                mpg_address_=(mpg_address_+8u)&(bytes-1u);mpg_low_.reset();--mpg_left_;
+            }
             continue;
         }
         if(pending_!=Pending::None) {
@@ -96,6 +109,18 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
             case 0x20: pending_=Pending::Mask;break;
             case 0x30: pending_=Pending::Row;break;
             case 0x31: pending_=Pending::Col;break;
+            case 0x4A: {
+                // EE manual 6.3.3/MPG: the following instructions are
+                // aligned 64-bit data, not VIF commands. Every VU start
+                // is still refused, so the target micro engine is Ready.
+                if(!vu)refuse(" MPG requires the shared VU micro memory");
+                if((lane+1u)&1u)refuse(" MPG payload requires 64-bit alignment");
+                const auto bytes=unit_==Unit::Vu0 ? 4096u : 16384u;
+                if(immediate>=bytes/8u)refuse(" MPG load address exceeds this VU micro memory");
+                mpg_address_=immediate*8u;mpg_left_=(command>>16u)&255u;
+                if(!mpg_left_)mpg_left_=256u;
+                mpg_low_.reset();break;
+            }
             case 0x50:
             case 0x51:
                 // DIRECTHL cannot interrupt a PATH3 IMAGE transfer. This
@@ -106,7 +131,11 @@ void Vif::write_words(std::span<const std::uint32_t> words,Gif& gif,GsRegisters&
                 direct_left_=immediate ? immediate : 65536u;
                 code_=command;
                 return; // Remaining bytes before qword alignment are padding.
-            default: refuse(" command unsupported: " + std::to_string(opcode));
+            default: {
+                constexpr char hex[]="0123456789ABCDEF";
+                auto reason=std::string(" command unsupported: 0x");
+                reason+=hex[(opcode>>4u)&15u];reason+=hex[opcode&15u];refuse(reason);
+            }
         }
         code_=command;
     }

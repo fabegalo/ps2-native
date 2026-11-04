@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-vif-mpg tests/vif_mpg.cpp)
+    target_link_libraries(ps2n-vif-mpg PRIVATE ps2n_core)
+    add_test(NAME native-vif-mpg COMMAND ps2n-vif-mpg)
+    set_tests_properties(native-vif-mpg PROPERTIES TIMEOUT 30)
     add_executable(ps2n-gs-ct16 tests/gs_ct16.cpp)
     target_link_libraries(ps2n-gs-ct16 PRIVATE ps2n_core)
     add_test(NAME native-gs-ct16 COMMAND ps2n-gs-ct16)

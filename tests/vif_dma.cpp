@@ -64,7 +64,7 @@ void direct_and_failures() {
     f.start();f.advance(4);require(f.gif.packets().empty(),"GIF still waits for its payload");
     f.advance(6);require(f.gif.packets().size()==1 && f.gs.read(kGsSiglblid+4,4)==0x12345678u,
         "TTE DIRECT delivers source data to real GIF PATH2 and GS");
-    Fixture bad;bad.word(0x300,0x4A000001u);bad.start(1,0x101,1);
+    Fixture bad;bad.word(0x300,0x4B000001u);bad.start(1,0x101,1);
     rejects([&]{bad.advance(2);},"command unsupported");
     require(bad.dma.ee_dma_read(0x10009020u)==1 && !(bad.dma.ee_dma_read(0x1000E010u)&2u),"unmodeled VU command does not fake DMA completion");
     rejects([&]{bad.advance(20);},"command unsupported");

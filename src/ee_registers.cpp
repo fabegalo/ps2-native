@@ -107,7 +107,7 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
 // see the same IOP.
 void EeRegisters::sync_iop() {
     iop_.run_until(now() / kEeCyclesPerIopCycle, &gs_);
-    iop_.advance_vif_dma(now(),vif0_,vif1_,gif_,gs_);
+    iop_.advance_vif_dma(now(),vif0_,vif1_,gif_,gs_,&vu_control_);
     iop_.advance_gif_dma(now(),gif_,gs_);
 }
 
@@ -403,7 +403,7 @@ void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint6
     }
     if (physical==0x10004000u || physical==0x10005000u) {
         auto& vif=(physical&0x1000u) ? vif1_ : vif0_;
-        vif.write_fifo(low, high, gif_, gs_);
+        vif.write_fifo(low, high, gif_, gs_,&vu_control_);
         return;
     }
     if (physical == kGifFifo) return gif_.write_fifo(low, high, gs_);
