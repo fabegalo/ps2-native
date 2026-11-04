@@ -403,16 +403,18 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         s.set_reg64_observed(t_, raw_gpr64(s, s_) ^ zimm(w), s.unknown_gpr_bits[s_]);
     } else if constexpr (Op == O::Lui) {
         s.set_reg32_sign_extended(t_, (w & 0xffffu) << 16);
-    } else if constexpr (Op == O::Lb) {
-        s.set_reg64(t_, static_cast<std::uint64_t>(static_cast<std::int64_t>(
-                            static_cast<std::int8_t>(m.read8(effective_address(s, w))))));
-    } else if constexpr (Op == O::Lbu) {
-        s.set_reg64(t_, m.read8(effective_address(s, w)));
-    } else if constexpr (Op == O::Lh) {
-        s.set_reg64(t_, static_cast<std::uint64_t>(static_cast<std::int64_t>(
-                            static_cast<std::int16_t>(m.read16(effective_address(s, w))))));
-    } else if constexpr (Op == O::Lhu) {
-        s.set_reg64(t_, m.read16(effective_address(s, w)));
+    } else if constexpr (Op == O::Lb || Op == O::Lbu || Op == O::Lh || Op == O::Lhu) {
+        constexpr bool half=Op==O::Lh || Op==O::Lhu;
+        constexpr bool signed_load=Op==O::Lb || Op==O::Lh;
+        const auto word=half ? m.load16_observed(effective_address(s,w)) : m.load8_observed(effective_address(s,w));
+        std::uint64_t value=word.value,unknown=word.unknown;
+        if constexpr(signed_load) {
+            constexpr auto sign=half ? 0x8000u : 0x80u;
+            constexpr auto extension=half ? 0xFFFFFFFFFFFF0000ull : 0xFFFFFFFFFFFFFF00ull;
+            if(value&sign)value|=extension;
+            if(unknown&sign)unknown|=extension;
+        }
+        s.set_reg64_observed(t_,value,unknown);
     } else if constexpr (Op == O::Lwl || Op == O::Lwr || Op == O::Ldl || Op == O::Ldr) {
         constexpr bool wide=Op==O::Ldl || Op==O::Ldr;
         constexpr bool left=Op==O::Lwl || Op==O::Ldl;
@@ -421,7 +423,7 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         const auto offset=address&(bytes-1u);
         const auto aligned=address&~(bytes-1u);
         std::uint64_t value=0,source_unknown=0;
-        if constexpr(wide)value=m.read64(aligned);
+        if constexpr(wide){const auto observed=m.load64_observed(aligned);value=observed.value;source_unknown=observed.unknown;}
         else {const auto observed=m.load32_observed(aligned);value=observed.value;source_unknown=observed.unknown;}
         auto result=raw_gpr64(s,t_);
         auto unknown=s.unknown_gpr_bits[t_];
@@ -449,7 +451,14 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             const auto source=left ? bytes-1u-offset+i : i-offset;
             used|=0xFFull<<(source*8u);
         }
-        if(used&s.unknown_gpr_bits[t_])(void)s.reg64(t_); // refuse before any write
+        if(used&s.unknown_gpr_bits[t_]) {
+            const auto first=left ? 0u : offset;
+            const auto count=left ? offset+1u : bytes-offset;
+            const auto shift=left ? (bytes-1u-offset)*8u : 0u;
+            const auto mask=count==8u ? ~0ull : (1ull<<(count*8u))-1u;
+            m.store_bytes_observed(aligned+first,count,{(value>>shift)&mask,(s.unknown_gpr_bits[t_]>>shift)&mask});
+            return;
+        }
         // Only enabled bytes are written; never read-modify-write an MMIO
         // register or touch the adjacent page to complete a partial store.
         for(unsigned i=0;i<bytes;++i) {
@@ -474,9 +483,9 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         const auto low = m.load64_observed(quad),high=m.load64_observed(quad+8u);
         s.set_reg128_observed(t_,low.value,high.value,low.unknown,high.unknown);
     } else if constexpr (Op == O::Sb) {
-        m.write8(effective_address(s, w), static_cast<std::uint8_t>(s.reg32(t_)));
+        m.store8_observed(effective_address(s,w),{static_cast<std::uint32_t>(raw_gpr64(s,t_)),static_cast<std::uint32_t>(s.unknown_gpr_bits[t_])});
     } else if constexpr (Op == O::Sh) {
-        m.write16(effective_address(s, w), static_cast<std::uint16_t>(s.reg32(t_)));
+        m.store16_observed(effective_address(s,w),{static_cast<std::uint32_t>(raw_gpr64(s,t_)),static_cast<std::uint32_t>(s.unknown_gpr_bits[t_])});
     } else if constexpr (Op == O::Sw) {
         const auto unknown = static_cast<std::uint32_t>(s.unknown_gpr_bits[t_]);
         if (unknown) m.store32_observed(effective_address(s, w), {static_cast<std::uint32_t>(raw_gpr64(s,t_)),unknown});

@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-ee-memory-copy tests/ee_memory_copy.cpp)
+    target_link_libraries(ps2n-ee-memory-copy PRIVATE ps2n_core)
+    add_test(NAME native-ee-memory-copy COMMAND ps2n-ee-memory-copy)
+    set_tests_properties(native-ee-memory-copy PROPERTIES TIMEOUT 30)
     add_executable(ps2n-iop-memory-copy tests/iop_memory_copy.cpp)
     target_link_libraries(ps2n-iop-memory-copy PRIVATE ps2n_core)
     add_test(NAME native-iop-memory-copy COMMAND ps2n-iop-memory-copy)

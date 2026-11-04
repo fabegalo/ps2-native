@@ -481,6 +481,14 @@ void Memory::write16(std::uint32_t address, std::uint16_t value) {
 std::uint32_t Memory::read32(std::uint32_t address) const {
     return static_cast<std::uint32_t>(read_le(address, 4, "LW", true));
 }
+ObservedWord Memory::load8_observed(std::uint32_t address) const {
+    std::uint64_t unknown{};const auto value=read_le(address,1,"LB",true,&unknown);
+    return {static_cast<std::uint32_t>(value),static_cast<std::uint32_t>(unknown)};
+}
+ObservedWord Memory::load16_observed(std::uint32_t address) const {
+    std::uint64_t unknown{};const auto value=read_le(address,2,"LH",true,&unknown);
+    return {static_cast<std::uint32_t>(value),static_cast<std::uint32_t>(unknown)};
+}
 ObservedWord Memory::load32_observed(std::uint32_t address) const {
     std::uint64_t unknown{};
     const auto value=read_le(address, 4, "LW", true, &unknown);
@@ -493,6 +501,26 @@ ObservedDoubleword Memory::load64_observed(std::uint32_t address) const {
 }
 void Memory::write32(std::uint32_t address, std::uint32_t value) {
     write_le(address, 4, value, "SW");
+}
+void Memory::store8_observed(std::uint32_t address, ObservedWord word) {
+    write_le(address,1,word.value,"SB",word.unknown&0xFFu);
+}
+void Memory::store16_observed(std::uint32_t address, ObservedWord word) {
+    write_le(address,2,word.value,"SH",word.unknown&0xFFFFu);
+}
+void Memory::store_bytes_observed(std::uint32_t address,std::size_t bytes,ObservedDoubleword word) {
+    if(!bytes || bytes>8u)throw std::invalid_argument("partial store requires one to eight enabled bytes");
+    if(bytes<8u)word.unknown&=(1ull<<(bytes*8u))-1u;
+    // Validate all selected addresses before exposing any part of an opaque
+    // store. Unknown MMIO payloads cannot create partial device side effects.
+    for(std::size_t b=0;b<bytes;++b) {
+        const auto target=resolve(address+static_cast<std::uint32_t>(b),1,true,"partial store");
+        if(word.unknown && target.region!=BusRegion::MainRam && target.region!=BusRegion::Scratchpad && target.region!=BusRegion::VuMemory)
+            throw device_refusal(BusFault::Device,true,1,address+static_cast<std::uint32_t>(b),target.physical,target.region,
+                                 "partial store","unknown MMIO bits cannot be stored in this device");
+    }
+    for(std::size_t b=0;b<bytes;++b)
+        write_le(address+static_cast<std::uint32_t>(b),1,word.value>>(b*8u),"partial store",(word.unknown>>(b*8u))&0xFFu);
 }
 void Memory::store32_observed(std::uint32_t address, ObservedWord word) {
     write_le(address, 4, word.value, "SW", word.unknown);

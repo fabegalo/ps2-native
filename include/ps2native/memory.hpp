@@ -111,15 +111,21 @@ public:
     [[nodiscard]] std::uint8_t read8(std::uint32_t guest_address) const;
     [[nodiscard]] std::uint16_t read16(std::uint32_t guest_address) const;
     [[nodiscard]] std::uint32_t read32(std::uint32_t guest_address) const;
-    // CPU word load may carry unknown status bits until a bitwise operation
-    // proves them irrelevant. Other reads remain strict.
+    // CPU loads transport unknown data until a consumer needs those bits.
+    // Non-observed reads remain strict.
+    [[nodiscard]] ObservedWord load8_observed(std::uint32_t guest_address) const;
+    [[nodiscard]] ObservedWord load16_observed(std::uint32_t guest_address) const;
     [[nodiscard]] ObservedWord load32_observed(std::uint32_t guest_address) const;
     [[nodiscard]] std::uint64_t read64(std::uint32_t guest_address) const;
     [[nodiscard]] ObservedDoubleword load64_observed(std::uint32_t guest_address) const;
     void write8(std::uint32_t guest_address, std::uint8_t value);
     void write16(std::uint32_t guest_address, std::uint16_t value);
     void write32(std::uint32_t guest_address, std::uint32_t value);
+    void store8_observed(std::uint32_t guest_address, ObservedWord word);
+    void store16_observed(std::uint32_t guest_address, ObservedWord word);
     void store32_observed(std::uint32_t guest_address, ObservedWord word);
+    // Contiguous enabled lanes of SWL/SWR/SDL/SDR, without reading neighbors.
+    void store_bytes_observed(std::uint32_t guest_address, std::size_t bytes, ObservedDoubleword word);
     void write64(std::uint32_t guest_address, std::uint64_t value);
     void store64_observed(std::uint32_t guest_address, ObservedDoubleword word);
     // SQ: one 128-bit store at a 16-byte aligned address. Memory takes it as
