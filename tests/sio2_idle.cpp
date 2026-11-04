@@ -50,6 +50,30 @@ Iop run(unsigned ending) {
 }
 }
 int main() try {
+    {
+        m20::Assembler a(kEeResetVector);
+        store(a,0xBF801070u,0);store(a,0xBF808268u,0x3BCu);
+        for(unsigned n=0;n<16;++n)store(a,0xBF808200u+n*4u,0x001C0700u|n);
+        a.la(8,0xBF808200u);a.la(10,0xA0000100u);
+        for(unsigned n=0;n<16;++n){a.lw(9,n*4u,8);a.nop();a.sw(9,n*4u,10);}
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> rom(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);iop.run_until(300);
+        require(!iop.stopped(),"all sixteen SIO2 command descriptors can be programmed without starting a transfer");
+        for(unsigned n=0;n<16;++n)require(iop.ee_read(0x100u+n*4u,4)==(0x001C0700u|n),
+                                       "SEND3 slots retain distinct descriptor words");
+    }
+    for(const unsigned mode : {0u,1u,2u}) {
+        m20::Assembler a(kEeResetVector);a.la(8,0xBF80823Cu);
+        if(!mode){a.lw(9,0,8);a.nop();a.addiu(10,9,1);}
+        else if(mode==1)a.raw((0x25u<<26)|(8u<<21)|(9u<<16)); // LHU
+        else a.raw((0x29u<<26)|(8u<<21)); // SH
+        a.label("idle");a.beq(0,0,"idle");a.nop();
+        const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> rom(4u*1024u*1024u);
+        std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);iop.run_until(30);
+        require(iop.stopped() && iop.stop_reason()->find(mode ? "only 32-bit" : "before any write")!=std::string::npos,
+                "SEND3 has no invented reset value or unverified narrow accesses");
+    }
     const auto idle=run(0);
     require(!idle.stopped() && idle.cycle()==150 && idle.gpr(10)==0,"enabled idle SIO2 IRQ cannot stop the CPU or invent an interrupt");
     const std::string causes[]={"","SIO2 transfer is not modeled","SIO2 control reset/status readback is not verified",

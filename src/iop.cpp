@@ -146,7 +146,11 @@ std::optional<unsigned> dma_channel_field(std::uint32_t address) {
     return std::nullopt;
 }
 bool is_latch(std::uint32_t address) {
-    return (address & 3u) == 0u && (dma_channel_field(address) ||
+    // SEND3 is sixteen command descriptors. Programming them does not
+    // start serial activity; CTRL.0 and both DMA starts still refuse.
+    // ps2tek SIO2 registers; ps2sdk sio2_regN_set/get (32-bit MMIO).
+    return (address & 3u) == 0u && ((address >= 0x1F808200u && address <= 0x1F80823Cu) ||
+           dma_channel_field(address) ||
            std::find(std::begin(kLatches), std::end(kLatches), address) != std::end(kLatches));
 }
 } // namespace
