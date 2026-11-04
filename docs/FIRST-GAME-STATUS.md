@@ -814,3 +814,17 @@ focados passaram; modo original repetido manteve PCs, contagens e hash canônico
 A CI encontrou no commit Q uma diferença do patch publicado: advance_q ficou
 após return ao selecionar hunks sem contexto. `da867c6` publica a ordem correta
 já testada localmente; nova CI acompanhada. Não foi relaxada a regressão.
+
+A inspeção local dos setores do próprio disco identificou no IRX a sequência
+SH zero em 0x760/0x762/0xB60/0xB62; o endereço 0xB60 não foi produzido por
+uma exceção de endereço inventada. A referência PCSX2 aplica máscara 0x7FF
+na janela SPU2 e conserva a região 0x346..0x3FF como armazenamento bruto;
+isso não prova seus efeitos em hardware. O diagnóstico seguinte opta
+separadamente por reter escritas halfword conhecidas nessa região não
+atribuída e seu espelho. Modo original, leituras e registradores funcionais
+continuam recusando o que não é modelado. Não é prova de áudio correto.
+
+Acrescentada leitura diagnóstica da RAM IOP no instante da parada, com
+nullopt para bytes nunca escritos. Ela não é uma leitura de barramento EE,
+não retoma o IOP e não relaxa a recusa de ee_read após stop. Permite registrar
+as instruções próximas dos próximos bloqueios sem reconstruir código externo.

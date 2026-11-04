@@ -72,6 +72,17 @@ public:
     // Throws DeviceRefusal when the bytes were never written by the IOP, or
     // when the IOP stopped before this time (its later state is unknown).
     [[nodiscard]] std::uint64_t ee_read(std::uint32_t offset, std::size_t bytes) const;
+    // Diagnostic snapshot at the stopped/current IOP time, never an EE bus
+    // response. Unwritten bytes remain unknown; this does not resume the IOP.
+    [[nodiscard]] std::optional<std::uint32_t> diagnostic_ram32(std::uint32_t offset) const {
+        if(offset>ram_.size()-4u)return std::nullopt;
+        std::uint32_t value=0;
+        for(unsigned byte=0;byte<4;++byte) {
+            if(!ram_written_[offset+byte])return std::nullopt;
+            value|=std::uint32_t{ram_[offset+byte]}<<(8u*byte);
+        }
+        return value;
+    }
     void ee_write(std::uint32_t offset, std::size_t bytes, std::uint64_t value);
     // The EE sees the same physical CDVD registers through the SBUS.
     // Call after synchronizing the IOP; no second command/result queue.
@@ -115,6 +126,9 @@ public:
     // Unknown SPDIF 0x7CA write side effects: explicit diagnostic hypothesis
     // of a configuration latch only. Reads remain unsupported; reset disables it.
     void diagnostic_spu2_7ca_latch() { diagnostic_spu2_7ca_latch_=true; }
+    // Separate hypothesis for the unassigned 0x346..0x3FF aperture and its
+    // 0x800 mirror. Does not turn reads or functional registers into stubs.
+    void diagnostic_spu2_reserved_latches() { diagnostic_spu2_reserved_latches_=true; }
     struct Spu2Sample { std::uint64_t cycle; std::int16_t left,right; };
     [[nodiscard]] const std::optional<Spu2Sample>& spu2_last_sample(unsigned core) const { return spu2_last_sample_.at(core); }
     [[nodiscard]] std::uint64_t spu2_sample_count(unsigned core) const { return spu2_sample_count_.at(core); }
@@ -276,6 +290,7 @@ private:
     bool diagnostic_cav_nominal_timing_{};
     bool diagnostic_spu2_quiescent_{};
     bool diagnostic_spu2_7ca_latch_{};
+    bool diagnostic_spu2_reserved_latches_{};
     std::array<std::optional<ObservedWord>,2> spu2_control_;
     // Quiet clocks are available only under the explicit cold-state
     // experiment: no active voices, inputs, effects or transfers.

@@ -4,9 +4,10 @@ O checkpoint experimental já produziu 16 pacotes GIF PATH3 e 1.048.576 escritas
 de pixels por IMAGE: limpeza real da VRAM comandada pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução concluída: ensaio 56, EE em espera `0x81FCC`, 340.000.000 instruções;
-IOP parou em `0x65330`, 46.490.573, escrevendo SPU2 `0x1F9007CA`.
-VMOVE passou. Experimento opt-in de latch 7CA preparado, sem alterar modo original.
+Última execução concluída: ensaio 57, EE em espera `0x81FCC`, 340.000.000 instruções;
+IOP parou em `0x65948`, 46.490.611, escrevendo SPU2 `0x1F900B60`.
+Ensaio 58 em andamento, com hipóteses opt-in de 7CA e janela não atribuída
+0x346..0x3FF/espelho. Modo original mantém recusas; leituras não são fabricadas.
 PMODE ainda não foi escrito; sem scanout.
 Continuar reexecutando, registrando PCs e resolvendo os bloqueios até conteúdo
 real exibido. Não trocar por float host nem criar exceções por título/PC.

@@ -149,6 +149,7 @@ public:
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
     [[nodiscard]] const Iop& iop() const noexcept { return registers_.iop(); }
     void diagnostic_spu2_7ca_latch() { registers_.diagnostic_spu2_7ca_latch(); }
+    void diagnostic_spu2_reserved_latches() { registers_.diagnostic_spu2_reserved_latches(); }
     void mount_disc(std::shared_ptr<DiscImage> disc,Iop::DiscMedium medium,bool diagnostic_cav_nominal_timing=false) {
         registers_.mount_disc(std::move(disc),medium,diagnostic_cav_nominal_timing);
     }
