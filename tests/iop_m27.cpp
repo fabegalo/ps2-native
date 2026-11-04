@@ -377,7 +377,7 @@ void check_partial_values() {
     iop.run_until(index_of(a, "checkpoint") + 4u);
     require_stop(iop, "I_STAT bits of sources other than the timers, VBLANK and DMA");
 
-    refuses([](Assembler& p) { p.lw(a0, 0x60, t3); p.nop(); p.addu(v0, a0, zero); },
+    refuses([](Assembler& p) { p.lw(a0, 0x60, t3); p.nop(); p.addu(v0, a0, zero); p.addiu(v0, v0, 1); },
             "SIF_BD6 bits 0-11 are not established");
     refuses([](Assembler& p) { p.lhu(a0, 0x60, t3); }, "only 32-bit reads are modeled");
     refuses([](Assembler& p) { p.lui(a0, 0x0100u); p.ori(a0, a0, 0x0700u); p.sw(a0, 0x1538, t1); },
@@ -449,7 +449,7 @@ void check_sif() {
     }
 
     refuses([](Assembler& p) { p.sw(zero, 0, t3); }, "SIF_MSCOM is written by the EE only");
-    refuses([](Assembler& p) { p.lw(a0, 0x10, t3); p.nop(); p.addu(v0, a0, zero); }, "before any write");
+    refuses([](Assembler& p) { p.lw(a0, 0x10, t3); p.nop(); p.addu(v0, a0, zero); p.addiu(v0, v0, 1); }, "before any write");
     refuses([](Assembler& p) { p.lhu(a0, 0x20, t3); }, "only 32-bit SIF accesses");
 }
 
@@ -507,7 +507,7 @@ void check_sif_ready_experiment() {
 
 void check_dma_reset_experiment() {
     Assembler a(0xBFC00000u);
-    a.la(t0,0xBF80157Cu);a.lw(t1,0,t0);a.nop();a.addu(v0,t1,zero);
+    a.la(t0,0xBF80157Cu);a.lw(t1,0,t0);a.nop();a.addu(v0,t1,zero);a.addu(a0,v0,zero);a.andi(a0,a0,3);
     a.label("idle");a.beq(zero,zero,"idle");a.nop();
     const auto rom=rom_of(a);Iop iop;
     iop.reset(rom,&kProfile);iop.run_until(20);

@@ -26,6 +26,10 @@ Iop run(unsigned ending) {
         if(ending==14){a.la(12,0);a.raw((0x26u<<26)|(8u<<21)|(12u<<16));} // LWR: no opaque LW proof.
         else a.lw(12,0,8);
         a.nop();
+        if(ending==16 || ending==17) {
+            a.addu(13,ending==16 ? 12u : 0u,ending==16 ? 0u : 12u);
+            a.addu(12,13,0); // Copy back without consuming the opaque status.
+        }
         if(ending==11) {
             a.la(8,0xA0000300u);a.lw(13,0,8);a.nop();a.la(14,~0xDu);
             a.r(13,14,13,0,0x24u);a.r(12,13,12,0,0x25u);
@@ -61,6 +65,10 @@ int main() try {
     const auto reset=run(7);
     require(!reset.stopped() && reset.ee_read(0x104,4)==0,"read/ORI-reset/SW uses known command bits and preserves the opaque sample");
     rejects([&]{(void)reset.ee_read(0x100,4);},"has not been written");
+    for(const unsigned ending : {16u,17u}) {
+        const auto moved=run(ending);
+        require(!moved.stopped(),"ADDU moves preserve an opaque SIO2 reset sample in either operand order");
+    }
     const std::string reset_causes[]={"start bit is unknown","SIO2 transfer is not modeled","current opaque control sample",
                                      "current opaque control sample","current opaque control sample","both reset bits",
                                      "requires a 32-bit read","current opaque control sample"};

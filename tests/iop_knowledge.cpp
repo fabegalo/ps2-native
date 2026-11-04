@@ -40,5 +40,29 @@ int main() try {
         require(!iop.stopped() && iop.ee_read(0x100,4)==0x17u,
                 "ORI in the load delay slot reads the old value and overrides the pending load to that register");
     }
+    for (const bool reversed : {false, true}) for (const unsigned destination : {9u, 11u}) {
+        m20::Assembler a(kEeResetVector);input(a);a.ori(9,9,0xA5u);
+        a.addu(destination,reversed ? 0u : 9u,reversed ? 9u : 0u);
+        a.andi(10,destination,0xA5u);a.sw(10,0x100,8);const auto iop=run(a);
+        require(!iop.stopped() && iop.ee_read(0x100,4)==0xA5u,
+                "ADDU moves preserve known bits in either operand order and when destination aliases source");
+        m20::Assembler b(kEeResetVector);input(b);
+        b.addu(destination,reversed ? 0u : 9u,reversed ? 9u : 0u);
+        b.beq(destination,0,"idle");b.nop();const auto unknown=run(b);
+        require(unknown.stopped() && unknown.stop_reason()->find("GPR "+std::to_string(destination)+" used while its value is unknown")!=std::string::npos,
+                "a move transports uncertainty and only its later consumption refuses");
+    }
+    for (const bool alias : {false, true}) {
+        m20::Assembler a(kEeResetVector);a.lui(8,0xA000u);a.la(9,7);a.lw(9,0x300,8);
+        a.addu(alias ? 9u : 11u,9,0);a.sw(alias ? 9u : 11u,0x100,8);
+        const auto iop=run(a);
+        require(!iop.stopped() && iop.ee_read(0x100,4)==7u,
+                "ADDU in the load delay slot reads the previous register and wins an aliased pending load");
+    }
+    {
+        m20::Assembler a(kEeResetVector);input(a);a.addu(0,9,0);a.addu(10,0,0);a.sw(10,0x100,8);
+        const auto iop=run(a);require(!iop.stopped() && iop.ee_read(0x100,4)==0,
+                "discarded moves do not consume undefined bits and $zero stays immutable");
+    }
     std::cout<<"R3000A OR/ORI preserve known bits, aliases, unknown consumption and load delay\n";
 } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

@@ -888,6 +888,14 @@ std::optional<std::uint32_t> Iop::stored_reg(unsigned index) const {
     if ((gpr_defined_ & (1u << index)) == 0u) return std::nullopt;
     return gpr_[index];
 }
+void Iop::copy_reg(unsigned destination, unsigned source) {
+    if (!destination) return;
+    if (gpr_defined_ & (1u << source)) return set_reg(destination, gpr_[source]);
+    // ADDU with $zero is an exact copy, including an opaque device sample.
+    // Queue the ALU write normally so the R3000A load delay remains intact.
+    write_ = PendingLoad{destination, gpr_[source], false, gpr_origin_[source],
+                         gpr_known_[source], gpr_sio2_epoch_[source]};
+}
 void Iop::set_reg(unsigned index, std::uint32_t value) {
     if (index != 0u) write_ = PendingLoad{index, value, true, {}, ~0u};
 }
@@ -1806,7 +1814,11 @@ void Iop::step() {
                     set_reg(rd, r);
                     break;
                 }
-                case 0x21: set_reg(rd, reg(rs) + reg(rt)); break;                               // ADDU
+                case 0x21: // ADDU; either $zero operand makes this an exact move.
+                    if (!rs) copy_reg(rd, rt);
+                    else if (!rt) copy_reg(rd, rs);
+                    else set_reg(rd, reg(rs) + reg(rt));
+                    break;
                 case 0x22: {                                                                    // SUB
                     const auto a = reg(rs), b = reg(rt), r = a - b;
                     if (((a ^ b) & (a ^ r)) >> 31) throw overflow();
