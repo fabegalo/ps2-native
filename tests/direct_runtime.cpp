@@ -87,7 +87,7 @@ void check_dma_errors(const ElfImage& elf) {
             unknown_irq.reason.find("interrupt masks not programmed")!=std::string::npos &&
             !contains(unknown_irq.iop_events,"destination complete"),"unknown SIF interrupt state is not replaced by zero");
     prepare_direct_elf(elf,nullptr,state,memory);
-    device_refused([&]{memory.write32(0xB000C400u,0x105);},"only normal source mode");
+    device_refused([&]{memory.write32(0xB000C400u,0x109);},"only normal or source chain mode");
     memory.write32(0xB000C410u,Memory::kMainRamBytes-16);
     memory.write32(0xB000C420u,2);
     device_refused([&]{memory.write32(0xB000C400u,0x101);},"outside main RAM");

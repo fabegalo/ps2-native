@@ -123,7 +123,8 @@ private:
     std::array<std::uint32_t, 4> ee_dma_global_unknown_{};
     std::array<std::uint32_t, 4> iop_sif1_{};
     std::deque<std::uint32_t> sif1_fifo_;
-    bool sif1_have_tag_{}, sif1_end_{};
+    bool sif1_have_tag_{}, sif1_end_{}, sif1_tag_irq_{};
+    bool ee_sif1_chain_end_{};
     std::uint32_t sif1_words_{};
     SifDmaMetrics sif1_metrics_;
     std::array<std::uint32_t,4> iop_sif0_{};

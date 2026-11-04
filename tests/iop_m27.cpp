@@ -346,7 +346,7 @@ void check_partial_values() {
     refuses([](Assembler& p) { p.lw(a0, 0x60, t3); p.nop(); p.addu(v0, a0, zero); },
             "SIF_BD6 bits 0-11 are not established");
     refuses([](Assembler& p) { p.lhu(a0, 0x60, t3); }, "only 32-bit reads are modeled");
-    refuses([](Assembler& p) { p.lui(a0, 0x4100u); p.ori(a0, a0, 0x0300u); p.sw(a0, 0x1538, t1); },
+    refuses([](Assembler& p) { p.lui(a0, 0x0100u); p.ori(a0, a0, 0x0700u); p.sw(a0, 0x1538, t1); },
             "only destination chain mode without TTE supported");
 }
 

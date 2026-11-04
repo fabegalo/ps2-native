@@ -220,7 +220,8 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     ee_dma_global_unknown_ = {0x03FF03FFu, 0u, 0u, 0u};
     iop_sif1_ = {};
     sif1_fifo_.clear();
-    sif1_have_tag_ = sif1_end_ = false;
+    sif1_have_tag_ = sif1_end_ = sif1_tag_irq_ = false;
+    ee_sif1_chain_end_=false;
     sif1_words_ = 0;
     sif1_metrics_ = {};
     iop_sif0_ = {}; iop_sif0_written_=0; sif0_fifo_.clear(); sif0_source_words_=0;
@@ -335,14 +336,18 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
         return;
     }
     if (address == 0x1000C400u) {
-        if (value != 0u && value != 1u && value != 0x101u)
-            throw DeviceRefusal("EE SIF1: only normal source mode supported; chain/interleave/TTE/TIE unsupported");
+        const bool chain=(value&0xCu)==4u;
+        if((chain && (value&~0xFFFF0185u)) ||
+           (!chain && value!=0u && value!=1u && value!=0x101u))
+            throw DeviceRefusal("EE SIF1: only normal or source chain mode without TTE supported");
+        if(chain && (value&0x100u) && (ee_sif1_qwc_ || !ee_dma_setup_[6][3]))
+            throw DeviceRefusal("EE SIF1 chain requires programmed TADR and zero initial QWC (resume not modeled)");
         const auto size = static_cast<std::size_t>(ee_sif1_qwc_) * 16u;
         if ((value & 0x100u) && (ee_sif1_madr_ > ee_ram_.size() || size > ee_ram_.size() - ee_sif1_madr_))
             throw DeviceRefusal("EE SIF1 DMA source outside main RAM");
         if ((value&0x100u) && !ee_dma_priority(ee_dma_observe(0x1000E020u),6u).has_value())
             throw DeviceRefusal("EE SIF1 priority depends on unknown D_PCR reset bits");
-        ee_sif1_chcr_ = value; return;
+        ee_sif1_chcr_ = value; ee_sif1_chain_end_=!chain; return;
     }
     if (address == 0x1000C410u) {
         if (value & 15u) throw DeviceRefusal("EE SIF1 MADR must be qword aligned (scratchpad unsupported)");
@@ -389,7 +394,8 @@ std::uint32_t Iop::iop_sif1_read(std::uint32_t address) const {
 void Iop::iop_sif1_write(std::uint32_t address, std::uint32_t value) {
     const auto field = (address - 0x1F801530u) / 4u;
     if (iop_sif1_[2] & kChcrStart) throw IopStop{"IOP SIF1 register write while busy"};
-    if (field == 2u && value != 0u && value != 0x01000600u)
+    // ps2sdk sceSifSetDChain uses 0x41000300; RAM is coherent here.
+    if (field == 2u && value != 0u && value != 0x01000600u && value != 0x41000300u)
         throw IopStop{"IOP SIF1: only destination chain mode without TTE supported"};
     iop_sif1_[field] = value;
 }
@@ -404,6 +410,24 @@ void Iop::pump_sif1() {
         source_enabled=*priority;
     }
     if (source_enabled) {
+        if((ee_sif1_chcr_&4u) && !ee_sif1_qwc_ && !ee_sif1_chain_end_) {
+            auto& tadr=ee_dma_setup_[6][3];
+            if(!tadr || (*tadr&15u) || *tadr>ee_ram_.size() || ee_ram_.size()-*tadr<16u)
+                throw IopStop{"EE SIF1 source tag outside aligned main RAM"};
+            if(ee_ram_unknown_ && (ee_ram_unknown_->contains(*tadr) || ee_ram_unknown_->contains(*tadr+4u)))
+                throw IopStop{"EE SIF1 source tag consumes unknown RAM bits"};
+            std::uint32_t tag=0,address=0;
+            for(unsigned b=0;b<4;++b) {tag|=std::uint32_t{ee_ram_[*tadr+b]}<<(8*b);address|=std::uint32_t{ee_ram_[*tadr+4+b]}<<(8*b);}
+            const auto id=(tag>>28u)&7u, qwc=tag&0xFFFFu;
+            if((id!=0u && id!=3u) || (tag&0x0C000000u))
+                throw IopStop{"EE SIF1 source chain: only REFE/REF without priority change modeled"};
+            if((address&15u) || address>ee_ram_.size() || std::uint64_t{qwc}*16u>ee_ram_.size()-address)
+                throw IopStop{"EE SIF1 referenced source outside aligned main RAM"};
+            ee_sif1_chain_end_=id==0u || ((tag&0x80000000u) && (ee_sif1_chcr_&0x80u));
+            ee_sif1_chcr_=(ee_sif1_chcr_&0xFFFFu)|(tag&0xFFFF0000u);
+            ee_sif1_madr_=address; ee_sif1_qwc_=qwc; *tadr+=16u;
+            events_.push_back({cycle_,"SIF1 EE source tag id="+std::to_string(id)+" qwc="+std::to_string(qwc)});
+        }
         if (ee_sif1_qwc_ && sif1_fifo_.size() <= 28u) {
             // Refuse the whole qword before enqueuing any placeholder bytes.
             if (ee_ram_unknown_ && !ee_ram_unknown_->empty())
@@ -422,7 +446,7 @@ void Iop::pump_sif1() {
         } else if (ee_sif1_qwc_) {
             ++sif1_metrics_.source_full_cycles;
         }
-        if (!ee_sif1_qwc_) {
+        if (!ee_sif1_qwc_ && ee_sif1_chain_end_) {
             ee_sif1_chcr_ &= ~0x100u;
             ee_dstat_ |= 0x40u;
             events_.push_back({cycle_, "SIF1 EE source complete (FIFO may still contain data)"});
@@ -437,8 +461,12 @@ void Iop::pump_sif1() {
     if (!sif1_have_tag_) {
         if (sif1_fifo_.size() < 4u) { ++sif1_metrics_.destination_empty_cycles; return; }
         const auto tag = sif1_fifo_[0], words = sif1_fifo_[1];
-        if ((tag & 0x7F000000u) || (words & 0xFF000003u) || sif1_fifo_[2] || sif1_fifo_[3])
-            throw IopStop{"SIF1 destination tag: unsupported IRQ/reserved bits or non-qword word count"};
+        if ((tag & 0x3F000000u) || (words & 0xFF000003u) || sif1_fifo_[2] || sif1_fifo_[3])
+            throw IopStop{"SIF1 destination tag: reserved bits or non-qword word count"};
+        // END+IRQ has the same endpoint in the documented tag format and
+        // emulator references. Non-END IRQ stopping behavior is not proven.
+        if((tag&0xC0000000u)==0x40000000u)
+            throw IopStop{"SIF1 destination tag IRQ without END: stop/continue behavior not verified"};
         const auto dest = tag & 0xFFFFFFu;
         if ((dest & 3u) || dest > ram_.size() || std::uint64_t{words} * 4u > ram_.size() - dest)
             throw IopStop{"SIF1 DMA destination outside aligned IOP RAM"};
@@ -446,6 +474,7 @@ void Iop::pump_sif1() {
         iop_sif1_[0] = dest;
         sif1_words_ = words;
         sif1_end_ = (tag & 0x80000000u) != 0;
+        sif1_tag_irq_ = (tag & 0x40000000u) != 0;
         sif1_have_tag_ = true;
         events_.push_back({cycle_, "SIF1 IOP tag destination=" + hex(dest) + " bytes=" + std::to_string(words * 4u)});
     }
@@ -469,9 +498,11 @@ void Iop::pump_sif1() {
             if (!dicr || !dicr->has_value() || !dicr2 || !dicr2->has_value())
                 throw IopStop{"SIF1 DMA completion: interrupt masks not programmed (pending state unknown)"};
             iop_sif1_[2] &= ~kChcrStart;
-            // Channel 10 -> DICR2 mask 19 / completion flag 27.
+            // Channel 10: completion mask 19, tag IRQ enable 10, flag 27.
+            // IQE is independent of the transfer-completion mask (ps2tek).
+            const bool raise=(**dicr2&(1u<<19)) || (sif1_tag_irq_ && (**dicr2&(1u<<10)));
             for (auto& [address, value] : latches_)
-                if (address == kDicr2 && value && (*value & (1u << 19))) *value |= 1u << 27;
+                if (address == kDicr2 && value && raise) *value |= 1u << 27;
             if (enabled(kDicr, 1u << 23) && enabled(kDicr2, 1u << 27)) {
                 const auto* control = latch(0x1F80157Cu);
                 if (!control || !control->has_value()) throw IopStop{"SIF1 DMA completion: DMACINTEN not programmed"};

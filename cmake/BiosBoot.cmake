@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-sif1-boot tests/sif1_boot.cpp)
+    target_link_libraries(ps2n-sif1-boot PRIVATE ps2n_core)
+    add_test(NAME native-sif1-boot COMMAND ps2n-sif1-boot)
+    set_tests_properties(native-sif1-boot PROPERTIES TIMEOUT 30)
     add_executable(ps2n-gs-events-fixture tests/gs_events.cpp)
     target_compile_definitions(ps2n-gs-events-fixture PRIVATE PS2N_GS_EVENTS_FIXTURE=1)
     target_link_libraries(ps2n-gs-events-fixture PRIVATE ps2n_core)
