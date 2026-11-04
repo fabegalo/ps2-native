@@ -12,6 +12,10 @@ void ranges() {
     require(!ee_fpu_multiply(0x3F800001,0x3F800003,flags) && flags==0xC000,
             "strict scalar multiply keeps its explicit refusal");
     const auto product=vu_float_product({0x3F800001,0},{0x3F800003,0});
+    require(!vu_float_product({0x3F800000,1},{0x3F800000,0}),
+            "a conservative lower product bound crossing the normalization boundary cannot certify one exponent");
+    require(!vu_float_product({0x00800000,1},{0x3F800000,0}),
+            "a lower bound crossing the minimum normal boundary cannot certify one underflow class");
     require(product && product->word.unknown && !product->flags &&
             contains(product->word,0x3F800003) && contains(product->word,0x3F800004),
             "ambiguous product retains both possible chopped results");

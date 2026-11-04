@@ -17,6 +17,10 @@ std::optional<VuFloatResult> hull(std::uint32_t low,std::uint32_t high,std::uint
 }
 std::uint32_t magnitude(std::uint32_t a) {return a&0x7F800000u ? a&0x7FFFFFFFu : 0u;}
 VuFloatResult packed(std::uint64_t product,int exponent,std::uint32_t sign) {
+    // The conservative lower bound can fall just below 1.0 even though
+    // both input significands were normalized. Normalize the bound itself;
+    // otherwise borrowing across bit 46 would incorrectly keep its exponent.
+    if(product<(1ull<<46u)){product<<=1u;--exponent;}
     const auto shift=product&(1ull<<47u) ? 24u : 23u;
     if(shift==24u)++exponent;
     if(exponent<=0)return {{sign,0},0x4008u};
