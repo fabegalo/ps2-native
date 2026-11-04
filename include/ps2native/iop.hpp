@@ -191,6 +191,7 @@ private:
     // AND of two registers, either possibly partly unknown: a bit is known
     // when known in both, or known 0 in one of them.
     void and_regs(unsigned rd, unsigned rs, unsigned rt);
+    void or_value(unsigned rd,unsigned rs,std::uint32_t value,std::uint32_t known,const std::string& origin);
     // rs == rt, decided when the known bits already differ even if some
     // bits are unknown; otherwise both must be known.
     [[nodiscard]] bool regs_equal(unsigned rs, unsigned rt) const;

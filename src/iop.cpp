@@ -815,6 +815,15 @@ void Iop::and_regs(unsigned rd, unsigned rs, unsigned rt) {
     const auto& origin = (ka != ~0u ? gpr_origin_[rs] : gpr_origin_[rt]);
     write_ = PendingLoad{rd, a & b & k, false, origin, k};
 }
+void Iop::or_value(unsigned rd,unsigned rs,std::uint32_t b,std::uint32_t kb,const std::string& b_origin) {
+    const auto a=gpr_[rs],ka=(gpr_defined_&(1u<<rs)) ? ~0u : gpr_known_[rs];
+    // A known one fixes an OR result even if the other operand is unknown.
+    const auto known=(ka&kb)|(ka&a)|(kb&b);
+    if(known==~0u)return set_reg(rd,a|b);
+    if(!rd)return;
+    const auto& origin=ka!=~0u ? gpr_origin_[rs] : b_origin;
+    write_=PendingLoad{rd,(a|b)&known,false,origin,known};
+}
 bool Iop::regs_equal(unsigned rs, unsigned rt) const {
     const auto known = [&](unsigned r) { return (gpr_defined_ & (1u << r)) != 0u ? ~0u : gpr_known_[r]; };
     if (((gpr_[rs] ^ gpr_[rt]) & known(rs) & known(rt)) != 0u) return false;
@@ -1658,7 +1667,7 @@ void Iop::step() {
                 }
                 case 0x23: set_reg(rd, reg(rs) - reg(rt)); break;                               // SUBU
                 case 0x24: and_regs(rd, rs, rt); break;                                          // AND
-                case 0x25: set_reg(rd, reg(rs) | reg(rt)); break;
+                case 0x25: or_value(rd,rs,gpr_[rt],(gpr_defined_&(1u<<rt)) ? ~0u : gpr_known_[rt],gpr_origin_[rt]); break;
                 case 0x26: set_reg(rd, reg(rs) ^ reg(rt)); break;
                 case 0x27: set_reg(rd, ~(reg(rs) | reg(rt))); break;
                 case 0x2A: set_reg(rd, static_cast<std::int32_t>(reg(rs)) < static_cast<std::int32_t>(reg(rt)) ? 1u : 0u); break;
@@ -1694,7 +1703,7 @@ void Iop::step() {
         case 0x0A: set_reg(rt, static_cast<std::int32_t>(reg(rs)) < static_cast<std::int32_t>(imm) ? 1u : 0u); break;
         case 0x0B: set_reg(rt, reg(rs) < imm ? 1u : 0u); break;
         case 0x0C: set_reg(rt, masked_reg(rs, uimm) & uimm); break;
-        case 0x0D: set_reg(rt, reg(rs) | uimm); break;
+        case 0x0D: or_value(rt,rs,uimm,~0u,{}); break;
         case 0x0E: set_reg(rt, reg(rs) ^ uimm); break;
         case 0x0F: set_reg(rt, uimm << 16); break;
         case 0x10:                                                                              // COP0

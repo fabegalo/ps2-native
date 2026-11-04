@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-iop-knowledge tests/iop_knowledge.cpp)
+    target_link_libraries(ps2n-iop-knowledge PRIVATE ps2n_core)
+    add_test(NAME native-iop-knowledge COMMAND ps2n-iop-knowledge)
+    set_tests_properties(native-iop-knowledge PROPERTIES TIMEOUT 30)
     add_executable(ps2n-cdvd-media tests/cdvd_media.cpp)
     target_link_libraries(ps2n-cdvd-media PRIVATE ps2n_core)
     add_test(NAME native-cdvd-media COMMAND ps2n-cdvd-media "${FIXTURE_DIR}")
