@@ -19,6 +19,10 @@ void step(Memory& m,EEState& s,MipsOpcode op,std::uint32_t word,bool interpreted
         case MipsOpcode::Addu:ee::exec<MipsOpcode::Addu>(s,m,0,word);break;
         case MipsOpcode::Dsubu:ee::exec<MipsOpcode::Dsubu>(s,m,0,word);break;
         case MipsOpcode::Subu:ee::exec<MipsOpcode::Subu>(s,m,0,word);break;
+        case MipsOpcode::Slt:ee::exec<MipsOpcode::Slt>(s,m,0,word);break;
+        case MipsOpcode::Sltu:ee::exec<MipsOpcode::Sltu>(s,m,0,word);break;
+        case MipsOpcode::Slti:ee::exec<MipsOpcode::Slti>(s,m,0,word);break;
+        case MipsOpcode::Sltiu:ee::exec<MipsOpcode::Sltiu>(s,m,0,word);break;
         default:throw std::runtime_error("unexpected test operation");
     }
 }
@@ -102,10 +106,35 @@ void neutral_arithmetic(Memory& memory) {
     rejects([&]{ee::exec<MipsOpcode::Daddu>(state,memory,0,(8u<<21u)|(9u<<16u)|(10u<<11u)|0x2Du);},"unknown carry");
     rejects([&]{ee::exec<MipsOpcode::Dsubu>(state,memory,0,(8u<<21u)|(9u<<16u)|(10u<<11u)|0x2Fu);},"unknown borrow");
 }
+void bounded_comparisons(Memory& memory) {
+    for(const bool interpreted:{false,true})for(const bool signed_order:{false,true}) {
+        for(const auto high:{0x3F490000ull,0xFFFFFFFFBF490000ull})for(const auto threshold:{0x31FFFFFFull,0xFFFFFFFFFFFFFFFFull}) {
+            EEState state;state.set_reg64_observed(8,high,0x3FFFu);state.set_reg64(9,threshold);
+            const auto expected=signed_order ? std::bit_cast<std::int64_t>(high)<std::bit_cast<std::int64_t>(threshold) : high<threshold;
+            step(memory,state,signed_order ? MipsOpcode::Slt : MipsOpcode::Sltu,
+                (8u<<21u)|(9u<<16u)|(10u<<11u)|(signed_order ? 0x2Au : 0x2Bu),interpreted);
+            require(state.reg64(10)==static_cast<unsigned>(expected),"signed/unsigned comparisons prove separated operand intervals without consuming irrelevant fraction bits");
+            for(unsigned low=0;low<16384;++low)require(expected==(signed_order ?
+                std::bit_cast<std::int64_t>(high|low)<std::bit_cast<std::int64_t>(threshold) : (high|low)<threshold),
+                "every concrete represented mantissa independently agrees with the proven comparison");
+        }
+        EEState state;state.set_reg64_observed(8,0,1);state.set_reg64(9,1);state.set_reg64(10,0x1234);
+        rejects([&]{step(memory,state,signed_order ? MipsOpcode::Slt : MipsOpcode::Sltu,
+            (8u<<21u)|(9u<<16u)|(10u<<11u)|(signed_order ? 0x2Au : 0x2Bu),interpreted);},"comparison depends");
+        require(state.reg64(10)==0x1234,"an uncertain comparison refuses before replacing its destination");
+        state.set_reg64_observed(8,0,~0ull);step(memory,state,signed_order ? MipsOpcode::Slt : MipsOpcode::Sltu,
+            (8u<<21u)|(8u<<16u)|(10u<<11u)|(signed_order ? 0x2Au : 0x2Bu),interpreted);
+        require(!state.reg64(10),"a register is never less than itself even when all raw bits remain opaque");
+        state.set_reg64_observed(8,0xFFFFFFFFFFFF0000ull,15);
+        step(memory,state,signed_order ? MipsOpcode::Slti : MipsOpcode::Sltiu,
+            ((signed_order ? 0xAu : 0xBu)<<26u)|(8u<<21u)|(10u<<16u)|0xFFFFu,interpreted);
+        require(state.reg64(10)==1,"SLTI/SLTIU compare against the actual sign-extended immediate");
+    }
+}
 }
 int main() try {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
-    doubleword_copies(memory);narrow_copies(memory);neutral_arithmetic(memory);
+    doubleword_copies(memory);narrow_copies(memory);neutral_arithmetic(memory);bounded_comparisons(memory);
     std::cout<<"EE opaque payload copies, all alignments/orders, template/interpreter and narrow sign extension passed\n";
     return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

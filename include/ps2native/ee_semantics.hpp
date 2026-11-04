@@ -48,6 +48,15 @@ constexpr std::uint64_t zimm(std::uint32_t word) { return word & 0xffffu; }
 inline std::uint64_t raw_gpr64(const EEState& state, unsigned index) {
     return index == 0 ? 0u : state.gpr[index].low;
 }
+inline bool less_observed(std::uint64_t a,std::uint64_t ua,std::uint64_t b,std::uint64_t ub,bool signed_order) {
+    const auto sign=signed_order ? 1ull<<63u : 0ull;
+    a=(a^sign)&~ua;b=(b^sign)&~ub;
+    // Every concrete word lies within these unsigned ordered intervals.
+    // Their disjointness can prove a comparison without guessing low bits.
+    if((a|ua)<b)return true;
+    if(a>=(b|ub))return false;
+    throw std::runtime_error("EE comparison depends on unknown operand bits");
+}
 inline bool negative_gpr64(const EEState& state,unsigned index) {
     // EE core BGEZ/BLTZ test bit 63; unrelated payload bits need not be known.
     constexpr auto sign=1ull<<63;
@@ -284,9 +293,9 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];
         s.set_reg64_observed(d_, ~(a | b), (ua | ub) & ~((a & ~ua) | (b & ~ub)));
     } else if constexpr (Op == O::Slt) {
-        s.set_reg64(d_, s64(s.reg64(s_)) < s64(s.reg64(t_)) ? 1u : 0u);
+        s.set_reg64(d_,s_!=t_ && less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],raw_gpr64(s,t_),s.unknown_gpr_bits[t_],true));
     } else if constexpr (Op == O::Sltu) {
-        s.set_reg64(d_, s.reg64(s_) < s.reg64(t_) ? 1u : 0u);
+        s.set_reg64(d_,s_!=t_ && less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],raw_gpr64(s,t_),s.unknown_gpr_bits[t_],false));
     } else if constexpr (Op == O::Movz) {
         if (s.reg64(t_) == 0u) s.set_reg64(d_, s.reg64(s_));
     } else if constexpr (Op == O::Movn) {
@@ -408,9 +417,9 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     } else if constexpr (Op == O::Daddiu) {
         s.set_reg64(t_, s.reg64(s_) + simm64(w));
     } else if constexpr (Op == O::Slti) {
-        s.set_reg64(t_, s64(s.reg64(s_)) < s64(simm64(w)) ? 1u : 0u);
+        s.set_reg64(t_,less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],simm64(w),0,true));
     } else if constexpr (Op == O::Sltiu) {
-        s.set_reg64(t_, s.reg64(s_) < simm64(w) ? 1u : 0u);
+        s.set_reg64(t_,less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],simm64(w),0,false));
     // Logical immediates are zero-extended and act on all 64 bits.
     } else if constexpr (Op == O::Andi) {
         s.set_reg64_observed(t_, raw_gpr64(s, s_) & zimm(w), s.unknown_gpr_bits[s_] & zimm(w));
