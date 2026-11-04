@@ -12,12 +12,22 @@
 | Boot EE | ROM0 reais, COP0/TLB, memória, RDRAM, início do kernel em RAM e AOT híbrido com trace | CPU e dispositivos ainda parciais |
 | Direct ELF | BOOT2 de ISO pelo loader comum, ambiente bare-metal, Count/Compare, SYSCALL/BREAK para handler convidado, usuário/supervisor/ERL e overlays AOT verificados | Não instala kernel/serviços; ELF comercial executado, sem imagem ou jogabilidade |
 | IOP | Inicialização R3000A, NVM externa, MECHACON, timers/VBLANK, SIF e EE→IOP SIF1 com bytes reais | Sem linker IRX, SIF0, RPC ou serviços completos; DMA/timing ainda parciais |
-| GS/GIF | VRAM 4 MiB PSMCT32/24, PATH3 PACKED/REGLIST/IMAGE, transferências, pontos/sprites, scanout RGBA8/BMP e eventos; imagem sintética determinística | Sem pixels da BIOS real; formatos, primitivas, efeitos e timing ainda parciais |
+| GS/GIF | VRAM 4 MiB, CT32/24 e índices T4/T8, profundidade, sprites UV/CLUT/blending, PATH2/3 e scanout; primeiras capturas reais de Super Bust-A-Move no diagnóstico experimental | Boot original e gameplay não comprovados; hipóteses explícitas e formatos/efeitos/timing parciais |
 | Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **Primeiros quadros não pretos do jogo, ensaio 101:** três capturas no
+  VBLANK, campos nativos 640x224 com 64.478 pixels não pretos cada,
+  mostram a tela original de Super Bust-A-Move informando Memory Card ausente.
+  Pixels vêm de DMA/GIF, paleta, textura, sprites e blending executados pelo
+  jogo; nenhum desenho host. EE `0x81FDC` / 1.300.000.000, IOP `0xAE94` /
+  166.552.087 ativo, 326 pacotes novos. Parada voluntária após as capturas,
+  sem recusa. Não comprova gameplay ou boot original de disco: usa injeção
+  de ELF e hipóteses registradas, incluindo SCANMSK=0 no reset. Slots vazios,
+  nenhum save alterado. Capturas e traces permanecem locais/ignorados.
+  CI de `d7588b0` e `767fc94` aprovada nos seis alvos de núcleo e launcher.
 - Super Bust-A-Move transferiu setores reais do CD, incluindo os LBAs
   15637–15691 de IOPRP202, por ReadCd/DMA3. Após a tag SIF1 NEXT,
   alcançou IOP `0x1F458` / 31.828.183 instruções, consulta MECHACON `03:00`;

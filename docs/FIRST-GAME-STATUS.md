@@ -1443,3 +1443,41 @@ PS2Recomp GS::reset, não como medição de hardware. API restrita à configura�
 anterior à atividade convidada; reset do perfil normal descarta a hipótese.
 Testes verificam desenho real sob a opção, reset e preservação do modo normal.
 Nenhuma alteração de SCANMSK foi inserida nos comandos ou no ELF do jogo.
+
+### Primeiras capturas reais — ensaio 101
+
+O jogo exibiu sua própria tela de Memory Card (PS2) ausente. Três capturas
+no VBLANK contêm 64.478 pixels RGB não pretos cada. São campos nativos
+640x224 de INT+FFMD, sem duplicação de linhas ou deinterlace inventado.
+Os comandos vieram do jogo por DMA/VIF DIRECTHL/GIF; CLUT, textura e
+sprites/blending produziram os pixels. A configuração de slots vazios é
+explícita, e nenhum Memory Card ou save do usuário foi criado ou modificado.
+
+| Captura | Ciclo EE | SHA-256 RGBA8 |
+|---|---:|---|
+| 1 | 1.305.433.587 | `9257654792aa082dfee0ff24fd8e8d1f8d650d2a52c8be2be814d03ad34b8290` |
+| 2 | 1.310.352.837 | `8af7db8a2ee95d10fd4a4ebb3242109ad0fcc6f1b0709f5c07e9dc9185f91e34` |
+| 3 | 1.315.272.087 | `9257654792aa082dfee0ff24fd8e8d1f8d650d2a52c8be2be814d03ad34b8290` |
+
+As capturas 1/3 coincidem; a segunda difere com a fase de campo do desenho.
+Arquivos locais `out/game-first/superbust-vblank-{1,2,3}.bmp` e conversões
+PNG sem alteração de dimensão/pixels; inspeção visual das capturas 1/2
+confirma texto e painel do jogo. Não são extrações avulsas de textura,
+limpeza preta, replay parcial, imagem gerada ou frame sintético.
+
+Parada voluntária do harness após as três capturas, no limite do chunk:
+EE `0x81FDC` / 1.300.000.000, IOP `0xAE94` / 166.552.087 ativo,
+nenhuma recusa. 326 pacotes GIF novos e 30.892.656 escritas de pixels/índices,
+incluindo limpezas repetidas e desenhos agora conhecidos. 554,279 s;
+não é velocidade de tempo real nem comparação de desempenho.
+RAM SHA-256 `0390138ea61f0f91fd5bb337f5ee2da6b432dbd894217d4a9da02ede736ca032`,
+um doubleword parcialmente desconhecido, não consumido pelo scanout.
+
+Oito testes focados GS/GIF/VIF/AOT passaram. CI `d7588b0` e `767fc94`:
+núcleo e launcher aprovados em Windows x64/ARM64, Linux x64/ARM64 e
+macOS Intel/Apple Silicon. O modo BIOS original continua sem a hipótese
+SCANMSK; a regressão preservou PCs, contagens e RAM canônicos.
+
+Limite: estas capturas provam a apresentação gráfica do jogo na execução
+experimental, com as hipóteses registradas e injeção do ELF. Não provam
+boot original de disco, menu principal, gameplay, áudio ou fidelidade total.
