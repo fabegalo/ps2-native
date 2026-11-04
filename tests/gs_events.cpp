@@ -605,7 +605,8 @@ void dma_suspend() {
     Iop receiver;receiver.reset(rom,nullptr);receiver.attach_ee_ram(ram);
     receiver.ee_dma_write(0x1000E020u,0);receiver.ee_dma_write(0x1000C020u,0);receiver.ee_dma_write(0x1000C000u,0x184u);
     receiver.ee_dma_write(0x1000C000u,0);
-    require(!(receiver.ee_dma_read(0x1000C000u)&0x100u),"empty receiver can be disarmed without an in-flight bus beat");
+    require(!(receiver.ee_dma_read(0x1000C000u)&0x100u) && !(receiver.ee_dma_read(0x1000E010u)&0x20u),
+            "empty receiver can stop at a tag boundary without a fabricated completion");
     receiver.ee_dma_write(0x1000C000u,0x184u);
     receiver.set_ee_dma_suspended(true);receiver.ee_dma_write(0x1000C000u,0);
     require(!(receiver.ee_dma_read(0x1000C000u)&0x100u) && !(receiver.ee_dma_read(0x1000E010u)&0x20u),

@@ -37,9 +37,18 @@ std::optional<std::size_t> mode_index(std::uint32_t physical) {
 }
 } // namespace
 
-void GsRegisters::reset(std::uint64_t now) {
+void GsRegisters::reset(std::uint64_t now, std::optional<std::uint64_t> diagnostic_reset_syncv) {
+    if (diagnostic_reset_syncv) {
+        const auto v = *diagnostic_reset_syncv;
+        const auto display = (v >> 42) & 0x7FFu;
+        const auto blank = (v & 0x3FFu) + ((v >> 10) & 0x3FFu) + ((v >> 20) & 0xFFFu) +
+                           ((v >> 32) & 0x3FFu) + ((v >> 53) & 0x7FFu);
+        if (!display || !blank) throw DeviceRefusal("diagnostic GS reset SYNCV needs display and blanking half-lines");
+    }
     ++generation_;
     mode_ = {};
+    diagnostic_reset_syncv_ = diagnostic_reset_syncv;
+    mode_.back() = diagnostic_reset_syncv_;
     reset_drawing();
     reset_events(now);
     vram_.invalidate();
@@ -219,6 +228,7 @@ void GsRegisters::write_impl(std::uint32_t physical, std::size_t bytes, std::uin
             // state (PCSX2 clears them too); the line clock restarts as NTSC.
             change_line_state({Sync::Running, 2u, {now, kEeCyclesPerBusCycle * kBusCyclesPerNtscLine}}, guard);
             mode_ = {};
+            mode_.back() = diagnostic_reset_syncv_;
             reset_drawing(); // VRAM survives a soft GS reset
             reset_events(now);
             ++generation_;

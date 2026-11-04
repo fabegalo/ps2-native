@@ -108,7 +108,12 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
     for(unsigned run=0;run<2;++run) {
         Memory memory; auto& state=states[run];const auto* module=run?&aot_module():nullptr;
         prepare_direct_elf(elf,module,state,memory);
-        if(!fixture.iop.empty()) memory.load_iop_program(fixture.iop,0x1000,0x1000);
+        if(!fixture.iop.empty()) {
+            // Both documented chain setup and the SDK's SIF-specific setup
+            // must transfer identical payload, preserve backpressure and IRQ.
+            const auto receiver=mode=="dma" && run ? direct_test::iop_receiver(true,0x41000300u) : fixture.iop;
+            memory.load_iop_program(receiver,0x1000,0x1000);
+        }
         BootOptions options;options.max_instructions=300000;options.stop_at=fixture.stop;options.trace=TraceLevel::Full;
         if(mode=="frame") options.on_frame=[&](const Framebuffer& f){frames[run].push_back(f);};
         auto& report=reports[run];report=run_ee_boot(state,memory,module,options);
@@ -181,6 +186,8 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
                     memory.read64(direct_test::data+104)==0xFEDCBA98FEDCBA98ull,"AOT PEXTUW");
             require(memory.read64(direct_test::data+112)==0x7654321089ABCDEFull &&
                     memory.read64(direct_test::data+120)==0x7654321089ABCDEFull,"AOT PPACW");
+            require(memory.read64(direct_test::data+128)==0x0000000600000000ull &&
+                    memory.read64(direct_test::data+136)==0x7654321089ABCDEFull,"AOT PLZCW preserves upper GPR and counts both words");
         } else if(mode=="exceptions") {
             require(state.reg32(2)==48 && memory.read32(direct_test::data)==3,
                     "guest handler returns to user mode, cancels branch, annuls false likely slot");

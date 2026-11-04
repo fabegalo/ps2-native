@@ -9,6 +9,7 @@
 #include <vector>
 
 namespace ps2native {
+struct ConsoleHardware;
 // One ROMDIR file of a ROM0 image, with its EXTINFO fields.
 struct BiosModule {
     std::string name;
@@ -51,6 +52,20 @@ struct BiosLoadOptions {
 // optional expected hash. Any inconsistency is an explicit error.
 [[nodiscard]] BiosImage load_bios_rom0(std::span<const std::uint8_t> bytes,
                                        const BiosLoadOptions& options = {});
+
+// Explicitly reviewed pairing, never inferred from filenames or region alone.
+// The caller supplies provenance for the compatibility decision; the loader
+// verifies both hashes, the console/ROMVER binding and ROM1's internal metadata.
+struct Rom1Identity {
+    std::string rom0_sha256, romver, model, mainboard;
+    std::string sha256, build, dvd_version, provenance;
+};
+struct Rom1Image {
+    std::vector<std::uint8_t> bytes;
+    Rom1Identity identity;
+};
+[[nodiscard]] Rom1Image load_bios_rom1(std::span<const std::uint8_t> bytes,
+    const BiosImage& bios, const ConsoleHardware& hardware, const Rom1Identity& identity);
 
 // ROM0 as an executable image at its reset-vector address (KSEG1 0xBFC00000),
 // so the AOT can translate statically reachable firmware code.

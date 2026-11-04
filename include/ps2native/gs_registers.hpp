@@ -85,7 +85,7 @@ public:
 
     // Power-on state at EE cycle `now`: nothing written; the line clock is
     // NTSC from `now` (hypothesis, as before the GS was modeled).
-    void reset(std::uint64_t now);
+    void reset(std::uint64_t now, std::optional<std::uint64_t> diagnostic_reset_syncv = {});
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes) const;
     void write(std::uint32_t physical, std::size_t bytes, std::uint64_t value, std::uint64_t now,
                const LineClockGuard& guard);
@@ -136,6 +136,7 @@ private:
     void finish_transfer();
 
     std::array<std::optional<std::uint64_t>, kModeRegisters> mode_{};
+    std::optional<std::uint64_t> diagnostic_reset_syncv_;
     std::optional<std::uint64_t> csr_written_;
     std::array<std::optional<std::uint64_t>, 256> general_{};
     std::array<std::optional<std::uint64_t>, 15> display_{};

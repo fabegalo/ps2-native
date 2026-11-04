@@ -48,9 +48,11 @@ GsRegisters::LineClock timer_clock(std::uint32_t mode, const GsRegisters& gs) {
 } // namespace
 
 void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::uint8_t> rom0, const NvmImage* nvm,
-                        const DiagnosticAssumptions* assumptions) {
+                        const DiagnosticAssumptions* assumptions, std::span<const std::uint8_t> rom1) {
     hardware_ = hardware;
-    iop_.reset(rom0, hardware, nvm);
+    iop_.reset(rom0, hardware, nvm, assumptions && assumptions->sbus_configuration_latches,
+               assumptions ? assumptions->iop_dmacinten : std::nullopt, rom1,
+               assumptions && assumptions->iop_sio2_irq_clear);
     // Hypothesis: counters, modes (disabled) and the latch are zero/unset after reset.
     timers_ = {};
     f500_.reset();
@@ -58,7 +60,7 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
     dev9_147x_ = {};
     sio_setup_ = {};
     sio_output_.clear();
-    gs_.reset(0u);
+    gs_.reset(0u, assumptions ? assumptions->gs_reset_syncv : std::nullopt);
     mch_.reset();
     // Hypothesis: every source masked at power-on. The kernel reads I_MASK
     // before writing it (EnableIntc tests the bit, then reverses it).
@@ -249,12 +251,6 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
     if(physical>=0x1F402000u && physical<0x1F402020u) {
         sync_iop();return iop_.ee_cdvd_read(physical,bytes);
     }
-    if(physical==0x1F803800u) {
-        if(bytes!=2u) throw DeviceRefusal("MPU board ID requires a 16-bit read");
-        if(!hardware_ || !hardware_->mpu_board_id) throw DeviceRefusal("MPU board ID has not been measured for this profile");
-        return *hardware_->mpu_board_id;
-    }
-    if(physical==0x1000F510u) throw DeviceRefusal("F510 readback is not verified");
     if(physical==IpuRegisters::kPosition) {
         if(bytes!=4u) throw DeviceRefusal("IPU_BP requires a 32-bit access");
         return ipu_.read_position();
@@ -303,6 +299,8 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
         // Unidentified register; what reads return has not been verified.
         throw DeviceRefusal("0x1000F500 read: an unidentified register; its read value is not verified");
     }
+    if (physical == 0x1000F510u)
+        throw DeviceRefusal("0x1000F510 read: VU0-interface configuration readback is not verified");
     if (physical == kDmacEnabler) {
         if (bytes != 4u)
             throw DeviceRefusal("D_ENABLER read of " + std::to_string(bytes) + " byte(s) is not modeled (32-bit only)");
@@ -314,6 +312,12 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
                                 std::string(hardware_->mainboard) + " has not been measured (" +
                                 std::string(hardware_->source) + ")");
         return (*hardware_->d_enabler&~0x10000u)|(iop_.ee_dma_suspended() ? 0x10000u : 0u);
+    }
+    if (physical == 0x1F803800u) {
+        if(bytes!=2u) throw DeviceRefusal("MPU board ID requires a 16-bit read");
+        if(!hardware_ || !hardware_->mpu_board_id)
+            throw DeviceRefusal("MPU board ID has not been measured for this profile");
+        return *hardware_->mpu_board_id;
     }
     if (physical == kToolBoardIdPhysical) {
         if (bytes != 1u)
@@ -358,7 +362,7 @@ std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
 }
 
 void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint64_t high) {
-    if(physical==0x10007010u) {
+    if (physical==0x10007010u) {
         if(ipu_.write_fifo(low,high)) intc_stat_|=1u<<8;
         return;
     }
@@ -376,7 +380,7 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
         sync_iop();iop_.ee_cdvd_write(physical,bytes,static_cast<std::uint32_t>(value));return;
     }
     if(physical==0x1000F590u) {
-        // EE User's Manual p.62: CPND is bit 16. Preserve board identification
+        // EE User's Manual: CPND is bit 16. Preserve board identification
         // bits; writes changing undocumented configuration still refuse.
         if(bytes!=4u || !hardware_ || !hardware_->d_enabler ||
            (value&~0x10000ull)!=(*hardware_->d_enabler&~0x10000u))
@@ -384,11 +388,6 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
         sync_iop();
         iop_.set_ee_dma_suspended((value&0x10000u)!=0);
         return;
-    }
-    if(physical==0x1000F510u) {
-        if(!diagnostic_omit_f510_) throw DeviceRefusal("no register model");
-        if(bytes!=4u || value) throw DeviceRefusal("F510 diagnostic omission permits only 32-bit zero initialization");
-        return; // Explicitly omit an unknown write effect; never a console default.
     }
     if(physical==IpuRegisters::kCommand) {
         if(bytes!=4u && bytes!=8u) throw DeviceRefusal("IPU_CMD requires a 32/64-bit access");
@@ -471,6 +470,17 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
         // is undocumented (PCSX2 keeps it as plain storage): the value is
         // latched and has no modeled effect.
         f500_ = static_cast<std::uint32_t>(value);
+        return;
+    }
+    if (physical == 0x1000F510u) {
+        if(!diagnostic_omit_f510_) throw DeviceRefusal("no register model");
+        // Hardware observations (wisi, PSX-Place, 2019-12-01) report writable
+        // interface bits and an effect on F590 readback. Firmware initializes
+        // it to zero before initializing VU0. The effect is unknown; this is
+        // an explicit diagnostic omission, not a hardware implementation.
+        // Other configurations and F510/F590 readback remain explicit refusals.
+        if (bytes != 4u || value != 0u)
+            throw DeviceRefusal("0x1000F510 VU0-interface configuration: only 32-bit zero initialization modeled");
         return;
     }
     if (physical == kToolBoardIdPhysical)

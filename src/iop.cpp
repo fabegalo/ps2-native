@@ -30,7 +30,7 @@ constexpr std::uint32_t kIStat = 0x1F801070u;
 constexpr std::uint32_t kIMask = 0x1F801074u;
 constexpr std::uint32_t kICtrl = 0x1F801078u;
 // I_STAT lines (ps2tek "IOP Interrupts"). The timers, VBLANK start/end (from
-// the GS vertical clock, when known) and DMA raise them here; every other
+// the GS vertical clock, when known), CDVD and DMA raise them here; every other
 // source is unknown, so its bits are never reported as 0.
 constexpr std::array<unsigned, 6> kTimerIrq{4u, 5u, 6u, 14u, 15u, 16u};
 constexpr std::uint32_t kTimerIrqs = (1u << 4) | (1u << 5) | (1u << 6) | (1u << 14) | (1u << 15) | (1u << 16);
@@ -153,8 +153,13 @@ bool is_latch(std::uint32_t address) {
 
 Iop::Iop() : ram_(kIopRamBytes), ram_written_(kIopRamBytes) {}
 
-void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware, const NvmImage* nvm) {
+void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware, const NvmImage* nvm,
+                bool diagnostic_sbus_latches, std::optional<std::uint32_t> diagnostic_dmacinten,
+                std::span<const std::uint8_t> rom1, bool diagnostic_sio2_irq_clear) {
+    if(diagnostic_dmacinten && (*diagnostic_dmacinten&~3u))
+        throw DeviceRefusal("diagnostic IOP DMACINTEN supports only bits 0-1");
     rom_.assign(rom0.begin(), rom0.end());
+    rom1_.assign(rom1.begin(),rom1.end());
     std::fill(ram_.begin(), ram_.end(), std::uint8_t{0});
     std::fill(ram_written_.begin(), ram_written_.end(), std::uint8_t{0});
     gpr_ = {};
@@ -182,7 +187,12 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     timers_ = {};
     timers_running_ = false;
     istat_ = 0u;
-    sio2_irq_acknowledged_=false;
+    sio2_irq_acknowledged_=diagnostic_sio2_irq_clear;
+    dma_irq_output_=false;
+    // Cold drive: no command or host tray/power event has been submitted.
+    // Only NOP/NOPsync completion is modeled; other commands fail before issue.
+    cdvd_irq_=0; cdvd_ncommand_.reset(); cdvd_complete_at_.reset();
+    disc_.reset();cdvd_type_=cdvd_status_=cdvd_sticky_=0;
     ee_dma_suspended_=hardware && hardware->d_enabler && (*hardware->d_enabler&0x10000u);
     // SIF: the communication registers are unknown until written. The flags
     // are 0 (hypothesis: SIFMAN and the EE kernel each wait for the other side
@@ -192,10 +202,14 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     sif_smcom_.reset();
     sif_msflg_ = 0u;
     sif_smflg_ = 0u;
+    diagnostic_sbus_latches_=diagnostic_sbus_latches;
+    diagnostic_sif_ready_=0;
+    sbus_control_write_.reset(); sbus_bd6_write_.reset();
     video_generation_.reset();
     video_ = {};
     gpr_known_ = {};
     latches_.clear();
+    if(diagnostic_dmacinten)latches_.push_back({0x1F80157Cu,*diagnostic_dmacinten});
     // Reset values the reset code reads before writing (hypotheses):
     // 0x1F801010 (boot ROM delay/size): the code keeps only bit 12 (ROM bus
     // width, set by the board) and writes the rest; taken as 0, the width the
@@ -226,7 +240,8 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     sif1_words_ = 0;
     sif1_metrics_ = {};
     iop_sif0_ = {}; iop_sif0_written_=0; sif0_fifo_.clear(); sif0_source_words_=0;
-    sif0_source_tag_=sif0_source_end_=sif0_dest_end_=false; sif0_metrics_={};sif0_last_qword_={};
+    sif0_source_tag_=sif0_source_end_=sif0_source_irq_=sif0_dest_end_=false; sif0_metrics_={};
+    sif0_last_qword_={};
     if (rom_.size() != kRomBytes) stop_ = "no ROM0 mapped for the IOP";
 }
 
@@ -327,9 +342,9 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
     // EE User's Manual p.62: suspend via CPND, then clear STR before
     // reconfiguring an active channel. A stopped transfer is not completion.
     const bool suspended_stop=ee_dma_suspended_ && field==0u && !(value&0x100u);
-    // No transfer is in process while the receiver awaits an absent tag.
-    // In this qword-atomic bus model STR can clear at that boundary; a
-    // payload in progress still requires documented CPND suspension.
+    // A receiver waiting for a tag has no transfer in process: in this
+    // qword-atomic bus model, STR can be cleared without losing a bus beat.
+    // Do not extend this to a payload in progress or synthesize its end IRQ.
     const bool waiting_receiver_stop=channel==5u && field==0u && value==0u &&
         ee_dma_setup_[5][2].value_or(0u)==0u && sif0_fifo_.empty();
     if(channel==5u && (ee_dma_setup_[5][0].value_or(0u)&0x100u) && !suspended_stop && !waiting_receiver_stop)
@@ -399,14 +414,17 @@ std::uint32_t Iop::iop_sif1_read(std::uint32_t address) const {
 }
 void Iop::iop_sif1_write(std::uint32_t address, std::uint32_t value) {
     const auto field = (address - 0x1F801530u) / 4u;
-    // An empty receiver has no in-flight payload to discard. Keep active
-    // packets and buffered data protected from an unmodeled abort.
+    // Clearing an armed receiver waiting for its next tag does not discard
+    // any bus beat. Stopping a payload or buffered stream remains unmodeled.
     const bool idle_stop=field==2u && value==0u && !sif1_have_tag_ &&
         !sif1_words_ && sif1_fifo_.empty();
     if((iop_sif1_[2]&kChcrStart) && !idle_stop)
         throw IopStop{"IOP SIF1 register write while busy address="+hex(address)+" value="+hex(value)+
                       " remaining="+std::to_string(sif1_words_)+" fifo="+std::to_string(sif1_fifo_.size())};
-    // ps2sdk sceSifSetDChain uses 0x41000300; RAM is coherent here.
+    // SIF1 is a destination-tag stream. SDK sceSifSetDChain arms it with
+    // 0x41000300 (including snooping; this model has coherent IOP memory).
+    // Keep the documented synthetic chain configuration too; other DMA modes
+    // remain refused instead of treating an arbitrary CHCR as success.
     if (field == 2u && value != 0u && value != 0x01000600u && value != 0x41000300u)
         throw IopStop{"IOP SIF1: only destination chain mode without TTE supported"};
     iop_sif1_[field] = value;
@@ -475,8 +493,6 @@ void Iop::pump_sif1() {
         const auto tag = sif1_fifo_[0], words = sif1_fifo_[1];
         if ((tag & 0x3F000000u) || (words & 0xFF000003u) || sif1_fifo_[2] || sif1_fifo_[3])
             throw IopStop{"SIF1 destination tag: reserved bits or non-qword word count"};
-        // END+IRQ has the same endpoint in the documented tag format and
-        // emulator references. Non-END IRQ stopping behavior is not proven.
         if((tag&0xC0000000u)==0x40000000u)
             throw IopStop{"SIF1 destination tag IRQ without END: stop/continue behavior not verified"};
         const auto dest = tag & 0xFFFFFFu;
@@ -504,23 +520,24 @@ void Iop::pump_sif1() {
     }
     if (!sif1_words_) {
         sif1_have_tag_ = false;
-        if (sif1_end_) {
+        if (sif1_end_ || sif1_tag_irq_) {
             const auto* dicr = latch(kDicr);
             const auto* dicr2 = latch(kDicr2);
             if (!dicr || !dicr->has_value() || !dicr2 || !dicr2->has_value())
                 throw IopStop{"SIF1 DMA completion: interrupt masks not programmed (pending state unknown)"};
-            iop_sif1_[2] &= ~kChcrStart;
-            // Channel 10: completion mask 19, tag IRQ enable 10, flag 27.
-            // IQE is independent of the transfer-completion mask (ps2tek).
-            const bool raise=(**dicr2&(1u<<19)) || (sif1_tag_irq_ && (**dicr2&(1u<<10)));
+            // DICR2 IQE10 is independent of completion mask 19. A tag IRQ
+            // occurs only after its payload; it need not end the chain.
+            const bool raise=(sif1_end_ && (**dicr2&(1u<<19))) ||
+                             (sif1_tag_irq_ && (**dicr2&(1u<<10)));
             for (auto& [address, value] : latches_)
                 if (address == kDicr2 && value && raise) *value |= 1u << 27;
-            if (enabled(kDicr, 1u << 23) && enabled(kDicr2, 1u << 27)) {
-                const auto* control = latch(0x1F80157Cu);
-                if (!control || !control->has_value()) throw IopStop{"SIF1 DMA completion: DMACINTEN not programmed"};
-                if ((**control & 3u) == 1u) istat_ |= kDmaIrq;
+            update_dma_irq();
+            if(sif1_tag_irq_ && raise)events_.push_back({cycle_, "SIF1 IOP tag IRQ"});
+            if(sif1_end_) {
+                iop_sif1_[2] &= ~kChcrStart;
+                diagnostic_sif_ready_&=~0x40u;
+                events_.push_back({cycle_, "SIF1 IOP destination complete"});
             }
-            events_.push_back({cycle_, "SIF1 IOP destination complete"});
         }
     }
 }
@@ -545,19 +562,41 @@ void Iop::iop_sif0_write(std::uint32_t address,std::uint32_t value) {
     if(field==2u) {sif0_source_tag_=false;sif0_source_words_=0;}
 }
 void Iop::finish_iop_sif0() {
-    // Channel 9: completion mask 18, flag 26, master control as for SIF1.
+    // Channel 9: completion mask 18, tag enable 9, flag 26. IQE is
+    // independent of completion masking, as for SIF1.
     const auto* dicr=latch(kDicr);const auto* dicr2=latch(kDicr2);
     if(!dicr || !*dicr || !dicr2 || !*dicr2)
         throw IopStop{"SIF0 source completion: interrupt masks not programmed"};
     const auto masks=**dicr2;
-    const auto* control=latch(0x1F80157Cu);
-    const bool irq=(masks&(1u<<18u)) && (**dicr&(1u<<23u));
-    if(irq && (!control || !*control))throw IopStop{"SIF0 completion: DMACINTEN not programmed"};
+    const bool raise=(sif0_source_end_ && (masks&(1u<<18u))) ||
+                     (sif0_source_irq_ && (masks&(1u<<9u)));
     for(auto& [address,value]:latches_)
-        if(address==kDicr2 && value && (masks&(1u<<18u))) *value|=1u<<26u;
-    if(irq && ((**control&3u)==1u))istat_|=kDmaIrq;
-    iop_sif0_[2]&=~kChcrStart;
-    events_.push_back({cycle_,"SIF0 IOP source complete (FIFO may still contain data)"});
+        if(address==kDicr2 && value && raise) *value|=1u<<26u;
+    update_dma_irq();
+    if(sif0_source_irq_ && raise)events_.push_back({cycle_,"SIF0 IOP tag IRQ"});
+    if(sif0_source_end_) {
+        iop_sif0_[2]&=~kChcrStart;
+        diagnostic_sif_ready_&=~0x20u;
+        events_.push_back({cycle_,"SIF0 IOP source complete (FIFO may still contain data)"});
+    }
+}
+void Iop::update_dma_irq() {
+    const auto* first=latch(kDicr);
+    const auto* second=latch(kDicr2);
+    const auto control=first ? first->value_or(0u) : 0u;
+    const auto pending=(control&0x7F000000u) |
+        (second ? second->value_or(0u)&0x3F000000u : 0u);
+    bool output=false;
+    if((control&(1u<<23)) && pending) {
+        const auto* gate=latch(0x1F80157Cu);
+        if(!gate || !*gate)throw IopStop{"DMA pending interrupt: DMACINTEN not programmed"};
+        output=(**gate&3u)==1u;
+    }
+    // DICR's master output is recomputed on control writes as well as on
+    // completion. I_STAT captures its rising edge; acknowledging I_STAT
+    // alone does not invent another edge while the DMA flags stay asserted.
+    if(output && !dma_irq_output_)istat_|=kDmaIrq;
+    dma_irq_output_=output;
 }
 void Iop::pump_sif0() {
     // Same bounded, instruction-clocked throughput hypothesis as SIF1.
@@ -567,7 +606,8 @@ void Iop::pump_sif0() {
         return value && *value && ((**value&mask)==mask);
     };
     const auto observed_source=[&](std::uint32_t address)->std::optional<std::uint32_t> {
-        if(address>ram_.size() || 4u>ram_.size()-address)return std::nullopt;
+        if(address>ram_.size() || 4u>ram_.size()-address)
+            return std::nullopt;
         std::uint32_t value=0;
         for(unsigned b=0;b<4;++b) {
             if(!ram_written_[address+b])return std::nullopt;
@@ -577,7 +617,7 @@ void Iop::pump_sif0() {
     };
     const auto source_word=[&](std::uint32_t address) {
         const auto value=observed_source(address);
-        if(!value)throw IopStop{"SIF0 source consumes undefined IOP RAM or exceeds its bounds"};
+        if(!value)throw IopStop{"SIF0 source consumes undefined or out-of-range IOP RAM"};
         return *value;
     };
     if((iop_sif0_[2]&kChcrStart) && enabled(0x1F801578u,1u) && enabled(0x1F801570u,0x800u)) {
@@ -588,20 +628,24 @@ void Iop::pump_sif0() {
                 const auto tag=source_word(at),words=source_word(at+4u);
                 const auto low=source_word(at+8u),high=source_word(at+12u);
                 const auto source=tag&0xFFFFFFu;
-                if((tag&0x7F000003u) || (words&0xFF000000u))
-                    throw IopStop{"SIF0 source tag: IRQ/reserved bits not modeled"};
+                if((tag&0x3F000003u) || (words&0xFF000000u))
+                    throw IopStop{"SIF0 source tag: reserved bits not modeled at "+hex(at)+
+                                  " tag="+hex(tag)+" words="+hex(words)};
+                if((tag&0xC0000000u)==0x40000000u)
+                    throw IopStop{"SIF0 source tag IRQ without END: stop/continue behavior not verified"};
                 if(source>ram_.size() || std::uint64_t{words}*4u>ram_.size()-source)
                     throw IopStop{"SIF0 source tag payload outside IOP RAM"};
                 sif0_fifo_.push_back(low);sif0_fifo_.push_back(high);
                 // Upper half of an EE destination tag is unused: occupancy
                 // padding only, never returned to the guest or copied to RAM.
                 sif0_fifo_.push_back(0);sif0_fifo_.push_back(0);
-                // The real bus qword contains the EE tag and the following
-                // IOP tag. Unknown following bytes may be ignored by the EE
-                // tag parser, but must never become invented payload padding.
+                // Hardware measurements reported with PCSX2's SIF research:
+                // an incomplete payload retains corresponding lanes of the
+                // preceding full bus qword (initially EE tag + next IOP tag).
                 sif0_last_qword_={low,high,observed_source(at+16u),observed_source(at+20u)};
                 iop_sif0_[0]=source;iop_sif0_[3]+=16u;iop_sif0_written_|=1u;
                 sif0_source_words_=words;sif0_source_end_=(tag&0x80000000u)!=0;
+                sif0_source_irq_=(tag&0x40000000u)!=0;
                 sif0_source_tag_=true;
             }
         } else if(sif0_source_words_) {
@@ -623,7 +667,7 @@ void Iop::pump_sif0() {
         }
         sif0_metrics_.peak_fifo_words=std::max(sif0_metrics_.peak_fifo_words,sif0_fifo_.size());
         if(sif0_source_tag_ && !sif0_source_words_) {
-            if(sif0_source_end_)finish_iop_sif0();
+            if(sif0_source_end_ || sif0_source_irq_)finish_iop_sif0();
             sif0_source_tag_=false;
         }
     }
@@ -660,9 +704,22 @@ void Iop::pump_sif0() {
     }
 }
 
+void Iop::mount_disc(std::shared_ptr<DiscImage> disc,DiscMedium medium) {
+    if(cycle_ || stop_ || !disc)throw DeviceRefusal("CDVD mount requires an active reset state and a disc image");
+    if(medium!=DiscMedium::Ps2Cd && medium!=DiscMedium::Ps2Dvd)
+        throw DeviceRefusal("CDVD medium is unsupported");
+    (void)disc->boot_path(); // Validate PS2 BOOT2, without loading guest code.
+    disc_=std::move(disc);cdvd_type_=medium==DiscMedium::Ps2Cd ? 0x12u : 0x14u;
+    // Host explicitly supplies a detected disc: tray closed, spindle on,
+    // paused. Spin-up/detection latency is outside this mount operation.
+    cdvd_status_=cdvd_sticky_=0x0Au;
+}
+
 void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
-    // A GS write at this boundary must affect the next interrupt decision.
-    if(video) refresh_video(*video);
+    // EE writes are preceded by a run to the write boundary. Observe the new
+    // clock before step() decides whether the next instruction is interrupted.
+    // Refreshing only after retirement leaves that decision one generation old.
+    if (video != nullptr) refresh_video(*video);
     if (video == nullptr && video_generation_) {
         // Detached: the VBLANK sources are unknown again.
         video_generation_.reset();
@@ -675,6 +732,11 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
         try {
             pump_sif1();
             pump_sif0();
+            if(cdvd_complete_at_ && cycle_>=*cdvd_complete_at_) {
+                cdvd_complete_at_.reset(); cdvd_irq_|=2u;
+                events_.push_back({cycle_,"CDVD N command completion"});
+            }
+            if(cdvd_irq_) istat_|=1u<<2u;
             step();
             ++cycle_;
             if (timers_running_) tick_timers();
@@ -694,6 +756,8 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
 std::uint32_t Iop::ee_cdvd_read(std::uint32_t physical,std::size_t bytes) {
     if(stopped())throw DeviceRefusal("CDVD read after the IOP stopped: "+*stop_);
     if(physical<0x1F402000u || physical>=0x1F402020u)throw DeviceRefusal("outside CDVD register window");
+    if(physical==0x1F40200Au || physical==0x1F40200Bu)
+        throw DeviceRefusal("EE CDVD drive status: bits 6-7 are not established");
     try { return io_read(physical,bytes,"EE CDVD read"); }
     catch(const IopStop& error) { throw DeviceRefusal(error.reason); }
 }
@@ -721,7 +785,7 @@ std::uint64_t Iop::ee_read(std::uint32_t offset, std::size_t bytes) const {
     return value;
 }
 
-void Iop::ee_write(std::uint32_t offset,std::size_t bytes,std::uint64_t value) {
+void Iop::ee_write(std::uint32_t offset, std::size_t bytes, std::uint64_t value) {
     if(bytes!=1u && bytes!=2u && bytes!=4u && bytes!=8u)
         throw DeviceRefusal("EE write to IOP RAM requires 1/2/4/8 bytes");
     if(offset>=kIopRamBytes || bytes>kIopRamBytes-offset)
@@ -794,6 +858,14 @@ std::uint32_t Iop::fetch(std::uint32_t address) const {
                (static_cast<std::uint32_t>(ram_[a.physical + 2]) << 16) |
                (static_cast<std::uint32_t>(ram_[a.physical + 3]) << 24);
     }
+    if(a.physical>=0x1E000000u && a.physical<0x1E400000u) {
+        const auto offset=a.physical-0x1E000000u;
+        if(offset>rom1_.size() || 4u>rom1_.size()-offset)
+            throw IopStop{"instruction fetch: ROM1 bytes are not supplied for this firmware"};
+        std::uint32_t value=0;
+        for(unsigned i=0;i<4;++i)value|=std::uint32_t{rom1_[offset+i]}<<(i*8u);
+        return value;
+    }
     if (a.physical >= kRomPhysical && a.physical - kRomPhysical < kRomBytes) {
         const auto o = a.physical - kRomPhysical;
         return static_cast<std::uint32_t>(rom_[o]) | (static_cast<std::uint32_t>(rom_[o + 1]) << 8) |
@@ -825,6 +897,13 @@ std::uint32_t Iop::load(std::uint32_t address, std::size_t bytes, const char* wh
             value |= static_cast<std::uint32_t>(rom_[a.physical - kRomPhysical + i]) << (8u * i);
         return value;
     }
+    if(a.physical>=0x1E000000u && a.physical<0x1E400000u) {
+        const auto offset=a.physical-0x1E000000u;
+        if(offset>rom1_.size() || bytes>rom1_.size()-offset)
+            throw IopStop{std::string(what)+": ROM1 bytes are not supplied for this firmware"};
+        for(std::size_t i=0;i<bytes;++i)value|=std::uint32_t{rom1_[offset+i]}<<(i*8u);
+        return value;
+    }
     return io_read(a.physical, bytes, what);
 }
 
@@ -846,6 +925,8 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
         }
         return;
     }
+    if(a.physical>=0x1E000000u && a.physical<0x1E400000u)
+        throw IopStop{std::string("store ")+what+" to read-only ROM1 at "+hex(address)};
     if (a.physical >= kRomPhysical && a.physical - kRomPhysical < kRomBytes)
         throw IopStop{std::string("store ") + what + " to ROM0 at " + hex(address)};
     io_write(a.physical, bytes, value, what);
@@ -868,9 +949,20 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
     }
     const auto name = std::string("load ") + what + " of IOP register " + hex(physical);
     if(physical==0x1F808268u)throw IopStop{"SIO2 control reset/status readback is not verified"};
-    if(physical==0x1F803800u) {
+    if(physical==0x1D000040u) {
+        if(bytes!=4u) throw IopStop{name+": only 32-bit control reads modeled"};
+        // Only the experimental SIF0/1 ready bits have a value. In
+        // particular, do not invent the widely used F0000002 constant.
+        if(!undefined_load_) {
+            undefined_load_=name+": unverified SIF_CTRL bits";
+            undefined_known_=diagnostic_sbus_latches_ ? 0x60u : 0u;
+        }
+        return diagnostic_sif_ready_;
+    }
+    if (physical == 0x1F803800u) {
         if(bytes!=2u) throw IopStop{name+": MPU board ID requires a 16-bit read"};
-        if(!hardware_ || !hardware_->mpu_board_id) throw IopStop{name+": MPU board ID has not been measured for this profile"};
+        if(!hardware_ || !hardware_->mpu_board_id)
+            throw IopStop{name+": MPU board ID has not been measured for this profile"};
         return *hardware_->mpu_board_id;
     }
     if (physical == kToolBoardIdPhysical) {
@@ -922,7 +1014,26 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
     }
     if (physical == kCdvdNStatus) {
         if (bytes != 1u) throw IopStop{name + ": only 8-bit reads are modeled"};
-        return kCdvdNStatusIdle;
+        return cdvd_complete_at_ ? ((kCdvdNStatusIdle&~0x40u)|0x80u) : kCdvdNStatusIdle;
+    }
+    if(physical==0x1F40200Au || physical==0x1F40200Bu || physical==0x1F40200Fu) {
+        if(bytes!=1u || !disc_)throw IopStop{name+": requires a byte access and an explicitly mounted disc"};
+        if(physical==0x1F40200Fu)return cdvd_type_;
+        // Bits 6-7 are undocumented, not assumed zero. The defined drive
+        // flags can be masked/compared through the existing knowledge model.
+        if(!undefined_load_) {
+            undefined_load_=name+": drive status bits 6-7 are not established";
+            undefined_known_=0xFFFFFF3Fu;
+        }
+        return physical==0x1F40200Au ? cdvd_status_ : cdvd_sticky_;
+    }
+    if(physical==0x1F402008u) {
+        if(bytes!=1u) throw IopStop{name+": CDVD I_STAT requires a byte"};
+        return cdvd_irq_;
+    }
+    if(physical==0x1F402004u) {
+        if(bytes!=1u || !cdvd_ncommand_) throw IopStop{name+": N command byte is unknown before issue"};
+        return *cdvd_ncommand_;
     }
     if (physical == kCdvdSCommand || physical == kCdvdSStatus || physical == kCdvdSResult) {
         if (bytes != 1u) throw IopStop{name + ": only 8-bit accesses are modeled"};
@@ -958,7 +1069,9 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
                     const auto* second = latch(kDicr2);
                     const auto flags = result & 0x7F000000u;
                     const auto flags2 = second ? second->value_or(0u) & 0x3F000000u : 0u;
-                    if ((result & (1u << 15)) || ((result & (1u << 23)) && (flags || flags2))) result |= 1u << 31;
+                    const auto* gate=latch(0x1F80157Cu);
+                    if ((result & (1u << 15)) || ((result & (1u << 23)) && (flags || flags2) &&
+                        gate && *gate && (**gate&1u))) result |= 1u << 31;
                 }
                 if (physical == kICtrl) {
                     // Only bit 0 exists; the read clears it.
@@ -988,11 +1101,39 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         iop_sif0_write(physical,*value); return;
     }
     if (physical >= 0x1F801530u && physical < 0x1F801540u) {
+        if(bytes==2u && (physical==0x1F801534u || physical==0x1F801536u) && value) {
+            const auto shift=(physical&2u)*8u;
+            iop_sif1_write(0x1F801534u,(iop_sif1_[1]&~(0xFFFFu<<shift))|((*value&0xFFFFu)<<shift));
+            return;
+        }
         if (bytes != 4u || !value) throw IopStop{"SIF1 DMA requires known 32-bit accesses"};
         iop_sif1_write(physical, *value);
         return;
     }
     const auto name = std::string("store ") + what + " of IOP register " + hex(physical);
+    if(physical==0x1F402008u) {
+        if(bytes!=1u || !value) throw IopStop{name+": CDVD I_STAT requires a known byte"};
+        cdvd_irq_&=static_cast<std::uint8_t>(~*value);
+        return;
+    }
+    if(physical==0x1F402004u) {
+        if(bytes!=1u || !value || *value>1u)
+            throw IopStop{name+": only parameter-free CDVD NOP/NOPsync commands modeled"};
+        if(cdvd_complete_at_) throw IopStop{name+": CDVD command issued while busy"};
+        cdvd_ncommand_=static_cast<std::uint8_t>(*value);
+        // Functional scheduling hypothesis: completion after one IOP cycle,
+        // never an inline success reply or a synthesized media read.
+        cdvd_complete_at_=cycle_+1u;
+        return;
+    }
+    if(physical==0x1D000040u) {
+        if(!diagnostic_sbus_latches_ || bytes!=4u || !value || (*value!=0x20u && *value!=0x40u))
+            throw IopStop{name+": unverified control operation outside SIF ready-bit experiment"};
+        // Functional hypothesis from SDK single-bit setup and observed
+        // emulator behavior: write-one toggles ready; completion clears it.
+        diagnostic_sif_ready_^=*value;
+        return;
+    }
     if (physical == kPostPhysical && (bytes == 1u || bytes == 4u)) {
         if (!value) throw IopStop{name + ": unknown value"};
         // Boot progress code (POST); 8-bit display value, no other effect.
@@ -1054,12 +1195,13 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         return;
     }
     if (is_latch(physical)) {
-        if(physical==0x1F808268u) {
-            if(!value || (*value&1u))throw IopStop{"SIO2 transfer is not modeled"};
-            if(*value!=0u && *value!=0xCu && *value!=0x3BCu)
-                throw IopStop{"SIO2 control configuration is not verified"};
-        }
         if (bytes != 4u) throw IopStop{name + ": only 32-bit accesses are modeled"};
+        // SIO2 CTRL bit 0 starts a transfer (ps2tek SIO2). Idle setup was
+        // already latched here; do not silently accept a command start.
+        if(physical==0x1F808268u && (!value || (*value&1u)))
+            throw IopStop{name+": SIO2 transfer is not modeled"};
+        if(physical==0x1F808268u && *value!=0u && *value!=0xCu && *value!=0x3BCu)
+            throw IopStop{"SIO2 control configuration is not verified"};
         if (dma_channel_field(physical) == 2u && (!value || (*value & kChcrStart) != 0u))
             throw IopStop{name + " = " + (value ? hex(*value) : std::string("(unknown)")) +
                           ": DMA transfers are not modeled"};
@@ -1074,9 +1216,11 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         for (auto& [address, latched] : latches_)
             if (address == physical) {
                 latched = value;
+                if(physical==kDicr || physical==kDicr2 || physical==0x1F80157Cu)update_dma_irq();
                 return;
             }
         latches_.push_back({physical, value});
+        if(physical==kDicr || physical==kDicr2 || physical==0x1F80157Cu)update_dma_irq();
         return;
     }
     throw IopStop{name + " = " + (value ? hex(*value) : std::string("(unknown)")) + ": device not implemented"};
@@ -1091,6 +1235,11 @@ void Iop::mechacon_command(std::uint8_t command, const char* what) {
     s_results_.clear();
     s_command_ = command;
     switch (command) {
+        case 0x05: // UpdateStickyFlags: actual latch update, not a stub.
+            if(!s_params_.empty() || !disc_)throw IopStop{name+": requires no parameters and an explicit disc"};
+            if(cdvd_complete_at_)s_results_.push_back(1u);
+            else {cdvd_sticky_=cdvd_status_;s_results_.push_back(0u);}
+            break;
         case 0x0A: { // ReadNVM: address high, low -> status, data high, data low (ps2sdk)
             if (s_params_.size() != 2u) throw IopStop{name + ": ReadNVM takes a 2-byte word address"};
             const auto address = static_cast<std::uint32_t>(s_params_[0] << 8 | s_params_[1]);
@@ -1231,16 +1380,17 @@ std::optional<bool> Iop::interrupt_line() const {
 }
 
 std::uint32_t Iop::modeled_irqs() const noexcept {
-    // SIO2 IRQ17 is idle until a serial command starts. All FIFO/DMA
-    // starts remain refused; CTRL accepts only documented idle/reset setup.
-    return kTimerIrqs | kDmaIrq | (sio2_irq_acknowledged_ ? (1u<<17u) : 0u) |
+    // Cold SIO2 has no in-flight command. Every path that could start one
+    // (CTRL.0, FIFO, DMA) refuses before changing state, so IRQ17 cannot rise.
+    // This proves the idle source only, not peripheral responses or timing.
+    return kTimerIrqs | kDmaIrq | (1u<<2u) | (sio2_irq_acknowledged_ ? (1u<<17u) : 0u) |
            (video_.state != GsRegisters::VerticalClock::State::Unknown ? kVblankStartIrq | kVblankEndIrq : 0u);
 }
 
 void Iop::refresh_video(const GsRegisters& video) {
     if (video_generation_ != video.timing_generation()) {
-        // The EE synchronizes the IOP before changing GS timing. Process the
-        // new generation from this boundary, using the shared IOP time unit.
+        // Retain the existing IOP-cycle granularity: the next tick processes
+        // edges from this boundary, never edges preceding the timing change.
         const auto from = cycle_ * kEeCyclesPerIopCycle;
         video_generation_ = video.timing_generation();
         video_ = video.vertical_clock();
@@ -1282,6 +1432,18 @@ void Iop::ee_sif_write(unsigned index, std::uint32_t value) {
         case 2: sif_msflg_ |= value; return;  // the EE sets its flags
         case 3: sif_smflg_ &= ~value; return; // and clears the IOP's
         case 1: throw DeviceRefusal(name + ": SIF_SMCOM is written by the IOP only (EE write effect unknown)");
+        case 4:
+            if(!diagnostic_sbus_latches_) throw DeviceRefusal(name+": not modeled (SBUS configuration experiment required)");
+            if(value!=0x100u) throw DeviceRefusal(name+": SBUS experiment only supports clock initialization, no IRQ/reset");
+            sbus_control_write_=value;
+            events_.push_back({cycle_,"DIAGNOSTIC SBUS CTRL configuration latch = "+hex(value)});
+            return;
+        case 6:
+            if(!diagnostic_sbus_latches_) throw DeviceRefusal(name+": not modeled (SBUS configuration experiment required)");
+            if(value!=0xFFu) throw DeviceRefusal(name+": SBUS experiment only supports SDK initialization");
+            sbus_bd6_write_=value;
+            events_.push_back({cycle_,"DIAGNOSTIC SBUS BD6 configuration latch = "+hex(value)});
+            return;
         default: throw DeviceRefusal(name + ": not modeled");
     }
 }

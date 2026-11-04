@@ -150,6 +150,7 @@ void Memory::load(const ElfImage& elf) {
     privilege_ = Privilege::Kernel;
     mapping_ = Mapping::ElfProgram;
     rom_.clear();
+    rom1_.clear();
     scratchpad_.clear();
     tlb_ = {};
     std::fill(ram_.begin(), ram_.end(), std::uint8_t{0});
@@ -160,20 +161,22 @@ void Memory::load(const ElfImage& elf) {
 }
 
 void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware,
-                            const NvmImage* nvm, const DiagnosticAssumptions* assumptions) {
+                            const NvmImage* nvm, const DiagnosticAssumptions* assumptions,
+                            std::span<const std::uint8_t> rom1) {
     if (rom0.size() != kBiosRomBytes)
         throw std::runtime_error("BIOS ROM0 must be exactly 4 MiB to be mapped at 0x1FC00000");
     mapping_ = Mapping::HardwareReset;
     unknown_words_.clear();
     std::fill(ram_.begin(), ram_.end(), std::uint8_t{0});
     rom_.assign(rom0.begin(), rom0.end());
+    rom1_.assign(rom1.begin(),rom1.end());
     scratchpad_.assign(kScratchpadBytes, 0);
     tlb_ = {};
     tlb_defined_ = {};
     asid_ = 0;
     error_level_ = true;
     privilege_ = Privilege::Kernel;
-    registers_.reset(hardware, rom_, nvm, assumptions);
+    registers_.reset(hardware, rom_, nvm, assumptions, rom1_);
     registers_.attach_ee_ram(ram_, &unknown_words_);
 }
 
@@ -329,6 +332,12 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
             if (rom_.empty()) throw refuse(BusFault::Unmapped);
             if (write) throw refuse(BusFault::RomWrite);
             return {physical, region, physical - kBiosRomPhysical};
+        case BusRegion::Rom1: {
+            const auto offset=physical-0x1E000000u;
+            if(offset>rom1_.size() || size>rom1_.size()-offset)throw refuse(BusFault::Unmapped);
+            if(write)throw refuse(BusFault::RomWrite);
+            return {physical,region,offset};
+        }
         case BusRegion::Unmapped:
             throw refuse(BusFault::Unmapped);
         default:
@@ -338,7 +347,7 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
 }
 
 std::uint64_t Memory::storage_unknown(const Target& target, std::size_t size) const {
-    if (unknown_words_.empty() || target.region == BusRegion::BiosRom) return 0;
+    if (unknown_words_.empty() || target.region == BusRegion::BiosRom || target.region == BusRegion::Rom1) return 0;
     const auto base = target.offset | (target.region == BusRegion::Scratchpad ? 0x80000000u : 0u);
     std::uint64_t unknown = 0;
     for (std::size_t i = 0; i < size; ++i) {
@@ -407,6 +416,7 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
                                  "read consumes unknown RAM bits");
         if (unknown) *unknown = symbolic;
         const auto& storage = target.region == BusRegion::BiosRom ? rom_
+                            : target.region == BusRegion::Rom1 ? rom1_
                             : target.region == BusRegion::Scratchpad ? scratchpad_ : ram_;
         for (std::size_t i = 0; i < size; ++i)
             value |= static_cast<std::uint64_t>(storage[target.offset + i]) << (8u * i);

@@ -103,7 +103,8 @@ public:
     // and resets the device registers of console `hardware` (may be nullptr),
     // whose MECHACON holds `nvm` (may be nullptr; must outlive the memory).
     void reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware = nullptr,
-                        const NvmImage* nvm = nullptr, const DiagnosticAssumptions* assumptions = nullptr);
+                        const NvmImage* nvm = nullptr, const DiagnosticAssumptions* assumptions = nullptr,
+                        std::span<const std::uint8_t> rom1 = {});
     [[nodiscard]] Mapping mapping() const noexcept { return mapping_; }
     // Naturally aligned little-endian accesses; misalignment is an explicit error
     // (the R5900 address-error exception is not modeled yet).
@@ -147,6 +148,7 @@ public:
     [[nodiscard]] const Gif& gif() const noexcept { return registers_.gif(); }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return registers_.mch(); }
     [[nodiscard]] const Iop& iop() const noexcept { return registers_.iop(); }
+    void mount_disc(std::shared_ptr<DiscImage> disc,Iop::DiscMedium medium) { registers_.mount_disc(std::move(disc),medium); }
     [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return registers_.video_encoder(); }
     [[nodiscard]] std::uint32_t read_vu_control(unsigned index) const { return registers_.read_vu_control(index); }
     void write_vu_control(unsigned index, std::uint32_t value) { registers_.write_vu_control(index,value); }
@@ -193,6 +195,7 @@ private:
     // EE register reads can have side effects (timers sample the clock).
     mutable EeRegisters registers_;
     std::vector<std::uint8_t> rom_;
+    std::vector<std::uint8_t> rom1_;
     std::vector<std::uint8_t> scratchpad_;
     std::array<TlbEntry, kTlbEntries> tlb_{};
     // Entries are undefined after reset until the guest writes them.

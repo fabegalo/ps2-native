@@ -44,16 +44,17 @@ inline Program cpu() {
     return {{{text,5,le_words(a.finish())},{data,6,std::move(bytes),64},
              {0x00000200u,5,le_words(h.finish())}},stop,{}, {}};
 }
-inline std::vector<std::uint8_t> iop_receiver(bool program_interrupt_masks=true) {
+inline std::vector<std::uint8_t> iop_receiver(bool program_interrupt_masks=true, std::uint32_t chcr=0x01000600u,
+                                              std::uint32_t dicr2=1u<<19) {
     Assembler a(0x1000u);
     store(a,0xBF801570u,0x8000u); // DPCR2 ch10 enable
     store(a,0xBF801578u,1u); // DMACEN
     store(a,0xBF80157Cu,1u); // DMACINTEN: master flags and IRQ enabled
     if(program_interrupt_masks) {
         store(a,0xBF8010F4u,1u<<23); // master IRQ enable
-        store(a,0xBF801574u,1u<<19); // ch10 IRQ enable
+        store(a,0xBF801574u,dicr2); // channel completion and tag IRQ enables
     }
-    store(a,0xBF801538u,0x01000600u); // chain, destination
+    store(a,0xBF801538u,chcr); // destination tag stream
     a.la(t0,0xBF801538u);
     a.label("busy"); a.lw(t1,0,t0); a.nop(); a.lui(t2,0x0100); a.r(t1,t2,t1,0,0x24);
     a.bne(t1,zero,"busy"); a.nop();
@@ -196,6 +197,7 @@ inline Program timer() {
     a.raw(0x70000488u|(t2<<21u)|(t3<<16u)|(t4<<11u));a.sq(t4,64,t0);
     a.raw(0x700004A8u|(t2<<21u)|(t3<<16u)|(t4<<11u));a.sq(t4,80,t0);
     a.raw(0x700004C8u|(t2<<21u)|(t3<<16u)|(t4<<11u));a.sq(t4,96,t0);
+    a.raw(0x70000004u|(t2<<21u)|(t4<<11u));a.sq(t4,112,t0);
     const auto stop=a.here();a.brk();
     Assembler h(0x80000200u);
     h.la(k0,data);h.mfc0(27,Cause);h.sw(27,4,k0);
@@ -203,7 +205,7 @@ inline Program timer() {
     h.la(t2,0xB0000010u);h.addiu(t3,zero,0x400);h.sw(t3,0,t2); // stop/clear EQUF
     h.la(t2,0xB000F000u);h.addiu(t3,zero,1u<<9u);h.sw(t3,0,t2);
     h.addiu(27,zero,1);h.sw(27,0,k0);h.eret();
-    std::vector<std::uint8_t> bytes(128);
+    std::vector<std::uint8_t> bytes(144);
     put(bytes,16,0x0123456789ABCDEFull,8);put(bytes,24,0xFEDCBA9876543210ull,8);
     return {{{text,5,le_words(a.finish())},{data,6,std::move(bytes)},
              {0x200u,5,le_words(h.finish())}},stop,{},{resume}};

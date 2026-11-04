@@ -126,6 +126,35 @@ void check_vertical_clock() {
     gs.write(kGsCsr, 8u, kCsrReset, 20u, {});
     require(gs.timing_generation() != generation && gs.vertical_clock().state == State::Unknown,
             "GS reset: SYNCV back to its unknown power-on value");
+
+    // Explicit experiment only: assumed reset timing is replaced by guest
+    // writes, restored on soft reset, and discarded by a normal power-on.
+    gs.reset(0u, kSyncvNtsc);
+    require(gs.vertical_clock().field == kField, "diagnostic reset timing is decoded normally");
+    gs.write(kGsSyncv, 8u, kSyncvNtsc + 1u, 10u, {});
+    require(gs.vertical_clock().field == kField + 1u, "guest overrides diagnostic timing");
+    gs.write(kGsCsr, 8u, kCsrReset, 20u, {});
+    require(gs.vertical_clock().field == kField && gs.vertical_clock().epoch == 20u,
+            "diagnostic soft reset uses its explicit reset configuration");
+    gs.reset(0u);
+    require(gs.vertical_clock().state == State::Unknown, "normal reset never inherits diagnostic timing");
+    rejects([&] { gs.reset(0u, 0u); }, "display and blanking");
+    DiagnosticAssumptions assumptions;
+    require(assumptions.empty(), "diagnostic defaults remain empty");
+    assumptions.gs_reset_syncv = kSyncvNtsc;
+    require(!assumptions.empty(), "GS-only experiment is marked diagnostic");
+    EeRegisters registers;
+    std::uint64_t diagnostic_clock=0;
+    registers.set_clock(&diagnostic_clock);
+    registers.reset(&kProfile, {}, nullptr, &assumptions);
+    require(registers.gs().vertical_clock().field == kField, "GS diagnostic option reaches shared hardware");
+    registers.reset(&kProfile);
+    registers.write(0x1000F590u,4u,0x14111u);
+    require(registers.read(0x1000F520u,4u)==0x14111u,"D_ENABLER exposes CPND while retaining board bits");
+    registers.write(0x1000F590u,4u,0x4111u);
+    require(registers.read(0x1000F520u,4u)==0x4111u,"D_ENABLEW resumes DMA");
+    rejects([&]{registers.write(0x1000F590u,4u,0u);},"CPND-only");
+    require(registers.gs().vertical_clock().state == State::Unknown, "normal console reset clears experiment");
 }
 
 // Polls I_STAT with interrupts disabled, counting VBLANK starts (RAM 0x100)
@@ -286,25 +315,30 @@ void check_vblank_interrupts() {
     blocked.reset(rom, &kProfile);
     blocked.run_until(100u, &unknown);
     require_stop(blocked, "VBLANK: GS SYNCV not written since reset");
-    auto changed=video(kSmode1Ntsc,std::nullopt);
-    Iop resumed;resumed.reset(rom,&kProfile);
-    const auto enabled=index_of(a,"spin");
-    resumed.run_until(enabled,&changed);
-    require(!resumed.stopped(),"unknown video timing is not consumed while interrupts are disabled");
-    changed.write(kGsSmode1,8,kSmode1Held,enabled*kEeCyclesPerIopCycle,{});
-    resumed.run_until(enabled+1u,&changed);
-    require(!resumed.stopped() && resumed.cycle()==enabled+1u,
-            "held timing is visible before the first enabled interrupt decision");
-    const auto boundary=resumed.cycle();
-    const auto boundary_pc=resumed.pc();
-    changed.write(kGsSmode1,8,kSmode1Ntsc,boundary*kEeCyclesPerIopCycle,{});
-    resumed.run_until(boundary+1u,&changed);
-    require_stop(resumed,"VBLANK: GS SYNCV not written since reset");
-    require(resumed.cycle()==boundary && resumed.pc()==boundary_pc,
-            "invalidated timing cannot retire an instruction using the previous clock");
-    changed.write(kGsSmode1,8,kSmode1Held,boundary*kEeCyclesPerIopCycle,{});
-    resumed.run_until(boundary+10u,&changed);
-    require(resumed.stopped() && resumed.cycle()==boundary,"later initialization cannot erase an unknown past interrupt decision");
+
+    // A GS write at an instruction boundary must affect the very next
+    // interrupt decision, even before another IOP instruction has retired.
+    auto changed = video(kSmode1Ntsc, std::nullopt);
+    Iop resumed;
+    resumed.reset(rom, &kProfile);
+    const auto enabled = index_of(a, "spin");
+    resumed.run_until(enabled, &changed);
+    require(!resumed.stopped(), "unknown timing is not consumed while IEc is clear");
+    changed.write(kGsSmode1, 8u, kSmode1Held, enabled * kEeCyclesPerIopCycle, {});
+    resumed.run_until(enabled + 1u, &changed);
+    require(!resumed.stopped() && resumed.cycle() == enabled + 1u,
+            "new held timing is visible before the first enabled interrupt decision");
+    changed.write(kGsSmode1, 8u, kSmode1Ntsc, resumed.cycle() * kEeCyclesPerIopCycle, {});
+    const auto boundary = resumed.cycle();
+    const auto boundary_pc = resumed.pc();
+    resumed.run_until(boundary + 1u, &changed);
+    require_stop(resumed, "VBLANK: GS SYNCV not written since reset");
+    require(resumed.cycle() == boundary && resumed.pc() == boundary_pc,
+            "invalidated timing cannot retire one instruction using the old clock");
+    changed.write(kGsSmode1, 8u, kSmode1Held, boundary * kEeCyclesPerIopCycle, {});
+    resumed.run_until(boundary + 10u, &changed);
+    require(resumed.stopped() && resumed.cycle() == boundary,
+            "later GS initialization cannot erase an earlier unknown interrupt decision");
 }
 
 // AND and BEQ on values with unknown bits; SIF_BD6; the DMA IRQ bit.
@@ -419,9 +453,151 @@ void check_sif() {
     refuses([](Assembler& p) { p.lhu(a0, 0x20, t3); }, "only 32-bit SIF accesses");
 }
 
+void check_ee_ram_writes() {
+    Assembler a(0xBFC00000u);
+    a.lui(t1,0xA000u);
+    a.lw(a0,0x100,t1); a.nop();
+    a.sw(a0,0x108,t1);
+    a.label("end"); a.nop();
+    const auto rom=rom_of(a);
+    Iop iop; iop.reset(rom,&kProfile);
+    iop.ee_write(0x100,4,0xABCDEF01u);
+    iop.run_until(index_of(a,"end"));
+    require(!iop.stopped() && iop.ee_read(0x108,4)==0xABCDEF01u,"IOP executes a load of bytes written by EE");
+    iop.ee_write(0x101,2,0x1234);
+    require(iop.ee_read(0x100,4)==0xAB123401u,"EE subword store preserves neighboring IOP bytes");
+    rejects([&]{(void)iop.ee_read(0x104,4);},"has not been written");
+    rejects([&]{iop.ee_write(0x1FFFFFu,2,0);},"outside the 2 MiB");
+    rejects([&]{iop.ee_write(0,16,0);},"requires 1/2/4/8");
+    rejects([&]{iop.ee_sif_write(4,0x100);},"experiment required");
+    iop.reset(rom,&kProfile,nullptr,true);
+    iop.ee_sif_write(4,0x100); iop.ee_sif_write(6,0xFF);
+    require(iop.ee_sif_read(2)==0 && iop.ee_sif_read(3)==0,"SBUS experiment never synthesizes either handshake flag");
+    rejects([&]{(void)iop.ee_sif_read(4);},"not modeled");
+    rejects([&]{(void)iop.ee_sif_read(6);},"not modeled");
+    rejects([&]{iop.ee_sif_write(4,0x40100);},"no IRQ/reset");
+    iop.reset(rom,&kProfile);
+    rejects([&]{iop.ee_sif_write(6,0xFF);},"experiment required");
+}
+
+void check_sif_ready_experiment() {
+    Assembler a(0xBFC00000u);
+    a.lui(t1,0xBD00); a.lui(t2,0xA000); a.lui(t3,0xBF80);
+    a.lw(a0,0x40,t1); a.nop(); a.andi(a0,a0,0x60); a.sw(a0,0x100,t2);
+    a.addiu(a1,zero,0x40); a.sw(a1,0x40,t1);
+    a.lw(a0,0x40,t1); a.nop(); a.andi(a0,a0,0x60); a.sw(a0,0x104,t2);
+    a.sw(a1,0x40,t1);
+    a.lw(a0,0x40,t1); a.nop(); a.andi(a0,a0,0x60); a.sw(a0,0x108,t2);
+    a.lui(a1,0x1234); a.sw(a1,0x1534,t3);
+    a.addiu(a1,zero,32); a.sh(a1,0x1534,t3);
+    a.lw(a0,0x1534,t3); a.nop(); a.sw(a0,0x10C,t2);
+    a.lui(a1,0x4100); a.ori(a1,a1,0x300); a.sw(a1,0x1538,t3);
+    a.label("end"); a.nop();
+    const auto rom=rom_of(a);
+    Iop iop; iop.reset(rom,&kProfile,nullptr,true);
+    iop.run_until(index_of(a,"end"));
+    require(!iop.stopped(),"SIF ready-bit experiment: "+iop.stop_reason().value_or(""));
+    require(iop.ee_read(0x100,4)==0 && iop.ee_read(0x104,4)==0x40 && iop.ee_read(0x108,4)==0,
+            "IOP single-bit control writes toggle only their selected ready bit");
+    require(iop.ee_read(0x10C,4)==0x12340020,"BCR halfword write preserves block count");
+    require(iop.sif1_metrics().bytes==0,"arming SDK destination never fabricates data");
+    iop.reset(rom,&kProfile); iop.run_until(index_of(a,"end"));
+    require_stop(iop,"unverified SIF_CTRL bits");
+}
+
+void check_dma_reset_experiment() {
+    Assembler a(0xBFC00000u);
+    a.la(t0,0xBF80157Cu);a.lw(t1,0,t0);a.nop();a.addu(v0,t1,zero);
+    a.label("idle");a.beq(zero,zero,"idle");a.nop();
+    const auto rom=rom_of(a);Iop iop;
+    iop.reset(rom,&kProfile);iop.run_until(20);
+    require_stop(iop,"before any write");
+    for(std::uint32_t value=0;value<4;++value) {
+        iop.reset(rom,&kProfile,nullptr,false,value);iop.run_until(20);
+        require(!iop.stopped() && iop.gpr(v0)==value,"explicit DMA IRQ reset experiment retains exact bits, including zero");
+    }
+    rejects([&]{iop.reset(rom,&kProfile,nullptr,false,4);},"only bits 0-1");
+    iop.reset(rom,&kProfile);iop.run_until(20);
+    require_stop(iop,"before any write");
+}
+void check_sif0_halfwords() {
+    for(unsigned halves=1;halves<3;++halves) {
+        Assembler a(0xBFC00000u);a.la(t0,0xBF801524u);a.la(t1,0xABCDu);
+        a.raw(0xA4000000u|(t0<<21u)|(t1<<16u)); // SH low BCR
+        if(halves==2) {
+            a.la(t1,0x1234u);a.raw(0xA4000002u|(t0<<21u)|(t1<<16u));
+            a.la(t1,0x0020u);a.raw(0xA4000000u|(t0<<21u)|(t1<<16u));
+        }
+        a.lw(v0,0,t0);a.nop();a.label("idle");a.beq(zero,zero,"idle");a.nop();
+        Iop iop;iop.reset(rom_of(a),&kProfile);iop.run_until(30);
+        if(halves==1)require_stop(iop,"register read before write");
+        else require(!iop.stopped() && iop.gpr(v0)==0x12340020u,"SIF0 SH preserves the opposite BCR halfword");
+    }
+}
+void check_sio2_idle() {
+    Assembler a(0xBFC00000u);
+    a.la(t1,0xBF800000u);a.la(t2,0xBF808268u);
+    a.label("ack");
+    a.sw(zero,0x1070,t1); // Explicitly acknowledge the unknown cold pending latch.
+    a.ori(t0,zero,0x3BC);a.sw(t0,0,t2);
+    a.lui(t0,2);a.sw(t0,0x1074,t1); // Enable only IRQ17.
+    a.ori(t0,zero,1);a.sw(t0,0x1078,t1);
+    a.la(t0,0x00400401u);a.mtc0(t0,Status);a.nop();
+    a.lw(t0,0x1070,t1);a.nop();a.lui(t3,2);a.r(t0,t3,t0,0,kAnd);
+    a.sw(t0,0x1000,zero);
+    a.ori(t0,zero,0x3BD);a.sw(t0,0,t2);
+    const auto rom=rom_of(a);Iop iop;iop.reset(rom,&kProfile);iop.run_until(100);
+    require_stop(iop,"SIO2 transfer is not modeled");
+    require(iop.gpr(t0)==0x3BD,"idle IRQ permits guest code to reach actual transfer start");
+    require(iop.gpr(t3)==0x20000,"IRQ17 mask was known");
+    // Remove the explicit ACK: only the opt-in experiment may proceed.
+    auto no_ack=rom;std::fill_n(no_ack.begin()+index_of(a,"ack")*4u,4,std::uint8_t{0});
+    Iop experiment;experiment.reset(no_ack,&kProfile,nullptr,false,std::nullopt,{},true);
+    experiment.run_until(100);require_stop(experiment,"SIO2 transfer is not modeled");
+    experiment.reset(no_ack,&kProfile);experiment.run_until(100);
+    require_stop(experiment,"sources that are not modeled (SIO2)");
+}
+
+void check_cdvd_completion() {
+    Assembler a(0xBFC00000u);
+    a.lui(t1,0xBF40); a.lui(t2,0xA000); a.lui(t3,0xBF80);
+    a.lbu(a0,0x2008,t1); a.nop(); a.sw(a0,0x100,t2);
+    a.sb(zero,0x2004,t1); // NOP is a real N command, with asynchronous IRQ.
+    a.lbu(a0,0x2008,t1); a.nop(); a.sw(a0,0x104,t2);
+    a.lw(a0,0x1070,t3); a.nop(); a.andi(a0,a0,4); a.sw(a0,0x108,t2);
+    a.addiu(a1,zero,2); a.sb(a1,0x2008,t1);
+    a.lbu(a0,0x2008,t1); a.nop(); a.sw(a0,0x10C,t2);
+    a.lw(a0,0x1070,t3); a.nop(); a.andi(a0,a0,4); a.sw(a0,0x110,t2);
+    a.addiu(a1,zero,0xFFFB); a.sw(a1,0x1070,t3);
+    a.lw(a0,0x1070,t3); a.nop(); a.andi(a0,a0,4); a.sw(a0,0x114,t2);
+    a.label("end"); a.nop();
+    const auto rom=rom_of(a); Iop iop; iop.reset(rom,&kProfile);
+    iop.run_until(index_of(a,"end"));
+    require(!iop.stopped(),"CDVD completion: "+iop.stop_reason().value_or(""));
+    require(iop.ee_read(0x100,4)==0 && iop.ee_read(0x104,4)==2 && iop.ee_read(0x108,4)==4,
+            "N command completion raises the CDVD reason and IOP IRQ2");
+    require(iop.ee_read(0x10C,4)==0 && iop.ee_read(0x110,4)==4 && iop.ee_read(0x114,4)==0,
+            "CDVD and IOP interrupt latches acknowledge independently");
+    refuses([](Assembler& p){p.lui(t1,0xBF40);p.addiu(a0,zero,6);p.sb(a0,0x2004,t1);},"only parameter-free CDVD");
+}
+
 // EE devices the kernel reaches after the GS reset.
 void check_ee_devices() {
     EeRegisters registers;
+    rejects([&] { (void)registers.read(0x1F803800u,2u); }, "not been measured");
+    auto measured=kProfile; measured.mpu_board_id=0xABCDu;
+    registers.reset(&measured);
+    require(registers.read(0x1F803800u,2u)==0xABCDu,"MPU board ID comes from the selected profile");
+    rejects([&] { (void)registers.read(0x1F803800u,4u); }, "16-bit read");
+    rejects([&] { registers.write(0x1F803800u,2u,0u); }, "no register model");
+    rejects([&] { registers.write(0x1000F510u,4u,0u); }, "no register model");
+    DiagnosticAssumptions f510_experiment;
+    f510_experiment.omit_f510_zero_write=true;
+    registers.reset(&measured,{},nullptr,&f510_experiment);
+    registers.write(0x1000F510u, 4u, 0u);
+    rejects([&] { registers.write(0x1000F510u, 4u, 1u); }, "zero initialization");
+    rejects([&] { registers.write(0x1000F510u, 8u, 0u); }, "32-bit zero");
+    rejects([&] { (void)registers.read(0x1000F510u, 4u); }, "readback is not verified");
     std::uint64_t ee = 0;
     registers.set_clock(&ee);
     registers.reset(&kProfile);
@@ -464,6 +640,12 @@ int main() {
         check_partial_values();
         check_sif();
         check_ee_devices();
+        check_ee_ram_writes();
+        check_sif_ready_experiment();
+        check_cdvd_completion();
+        check_sio2_idle();
+        check_dma_reset_experiment();
+        check_sif0_halfwords();
         std::cout << "M2.7 IOP checks passed\n";
         return 0;
     } catch (const std::exception& error) {

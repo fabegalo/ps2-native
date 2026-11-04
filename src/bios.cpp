@@ -1,6 +1,7 @@
 #include "ps2native/bios.hpp"
 #include "ps2native/memory.hpp"
 #include "ps2native/sha256.hpp"
+#include "ps2native/console.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -151,8 +152,8 @@ const BiosModule* BiosImage::find(std::string_view name) const noexcept {
     return it == modules.end() ? nullptr : &*it;
 }
 
-BiosImage load_bios_rom0(std::span<const std::uint8_t> rom, const BiosLoadOptions& options) {
-    if (rom.size() != Memory::kBiosRomBytes)
+static BiosImage load_rom_directory(std::span<const std::uint8_t> rom, const BiosLoadOptions& options, bool primary) {
+    if (primary && rom.size() != Memory::kBiosRomBytes)
         reject("size is " + std::to_string(rom.size()) + " bytes; ROM0 is exactly 4194304 bytes "
                "(partial dumps and concatenated ROM0+ROM1/ROM2/EROM files are not accepted)");
     BiosImage bios;
@@ -196,6 +197,7 @@ BiosImage load_bios_rom0(std::span<const std::uint8_t> rom, const BiosLoadOption
         at += kEntryBytes;
     }
     for (const auto* required : {"RESET", "ROMDIR", "EXTINFO", "ROMVER"}) {
+        if(!primary && std::string_view(required)=="ROMVER")continue;
         const auto count = std::count_if(bios.modules.begin(), bios.modules.end(),
                                          [&](const BiosModule& m) { return m.name == required; });
         if (count != 1) reject(std::string("ROMDIR must contain exactly one '") + required + "' entry");
@@ -224,9 +226,35 @@ BiosImage load_bios_rom0(std::span<const std::uint8_t> rom, const BiosLoadOption
     for (auto& module : bios.modules)
         parse_extinfo(rom, extinfo_base + module.extinfo_offset, module);
 
-    bios.version = parse_romver(rom, *bios.find("ROMVER"));
+    if(primary)bios.version = parse_romver(rom, *bios.find("ROMVER"));
     bios.rom0.assign(rom.begin(), rom.end());
     return bios;
+}
+
+BiosImage load_bios_rom0(std::span<const std::uint8_t> rom, const BiosLoadOptions& options) {
+    return load_rom_directory(rom,options,true);
+}
+
+Rom1Image load_bios_rom1(std::span<const std::uint8_t> bytes, const BiosImage& bios,
+                        const ConsoleHardware& hardware, const Rom1Identity& identity) {
+    const auto fail=[](const char* why) {throw std::runtime_error(std::string("ROM1 rejected: ")+why);};
+    if(bytes.empty() || bytes.size()>4u*1024u*1024u || bytes.size()%16u)fail("invalid mapped size");
+    if(identity.provenance.empty() || identity.build.empty() || identity.dvd_version.empty())
+        fail("explicit compatibility provenance and internal identity are required");
+    if(identity.rom0_sha256!=bios.sha256 || sha256_hex(bios.rom0)!=bios.sha256 ||
+       identity.romver!=bios.version.romver || hardware.romver!=identity.romver ||
+       identity.model!=hardware.model || identity.mainboard!=hardware.mainboard)
+        fail("ROM0/ROMVER/console binding mismatch; firmware revisions are never mixed");
+    if(identity.sha256.size()!=64u || sha256_hex(bytes)!=identity.sha256)fail("SHA-256 mismatch");
+    const auto parsed=load_rom_directory(bytes,{},false);
+    if(parsed.find("ROMDIR")->comment!=identity.build)fail("ROMDIR build mismatch");
+    const auto* version=parsed.find(std::string("DVDVER")+bios.version.region_code);
+    if(!version)version=parsed.find("DVDVER");
+    if(!version)fail("DVD version metadata absent");
+    std::string text(reinterpret_cast<const char*>(bytes.data()+version->offset),version->size);
+    while(!text.empty() && (text.back()=='\0' || text.back()=='\r' || text.back()=='\n'))text.pop_back();
+    if(text!=identity.dvd_version)fail("DVD version mismatch");
+    return {{bytes.begin(),bytes.end()},identity};
 }
 
 ElfImage bios_code_image(const BiosImage& bios) {

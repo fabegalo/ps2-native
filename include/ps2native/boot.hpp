@@ -71,7 +71,7 @@ struct BootReport {
 // state; a run that uses them is an experiment, not a boot of a measured console.
 void prepare_ee_boot(const BiosImage& bios, const AotModule* aot, EEState& state, Memory& memory,
                      const ConsoleHardware* hardware = nullptr, const NvmImage* nvm = nullptr,
-                     const DiagnosticAssumptions* assumptions = nullptr);
+                     const DiagnosticAssumptions* assumptions = nullptr, const Rom1Image* rom1 = nullptr);
 
 // Bare-metal ELF development mode, not an emulation of ExecPS2 or Sony BIOS.
 // Zero RAM/BSS/GPRs, kernel mode, interrupts disabled, entry from ELF. SP is

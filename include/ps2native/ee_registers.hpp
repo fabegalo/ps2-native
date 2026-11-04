@@ -61,7 +61,8 @@ public:
     // reset vector in `rom0` (empty: no IOP execution); the clock is attached
     // separately.
     void reset(const ConsoleHardware* hardware = nullptr, std::span<const std::uint8_t> rom0 = {},
-               const NvmImage* nvm = nullptr, const DiagnosticAssumptions* assumptions = nullptr);
+               const NvmImage* nvm = nullptr, const DiagnosticAssumptions* assumptions = nullptr,
+               std::span<const std::uint8_t> rom1 = {});
     // EE cycle counter (EEState::retired_instructions during boot).
     void set_clock(const std::uint64_t* ee_cycles) noexcept { clock_ = ee_cycles; }
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes);
@@ -72,6 +73,7 @@ public:
     [[nodiscard]] const GsRegisters& gs() const noexcept { return gs_; }
     [[nodiscard]] const MchRegisters& mch() const noexcept { return mch_; }
     [[nodiscard]] const Iop& iop() const noexcept { return iop_; }
+    void mount_disc(std::shared_ptr<DiscImage> disc,Iop::DiscMedium medium) { iop_.mount_disc(std::move(disc),medium); }
     [[nodiscard]] const VideoEncoderBus& video_encoder() const noexcept { return video_encoder_; }
     [[nodiscard]] ObservedWord observe_ipu_control() const noexcept {return ipu_.observe_control();}
     [[nodiscard]] std::uint32_t read_vu_control(unsigned index) const {
@@ -151,6 +153,7 @@ private:
     Iop iop_;
     // 0x1000F500: unidentified register written by the BIOS reset code.
     std::optional<std::uint32_t> f500_;
+    // An explicit diagnostic may omit F510's unknown zero-write effect.
     bool diagnostic_omit_f510_{};
     // DEV9 0x1F801470/0x1F801472: write latches, same rule as 0x1000F500.
     std::array<std::optional<std::uint16_t>, 2> dev9_147x_{};

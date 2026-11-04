@@ -18,6 +18,8 @@
 #include "ps2native/device_timing.hpp"
 #include "ps2native/gs_registers.hpp"
 #include "ps2native/nvm.hpp"
+#include "ps2native/disc.hpp"
+#include <memory>
 
 #include <array>
 #include <cstddef>
@@ -56,7 +58,9 @@ public:
     // `hardware` (nullptr: none, so its PRId read stops the IOP), whose
     // MECHACON holds `nvm` (nullptr: none, so NVM reads stop the IOP). `nvm`
     // must have been validated for `hardware` and outlive the IOP.
-    void reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware, const NvmImage* nvm = nullptr);
+    void reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware, const NvmImage* nvm = nullptr,
+               bool diagnostic_sbus_latches = false, std::optional<std::uint32_t> diagnostic_dmacinten = std::nullopt,
+               std::span<const std::uint8_t> rom1 = {}, bool diagnostic_sio2_irq_clear = false);
     // Runs until `cycle` IOP cycles since reset, or until the IOP stops.
     // `video` (nullptr: none) is the GS whose vertical clock raises VBLANK
     // start/end (I_STAT bits 0 and 11); its timing must not change while the
@@ -66,11 +70,15 @@ public:
     // Throws DeviceRefusal when the bytes were never written by the IOP, or
     // when the IOP stopped before this time (its later state is unknown).
     [[nodiscard]] std::uint64_t ee_read(std::uint32_t offset, std::size_t bytes) const;
-    void ee_write(std::uint32_t offset,std::size_t bytes,std::uint64_t value);
+    void ee_write(std::uint32_t offset, std::size_t bytes, std::uint64_t value);
     // The EE sees the same physical CDVD registers through the SBUS.
     // Call after synchronizing the IOP; no second command/result queue.
     [[nodiscard]] std::uint32_t ee_cdvd_read(std::uint32_t physical,std::size_t bytes);
     void ee_cdvd_write(std::uint32_t physical,std::size_t bytes,std::uint32_t value);
+    enum class DiscMedium { Ps2Cd, Ps2Dvd };
+    // Explicit host insertion before execution, already detected and paused.
+    // No filesystem service or IRX loader is installed in the guest.
+    void mount_disc(std::shared_ptr<DiscImage> disc, DiscMedium medium);
     // SIF register `index` (0 MSCOM, 1 SMCOM, 2 MSFLG, 3 SMFLG, 4 CTRL, 6 BD6;
     // EE 0x1000F200 + index * 0x10) as the EE reads or writes it; the IOP must
     // have been run up to now. Throws DeviceRefusal for what is not modeled.
@@ -98,7 +106,6 @@ public:
     [[nodiscard]] bool ee_dma_interrupt_pending() const noexcept {
         return (ee_dstat_ & (ee_dstat_>>16u) & 0x63FFu)!=0u;
     }
-
     void set_ee_dma_suspended(bool suspended) noexcept { ee_dma_suspended_=suspended; }
     [[nodiscard]] bool ee_dma_suspended() const noexcept { return ee_dma_suspended_; }
 
@@ -115,6 +122,7 @@ private:
     void pump_sif1();
     void pump_sif0();
     void finish_iop_sif0();
+    void update_dma_irq();
     std::uint32_t iop_sif0_read(std::uint32_t address) const;
     void iop_sif0_write(std::uint32_t address, std::uint32_t value);
     std::uint32_t iop_sif1_read(std::uint32_t address) const;
@@ -135,9 +143,9 @@ private:
     std::uint8_t iop_sif0_written_{};
     std::deque<std::uint32_t> sif0_fifo_;
     std::uint32_t sif0_source_words_{};
-    bool sif0_source_tag_{},sif0_source_end_{},sif0_dest_end_{};
-    // Incomplete SIF bus qwords retain the previous full qword lanes.
-    // Reported console measurements: PCSX2 Sif.h, "PS2 test results".
+    bool sif0_source_tag_{},sif0_source_end_{},sif0_source_irq_{},sif0_dest_end_{};
+    // Last complete SIF bus qword. Partial packets retain the lanes the IOP
+    // did not supply; unknown tag padding stays unknown until overwritten.
     std::array<std::optional<std::uint32_t>,4> sif0_last_qword_{};
     SifDmaMetrics sif0_metrics_;
     struct PendingLoad {
@@ -201,6 +209,7 @@ private:
     [[nodiscard]] std::uint32_t cop0_read(unsigned index);
 
     std::vector<std::uint8_t> rom_;
+    std::vector<std::uint8_t> rom1_;
     std::vector<std::uint8_t> ram_;
     std::vector<std::uint8_t> ram_written_; // 1 per byte written since power-on
     std::array<std::uint32_t, 32> gpr_{};
@@ -236,12 +245,23 @@ private:
     bool timers_running_{};
     std::uint32_t istat_{}; // I_STAT bits of the modeled sources
     bool sio2_irq_acknowledged_{};
+    bool dma_irq_output_{};
+    std::uint8_t cdvd_irq_{};
     bool ee_dma_suspended_{};
+    std::optional<std::uint8_t> cdvd_ncommand_;
+    std::optional<std::uint64_t> cdvd_complete_at_;
+    std::shared_ptr<DiscImage> disc_;
+    std::uint8_t cdvd_type_{}, cdvd_status_{}, cdvd_sticky_{};
     // SIF registers shared with the EE (ps2tek "SIF Registers"): MSCOM is
     // written by the EE, SMCOM by the IOP (empty: never written); MSFLG bits
     // are set by the EE and cleared by the IOP, SMFLG the other way round.
     std::optional<std::uint32_t> sif_mscom_, sif_smcom_;
     std::uint32_t sif_msflg_{}, sif_smflg_{};
+    // Explicit experiment: retain the SDK's SBUS configuration writes;
+    // readback and SIF2 electrical/clock behavior are not established.
+    bool diagnostic_sbus_latches_{};
+    std::uint32_t diagnostic_sif_ready_{};
+    std::optional<std::uint32_t> sbus_control_write_, sbus_bd6_write_;
     // GS vertical clock as last seen (generation), and the next edges.
     std::optional<std::uint64_t> video_generation_;
     GsRegisters::VerticalClock video_{};

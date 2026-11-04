@@ -55,9 +55,20 @@ inline constexpr std::uint32_t kVideoEncoderMasterBytes = 0x20u;
 struct DiagnosticAssumptions {
     // Read values of video encoder registers (register, value).
     std::vector<std::pair<std::uint8_t, std::uint8_t>> video_encoder_registers;
-    // Omit an unknown hardware effect only in an explicitly selected experiment.
+    // The F510 zero write has no verified hardware semantics. It may only be
+    // omitted by an explicitly selected experiment, never a console default.
     bool omit_f510_zero_write{};
-    [[nodiscard]] bool empty() const noexcept { return video_encoder_registers.empty() && !omit_f510_zero_write; }
+    // SBUS clock/BD6 configuration has incomplete hardware evidence. This
+    // experiment retains initialization writes without inventing readback.
+    bool sbus_configuration_latches{};
+    // Unmeasured IOP DMA interrupt-control reset. Only low two bits are
+    // modeled; absent means that a guest write is required before use.
+    std::optional<std::uint32_t> iop_dmacinten;
+    bool iop_sio2_irq_clear{}; // Unmeasured cold I_STAT.17; diagnostic only.
+    // Experimental PCRTC timing after power-on/CSR reset, never a console
+    // default. Guest SYNCV writes replace it until the next reset.
+    std::optional<std::uint64_t> gs_reset_syncv;
+    [[nodiscard]] bool empty() const noexcept { return video_encoder_registers.empty() && !gs_reset_syncv && !omit_f510_zero_write && !sbus_configuration_latches && !iop_dmacinten && !iop_sio2_irq_clear; }
 };
 
 // The slave and the transactions that reach it (shared by both masters).

@@ -16,7 +16,36 @@
 | Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
-## Última evidência: primeiro ELF comercial
+## Continuação experimental do jogo — 04/11/2026
+
+- Super Bust-A-Move alcançou 154.883.782 instruções, EE `0x80005F00`,
+  IOP `0x1AEE8`, 1.664 bytes SIF1 e 1.536 bytes SIF0. Após contexto COP0,
+  IRQ de DMA pendente, ROM1 validada e SIO2 ocioso, chega ao status CDVD.
+  A montagem explícita da imagem local está sendo exercitada no ensaio seguinte.
+- DMA/IRQ SIF nos dois sentidos, pacotes parciais, PLZCW e salvamento simbólico
+  de BPC/PCCR exercitados por código convidado. Nenhuma resposta RPC fabricada.
+- Modo original repetido após ROM1/CDVD: mesmos PCs `0x80007D20`/`0x80005F00`,
+  contagens e RAM SHA-256 `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
+- **Zero pacotes gráficos do jogo, zero pixels; ainda não roda o jogo.** O ensaio
+  usa injeção de ELF e hipóteses explícitas de hardware; não comprova boot original.
+  Modo BIOS original e respostas desconhecidas continuam preservados.
+- Sequência, hipóteses, testes e referências:
+  [primeiro jogo](docs/FIRST-GAME-STATUS.md#continuação-experimental--subsistemas-exercitados-pelo-jogo).
+
+## Última evidência: sincronização GS/IOP — 04/11/2026
+
+- Corrigida a observação de mudanças do timing GS antes da próxima decisão de interrupção
+  do IOP. Regressão própria falha antes da correção e passa depois; uma parada anterior
+  continua preservada. Não altera valores de reset do GS nem respostas do encoder.
+- **Super Bust-A-Move repetido no interpretador e no híbrido:** 4.486.087 instruções,
+  PC `0x80005F00`, IOP `0x000040B0`, RAM idêntica; **zero pacotes GIF do jogo e zero pixels**.
+  O trace confirma `CSR.RESET` → `SMODE1` → encoder desconhecido, sem escrita de `SYNCV`.
+  `SetGsCrt` Sony repetido também para em `0x80007D20`; não há inicialização comprovada.
+- Cinco testes focados de IOP/SIF aprovados. A correção não demonstrou avanço do jogo
+  nem ganho de desempenho. Evidências e dependência de dados reais de hardware:
+  [relatório do primeiro jogo](docs/FIRST-GAME-STATUS.md#sincronização-gsiop-e-reexecução-do-checkpoint).
+
+## Evidência anterior: primeiro ELF comercial
 
 - **The Simpsons: Hit & Run (USA), SLUS-20624:** escolhido entre os novos discos pelo ELF monolítico.
   Até a primeira syscall: 214.945 instruções, 214.944 AOT/1 interpretada, PC `0x80000180`, zero pixels GS.

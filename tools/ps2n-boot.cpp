@@ -36,7 +36,11 @@ int boot_main(int argc, Character** argv) {
                      "                 [--trace=events|full] [--trace-out=FILE] [--tail=N] [--stop-at=0xADDRESS]\n"
                      "                 [--frame-out=FILE.bmp] (GS VRAM snapshot at stop, when supported)\n"
                      "                 [--assume-video-encoder=0xREG:0xVALUE]... (diagnostic experiments only)\n"
-                     "                 [--diagnostic-omit-f510-zero-write] (unverified write omitted)\n";
+                     "                 [--assume-gs-reset-syncv=0xVALUE] (diagnostic experiment only)\n"
+                     "                 [--diagnostic-omit-f510-zero-write] (unverified write omitted)\n"
+                     "                 [--assume-sbus-configuration-latches] (unverified configuration model)\n"
+                     "                 [--assume-iop-dmacinten=0..3] (unmeasured reset, diagnostic only)\n"
+                     "                 [--assume-iop-sio2-irq-clear] (unmeasured reset, diagnostic only)\n";
         return 2;
     }
     try {
@@ -81,8 +85,18 @@ int boot_main(int argc, Character** argv) {
                 if (index > 0xFFu || value > 0xFFu) throw std::runtime_error("Invalid --assume-video-encoder (bytes)");
                 assumptions.video_encoder_registers.emplace_back(static_cast<std::uint8_t>(index),
                                                                  static_cast<std::uint8_t>(value));
-            } else if(flag=="--diagnostic-omit-f510-zero-write") {
+            } else if (flag.starts_with("--assume-gs-reset-syncv=")) {
+                assumptions.gs_reset_syncv = number(flag.substr(sizeof("--assume-gs-reset-syncv=")-1u), "--assume-gs-reset-syncv");
+            } else if (flag=="--diagnostic-omit-f510-zero-write") {
                 assumptions.omit_f510_zero_write=true;
+            } else if (flag=="--assume-sbus-configuration-latches") {
+                assumptions.sbus_configuration_latches=true;
+            } else if (flag=="--assume-iop-sio2-irq-clear") {
+                assumptions.iop_sio2_irq_clear=true;
+            } else if (flag.starts_with("--assume-iop-dmacinten=")) {
+                const auto value=number(flag.substr(sizeof("--assume-iop-dmacinten=")-1u),"--assume-iop-dmacinten");
+                if(value>3u)throw std::runtime_error("--assume-iop-dmacinten requires 0..3");
+                assumptions.iop_dmacinten=static_cast<std::uint32_t>(value);
             } else if (flag.starts_with("--max-instructions=")) {
                 options.max_instructions = number(flag.substr(19), "--max-instructions");
             } else if (flag == "--trace=events") {
@@ -136,8 +150,6 @@ int boot_main(int argc, Character** argv) {
                 for (const bool ok : nvm->config_checksum_ok[area]) header << (ok ? '+' : '-');
             }
             header << "\n";
-            if(assumptions.omit_f510_zero_write)
-                header<<"# DIAGNOSTIC F510 zero write OMITTED; hardware effect unverified\n";
         } else {
             header << "# nvm none\n";
         }
@@ -146,6 +158,17 @@ int boot_main(int argc, Character** argv) {
             for (const auto& [index, value] : assumptions.video_encoder_registers)
                 header << ' ' << hex32(index).substr(8) << '=' << hex32(value).substr(8);
             header << "\n";
+            if (assumptions.gs_reset_syncv)
+                header << "# DIAGNOSTIC GS reset SYNCV = 0x" << std::hex << *assumptions.gs_reset_syncv
+                       << std::dec << " (unmeasured; guest writes override until reset)\n";
+            if(assumptions.omit_f510_zero_write)
+                header<<"# DIAGNOSTIC F510 zero write OMITTED; hardware effect unverified\n";
+            if(assumptions.sbus_configuration_latches)
+                header<<"# DIAGNOSTIC SBUS clock/BD6 initialization retained as latches; electrical effects unverified\n";
+            if(assumptions.iop_dmacinten)
+                header<<"# DIAGNOSTIC IOP DMACINTEN reset = "<<*assumptions.iop_dmacinten<<" (unmeasured)\n";
+            if(assumptions.iop_sio2_irq_clear)
+                header<<"# DIAGNOSTIC IOP I_STAT.17 initially clear (unmeasured)\n";
         }
         header << "# engine " << (module != nullptr ? "hybrid: AOT blocks " + std::to_string(module->block_count) +
                                                           " + interpreter fallback"
