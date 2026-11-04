@@ -1418,3 +1418,28 @@ PRIM=156, PSMT4, CLUT CT32 CSM1, filtro nearest, MODULATE e alpha 44.
 Scanout continua preto; RAM com o mesmo digest do ensaio 98.
 Replay local da cadeia isolou o mesmo comando, mas usa estado GS/VRAM
 incompleto e não constitui execução do jogo ou evidência de frame.
+Continuação GS: consultados novamente PS2Recomp gs_frontend/gs_cpu_backend
+e GS User's Manual (CLUT, UV, texture functions e alpha). Implementação BSD
+independente de sprites UV com passos exatos em 10.4, nearest nível zero,
+CT32/PSMT8/PSMT4, CLUT CSM1 CT32 copiada em TEX0/TEX2, MODULATE/DECAL,
+wrap e alpha blending inteiro. FBA, máscara de framebuffer, scissor e
+profundidade continuam compartilhados. O renderer recusa slopes UV cuja
+precisão DDA não está estabelecida, cache obsoleto/feedback, outros formatos,
+filtros e funções. Nenhum float host ou resposta gráfica fabricada.
+Oito testes focados aprovados: paleta persistente após alteração da origem,
+TEX2, índices 4/8 bits, UV escalado, alpha, arredondamento negativo, recusa de
+cache e regressões GS/GIF/VIF/AOT. Modo original repetido: mesmos PCs,
+contagens e RAM canônica `cead2f7c0c4e38113e2b445bb0f751fa94a17203549cab3e5639c7e4def9c354`.
+Ensaio 100, ainda sem hipótese SCANMSK: sprites executados, 265 pacotes novos,
+2.077.200 escritas comprovadas por transferências. A máscara não escrita
+torna os desenhos condicionais e propaga incerteza também à profundidade.
+EE `0x1CE468` / 1.268.129.288 recusa leitura de profundidade indeterminada;
+IOP `0x47860` / 162.568.248 ativo; 536,405 s (build concorrente, sem comparação
+de performance). Scanout recusado por bits desconhecidos, nenhum frame.
+RAM `7863c1c16e8123c62dab0e1ce3a2aadd573c43b5dee2095d501f089e9b4e4aa1`,
+um doubleword parcialmente desconhecido.
+Ensaio 101 usa SCANMSK=0 como hipótese explícita de reset, coerente com
+PS2Recomp GS::reset, não como medição de hardware. API restrita à configuração
+anterior à atividade convidada; reset do perfil normal descarta a hipótese.
+Testes verificam desenho real sob a opção, reset e preservação do modo normal.
+Nenhuma alteração de SCANMSK foi inserida nos comandos ou no ELF do jogo.

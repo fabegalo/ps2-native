@@ -87,6 +87,9 @@ public:
     // NTSC from `now` (hypothesis, as before the GS was modeled).
     void reset(std::uint64_t now, std::optional<std::uint64_t> diagnostic_reset_syncv = {},
                std::optional<bool> diagnostic_reset_field = {});
+    // Explicit experiment only, configured before guest activity. The normal
+    // profile keeps SCANMSK unknown; reference-emulator reset is not a measurement.
+    void diagnostic_scanmask_reset(unsigned mask);
     [[nodiscard]] std::uint64_t read(std::uint32_t physical, std::size_t bytes) const;
     [[nodiscard]] ObservedDoubleword observe_csr() const noexcept {
         auto result=ObservedDoubleword{events_,std::uint64_t{unknown_events_}|~std::uint64_t{0x1F}};
@@ -135,6 +138,9 @@ private:
     void vertex(std::uint8_t index, std::uint64_t value);
     void start_transfer(std::uint64_t value);
     void transfer_data(std::uint64_t value);
+    void load_clut(std::uint64_t tex0);
+    [[nodiscard]] std::uint32_t sample_texture(std::uint64_t tex0, std::uint64_t clamp, int u, int v);
+    void texture_write_guard(unsigned address) const;
     void reset_drawing();
     void reset_events(std::uint64_t now);
     void raise_event(std::uint32_t event);
@@ -144,12 +150,18 @@ private:
     std::array<std::optional<std::uint64_t>, kModeRegisters> mode_{};
     std::optional<std::uint64_t> diagnostic_reset_syncv_;
     std::optional<bool> diagnostic_reset_field_,field_;
+    std::optional<unsigned> diagnostic_reset_scanmask_;
     std::optional<std::uint64_t> csr_written_;
     std::array<std::optional<std::uint64_t>, 256> general_{};
     std::array<std::optional<std::uint64_t>, 15> display_{};
     GsVram vram_;
-    struct Vertex { int x{}, y{}; };
+    struct Vertex { int x{}, y{}, u{}, v{}; };
     std::optional<Vertex> first_vertex_;
+    std::array<std::optional<std::uint32_t>,256> clut_{};
+    std::array<std::optional<unsigned>,2> clut_base_{};
+    std::array<bool,512> sampled_pages_{};
+    std::uint64_t transfer_generation_{};
+    std::optional<std::uint64_t> texture_flush_generation_;
     struct Transfer {
         bool active{};
         unsigned base{}, bw{}, psm{}, x{}, y{}, width{}, height{}, pixel{}, pending_bytes{};

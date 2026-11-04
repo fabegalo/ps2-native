@@ -197,7 +197,89 @@ void configure_draw(GsRegisters& gs, bool raster_state = true) {
     if (raster_state) { gs.general_write(0x22,0); gs.general_write(0x4A,0); }
     gs.general_write(0x46,1); gs.general_write(1,0x80402010);
 }
+void check_textured_sprites() {
+    GsRegisters gs;gs.reset(0);configure_draw(gs);
+    const auto upload=[&](unsigned base,unsigned psm,unsigned bw,unsigned width,unsigned height,const std::vector<std::uint64_t>& data) {
+        gs.general_write(0x50,(std::uint64_t{base/256u}<<32)|(std::uint64_t{bw/64u}<<48)|(std::uint64_t{psm}<<56));
+        gs.general_write(0x51,0);gs.general_write(0x52,width|(std::uint64_t{height}<<32));gs.general_write(0x53,0);
+        for(std::size_t i=0;i<data.size();i+=2)gs.image_write(data[i],i+1<data.size()?data[i+1]:0);
+    };
+    std::vector<std::uint64_t> palette;
+    for(unsigned i=0;i<16;i+=2)palette.push_back((0x80604020ull+i)|((0x80604021ull+i)<<32));
+    upload(0x20000,0,64,8,2,palette);
+    upload(0x10000,20,128,8,2,{0xFEDCBA9876543210ull});
+    const std::uint64_t tex=256u|(2ull<<14)|(20ull<<20)|(3ull<<26)|(1ull<<30)|(1ull<<34)|(512ull<<37);
+    rejects([&]{gs.general_write(6,tex|(1ull<<61));},"TEXFLUSH");
+    gs.general_write(0x3F,0);gs.general_write(6,tex|(1ull<<61));
+    gs.general_write(0x14,1);gs.general_write(8,0);gs.general_write(0x42,0x44);gs.general_write(1,0x80808080);
+    const auto sprite=[&](unsigned x,unsigned y,unsigned width=8,unsigned u0=0,unsigned u1=128) {
+        gs.general_write(0,0x156);gs.general_write(3,u0);gs.general_write(5,x*16u|(std::uint64_t{y*16u}<<16));
+        gs.general_write(3,u1|(32u<<16));gs.general_write(5,(x+width)*16u|(std::uint64_t{(y+2u)*16u}<<16));
+    };
+    sprite(0,0);
+    for(unsigned i=0;i<16;++i)require(gs.vram().read(0,64,0,i%8,i/8)==0x80604020u+i,
+        "T4 CSM1 palette, nearest UV, modulate and full alpha blend produce exact source colors without reading unknown destination");
+    for(auto& p:palette)p=0x8040201080402010ull;
+    upload(0x20000,0,64,8,2,palette);gs.general_write(0x3F,0);
+    gs.general_write(6,tex);sprite(8,0);
+    require(gs.vram().read(0,64,0,8,0)==0x80604020u,"CLD=0 preserves copied palette after source VRAM changes");
+    gs.general_write(0x16,tex|(1ull<<61));sprite(16,0);
+    require(gs.vram().read(0,64,0,16,0)==0x80402010u && ((*gs.general(6)&0x3FFFu)==256u),
+            "TEX2 reloads palette and preserves texture location/dimensions");
+    rejects([&]{gs.general_write(6,tex|(4ull<<61));},"unknown CBP");
+    gs.general_write(6,tex|(2ull<<61));gs.general_write(6,tex|(4ull<<61));
+    gs.general_write(8,1);sprite(24,0,8,112,240); // clamp every U to texel 7
+    require(gs.vram().read(0,64,0,31,0)==0x80402010u,"clamp accepts coordinates beyond width");
+    gs.general_write(8,0);sprite(32,0,16); // exact half-rate UV increments
+    require(gs.vram().read(0,64,0,32,0)==gs.vram().read(0,64,0,33,0),"nearest scaled sprite repeats texel");
+    rejects([&]{sprite(0,4,3,0,16);},"fractional UV DDA");
+    gs.general_write(0x14,0x21);rejects([&]{sprite(0,4);},"nearest level zero");gs.general_write(0x14,1);
+    upload(0x10000,20,128,8,2,{0});rejects([&]{sprite(0,4);},"TEXFLUSH");
+    gs.general_write(0x3F,0);gs.general_write(0x4C,8u|(1u<<16));
+    rejects([&]{sprite(0,0);},"aliases sampled texture");
+
+    gs.reset(0);configure_draw(gs);palette.clear();
+    for(unsigned i=0;i<256;i+=2)palette.push_back((0x20400000ull+i)|((0x20400001ull+i)<<32));
+    upload(0x20000,0,64,16,16,palette);
+    upload(0x10000,19,128,8,1,{0x0000000000181008ull});
+    const std::uint64_t tex8=256u|(2ull<<14)|(19ull<<20)|(3ull<<26)|(1ull<<35)|(512ull<<37);
+    gs.general_write(0x3F,0);gs.general_write(6,tex8|(1ull<<61));
+    gs.general_write(0x14,1);gs.general_write(8,0);gs.general_write(0x42,0x44);
+    sprite(0,0);
+    require(gs.vram().read(0,64,0,0,0)==0x80400010 && gs.vram().read(0,64,0,1,0)==0x80400008 &&
+            gs.vram().read(0,64,0,2,0)==0x80400018,"T8 CSM1 exchanges index bits 3/4; DECAL RGB keeps fragment alpha");
+    sprite(8,0,8,128,256);
+    require(gs.vram().read(0,64,0,8,0)==0x80400010,"repeat wraps a full texture width");
+    rejects([&]{gs.general_write(6,tex8|(1ull<<55)|(1ull<<61));},"CSM1");
+    gs.write(kGsCsr,8,kCsrReset,1,{});configure_draw(gs);gs.general_write(0x3F,0);
+    gs.general_write(6,tex8);gs.general_write(0x14,1);gs.general_write(8,0);gs.general_write(0x42,0x44);
+    rejects([&]{sprite(0,0);},"unloaded CLUT");
+
+    // Source-alpha blend with negative intermediate and final saturation.
+    GsRegisters blend;blend.reset(0);configure_draw(blend);blend.general_write(0,0);
+    blend.general_write(1,0x80000080);blend.general_write(5,0);
+    blend.general_write(0,0x40);blend.general_write(0x42,0x44);blend.general_write(1,0x40000001);blend.general_write(5,0);
+    require(blend.vram().read(0,64,0,0,0)==0x40000040,"signed blend floors a negative half before adding destination");
+    blend.general_write(0x42,0x82);blend.general_write(1,0x80808080);blend.general_write(5,0);
+    require(blend.vram().read(0,64,0,0,0)==0x80000000,"negative blend saturates to zero");
+}
 void check_drawing_scanout() {
+    check_textured_sprites();
+    {
+        GsRegisters experiment;experiment.reset(0);
+        require(!experiment.general(0x22),"normal reset has no assumed SCANMSK");
+        rejects([&]{experiment.diagnostic_scanmask_reset(1);},"valid mask");
+        experiment.diagnostic_scanmask_reset(2);
+        require(experiment.general(0x22)==2,"explicit experiment records the chosen reset mask");
+        experiment.general_write(0x22,3);experiment.write(kGsCsr,8,kCsrReset,1,{});
+        require(experiment.general(0x22)==2,"soft reset reapplies only the explicit hypothesis");
+        rejects([&]{experiment.diagnostic_scanmask_reset(0);},"before guest activity");
+        experiment.reset(0);require(!experiment.general(0x22),"new normal profile discards the hypothesis");
+        experiment.diagnostic_scanmask_reset(0);configure_draw(experiment,false);
+        experiment.general_write(0,0);experiment.general_write(5,0);
+        require(experiment.vram().read(0,64,1,0,0)==0x402010u,
+                "explicit normal scan mask lets actual drawing commands establish RGB");
+    }
     {
         GsRegisters symbolic; symbolic.reset(0); configure_draw(symbolic,false);
         setup_transfer(symbolic,0,2,1); symbolic.image_write(0,0);

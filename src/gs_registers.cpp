@@ -1,5 +1,6 @@
 #include "ps2native/gs_registers.hpp"
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -50,12 +51,19 @@ void GsRegisters::reset(std::uint64_t now, std::optional<std::uint64_t> diagnost
     mode_ = {};
     diagnostic_reset_syncv_ = diagnostic_reset_syncv;
     diagnostic_reset_field_ = diagnostic_reset_field;
+    diagnostic_reset_scanmask_.reset();
     mode_.back() = diagnostic_reset_syncv_;
     reset_drawing();
     reset_events(now);
     vram_.invalidate();
     csr_written_.reset();
     line_ = {Sync::Running, 2u, {now, kEeCyclesPerBusCycle * kBusCyclesPerNtscLine}};
+}
+void GsRegisters::diagnostic_scanmask_reset(unsigned mask) {
+    if(mask>3u || mask==1u || event_cycle_ ||
+       std::any_of(general_.begin(),general_.end(),[](const auto& value){return value.has_value();}))
+        throw DeviceRefusal("diagnostic SCANMSK needs a valid mask before guest activity");
+    diagnostic_reset_scanmask_=mask;general_[0x22]=mask;
 }
 
 std::uint64_t GsRegisters::read(std::uint32_t physical, std::size_t bytes) const {
@@ -337,9 +345,21 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
             first_vertex_.reset();
             general_[index] = value;
             return;
-        case 0x01: case 0x02: case 0x03: case 0x06: case 0x07: case 0x08: case 0x09: case 0x0A:
-        case 0x14: case 0x15: case 0x16: case 0x17: case 0x18: case 0x19: case 0x1A: case 0x1B: case 0x1C:
-        case 0x22: case 0x34: case 0x35: case 0x36: case 0x37: case 0x3B: case 0x3D: case 0x3F: case 0x40:
+        case 0x06: case 0x07:
+            load_clut(value); general_[index]=value; return;
+        case 0x16: case 0x17: {
+            constexpr auto mask=0xFFFFFFE003F00000ull;
+            const auto tex=static_cast<std::uint8_t>(index-0x10u);
+            load_clut(value);
+            if(general_[tex]) general_[tex]=(*general_[tex]&~mask)|(value&mask);
+            general_[index]=value;return;
+        }
+        case 0x3F:
+            texture_flush_generation_=transfer_generation_;sampled_pages_={};
+            general_[index]=value;return;
+        case 0x01: case 0x02: case 0x03: case 0x08: case 0x09: case 0x0A:
+        case 0x14: case 0x15: case 0x18: case 0x19: case 0x1A: case 0x1B: case 0x1C:
+        case 0x22: case 0x34: case 0x35: case 0x36: case 0x37: case 0x3B: case 0x3D: case 0x40:
         case 0x41: case 0x42: case 0x43: case 0x44: case 0x45: case 0x46: case 0x47: case 0x48: case 0x49:
         case 0x4A: case 0x4B: case 0x4C: case 0x4D: case 0x4E: case 0x4F: case 0x50: case 0x51: case 0x52:
             general_[index] = value;

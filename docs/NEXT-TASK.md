@@ -1,15 +1,17 @@
 # Próxima execução — Super Bust-A-Move (SLUS-20115)
 
-O checkpoint experimental já produziu 255 pacotes GIF e 1.948.160 escritas
+O checkpoint experimental já produziu 265 pacotes GIF e 2.077.200 escritas
 comprovadas: limpeza e uploads de texturas/paletas comandados pelo jogo. Ainda nenhum
 frame exibido, menu ou gameplay. Não apresentar a extração preta de VRAM como frame.
 
-Última execução concluída: ensaio 99, EE `0x1CE460`, 1.263.225.943 instruções;
-IOP `0xAE98` / 161.955.330 ativo. DMA VIF/GIF, profundidade,
+Última execução concluída: ensaio 100, EE `0x1CE468`, 1.268.129.288 instruções;
+IOP `0x47860` / 162.568.248 ativo. DMA VIF/GIF, profundidade,
 scanout INT+FFMD, propagação de incerteza, uploads PSMT8/PSMT4, PSUBW,
 sondagem de Memory Card vazia e FLUSH/DIRECTHL passaram.
-Próximo bloqueio: sprite UV com PSMT4, CLUT CT32 CSM1, nearest,
-MODULATE e alpha blending. Implementação em validação no ensaio 100.
+Sprites UV com PSMT4, CLUT CT32 CSM1, nearest, MODULATE e alpha blending
+passaram. Bloqueio: SCANMSK não escrito torna cor/profundidade indeterminadas.
+Ensaio 101 usa a hipótese isolada SCANMSK=0 no reset; a API só aceita
+configuração antes da execução. O modo normal continua sem essa hipótese.
 Slots de Memory Card explicitamente vazios na API diagnóstica existente
 (máscara 12, timeout 8192); nenhum save montado ou alterado.
 D-cache funcional explícito desde reset passou por DXLTG: conteúdo separado

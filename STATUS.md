@@ -68,6 +68,15 @@
   CI de `f6344e4`, `950cfd8`, `df1203c`, `b6ea81f` e `259346e`
   aprovada nos seis alvos de núcleo e launcher. Regressão BIOS original
   mantém PCs, contagens e hash canônicos após essas mudanças.
+- Ensaios 98–100: slots de Memory Card explicitamente vazios e
+  VIF FLUSH/DIRECTHL passaram; sprites UV, nearest, CLUT CSM1 CT32,
+  PSMT4/8 e alpha blending implementados com aritmética inteira.
+  Ensaio 100: EE `0x1CE468` / 1.268.129.288, IOP ativo, 265 pacotes GIF,
+  2.077.200 escritas comprovadas por transferências. SCANMSK não escrito
+  propaga incerteza aos desenhos; profundidade e scanout recusam bits
+  indeterminados. Ainda nenhum frame não preto. O ensaio 101 configura
+  SCANMSK=0 como hipótese isolada de reset, desligada no modo original.
+  Oito testes gráficos focados e regressão BIOS original aprovados.
 - Sequência, hipóteses, testes e referências:
   [primeiro jogo](docs/FIRST-GAME-STATUS.md#continuação-experimental--subsistemas-exercitados-pelo-jogo).
 
