@@ -1291,6 +1291,12 @@ std::optional<std::uint16_t> Iop::spu2_ram_halfword(std::uint32_t word_address) 
     return spu2_ram_[word_address];
 }
 void Iop::validate_spu2_pio(unsigned core,const ObservedWord& control) const {
+    if((spu2_adma_[0].normal && spu2_adma_[0].next) || (spu2_adma_[1].normal && spu2_adma_[1].next))
+        throw IopStop{"SPU2 PIO arbitration with pending normal DMA is not modeled"};
+    const auto previous=spu2_control_[core];
+    if(spu2_transfer_[core].address && (*spu2_transfer_[core].address&7u) &&
+       (!previous || (previous->unknown&0x30u) || (previous->value&0x30u)!=0x10u))
+        throw IopStop{"SPU2 unaligned PIO start is not modeled"};
     if(spu2_effects_active(0) || spu2_effects_active(1))
         throw IopStop{"SPU2 PIO bus arbitration with active effects is not modeled"};
     if(!diagnostic_spu2_pio_cycles_)throw IopStop{"SPU2 PIO transfer timing requires an explicit word-cycle experiment"};
@@ -1337,6 +1343,35 @@ void Iop::validate_spu2_adma(unsigned core) const {
     if(spu2_transfer_[0].next || spu2_transfer_[1].next || !spu2_transfer_[core].fifo.empty())
         throw IopStop{"SPU2 normal transfer and ADMA cannot share the sound RAM path"};
 }
+void Iop::validate_spu2_normal_dma(unsigned core,std::uint32_t words) const {
+    if(!diagnostic_spu2_adma_cycles_ || !diagnostic_spu2_quiescent_)
+        throw IopStop{"SPU2 normal DMA requires the explicit shared-bus throughput and quiet-reset experiment"};
+    const auto& state=spu2_adma_[core];const auto control=spu2_control_[core];
+    if(!state.control_written || state.enabled || !control || (control->unknown&0x80F0u) ||
+       (control->value&0x80F0u)!=0x8020u)
+        throw IopStop{"SPU2 normal DMA requires ADMAS written off and an enabled core in DMA-write mode without effects/IRQ"};
+    const auto target=spu2_transfer_[core].address;
+    if(!target || *target<0x2800u || std::uint64_t{*target}+std::uint64_t{words}*2u>0x100000u)
+        throw IopStop{"SPU2 normal DMA target is unknown, overlaps dynamic buffers or wraps sound RAM"};
+    for(unsigned c=0;c<2u;++c) {
+        const auto attr=spu2_control_[c];
+        if(!attr || ((attr->value|attr->unknown)&0x40u))
+            throw IopStop{"SPU2 normal DMA requires both shared-RAM IRQ comparators disabled"};
+        if(spu2_transfer_[c].next || !spu2_transfer_[c].fifo.empty())
+            throw IopStop{"SPU2 normal DMA and PIO arbitration is not modeled"};
+        if(spu2_effects_active(c)) {
+            const auto area=spu2_effect_area(c);
+            if(area.first<=area.second && *target<=area.second && *target+words*2u>area.first)
+                throw IopStop{"SPU2 normal DMA overlaps an uncomputed active effect workspace"};
+        }
+        const auto& other=spu2_adma_[c];
+        if(c!=core && other.next && other.normal) {
+            const auto first=*spu2_transfer_[c].address,last=first+other.remaining*2u;
+            if(*target<last && *target+words*2u>first)
+                throw IopStop{"SPU2 concurrent normal DMA destinations overlap"};
+        }
+    }
+}
 std::uint32_t Iop::read_spu2_dma(unsigned core,std::uint32_t field,std::size_t bytes) const {
     const auto& state=spu2_adma_[core];
     if(bytes==2u && (field==4u || field==6u)) {
@@ -1359,19 +1394,20 @@ void Iop::write_spu2_dma(unsigned core,std::uint32_t field,std::size_t bytes,std
     if(bytes!=4u || (field!=0u && field!=4u && field!=8u))throw IopStop{"SPU2 DMA requires known words or BCR halfwords"};
     if(field==8u && (value&kChcrStart)) {
         if(value!=0x01000201u)throw IopStop{"SPU2 DMA supports incrementing RAM-to-device request mode only"};
-        if(!state.enabled)throw IopStop{"SPU2 normal DMA transfer is not modeled (ADMA must be configured)"};
-        validate_spu2_adma(core);
+        if(state.enabled)validate_spu2_adma(core);
         if((state.written&7u)!=7u)throw IopStop{"SPU2 DMA needs programmed address and both BCR halves"};
         const auto blocks=state.dma[1]>>16u,block_words=state.dma[1]&0xFFFFu;
         const auto words=std::uint64_t{blocks}*block_words;
-        if(!blocks || !block_words || words%256u || words>ram_.size()/4u || (state.dma[0]&3u) ||
+        if(!blocks || !block_words || (state.enabled && words%256u) || words>ram_.size()/4u || (state.dma[0]&3u) ||
            state.dma[0]>ram_.size() || words*4u>ram_.size()-state.dma[0])
-            throw IopStop{"SPU2 ADMA needs whole 1024-byte stereo blocks in aligned IOP RAM"};
+            throw IopStop{"SPU2 DMA needs bounded aligned IOP RAM and nonzero blocks (ADMA requires whole stereo banks)"};
+        if(!state.enabled)validate_spu2_normal_dma(core,static_cast<std::uint32_t>(words));
         const auto enable=latch(0x1F801578u),priority=latch(core ? 0x1F801570u : 0x1F8010F0u);
         if(!enable || !*enable || !priority || !*priority)throw IopStop{"SPU2 DMA global enable/priority is unknown"};
         const auto irq=latch(core ? kDicr2 : kDicr);
         if(!irq || !*irq)throw IopStop{"SPU2 DMA interrupt control is unknown"};
         state.remaining=static_cast<std::uint32_t>(words);state.block_remaining=block_words;
+        state.normal=!state.enabled;
         state.next=cycle_+diagnostic_spu2_adma_cycles_;
     }
     state.dma[field/4u]=value;state.written|=field==0u ? 1u : field==4u ? 6u : 8u;
@@ -1397,23 +1433,29 @@ bool Iop::tick_spu2_adma(unsigned core) {
     const auto enabled=latch(0x1F801578u),priority=latch(core ? 0x1F801570u : 0x1F8010F0u);
     const auto priority_bit=core ? 8u : 0x80000u;
     if(!enabled || !*enabled || !priority || !*priority)throw IopStop{"SPU2 DMA enable became unknown during transfer"};
-    if(!(**enabled&1u) || !(**priority&priority_bit) || state.ready[state.fill_bank]) {
+    if(!(**enabled&1u) || !(**priority&priority_bit) || (!state.normal && state.ready[state.fill_bank])) {
         state.next=cycle_+diagnostic_spu2_adma_cycles_;return false; // true backpressure; no catch-up burst
     }
     const auto source=state.dma[0];
-    for(unsigned b=0;b<4;++b)if(!ram_written_[source+b])throw IopStop{"SPU2 DMA consumes unknown IOP RAM bytes"};
-    const auto target=0x2000u+core*0x400u+state.fill_bank*0x100u+
+    if(!state.normal)for(unsigned b=0;b<4;++b)if(!ram_written_[source+b])throw IopStop{"SPU2 DMA consumes unknown IOP RAM bytes"};
+    const auto target=state.normal ? *spu2_transfer_[core].address : 0x2000u+core*0x400u+state.fill_bank*0x100u+
         (state.fill_word>=128u ? 0x200u : 0u)+(state.fill_word%128u)*2u;
     if(spu2_ram_.empty()){spu2_ram_.resize(0x100000u);spu2_ram_written_.resize(0x100000u);}
     for(unsigned n=0;n<2;++n) {
         spu2_ram_[target+n]=static_cast<std::uint16_t>(ram_[source+2u*n]|(std::uint16_t{ram_[source+2u*n+1u]}<<8u));
-        spu2_ram_written_[target+n]=1;
+        spu2_ram_written_[target+n]=(ram_written_[source+2u*n] && ram_written_[source+2u*n+1u]) ? 1u : 0u;
     }
-    state.dma[0]+=4u;++state.words;
+    state.dma[0]+=4u;
+    if(state.normal) {
+        ++state.normal_words;auto& transfer=spu2_transfer_[core];
+        transfer.address=(target+2u)&0xFFFFFu;
+        transfer.high=static_cast<std::uint16_t>(*transfer.address>>16u);
+        transfer.low=static_cast<std::uint16_t>(*transfer.address);
+    } else ++state.words;
     if(!(--state.block_remaining)) {
         state.dma[1]-=0x10000u;state.block_remaining=state.dma[1]&0xFFFFu;
     }
-    if(++state.fill_word==256u) {
+    if(!state.normal && ++state.fill_word==256u) {
         state.ready[state.fill_bank]=true;
         // Explicit timing experiment: input starts at the next 48 kHz edge
         // after a full initial stereo bank, and waits if a bank is not ready.
@@ -1425,7 +1467,8 @@ bool Iop::tick_spu2_adma(unsigned core) {
         state.next.reset();state.dma[2]&=~kChcrStart;
         const auto reg=core ? kDicr2 : kDicr,mask=core ? 0x10000u : 0x100000u,flag=core ? 0x1000000u : 0x10000000u;
         for(auto& [address,value]:latches_)if(address==reg && value && (*value&mask))*value|=flag;
-        update_dma_irq();events_.push_back({cycle_,"DIAGNOSTIC SPU2 core "+std::to_string(core)+" ADMA real payload complete"});
+        update_dma_irq();events_.push_back({cycle_,"DIAGNOSTIC SPU2 core "+std::to_string(core)+
+            (state.normal ? " normal DMA real payload complete" : " ADMA real payload complete")});
     }
     return true;
 }
@@ -1474,7 +1517,13 @@ void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
         throw IopStop{"SPU2 active ADMA requires its core enabled and normal transfer/effects/IRQ disabled"};
     if((spu2_adma_[0].enabled || spu2_adma_[1].enabled) && ((word.value|word.unknown)&0x40u))
         throw IopStop{"SPU2 IRQ changes while ADMA uses shared RAM are not modeled"};
-    if(mode==0x20u || mode==0x30u)throw IopStop{"SPU2 DMA processing/control configuration is not modeled"};
+    if(mode==0x30u)throw IopStop{"SPU2 DMA read processing/control configuration is not modeled"};
+    const bool normal_pending=(spu2_adma_[0].normal && spu2_adma_[0].next) ||
+                              (spu2_adma_[1].normal && spu2_adma_[1].next);
+    if(normal_pending && ((word.value|word.unknown)&0xC0u))
+        throw IopStop{"SPU2 effects/IRQ changes during normal DMA are not modeled"};
+    if(spu2_adma_[core].normal && spu2_adma_[core].next &&
+       ((word.value&0x8030u)!=0x8020u))throw IopStop{"SPU2 normal DMA cancellation while data is pending is not modeled"};
     auto& transfer=spu2_transfer_[core];
     if(transfer.next && (mode!=0x10u || !(word.value&0x8000u)))
         throw IopStop{"SPU2 PIO cancellation while real FIFO data is pending is not modeled"};
@@ -1724,21 +1773,25 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         const auto core=(physical-0x1F900344u)/0x400u;
         const auto word=spu2_control_[core];
         if(!word || !spu2_next_sample_[core])throw IopStop{"SPU2 STATX is not established by a quiet enabled core"};
-        // No PIO/DMA request, active waveform source, effect or IRQ can be
-        // in flight in this supported state. Unmodeled status stays unknown.
+        // Busy follows actual queued data. Normal-DMA ready is established
+        // only by a transfer we have observed, never by a cold readback.
         undefined_load_="SPU2 STATX: status outside the quiet transfer/IRQ fields is unknown";
         auto known=0x7FFu;
         if((word->value|word->unknown)&0xFu)known&=~0xFu;
         if(word->value&0x30u)known&=~0x30u; // transfer-mode echo fields remain unverified
         undefined_known_=known|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
-        return spu2_transfer_[core].next ? 0x400u : 0u;
+        const auto& dma=spu2_adma_[core];
+        const bool normal_mode=(word->value&0x30u)==0x20u;
+        if(normal_mode && !dma.normal)undefined_known_&=~0x80u;
+        if(spu2_transfer_[core].next || (dma.normal && dma.next))return 0x400u;
+        return normal_mode && dma.normal ? 0x80u : 0u;
     }
     if(physical==0x1F9001B0u || physical==0x1F9005B0u) {
         if(bytes!=2u)throw IopStop{"SPU2 AutoDMA status requires a halfword read"};
         const auto core=(physical-0x1F9001B0u)/0x400u;
         const auto& state=spu2_adma_[core];
         const bool retained=diagnostic_spu2_admas_control_latch_ && state.control_written;
-        if((!diagnostic_spu2_adma_cycles_ || !state.next) && !retained)
+        if((!diagnostic_spu2_adma_cycles_ || !state.next || state.normal) && !retained)
             throw IopStop{"SPU2 AutoDMA inactive/readback flags are not verified"};
         // Separate, explicit whole-control latch hypothesis. This is only
         // readback of a known guest write, never a cold status default.
@@ -2017,9 +2070,14 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         if(bytes!=2u || !value)throw IopStop{"SPU2 transfer address requires a known halfword write"};
         auto& transfer=spu2_transfer_[(physical-0x1F9001A8u)/0x400u];
         if(transfer.next)throw IopStop{"SPU2 transfer address change while PIO is busy is not modeled"};
-        // All sources consulted agree on aligned PIO starts. Unaligned
-        // low-bit readback/rounding is not established by this model.
-        if((physical&2u) && (*value&7u))throw IopStop{"SPU2 unaligned transfer start is unverified"};
+        if(spu2_adma_[(physical-0x1F9001A8u)/0x400u].next)
+            throw IopStop{"SPU2 transfer address change while DMA data is pending is not modeled"};
+        const auto control=spu2_control_[(physical-0x1F9001A8u)/0x400u];
+        if((physical&2u) && (*value&7u) && control && (control->value&0x30u)==0x10u)
+            throw IopStop{"SPU2 unaligned PIO address reconfiguration is not modeled"};
+        // TSA is configured independently of starting a transfer. Keep its
+        // low halfword intact; transfer-mode validation decides whether the
+        // configured address can be consumed, without silently rounding it.
         if(physical&2u)transfer.low=static_cast<std::uint16_t>(*value);
         else transfer.high=static_cast<std::uint16_t>(*value&0xFu);
         if(transfer.high && transfer.low)transfer.address=(std::uint32_t{*transfer.high}<<16u)|*transfer.low;
@@ -2145,6 +2203,8 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
             if(is_spu2_voice_start(physical))*value&=(physical&2u) ? 0xFFF8u : 0xFu;
         }
         if(is_spu2_effect_address(physical)) {
+            if((spu2_adma_[0].normal && spu2_adma_[0].next) || (spu2_adma_[1].normal && spu2_adma_[1].next))
+                throw IopStop{"SPU2 effect workspace change during normal DMA is not modeled"};
             const auto core=(physical-0x1F900000u)/0x400u;
             const auto control=spu2_control_[core];
             if(!control || (control->unknown&0x80u))

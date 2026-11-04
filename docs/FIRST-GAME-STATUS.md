@@ -1096,3 +1096,42 @@ continuam obrigatoriamente zero; não é implementação de DSP.
 Referência consultada: https://github.com/PCSX2/pcsx2/blob/master/pcsx2/SPU2/Reverb.cpp
 Sem copiar/incorporar código GPL. Busca em documentação pública não forneceu
 confirmação física do comportamento ESA>EEA; a incerteza permanece registrada.
+
+Ensaio 78: área invertida experimental passou; IOP `0x66128` / 46.754.814,
+configuração TSA baixo=849F. EE `0x81FC4` / 360.000.000, 113,810 s;
+RAM `3b80af0282085097ff125390f1104614ef1b8b28c7b8365c93d53b37c73ac4af`.
+16 pacotes/limpeza, sem PMODE. TSA agora retém a configuração inteira do
+halfword baixo sem iniciar transferência ou arredondar. A recusa de consumo
+PIO não alinhado foi movida para seu início. Testes percorrem os oito valores
+dos bits baixos nos dois cores, sem fabricar RAM. Referências PS2Recomp áudio,
+mapa PS2tek e configuração/DMA SPU2 consultadas; DMA normal ainda não implementado.
+
+Ensaio 79: TSA configurado; IOP `0x66160` / 46.754.845, ATTR core 1=C021
+selecionando DMA normal de escrita. EE `0x81FC4` / 360.000.000, 100,838 s;
+mesmo hash do 78, sem PMODE/novos pixels.
+
+DMA normal implementado no barramento compartilhado existente: payloads reais
+IOP→RAM SPU2, TSA sem arredondamento, MADR/BCR/CHCR e IRQ por término real.
+Bytes desconhecidos permanecem desconhecidos na RAM de som; a transferência
+não precisa interpretar seu valor. Dois canais dividem um único slot, com
+throughput/round-robin explícitos. Gates DMACEN/DPCR pausam sem completar.
+Sem DMA de leitura, wrap de payload, escrita em buffers dinâmicos, IRQ de RAM,
+PIO simultâneo ou sobreposição com área de efeitos ativa. Uma área de efeitos
+disjunta de ganho zero é permitida sob a hipótese de throughput agregado.
+O ensaio 80 seleciona 16 ciclos IOP/palavra de 32 bits, não medidos em hardware;
+sem a opção, iniciar DMA continua recusado. Seis testes focados passaram,
+incluindo payload, bytes opacos, limites, gates, IRQ, conflitos e regressões.
+PS2Recomp áudio e comportamento DMA SPU2 consultados; código/testes BSD próprios.
+
+Ensaio 80: 256 palavras reais de 32 bits por DMA normal core 1, além de 16
+halfwords PIO. IOP chegou a `0x65D20` / 46.759.272, consultando STATX bit 7
+após o payload. EE `0x81FC4` / 360.000.000, 103,276 s; hash RAM igual ao 79.
+Ainda 16 pacotes/limpeza de VRAM, PMODE não escrito: nenhum frame exibido.
+STATX agora deriva busy do payload pendente e ready do término de uma
+transferência normal observada, somente enquanto ATTR mantém modo DMA-write.
+Antes de uma transferência observada, ready permanece desconhecido. Testes
+alternam polling de CHCR/STATX, dois cores, IRQ ligada/desligada e payload
+parcialmente desconhecido; seis testes focados passaram (4,67 s).
+Referência comportamental consultada: PCSX2 SPU2/spu2.cpp (notificação de
+conclusão); nenhuma implementação GPL incorporada. Timing segue experimental.
+CI de `1ef95a1`, `778745c` e `e58bfea`: núcleo e launcher aprovados nos seis alvos.

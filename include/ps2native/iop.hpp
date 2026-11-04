@@ -165,6 +165,7 @@ public:
         diagnostic_spu2_admas_control_latch_=true;
     }
     [[nodiscard]] std::uint64_t spu2_adma_words(unsigned core) const { return spu2_adma_.at(core).words; }
+    [[nodiscard]] std::uint64_t spu2_dma_words(unsigned core) const { return spu2_adma_.at(core).normal_words; }
     [[nodiscard]] std::uint64_t spu2_input_frames(unsigned core) const { return spu2_adma_.at(core).frames; }
     struct Spu2Sample { std::uint64_t cycle; std::int16_t left,right; };
     [[nodiscard]] const std::optional<Spu2Sample>& spu2_last_sample(unsigned core) const { return spu2_last_sample_.at(core); }
@@ -292,6 +293,7 @@ private:
     void tick_spu2_quiet();
     void validate_spu2_pio(unsigned core,const ObservedWord& control) const;
     void validate_spu2_adma(unsigned core) const;
+    void validate_spu2_normal_dma(unsigned core,std::uint32_t words) const;
     [[nodiscard]] bool spu2_input_quiet(unsigned core,std::uint32_t mixer) const;
     [[nodiscard]] bool tick_spu2_adma(unsigned core);
     void consume_spu2_input(unsigned core,std::uint64_t sample_cycle);
@@ -402,6 +404,7 @@ private:
     std::uint32_t diagnostic_spu2_pio_cycles_{};
     struct Spu2Adma {
         bool enabled{},primed{},control_written{};
+        bool normal{};
         std::array<bool,2> ready{};
         unsigned fill_bank{},fill_word{},read_bank{},read_position{};
         std::array<std::uint32_t,3> dma{}; // MADR, BCR, CHCR
@@ -409,6 +412,7 @@ private:
         std::uint32_t remaining{},block_remaining{};
         std::optional<std::uint64_t> next;
         std::uint64_t words{},frames{};
+        std::uint64_t normal_words{};
         std::optional<Spu2Sample> last_input;
     };
     std::array<Spu2Adma,2> spu2_adma_;

@@ -66,8 +66,18 @@ int main() try {
         idle(a);const auto rom=image(a);Iop iop;iop.reset(rom,nullptr,nullptr,false,std::nullopt,{},false,true);
         if(mode)iop.diagnostic_spu2_pio_word_cycles(1024);
         iop.run_until(800);
-        require(iop.stopped() && iop.spu2_pio_words(0)==0 && !iop.spu2_ram_halfword(0x2800u),
+        require((mode==6u ? !iop.stopped() : iop.stopped()) && iop.spu2_pio_words(0)==0 && !iop.spu2_ram_halfword(0x2800u),
                 "unselected timing, unknown IRQ/address, unaligned start, widths, overflow, DMA and busy reconfiguration cannot fabricate a completed upload");
+        if(mode==3u)require(iop.stop_reason()->find("unaligned PIO start")!=std::string::npos,
+            "unaligned TSA configuration is retained; consumption is refused only when PIO starts");
+    }
+    for(unsigned core=0;core<2u;++core)for(unsigned low=0;low<8u;++low) {
+        m20::Assembler a(kEeResetVector);const auto base=0xBF9001A8u+core*0x400u;
+        put(a,base,0xFu);put(a,base+2u,static_cast<std::uint16_t>(0x8498u+low));
+        a.la(8,base+2u);a.lhu(9,0,8);a.nop();a.la(10,0xA0000100u);a.sw(9,0,10);idle(a);
+        const auto rom=image(a);Iop iop;iop.reset(rom,nullptr);iop.run_until(100u);
+        require(!iop.stopped() && iop.ee_read(0x100u,4)==0x8498u+low && iop.spu2_pio_words(core)==0u &&
+            !iop.spu2_ram_halfword(0xF8498u+low),"TSA retains each low-bit configuration without rounding or initiating RAM traffic");
     }
     {
         m20::Assembler a(kEeResetVector);
@@ -83,6 +93,15 @@ int main() try {
         iop.diagnostic_spu2_pio_word_cycles(9);iop.run_until(1000);
         require(!iop.stopped() && iop.spu2_pio_words(0)==1 && iop.spu2_pio_words(1)==1 &&
             iop.spu2_ram_halfword(0x2800u)==0x1235u,"both cores transfer actual data into the same physical sound RAM");
+    }
+    {
+        m20::Assembler a(kEeResetVector);put(a,0xBF90019Au,0x8000u);put(a,0xBF90059Au,0x8000u);
+        put(a,0xBF9001A8u,0);put(a,0xBF9001AAu,0x2800u);put(a,0xBF9001ACu,0x1234u);put(a,0xBF90019Au,0x8010u);
+        for(unsigned n=0;n<20u;++n)a.nop();put(a,0xBF9001ACu,0x5678u);idle(a);
+        const auto rom=image(a);Iop iop;iop.reset(rom,nullptr,nullptr,false,std::nullopt,{},false,true);
+        iop.diagnostic_spu2_pio_word_cycles(3u);iop.run_until(200u);
+        require(!iop.stopped() && iop.spu2_ram_halfword(0x2800u)==0x1234u && iop.spu2_ram_halfword(0x2801u)==0x5678u,
+            "an aligned PIO start may continue at its real incremented address without requiring every word to be eight-word aligned");
     }
     std::cout<<"SPU2 FIFO payloads, exact modeled bus edges, busy polling, shared RAM, wrap and refusals passed\n";
     return 0;
