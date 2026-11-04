@@ -57,6 +57,22 @@ inline bool less_observed(std::uint64_t a,std::uint64_t ua,std::uint64_t b,std::
     if(a>=(b|ub))return false;
     throw std::runtime_error("EE comparison depends on unknown operand bits");
 }
+inline ObservedDoubleword add_observed(std::uint64_t a,std::uint64_t ua,std::uint64_t b,std::uint64_t ub,
+                                      unsigned width,bool subtract) {
+    a&=~ua;b=(subtract ? ~b : b)&~ub;
+    unsigned carry_min=subtract ? 1u : 0u,carry_max=carry_min;
+    ObservedDoubleword result{};
+    for(unsigned bit=0;bit<width;++bit) {
+        const auto av=static_cast<unsigned>((a>>bit)&1u),bv=static_cast<unsigned>((b>>bit)&1u);
+        const auto amin=av+bv+carry_min;
+        const auto amax=(av|static_cast<unsigned>((ua>>bit)&1u))+
+                        (bv|static_cast<unsigned>((ub>>bit)&1u))+carry_max;
+        if(amin==amax)result.value|=std::uint64_t{amin&1u}<<bit;
+        else result.unknown|=1ull<<bit;
+        carry_min=amin>>1u;carry_max=amax>>1u;
+    }
+    return result;
+}
 inline bool negative_gpr64(const EEState& state,unsigned index) {
     // EE core BGEZ/BLTZ test bit 63; unrelated payload bits need not be known.
     constexpr auto sign=1ull<<63;
@@ -266,10 +282,11 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         else if constexpr(!subtract) {
             if(!a && !ua){value=b;unknown=ub;}
             else if(!ua && !ub)value=a+b;
-            else throw std::runtime_error("EE addition consumes unknown carry bits");
+            else {const auto sum=add_observed(a,ua,b,ub,wide ? 64u : 32u,false);value=sum.value;unknown=sum.unknown;}
         } else {
             if(!ua && !ub)value=a-b;
-            else throw std::runtime_error("EE subtraction consumes unknown borrow bits");
+            else if(s_==t_){value=0;unknown=0;}
+            else {const auto sum=add_observed(a,ua,b,ub,wide ? 64u : 32u,true);value=sum.value;unknown=sum.unknown;}
         }
         if constexpr(!wide) {
             value=sx32(static_cast<std::uint32_t>(value));

@@ -103,8 +103,30 @@ void neutral_arithmetic(Memory& memory) {
             "zero arithmetic copies preserve opaque low bits, 32-bit sign extension, upper 128-bit lanes and aliased inputs in both engines");
     }
     EEState state;state.set_reg64_observed(8,0x12345678,1);state.set_reg64(9,1);
-    rejects([&]{ee::exec<MipsOpcode::Daddu>(state,memory,0,(8u<<21u)|(9u<<16u)|(10u<<11u)|0x2Du);},"unknown carry");
-    rejects([&]{ee::exec<MipsOpcode::Dsubu>(state,memory,0,(8u<<21u)|(9u<<16u)|(10u<<11u)|0x2Fu);},"unknown borrow");
+    ee::exec<MipsOpcode::Daddu>(state,memory,0,(8u<<21u)|(9u<<16u)|(10u<<11u)|0x2Du);
+    require(state.gpr[10].low==0x12345678 && state.unknown_gpr_bits[10]==3,"an unknown low carry taints only the output bits that can depend on it");
+    ee::exec<MipsOpcode::Dsubu>(state,memory,0,(8u<<21u)|(9u<<16u)|(10u<<11u)|0x2Fu);
+    require(state.gpr[10].low==0x12345670 && state.unknown_gpr_bits[10]==15,"an unknown borrow remains opaque across its exact bit range");
+}
+void opaque_carries(Memory& memory) {
+    for(const bool interpreted:{false,true})for(const bool wide:{false,true})for(const bool subtract:{false,true})
+    for(const auto base:{0ull,0x7FFFFFFCull,0xFFFFFFFFFFFFFFFCull})for(const auto other:{0ull,1ull,0xFF000000ull,0xFFFFFFFFFFFFFFFDull}) {
+        EEState state;state.set_reg64_observed(8,base,3);state.set_reg64_observed(9,other,1);
+        const auto op=wide ? subtract ? MipsOpcode::Dsubu : MipsOpcode::Daddu : subtract ? MipsOpcode::Subu : MipsOpcode::Addu;
+        const auto word=(8u<<21u)|(9u<<16u)|(10u<<11u)|(wide ? subtract ? 0x2Fu : 0x2Du : subtract ? 0x23u : 0x21u);
+        step(memory,state,op,word,interpreted);
+        for(unsigned x=0;x<4;++x)for(unsigned y=0;y<2;++y) {
+            const auto a=(base&~3ull)|x,b=(other&~1ull)|y;
+            auto exact=subtract ? a-b : a+b;
+            if(!wide)exact=ee::sx32(static_cast<std::uint32_t>(exact));
+            require(!((exact^state.gpr[10].low)&~state.unknown_gpr_bits[10]),
+                "every concrete carry/borrow candidate is contained across 32/64-bit wrap and sign extension in both engines");
+        }
+    }
+    EEState state;state.set_reg64_observed(8,0x3EC90FD0u,15);state.set_reg64(9,0xFFFFFFFFFF000000ull);
+    ee::exec<MipsOpcode::Addu>(state,memory,0,(8u<<21u)|(9u<<16u)|(10u<<11u)|0x21u);
+    require(state.gpr[10].low==0x3DC90FD0u && state.unknown_gpr_bits[10]==15,
+        "adding a disjoint known exponent adjustment retains opaque fraction bits with no fabricated carry");
 }
 void bounded_comparisons(Memory& memory) {
     for(const bool interpreted:{false,true})for(const bool signed_order:{false,true}) {
@@ -134,7 +156,7 @@ void bounded_comparisons(Memory& memory) {
 }
 int main() try {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
-    doubleword_copies(memory);narrow_copies(memory);neutral_arithmetic(memory);bounded_comparisons(memory);
+    doubleword_copies(memory);narrow_copies(memory);neutral_arithmetic(memory);opaque_carries(memory);bounded_comparisons(memory);
     std::cout<<"EE opaque payload copies, all alignments/orders, template/interpreter and narrow sign extension passed\n";
     return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
