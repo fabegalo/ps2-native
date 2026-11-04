@@ -1179,3 +1179,28 @@ Reset remove a hipótese; configuração tardia/valores fora de dois bits recusa
 Testes exercitam as quatro combinações, recusa dos demais bits, reset e RECV3;
 IOP knowledge e boot M20 passaram. A opção não configura periféricos, não
 cria conexão e não produz respostas seriais. Código BSD próprio.
+Ensaio 84: seleção de timing PADMAN passou; IOP `0x47850` / 47.580.787,
+início SIO2 sem experimento serial habilitado. EE `0x81FD0` / 360.000.000,
+104,214 s; RAM igual ao 83. Sem PMODE/frame, 31.584 palavras DMA SPU2.
+Ensaio 85 habilita apenas receptor infravermelho ausente, timeout explícito
+8192 ciclos IOP e DMA SIO2 4 ciclos/palavra; os outros periféricos continuam
+recusados. Testes SIO2 idle/DMA passaram. O modo original repetido após
+FIELD/RECV2 manteve PCs, contagens e hash canônicos, sem pixels.
+Ensaio 85: mesmo PC/contagem do 84; FIFO contém dois polls reais de controle,
+`01 42 00 00 00`, e a ausência de IR corretamente não responde como pad.
+105,522 s, mesmo hash, sem PMODE/frame. Implementado controle digital padrão
+selecionado explicitamente por porta: comando 42 de cinco bytes responde ID
+41/5A e estado ativo-baixo configurado dos botões; bits sem L3/R3 permanecem
+soltos. A resposta percorre FIFO/DMA e só conclui no prazo serial escolhido.
+Não há resposta RPC host, alteração do convidado, modo analógico ou comandos
+não conhecidos. Topologia contraditória, packet size/comando desconhecido e
+mistura de status conectado/ausente ainda recusam. Reset remove o dispositivo.
+Ensaio 86 configura pads digitais nas portas 0/1, todos os botões soltos;
+8192 ciclos IOP por transação continuam hipótese, não serial timing medido.
+Três testes focados passaram: estados de botões distintos, duas portas,
+conclusão/IRQ, DMA com bytes reais e padding opaco, configuração e reset.
+PS2Recomp ps2_pad.cpp consultado como referência de separação de entrada host;
+protocolo digital consultado em https://psx-spx.consoledev.net/controllersandmemorycards/
+e contagem de portas/status em PCSX2 Sio2.cpp. Código/testes originais BSD,
+sem incorporar GPL. CI `0f05001` e `3050f99` passou nos seis alvos do núcleo
+e do launcher.

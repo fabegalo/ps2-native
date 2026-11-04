@@ -34,13 +34,13 @@
   `0x1CDF74`, leitura GS CSR, após 338.172.827 instruções. O ensaio usa injeção
   de ELF e hipóteses explícitas, incluindo SPU2 inativo no reset; não comprova
   boot original. O modo original mantém PCs/contagens/hash anteriores.
-- Continuação até ensaio 80: CSR, IMR, aritmética inteira com overflow,
-  FPU, montagem e multiplicação das matrizes VU superados. EE em espera `0x81FC4` /
-  360.000.000 instruções, IOP parado `0x65D20` / 46.759.272. A fronteira Booth
+- Continuação até ensaio 84: CSR, IMR, aritmética inteira com overflow,
+  FPU, montagem e multiplicação das matrizes VU superados. EE em espera `0x81FD0` /
+  360.000.000 instruções, IOP parado `0x47850` / 47.580.787. A fronteira Booth
   de 15 zeros baixos foi resolvida por perda do carry da coluna 15; 16 ou
   mais zeros não atingem colunas descartadas. Demais casos ambíguos recusam.
   VSQRT/VDIV/Q e VMOVE passaram. A hipótese explícita SPU2 7CA permitiu
-  investigar as janelas não atribuídas, também isoladas por hipótese explícita. PIO enviou 16 halfwords reais para RAM SPU2; parâmetros, KON/KOFF simbólicos, ENDX, ESA/EEA e configuração master passaram. ENVX zero foi provado por release linear limitado; efeitos de ganho zero preservam RAM desconhecida. ESA inicial foi isolado por hipótese; o ensaio 80 transferiu 256 palavras reais por DMA normal e chegou à consulta STATX de conclusão. O barramento usa throughput explícito não medido; bytes opacos permanecem desconhecidos. Sem novos pixels além da limpeza;
+  investigar as janelas não atribuídas, também isoladas por hipótese explícita. PIO enviou 16 halfwords reais para RAM SPU2; parâmetros, KON/KOFF simbólicos, ENDX, ESA/EEA e configuração master passaram. ENVX zero foi provado por release linear limitado; efeitos de ganho zero preservam RAM desconhecida. ESA inicial foi isolado por hipótese; o ensaio 84 completou 31.584 palavras reais por DMA normal e alcançou uma transferência SIO2. FIELD e os bits de timing RECV2 usados pelo PADMAN avançaram sob hipóteses estreitas e explícitas. O barramento usa throughput explícito não medido; bytes opacos permanecem desconhecidos. Sem novos pixels além da limpeza;
   PMODE ainda não escrito. O modo BIOS original mantém seu hash/contagens.
   Commits `d4d98a1` e `8410973` aprovados na CI dos seis alvos (núcleo e launcher);
   `94230de` e a correção de fixture FPU `dd6ed41` aprovados nos seis do núcleo.

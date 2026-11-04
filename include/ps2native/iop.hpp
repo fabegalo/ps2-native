@@ -133,10 +133,13 @@ public:
         if(cycle_)throw DeviceRefusal("SIO2 reset-latch experiment requires reset state before execution");
         diagnostic_sio2_reset_completion_=true;
     }
-    void diagnostic_sio2_unplugged_ports(unsigned mask,std::uint32_t timeout_cycles);
     // Unmeasured RECV2 bits 4/5 used by PADMAN to choose port timing.
     // Defines only these two bits; no connection status or serial reply.
     void diagnostic_sio2_port_timing(unsigned bits);
+    // Standard digital pad with explicit active-low buttons and unmeasured
+    // packet duration. No analog/configuration commands are inferred.
+    void diagnostic_sio2_digital_pad(unsigned port,std::uint16_t buttons,std::uint32_t packet_cycles);
+    void diagnostic_sio2_unplugged_ports(unsigned mask,std::uint32_t timeout_cycles);
     void diagnostic_sio2_dma_word_cycles(std::uint32_t cycles);
     [[nodiscard]] std::uint64_t sio2_dma_words(unsigned channel) const { return sio2_dma_.at(channel).words; }
     [[nodiscard]] std::optional<std::uint8_t> sio2_input_byte(std::size_t n) const {
@@ -337,6 +340,8 @@ private:
     std::array<std::uint64_t,32> gpr_sio2_epoch_{};
     std::uint64_t sio2_control_epoch_{},undefined_sio2_epoch_{};
     std::optional<unsigned> diagnostic_sio2_port_timing_;
+    std::array<std::optional<std::uint16_t>,2> sio2_digital_pads_;
+    std::uint32_t sio2_response_status_{};
     std::vector<std::uint8_t> sio2_input_;
     std::deque<ObservedWord> sio2_output_,sio2_pending_reply_;
     unsigned diagnostic_sio2_unplugged_ports_{};

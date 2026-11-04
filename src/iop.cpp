@@ -205,6 +205,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     gpr_ = {};
     gpr_sio2_epoch_={};sio2_control_epoch_=undefined_sio2_epoch_=0;
     diagnostic_sio2_port_timing_.reset();
+    sio2_digital_pads_={};sio2_response_status_=0;
     sio2_input_.clear();sio2_output_.clear();sio2_complete_at_.reset();
     diagnostic_sio2_timeout_cycles_=sio2_reply_bytes_=sio2_interrupt_enable_=0;
     sio2_completion_flag_=sio2_response_valid_=false;sio2_diagnostic_control_.reset();
@@ -905,7 +906,7 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
                 sio2_output_=std::move(sio2_pending_reply_); // clocked wire bytes plus opaque DMA padding
                 sio2_response_valid_=true;
                 sio2_completion_flag_=true;update_sio2_irq();
-                events_.push_back({cycle_,"DIAGNOSTIC SIO2 absent serial timeout"});
+                events_.push_back({cycle_,"DIAGNOSTIC SIO2 serial packet complete"});
             }
             if(cdvd_complete_at_ && cycle_>=*cdvd_complete_at_) {
                 cdvd_complete_at_.reset(); cdvd_irq_|=2u;
@@ -1156,10 +1157,6 @@ std::uint32_t Iop::load(std::uint32_t address, std::size_t bytes, const char* wh
 }
 
 
-void Iop::diagnostic_sio2_port_timing(unsigned bits) {
-    if(bits>3u || cycle_)throw DeviceRefusal("SIO2 port timing bits require a two-bit sample before guest execution");
-    diagnostic_sio2_port_timing_=bits;
-}
 void Iop::reset_sio2_completion() {
     if(sio2_completion_flag_ && !diagnostic_sio2_reset_completion_)
         throw IopStop{"SIO2 CTRL reset effect on pending completion is unverified; explicit reset-latch experiment required"};
@@ -1172,6 +1169,20 @@ void Iop::update_sio2_irq() {
     const bool output=sio2_completion_flag_ && (sio2_interrupt_enable_&0x200u);
     if(output && !sio2_irq_output_)istat_|=1u<<17u;
     sio2_irq_output_=output;
+}
+void Iop::diagnostic_sio2_digital_pad(unsigned port,std::uint16_t buttons,std::uint32_t packet_cycles) {
+    if(port>=2u || !packet_cycles || cycle_)
+        throw DeviceRefusal("SIO2 digital pad needs port 0/1 and positive packet cycles before execution");
+    if(diagnostic_sio2_timeout_cycles_ && diagnostic_sio2_timeout_cycles_!=packet_cycles)
+        throw DeviceRefusal("SIO2 peripherals must share the explicit packet duration experiment");
+    if(diagnostic_sio2_unplugged_ports_&(1u<<port))
+        throw DeviceRefusal("SIO2 digital pad cannot attach to an explicitly unplugged port");
+    diagnostic_sio2_timeout_cycles_=packet_cycles;
+    sio2_digital_pads_[port]=static_cast<std::uint16_t>(buttons|6u); // no L3/R3 on the digital pad
+}
+void Iop::diagnostic_sio2_port_timing(unsigned bits) {
+    if(bits>3u || cycle_)throw DeviceRefusal("SIO2 port timing bits require a two-bit sample before guest execution");
+    diagnostic_sio2_port_timing_=bits;
 }
 void Iop::diagnostic_sio2_dma_word_cycles(std::uint32_t cycles) {
     if(!cycles || cycle_)throw DeviceRefusal("SIO2 DMA experiment requires positive word cycles before guest execution");
@@ -1265,6 +1276,8 @@ void Iop::diagnostic_sio2_unplugged_ports(unsigned mask,std::uint32_t timeout_cy
         throw DeviceRefusal("SIO2 unplugged-port experiment requires a four-port mask and positive timeout before execution");
     if(diagnostic_sio2_timeout_cycles_ && diagnostic_sio2_timeout_cycles_!=timeout_cycles)
         throw DeviceRefusal("SIO2 unplugged ports must use the same explicitly assumed timeout");
+    for(unsigned p=0;p<2u;++p)if((mask&(1u<<p)) && sio2_digital_pads_[p])
+        throw DeviceRefusal("SIO2 unplugged mask conflicts with an attached digital pad");
     diagnostic_sio2_timeout_cycles_=timeout_cycles;diagnostic_sio2_unplugged_ports_=mask;
 }
 void Iop::start_sio2_infrared(std::uint32_t interrupt_enable) {
@@ -1273,6 +1286,7 @@ void Iop::start_sio2_infrared(std::uint32_t interrupt_enable) {
     if(sio2_complete_at_ || !sio2_control_epoch_ || !sio2_output_.empty())
         throw IopStop{"SIO2 infrared start while busy, unconfigured, or with unread data"};
     std::size_t consumed=0,clocked=0;std::deque<ObservedWord> reply;
+    unsigned pad_ports=0,absent_packets=0;
     for(unsigned n=0;n<16;++n) {
         const auto descriptor=latch(0x1F808200u+4u*n);
         if(!descriptor || !*descriptor)throw IopStop{"SIO2 command descriptor is unknown"};
@@ -1295,22 +1309,34 @@ void Iop::start_sio2_infrared(std::uint32_t interrupt_enable) {
                 throw IopStop{"SIO2 DMA descriptor requires complete input and an armed output channel"};
         }
         if(consumed+input>sio2_input_.size())throw IopStop{"SIO2 infrared command input is incomplete"};
-        if(!unplugged && (!diagnostic_sio2_infrared_absent_ || sio2_input_[consumed]!=0x61u))
-            throw IopStop{"SIO2 peripheral is not modeled by the absent infrared experiment"};
-        for(unsigned b=0;b<rx;++b)reply.push_back({0xFFu,0}); // explicitly absent device cannot drive DAT
+        if(port<2u && sio2_digital_pads_[port] && sio2_input_[consumed]==0x01u) {
+            if(tx!=5u || sio2_input_[consumed+1u]!=0x42u)
+                throw IopStop{"SIO2 digital pad supports only a five-byte button poll"};
+            const auto buttons=*sio2_digital_pads_[port];
+            for(const auto byte:{0xFFu,0x41u,0x5Au,unsigned(buttons&0xFFu),unsigned(buttons>>8u)})
+                reply.push_back({byte,0});
+            pad_ports|=1u<<port;
+        } else {
+            if(!unplugged && (!diagnostic_sio2_infrared_absent_ || sio2_input_[consumed]!=0x61u))
+                throw IopStop{"SIO2 peripheral is not modeled by the absent infrared experiment"};
+            for(unsigned b=0;b<rx;++b)reply.push_back({0xFFu,0}); // explicitly absent device cannot drive DAT
+            ++absent_packets;
+        }
         for(std::size_t b=rx;b<output;++b)reply.push_back({0,0xFFu});
         consumed+=input;clocked+=rx;
     }
     if(!consumed || consumed!=sio2_input_.size())
         throw IopStop{"SIO2 infrared command input does not match its descriptors"};
     if(reply.size()>256u)throw IopStop{"SIO2 reply exceeds the bounded RX FIFO"};
+    if(pad_ports && absent_packets)throw IopStop{"SIO2 mixed connected/absent response status is not modeled"};
+    sio2_response_status_=pad_ports ? (0x1000u|(pad_ports==3u ? 0x200u : 0x100u)) : 0x1D100u;
     sio2_interrupt_enable_=interrupt_enable&0x300u;
     update_sio2_irq();
     sio2_diagnostic_control_=interrupt_enable&~0xDu;
     sio2_reply_bytes_=static_cast<std::uint32_t>(clocked);sio2_pending_reply_=std::move(reply);
     sio2_complete_at_=cycle_+diagnostic_sio2_timeout_cycles_;
     sio2_input_.clear();sio2_response_valid_=false;++sio2_control_epoch_;
-    events_.push_back({cycle_,"DIAGNOSTIC SIO2 absent serial start: "+std::to_string(clocked)+" clocked bytes; DMA padding opaque"});
+    events_.push_back({cycle_,"DIAGNOSTIC SIO2 serial start: "+std::to_string(clocked)+" clocked bytes; DMA padding opaque"});
 }
 
 void Iop::diagnostic_spu2_pio_word_cycles(std::uint32_t cycles) {
@@ -1915,7 +1941,7 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         }
         if(!sio2_response_valid_)throw IopStop{"SIO2 response status is unknown before a completed transfer"};
         // ps2tek: disconnected response, not a successful peripheral reply.
-        return 0x1D100u;
+        return sio2_response_status_;
     }
     if(physical==0x1F808270u || physical==0x1F808274u) {
         if(bytes!=4u)throw IopStop{"SIO2 RECV2/RECV3 require word reads"};
