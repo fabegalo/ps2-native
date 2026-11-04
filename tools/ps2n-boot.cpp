@@ -42,6 +42,7 @@ int boot_main(int argc, Character** argv) {
                      "                 [--assume-iop-dmacinten=0..3] (unmeasured reset, diagnostic only)\n"
                      "                 [--assume-iop-sio2-irq-clear] (unmeasured reset, diagnostic only)\n"
                      "                 [--assume-spu2-quiescent-reset] (unmeasured inactive voices/inputs and IRQ9 clear)\n"
+                     "                 [--assume-spu2-admas-control-latch] (unmeasured whole written-control readback)\n"
                      "                 [--assume-spu2-adma-word-cycles=N] (unmeasured shared bus, round-robin, priming/underflow wait)\n"
                      "                 [--assume-spu2-pio-word-cycles=N] (unmeasured PIO throughput, diagnostic only)\n";
         return 2;
@@ -96,6 +97,8 @@ int boot_main(int argc, Character** argv) {
                 assumptions.sbus_configuration_latches=true;
             } else if (flag=="--assume-iop-sio2-irq-clear") {
                 assumptions.iop_sio2_irq_clear=true;
+            } else if(flag=="--assume-spu2-admas-control-latch") {
+                assumptions.spu2_admas_control_latch=true;
             } else if(flag.starts_with("--assume-spu2-adma-word-cycles=")) {
                 const auto value=number(flag.substr(sizeof("--assume-spu2-adma-word-cycles=")-1u),"--assume-spu2-adma-word-cycles");
                 if(!value || value>std::numeric_limits<std::uint32_t>::max())throw std::runtime_error("SPU2 ADMA word cycles must be 1..UINT32_MAX");
@@ -182,6 +185,8 @@ int boot_main(int argc, Character** argv) {
                 header<<"# DIAGNOSTIC IOP DMACINTEN reset = "<<*assumptions.iop_dmacinten<<" (unmeasured)\n";
             if(assumptions.iop_sio2_irq_clear)
                 header<<"# DIAGNOSTIC IOP I_STAT.17 initially clear (unmeasured)\n";
+            if(assumptions.spu2_admas_control_latch)
+                header<<"# DIAGNOSTIC ADMAS whole written control retained as a latch (unmeasured); no cold readback assumed\n";
             if(assumptions.spu2_adma_word_cycles)
                 header<<"# DIAGNOSTIC SPU2 ADMA throughput "<<*assumptions.spu2_adma_word_cycles<<" IOP cycles/32-bit shared-bus word; cross-controller round-robin, full-bank priming/underflow wait (unmeasured); actual stereo payloads\n";
             if(assumptions.spu2_pio_word_cycles)

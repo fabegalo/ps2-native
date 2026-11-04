@@ -139,6 +139,11 @@ public:
     [[nodiscard]] std::uint64_t spu2_pio_words(unsigned core) const { return spu2_transfer_.at(core).words; }
     // Functional ADMA double buffering; explicit throughput/priming model.
     void diagnostic_spu2_adma_word_cycles(std::uint32_t cycles);
+    // Separate unmeasured readback hypothesis, never an assumed cold value.
+    void diagnostic_spu2_admas_control_latch() {
+        if(cycle_)throw DeviceRefusal("ADMAS readback experiment must be selected before guest execution");
+        diagnostic_spu2_admas_control_latch_=true;
+    }
     [[nodiscard]] std::uint64_t spu2_adma_words(unsigned core) const { return spu2_adma_.at(core).words; }
     [[nodiscard]] std::uint64_t spu2_input_frames(unsigned core) const { return spu2_adma_.at(core).frames; }
     struct Spu2Sample { std::uint64_t cycle; std::int16_t left,right; };
@@ -339,7 +344,7 @@ private:
     std::vector<std::uint8_t> spu2_ram_written_;
     std::uint32_t diagnostic_spu2_pio_cycles_{};
     struct Spu2Adma {
-        bool enabled{},primed{};
+        bool enabled{},primed{},control_written{};
         std::array<bool,2> ready{};
         unsigned fill_bank{},fill_word{},read_bank{},read_position{};
         std::array<std::uint32_t,3> dma{}; // MADR, BCR, CHCR
@@ -351,6 +356,7 @@ private:
     };
     std::array<Spu2Adma,2> spu2_adma_;
     std::uint32_t diagnostic_spu2_adma_cycles_{};
+    bool diagnostic_spu2_admas_control_latch_{};
     std::uint64_t spu2_adma_bus_available_{};
     unsigned spu2_adma_last_grant_{1u};
     std::uint64_t gif_dma_cycle_{};

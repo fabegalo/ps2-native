@@ -54,6 +54,8 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
                assumptions ? assumptions->iop_dmacinten : std::nullopt, rom1,
                assumptions && assumptions->iop_sio2_irq_clear,
                assumptions && assumptions->spu2_quiescent_reset);
+    if(assumptions && assumptions->spu2_admas_control_latch)
+        iop_.diagnostic_spu2_admas_control_latch();
     if(assumptions && assumptions->spu2_adma_word_cycles)
         iop_.diagnostic_spu2_adma_word_cycles(*assumptions->spu2_adma_word_cycles);
     if(assumptions && assumptions->spu2_pio_word_cycles)

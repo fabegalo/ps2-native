@@ -228,7 +228,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     diagnostic_spu2_effect_end_.reset();
     spu2_next_sample_={};spu2_last_sample_={};spu2_sample_count_={};spu2_clock_active_=false;
     spu2_transfer_={};spu2_ram_.clear();spu2_ram_written_.clear();diagnostic_spu2_pio_cycles_=0;
-    spu2_adma_={};diagnostic_spu2_adma_cycles_=0;
+    spu2_adma_={};diagnostic_spu2_adma_cycles_=0;diagnostic_spu2_admas_control_latch_=false;
     spu2_adma_bus_available_=0;spu2_adma_last_grant_=1u;
     gif_dma_cycle_=0;
     gif_dma_stop_.reset();
@@ -1467,8 +1467,14 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
     if(physical==0x1F9001B0u || physical==0x1F9005B0u) {
         if(bytes!=2u)throw IopStop{"SPU2 AutoDMA status requires a halfword read"};
         const auto core=(physical-0x1F9001B0u)/0x400u;
-        if(!diagnostic_spu2_adma_cycles_ || !spu2_adma_[core].next)
+        const auto& state=spu2_adma_[core];
+        const bool retained=diagnostic_spu2_admas_control_latch_ && state.control_written;
+        if((!diagnostic_spu2_adma_cycles_ || !state.next) && !retained)
             throw IopStop{"SPU2 AutoDMA inactive/readback flags are not verified"};
+        // Separate, explicit whole-control latch hypothesis. This is only
+        // readback of a known guest write, never a cold status default.
+        // Without opt-in, only an ongoing transfer's busy bit is established.
+        if(retained)return state.enabled ? 1u<<core : 0u;
         // ps2tek ADMA_CTRL: own bit 0/1 indicates an ongoing ADMA write.
         // A real queued transfer proves busy, without inventing reset,
         // completion or unrelated readback flags. Full unknown consumption
@@ -1697,7 +1703,7 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
             if(state.next)throw IopStop{"SPU2 AutoDMA disable with real DMA data pending is not modeled"};
             state.enabled=false; // preserve the actual RAM bytes, never clear a buffer synthetically
         }
-        return;
+        state.control_written=true;return;
     }
 
     if(physical==0x1F9001A8u || physical==0x1F9001AAu || physical==0x1F9005A8u || physical==0x1F9005AAu) {

@@ -126,6 +126,31 @@ int main() try {
         require(iop.stopped() && iop.spu2_adma_words(0)==1 && iop.spu2_ram_halfword(0x2000u)==0xCDEFu &&
             iop.spu2_ram_halfword(0x2001u)==0x89ABu && !iop.spu2_ram_halfword(0x2002u),"unknown source bytes stop at the exact first missing word after preserving prior real transfers");
     }
+    for(unsigned core=0;core<2;++core) {
+        Iop iop;
+        for(const bool retained : {true,false}) {
+            m20::Assembler a(kEeResetVector);setup(a,core,true);
+            const auto dma=core ? 0xBF801500u : 0xBF8010C0u;
+            sw(a,dma+8u,0x01000201u);a.la(8,dma+8u);
+            a.label("wait");a.lw(9,0,8);a.nop();a.raw((9u<<16)|(9u<<11)|(24u<<6)|2u);a.andi(9,9,1);a.bne(9,0,"wait");a.nop();
+            a.la(8,0xBF9001B0u+core*0x400u);a.lhu(9,0,8);a.nop();a.andi(11,9,1u<<core);
+            a.la(10,0xA0000120u);a.sw(11,0,10);a.sh(0,0,8);
+            a.lhu(9,0,8);a.nop();a.andi(11,9,1u<<core);a.sw(11,4,10);
+            a.addiu(9,9,1);a.sw(9,8,10);idle(a);const auto rom=image(a);
+            iop.reset(rom,nullptr,nullptr,false,std::nullopt,{},false,true);iop.diagnostic_spu2_adma_word_cycles(1);
+            if(retained)iop.diagnostic_spu2_admas_control_latch();payload(iop);iop.run_until(300000u);
+            require(iop.spu2_adma_words(core)==768,"post-DMA readback never replaces actual data movement");
+            if(retained)require(!iop.stopped() && iop.diagnostic_ram32(0x120u)==(1u<<core) && iop.diagnostic_ram32(0x124u)==0 && iop.diagnostic_ram32(0x128u)==1,
+                "separate whole-control latch hypothesis retains known writes and explicit disable only when requested");
+            else require(iop.stopped() && !iop.diagnostic_ram32(0x120u) && iop.stop_reason()->find("inactive/readback")!=std::string::npos,
+                         "reset removes the readback experiment and completed DMA does not invent inactive status");
+        }
+    }
+    {
+        m20::Assembler a(kEeResetVector);a.la(8,0xBF9001B0u);a.lhu(9,0,8);a.nop();idle(a);
+        const auto rom=image(a);Iop iop;iop.reset(rom,nullptr);iop.diagnostic_spu2_admas_control_latch();iop.run_until(20);
+        require(iop.stopped(),"retained-enable experiment never invents an ADMAS cold value before a guest write");
+    }
     std::cout<<"SPU2 ADMA payloads, stereo banks, backpressure, sample clock, DMA gates and actual completion IRQs passed\n";
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
