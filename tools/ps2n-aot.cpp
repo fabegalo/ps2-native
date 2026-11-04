@@ -1,4 +1,5 @@
 #include "ps2native/core.hpp"
+#include "ps2native/disc.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -11,13 +12,14 @@
 template <typename Character>
 int aot_main(int argc, Character** argv) {
     if (argc < 3) {
-        std::cerr << "Usage: ps2n-aot <owned-mips-elf> <output.cpp> [--hybrid] [--entry=0xADDRESS ...] [--table=0xADDRESS:COUNT ...]\n"
+        std::cerr << "Usage: ps2n-aot <owned-mips-elf|disc.iso> <output.cpp> [--disc] [--hybrid] [--entry=0xADDRESS ...] [--table=0xADDRESS:COUNT ...]\n"
                      "       ps2n-aot <your-rom0.bin> <output.cpp> --bios [--expect-sha256=HEX] [--entry=0xADDRESS ...]\n";
         return 2;
     }
     try {
         ps2native::AotOptions options;
         bool bios_input = false;
+        bool disc_input = false;
         std::optional<std::string> expected_sha256;
         auto parse_u32 = [](const std::string& value, const std::string& label) {
             if (value.empty() || value[0] == '-')
@@ -48,13 +50,20 @@ int aot_main(int argc, Character** argv) {
                 options.interpreter_boundaries = true;
             } else if (flag == "--bios") {
                 bios_input = true;
+            } else if (flag == "--disc") {
+                disc_input = true;
             } else if (flag.starts_with("--expect-sha256=")) {
                 expected_sha256 = flag.substr(16);
             } else {
-                throw std::runtime_error("Unrecognized argument; expected --entry, --table, --hybrid, --bios or --expect-sha256");
+                throw std::runtime_error("Unrecognized argument; expected --entry, --table, --hybrid, --disc, --bios or --expect-sha256");
             }
         }
-        const auto input = ps2native::read_file(std::filesystem::path(argv[1]));
+        if (bios_input && disc_input) throw std::runtime_error("--bios and --disc are mutually exclusive");
+        if (ps2native::file_exists(std::filesystem::path(argv[2])) &&
+            ps2native::files_equivalent(std::filesystem::path(argv[1]),std::filesystem::path(argv[2])))
+            throw std::runtime_error("AOT output must not overwrite its input");
+        const auto input = disc_input ? ps2native::DiscImage(std::filesystem::path(argv[1])).boot_elf().bytes
+                                     : ps2native::read_file(std::filesystem::path(argv[1]));
         if (bios_input) {
             // Hybrid translation of user-supplied boot firmware: reachable ROM code
             // only, interpreter boundaries listed; nothing is embedded but code.

@@ -81,4 +81,8 @@ struct EEState {
 // when interrupt entry changed PC. Timing retains the shared 1 cycle/instruction
 // model; this does not claim cycle-accurate superscalar execution.
 bool poll_ee_timer_interrupt(EEState& state);
+// Level-1 synchronous exception entry. Does not implement a BIOS service:
+// execution continues at the guest's V_COMMON handler (or bootstrap vector).
+// Nested EXL preserves EPC/BD; the instruction's pending branch is cancelled.
+void enter_ee_exception(EEState& state, std::uint32_t code, std::uint32_t pc, bool in_delay_slot);
 } // namespace ps2native

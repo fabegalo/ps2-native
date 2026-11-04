@@ -112,10 +112,41 @@ inline Program frame() {
     const auto stop=a.here(); a.brk();
     return {{{text,5,le_words(a.finish())},{data,6,std::move(bytes)}},stop,{},{}};
 }
+inline Program exceptions() {
+    Assembler a(text);
+    std::vector<std::uint32_t> roots;
+    a.addiu(t0,zero,0x10); a.mtc0(t0,Status); // user mode, no CU0
+    const auto syscall=a.here(); a.raw(0x0000000Cu); roots.push_back(a.here());
+    a.addiu(v0,zero,7);
+    a.beq(zero,zero,"target"); a.raw(0x0000000Cu); roots.push_back(a.here());
+    a.addiu(v0,v0,11); // handler skips the trapped branch+slot, cancels its target
+    a.label("target"); a.brk(); roots.push_back(a.here());
+    a.addiu(v0,v0,13);
+    a.i(0x15,zero,zero,0); a.raw(0x0000000Cu); // false BNEL annuls the SYSCALL
+    roots.push_back(a.here()); a.addiu(v0,v0,17);
+    a.la(t0,data+32); a.lq(t1,0,t0);
+    a.raw(0x700006E9u|(t1<<16u)|(t1<<11u)); // PCPYH t1,t1, aliasing
+    a.sq(t1,16,t0);
+    a.raw(0x70000389u|(t1<<21u)|(t1<<16u)|(t1<<11u)); // PCPYLD t1,t1,t1
+    a.sq(t1,32,t0);
+    const auto stop=a.here(); a.brk();
+    Assembler h(0x80000180u);
+    h.la(k0,data); h.lw(t0,0,k0); h.addiu(t1,t0,1); h.sw(t1,0,k0);
+    h.r(0,t0,t0,3,0); h.addu(k0,k0,t0);
+    h.mfc0(27,Cause); h.sw(27,4,k0); h.mfc0(t2,14); h.sw(t2,8,k0);
+    h.r(0,27,t3,31,2); h.r(0,t3,t3,2,0); h.addiu(t3,t3,4);
+    h.addu(t2,t2,t3); h.mtc0(t2,14); h.eret();
+    std::vector<std::uint8_t> records(80);
+    put(records,28,syscall); // independent test's expected first EPC
+    put(records,32,0xFEDCBA9876543210ull,8); put(records,40,0x0123456789ABCDEFull,8);
+    return {{{text,5,le_words(a.finish())},{data,6,std::move(records)},
+             {0x00000180u,5,le_words(h.finish())}},stop,{},std::move(roots)};
+}
 inline Program build(const std::string& mode) {
     if(mode=="cpu") return cpu();
     if(mode=="dma") return dma();
     if(mode=="frame") return frame();
+    if(mode=="exceptions") return exceptions();
     if(mode=="dynamic") {
         Assembler a(text);
         a.la(t0,data);a.la(t1,dynamic_address);a.addiu(t2,zero,3);

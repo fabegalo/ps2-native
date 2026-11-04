@@ -4,6 +4,22 @@
 #include <stdexcept>
 
 namespace ps2native {
+void enter_ee_exception(EEState& state, std::uint32_t code, std::uint32_t pc, bool in_delay_slot) {
+    if (code > 31u) throw std::invalid_argument("invalid EE exception code");
+    const auto status = state.cp0(Cop0::Status);
+    auto cause = (state.cp0(Cop0::Cause) & ~0x7Cu) | (code << 2u);
+    if (!(status & kStatusEXL)) {
+        state.set_cp0(Cop0::Epc, in_delay_slot ? pc - 4u : pc);
+        cause = (cause & ~0x80000000u) | (in_delay_slot ? 0x80000000u : 0u);
+    }
+    state.set_cp0(Cop0::Cause, cause);
+    state.set_cp0(Cop0::Status, status | kStatusEXL);
+    state.pc = (status & kStatusBEV) ? 0xBFC00380u : 0x80000180u;
+    state.delay_pending = false;
+    state.delay_indirect = false;
+    state.indirect_entry_pending = false;
+}
+
 bool poll_ee_timer_interrupt(EEState& state) {
     auto cause = state.cp0(Cop0::Cause);
     if (state.compare_written && state.count() == state.cp0(Cop0::Compare)) cause |= kStatusIM7;

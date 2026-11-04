@@ -1,28 +1,26 @@
-# Próximo incremento — completar o pipeline IRX/VU sem substituir o hardware
+# Próximo trabalho — continuar Shadow of the Colossus (SCUS-97472)
 
-Direct ELF, SIF1 EE→IOP, VIF1 DIRECT→GIF→GS e overlays EE regenerados offline estão demonstrados
-por programas próprios. O escopo integral M3.0 permanece aberto; ver [M3.0-STATUS](M3.0-STATUS.md).
+Meta preservada: inicialização normal → primeiro frame real → menu original → controles → gameplay.
+Só "ELF executa" está demonstrado. Ver [FIRST-GAME-STATUS](FIRST-GAME-STATUS.md) para os hashes,
+checkpoints e a distinção entre Direct ELF, boot normal e injeção diagnóstica em firmware parcial.
 
-1. **IRX:** implementar loader relocável R3000A e linking import/export com versões, usando o IOP
-   existente. Testes próprios de módulos produtores/consumidores, HI16/LO16/R_MIPS_26, símbolos
-   ausentes e recusas transacionais. O payload raw atual não comprova esse contrato. Auditar cada
-   arquivo permissivo antes de adaptar Play!; não usar seu kernel HLE como substituto do original.
-2. **VU0/VU1:** estabelecer um subconjunto micro executável com decode, hazards, E/end e delay slots
-   documentados, compartilhando semântica entre interpretação e AOT. Implementar MPG/UNPACK/MSCAL
-   em VIF somente junto com execução real. Estender o frame próprio para atravessar VU/GIF/GS;
-   comparar registros, memória, eventos e digest, recusando instruções fora do subconjunto.
-3. **SIF:** estender SIF1 para cadeia de origem/TTE/TIE, tags IRQ e quantidades parciais conforme
-   evidência; depois SIF0 e entrega de interrupções EE. Validar latências/FIFO/arbitragem físicas
-   antes de promover o throughput experimental atual a modelo de timing fiel.
-4. **Serviços:** executar um homebrew próprio convencional só quando kernel/syscalls e dependências
-   tiverem implementação demonstrada; não fornecer stubs de sucesso. Medir cobertura, trocas e tempo
-   sob condições equivalentes e manter a CI de seis alvos.
+1. **Dependência externa do boot original:** obter identificação medida do codificador de vídeo
+   (`0x7E`/eventual `0x7F`, endereço serial `0x42`) do console compatível com ROMVER
+   `0200EC20040614`/NVM SCPH-70004. A ROM0/NVM local não contém esses dados. Repetir o boot com
+   os valores comprovados; nenhum valor assumido ou fallback de outra revisão certifica a etapa.
+2. **Timer/INTC exigido pelo mesmo ELF:** implementar contagem/compare/overflow, flags W1C e
+   interrupções de T0–T3 com I_STAT/I_MASK e entrega INT0 no dispatcher comum. Último ponto
+   diagnóstico: escrita `T2_MODE=0xF82`, PC `0x001103E8`, após 312.702 instruções. Conferir COMP
+   e estado efetivamente programados; reset desconhecido não pode virar zero inventado. Testar
+   bordas, máscaras, rearmamento, atraso de branch, EXL/ERL e equivalência AOT/interpretador.
+3. Retomar o jogo **pelo kernel realmente inicializado**, sem apresentar a injeção no estado
+   interrompido como ExecPS2. Seguir o primeiro bloqueio observado de SIF/DMA/IOP; os IRX e
+   IOPRP300 devem vir do próprio disco, sem mistura de módulos de firmware nem HLE de sucesso.
+4. Preservar código estático provado em AOT; o bootstrap tem só 23 instruções traduzidas,
+   e a execução inicial quase toda AOT é limpeza de RAM, não cobertura dos XFF dinâmicos.
+   Usar prova independente e regeneração offline para regiões carregadas; não adivinhar funções.
+5. Avançar VIF/VU/GS, input e SPU2 conforme os acessos reais. Só promover cada etapa com execução,
+   pixels/frames e evidência de input correspondentes. Regressões focadas e CI dos seis alvos.
 
-O caminho ROM0/NVM original continua sendo requisito independente. Para avançar a SCPH-70004 além
-do bloqueio existente ainda faltam IDs medidos do codificador de vídeo, fase vertical pós-reset e
-INTC do EE; diagnóstico com valores assumidos não prova o Browser. Preservar essa investigação e
-os dados compatíveis por console conforme [M2.9](M2.9-STATUS.md), sem usar Direct ELF como resultado
-de compatibilidade de firmware.
-
-Não editar READMEs ou contratos permanentes por incremento. Manter launcher/GUI separado,
-programas próprios reproduzíveis, nenhum binário proprietário ou codegen de firmware no Git.
+Não alterar o launcher, READMEs ou contratos permanentes. Preservar ISO, firmware, NVM e saves.
+Traces, extrações e traduções de conteúdo proprietário ficam apenas em `out/` ignorado.

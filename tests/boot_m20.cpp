@@ -93,7 +93,7 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     require(memory.read32(0xA0001000u) == 0xCAFEF00Du, "RAM through KSEG0 and KSEG1");
     bus_fault([&] { memory.write32(0xBFC00000u, 1u); }, BusFault::RomWrite, "write to ROM");
     bus_fault([&] { (void)memory.read32(0x80000002u); }, BusFault::Unaligned, "Unaligned guest LW");
-    bus_fault([&] { (void)memory.read32(0x00000000u); }, BusFault::KusegWithErl, "Status.ERL = 1");
+    require(memory.read32(0x00001000u)==0xCAFEF00Du,"ERL kuseg bypasses the TLB");
     bus_fault([&] { (void)memory.read32(0xB000F000u); }, BusFault::Device, "INTC");
     bus_fault([&] { (void)memory.read32(0xB0003000u); }, BusFault::Device, "GIF");
     bus_fault([&] { (void)memory.read32(0xB000F410u); }, BusFault::Device, "MCH (RDRAM controller)");
@@ -157,9 +157,20 @@ void check_interpreter_stops(const std::vector<std::uint8_t>& rom) {
                 "stop for " + hex8(word) + ": [" + report.category + "] " + report.reason);
         require(report.word == word && report.retired == 0u, "stop leaves the instruction unretired");
     };
-    expect(0x0000000Cu, "guest exception", "SYSCALL (ExcCode 8) exception; vectoring to 0xBFC00380");
-    expect(0x0000000Du, "guest exception", "BREAK (ExcCode 9)");
-    expect(0x8C080000u, "bus: kuseg with Status.ERL", "LW");
+    for (const auto word : {0x0000000Cu, 0x0000000Du}) {
+        auto patched = rom;
+        put32(patched, 0, word);
+        EEState state;
+        Memory memory;
+        prepare_ee_boot(load_bios_rom0(patched), nullptr, state, memory);
+        BootOptions options;
+        options.stop_at = 0xBFC00380u;
+        const auto report = run_ee_boot(state, memory, nullptr, options);
+        require(report.outcome == BootOutcome::StopAddress && report.retired == 1 &&
+                state.cp0(Cop0::Epc) == m20::kResetVector &&
+                (state.cp0(Cop0::Cause) & 0x7Cu) == (word == 0xCu ? 8u : 9u) * 4u &&
+                (state.cp0(Cop0::Status) & kStatusEXL), "synchronous exception enters bootstrap vector");
+    }
     expect(0x44000000u, "unsupported", "(COP1/FPU) not implemented by the interpreter");
     expect(0x70000000u, "unsupported", "(MMI) not implemented");
     expect(0x88080000u, "unsupported", "(unaligned load/store)");

@@ -231,6 +231,15 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             return out;
         };
         s.set_reg128(d_, lanes(a.low, b.low), lanes(a.high, b.high));
+    // PCPYH: broadcast the low halfword independently in each 64-bit half.
+    } else if constexpr (Op == O::Pcpyh) {
+        const auto source = s.reg128(t_);
+        constexpr auto repeat = 0x0001000100010001ull;
+        s.set_reg128(d_, (source.low & 0xFFFFu) * repeat, (source.high & 0xFFFFu) * repeat);
+    } else if constexpr (Op == O::Pcpyld) {
+        const auto low = s.reg64(t_);
+        const auto high = s.reg64(s_);
+        s.set_reg128(d_, low, high);
     // PAND/PXOR/POR/PNOR: bitwise over all 128 bits.
     } else if constexpr (Op == O::Pand || Op == O::Pxor || Op == O::Por || Op == O::Pnor) {
         const auto a = s.reg128(s_);

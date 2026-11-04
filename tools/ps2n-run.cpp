@@ -2,6 +2,7 @@
 #include "ps2native/boot.hpp"
 #include "ps2native/io.hpp"
 #include "ps2native/sha256.hpp"
+#include "ps2native/disc.hpp"
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -12,6 +13,7 @@ template<class C> int run_main(int argc, C** argv) {
     try {
         if (argc < 2) {
             std::cerr << "Usage: ps2n-run <owned-ps2.elf> [--budget=N] [--stop=ADDRESS] [--frame=out.bmp]\n"
+                         "         [--disc] [--trace=events|full] [--trace-out=FILE] [--tail=N]\n"
                          "         [--iop-image=raw.bin --iop-load=ADDRESS --iop-entry=ADDRESS]\n";
             return 2;
         }
@@ -19,6 +21,8 @@ template<class C> int run_main(int argc, C** argv) {
         std::filesystem::path frame;
         std::filesystem::path iop_image;
         std::optional<std::uint32_t> iop_load, iop_entry;
+        std::filesystem::path trace_out;
+        bool disc_input=false;
         for (int i = 2; i < argc; ++i) {
             const auto flag = ps2native::path_utf8(std::filesystem::path(argv[i]));
             const auto number = [&](std::size_t offset, std::uint64_t max) {
@@ -35,9 +39,15 @@ template<class C> int run_main(int argc, C** argv) {
             else if (flag.starts_with("--iop-image=")) iop_image = std::filesystem::path(argv[i]).native().substr(12);
             else if (flag.starts_with("--iop-load=")) iop_load = static_cast<std::uint32_t>(number(11,0xFFFFFFFFu));
             else if (flag.starts_with("--iop-entry=")) iop_entry = static_cast<std::uint32_t>(number(12,0xFFFFFFFFu));
+            else if (flag == "--disc") disc_input=true;
+            else if (flag == "--trace=full") options.trace=ps2native::TraceLevel::Full;
+            else if (flag == "--trace=events") options.trace=ps2native::TraceLevel::Events;
+            else if (flag.starts_with("--trace-out=")) trace_out=std::filesystem::path(argv[i]).native().substr(12);
+            else if (flag.starts_with("--tail=")) options.tail_instructions=static_cast<std::size_t>(number(7,1000000));
             else throw std::runtime_error("unknown option: " + flag);
         }
-        const auto elf = ps2native::parse_ee_elf(ps2native::read_file(std::filesystem::path(argv[1])));
+        const auto elf = disc_input ? ps2native::DiscImage(std::filesystem::path(argv[1])).boot_elf()
+                                   : ps2native::parse_ee_elf(ps2native::read_file(std::filesystem::path(argv[1])));
         ps2native::Memory memory;
         ps2native::EEState state;
         const ps2native::AotModule* module = nullptr;
@@ -59,7 +69,22 @@ template<class C> int run_main(int argc, C** argv) {
                   << std::dec << " retired=" << report.retired << " aot=" << report.aot_instructions
                   << " interpreted=" << report.interpreted_instructions << " switches=" << report.engine_switches
                   << " runtime_ms=" << elapsed << '\n' << report.reason << '\n';
+        std::cout << "status=0x" << std::hex << state.cp0(ps2native::Cop0::Status)
+                  << " cause=0x" << state.cp0(ps2native::Cop0::Cause) << " epc=0x" << state.cp0(ps2native::Cop0::Epc)
+                  << " v1=0x" << state.reg32(3) << std::dec
+                  << " gs_pixel_writes=" << memory.gs().vram().pixel_writes() << '\n';
+        std::string trace="# ELF sha256 "+ps2native::sha256_hex(elf.bytes)+"\n";
+        for (const auto& line:report.trace) trace+=line+'\n';
+        trace+="# instruction tail\n";
+        for (const auto& line:report.tail) trace+=line+'\n';
+        if (!trace_out.empty()) {
+            if (ps2native::file_exists(trace_out) && ps2native::files_equivalent(trace_out,std::filesystem::path(argv[1])))
+                throw std::runtime_error("trace output must not overwrite the input");
+            (void)ps2native::write_text_if_changed(trace_out,trace);
+        } else std::cout << trace;
         if (!frame.empty()) {
+            if (ps2native::file_exists(frame) && ps2native::files_equivalent(frame,std::filesystem::path(argv[1])))
+                throw std::runtime_error("frame output must not overwrite the input");
             const auto image = memory.gs().scanout(state.retired_instructions);
             ps2native::save_framebuffer_bmp(frame, image);
             std::cout << "frame_rgba_sha256=" << ps2native::sha256_hex(image.rgba) << '\n';

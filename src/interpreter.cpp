@@ -34,15 +34,12 @@ public:
         throw GuestStop(kind, what + " at " + hex32(s_.instruction_pc));
     }
 
-    // Kernel mode is the only privilege level modeled; the COP0 timer is the
-    // only interrupt source that could fire without an implemented device.
     void apply_status() {
         const auto status = s_.cp0(Cop0::Status);
         const bool exception_level = (status & (kStatusEXL | kStatusERL)) != 0u;
-        m_.set_translation_context(static_cast<std::uint8_t>(s_.cp0(Cop0::EntryHi) & 0xFFu),
-                                   (status & kStatusERL) != 0u);
-        if (!exception_level && (status & kStatusKSU) != 0u)
-            stop(StopKind::NotModeled, "Status.KSU selects supervisor/user mode; only kernel mode is modeled");
+        m_.set_cpu_context(status, s_.cp0(Cop0::EntryHi));
+        if (!exception_level && (status & kStatusKSU) == kStatusKSU)
+            stop(StopKind::Undefined, "Status.KSU selects reserved privilege mode");
         if (!exception_level && (status & kStatusIE) && (status & kStatusEIE) &&
             (status & kStatusIM7) && !s_.compare_written)
             stop(StopKind::NotModeled, "COP0 timer interrupt enabled with undefined Compare");
@@ -195,7 +192,9 @@ public:
             default:
                 stop(StopKind::NotModeled, "CACHE operation " + hex32(op) + " (cache contents are not modeled)");
         }
-        if (op != 0x0C) (void)m_.translate(address, false); // Address translation faults still apply.
+        // Only hit operations use the address's translation/tag. Index
+        // operations select a cache set/way directly, including unmapped VA 0.
+        if (op == 0x18 || op == 0x1A || op == 0x1C) (void)m_.translate(address, false);
         event(std::string("CACHE ") + name + " " + hex32(address) + " (no cache model: memory coherent)");
     }
 
@@ -229,6 +228,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
     auto& state = ctx.state;
     auto& memory = ctx.memory;
     (void)poll_ee_timer_interrupt(state);
+    memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi));
     const auto pc = state.pc;
     state.instruction_pc = pc;
     state.instruction_in_delay_slot = state.delay_pending;
@@ -237,12 +237,24 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
     if (instruction.has_delay_slot() && state.delay_pending)
         throw std::runtime_error("Control transfer in an active delay slot is unsupported");
     Interpreter cpu(ctx, events);
+    const auto status = state.cp0(Cop0::Status);
+    if (((word >> 26u) == 0x10u || instruction.opcode == MipsOpcode::Cache) &&
+        instruction.opcode != MipsOpcode::Ei && instruction.opcode != MipsOpcode::Di &&
+        !(status & (kStatusEXL | kStatusERL | (1u << 28u))) && (status & kStatusKSU))
+        cpu.stop(StopKind::GuestException, "COP0 unusable in supervisor/user mode with Status.CU0 = 0; vectoring is not modeled");
     switch (instruction.opcode) {
         case MipsOpcode::Syscall: case MipsOpcode::Break: {
-            const auto vector = (state.cp0(Cop0::Status) & kStatusBEV) ? 0xBFC00380u : 0x80000180u;
-            cpu.stop(StopKind::GuestException,
-                     std::string(instruction.opcode == MipsOpcode::Syscall ? "SYSCALL (ExcCode 8)" : "BREAK (ExcCode 9)") +
-                     " exception; vectoring to " + hex32(vector) + " is not modeled");
+            if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Interpreter);
+            enter_ee_exception(state, instruction.opcode == MipsOpcode::Syscall ? 8u : 9u, pc, state.delay_pending);
+            memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi));
+            cpu.event(std::string(instruction.opcode == MipsOpcode::Syscall ? "SYSCALL" : "BREAK") +
+                      " exception -> " + hex32(state.pc) + " EPC=" + hex32(state.cp0(Cop0::Epc)) +
+                      " Cause=" + hex32(state.cp0(Cop0::Cause)));
+            // Exception entry replaces normal retirement: retire() would apply
+            // the cancelled branch target when the trap was in its delay slot.
+            ++ctx.executed;
+            ++state.retired_instructions;
+            return;
         }
         case MipsOpcode::Eret:
             if (state.delay_pending) cpu.stop(StopKind::Undefined, "ERET in a branch delay slot");

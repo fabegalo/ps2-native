@@ -10,13 +10,27 @@
 |---|---|---|
 | AOT MIPS/R5900 | ELF32 sintéticos, CFG conservador, relocations como evidência, geração C++ e testes end-to-end | Cobertura incompleta de jogos e código dinâmico |
 | Boot EE | ROM0 reais, COP0/TLB, memória, RDRAM, início do kernel em RAM e AOT híbrido com trace | CPU e dispositivos ainda parciais |
-| Direct ELF | Loader comum, ambiente bare-metal explícito, Count/Compare e retomada com overlays AOT verificados | Sem kernel Sony/HLE, syscalls convencionais ou suporte demonstrado a jogos |
+| Direct ELF | BOOT2 de ISO pelo loader comum, ambiente bare-metal, Count/Compare, SYSCALL/BREAK para handler convidado, usuário/supervisor/ERL e overlays AOT verificados | Não instala kernel/serviços; ELF comercial executado, sem imagem ou jogabilidade |
 | IOP | Inicialização R3000A, NVM externa, MECHACON, timers/VBLANK, SIF e EE→IOP SIF1 com bytes reais | Sem linker IRX, SIF0, RPC ou serviços completos; DMA/timing ainda parciais |
 | GS/GIF | VRAM 4 MiB PSMCT32/24, PATH3 PACKED/REGLIST/IMAGE, transferências, pontos/sprites, scanout RGBA8/BMP e eventos; imagem sintética determinística | Sem pixels da BIOS real; formatos, primitivas, efeitos e timing ainda parciais |
 | Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
-## Última evidência: incremento M3.0
+## Última evidência: primeiro ELF comercial
+
+- **Shadow of the Colossus (USA), SCUS-97472:** executado diretamente da ISO original. Até o vetor
+  da primeira syscall: 86.278 instruções, 86.277 AOT/1 interpretada, PC `0x80000180`, zero pixels GS.
+  Tetris Plus local é PS1 e não é candidato ao runtime EE. **Nenhum menu, controle ou gameplay.**
+- **Correções genéricas executadas:** exceções SYSCALL/BREAK, retorno usuário/supervisor, permissões,
+  kuseg com ERL, CACHE por índice, PCPYH/PCPYLD e leitura Tn_MODE no subconjunto suportado.
+- **Diagnóstico separado, sem boot concluído:** ELF injetado no estado parcial do firmware executou
+  handlers Sony reais até 312.702 instruções e parou ao habilitar interrupções do Timer 2
+  (`0x001103E8`). Isso não comprova inicialização normal. Boot ROM0/NVM original repetido mantém
+  o bloqueio externo no ID não medido do codificador (`0x80007D20`), sem respostas assumidas.
+- **Regressões:** leitura ISO/BOOT2, exceções, modos de memória, cache e MMI com fixtures próprios;
+  nenhuma alteração no launcher. Identidades, logs, testes/CI e limites: [primeiro jogo](docs/FIRST-GAME-STATUS.md).
+
+## Evidência anterior: incremento M3.0
 
 - **Três ELF próprios pelo mesmo runtime:** chamadas/memória/interrupt de Count, comunicação SIF1 e frame
   VIF1 DIRECT→GIF PATH2→GS. Interpretador e AOT conferem memória, registradores, eventos e framebuffer.

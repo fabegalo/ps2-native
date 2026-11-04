@@ -193,6 +193,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                     break;
                 }
                 (void)poll_ee_timer_interrupt(state);
+                memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi));
                 // Hybrid mode: every address may continue in the interpreter, so
                 // the AOT-only verified-entry restriction does not apply here.
                 state.indirect_entry_pending = false;

@@ -1,4 +1,5 @@
 #include "ps2native/memory.hpp"
+#include "ps2native/ee.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -110,6 +111,7 @@ BusRegion classify_physical(std::uint32_t p) noexcept {
 const char* bus_fault_name(BusFault fault) noexcept {
     switch (fault) {
         case BusFault::Unaligned: return "address error (unaligned)";
+        case BusFault::Privilege: return "address error (privilege)";
         case BusFault::OutsideProgramRam: return "outside EE main RAM";
         case BusFault::TlbRefill: return "TLB refill";
         case BusFault::TlbInvalid: return "TLB invalid";
@@ -143,6 +145,7 @@ std::size_t Memory::physical_address(std::uint32_t address, std::size_t size) {
 }
 
 void Memory::load(const ElfImage& elf) {
+    privilege_ = Privilege::Kernel;
     mapping_ = Mapping::ElfProgram;
     rom_.clear();
     scratchpad_.clear();
@@ -166,6 +169,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
     tlb_defined_ = {};
     asid_ = 0;
     error_level_ = true;
+    privilege_ = Privilege::Kernel;
     registers_.reset(hardware, rom_, nvm, assumptions);
     registers_.attach_ee_ram(ram_);
 }
@@ -186,9 +190,15 @@ void Memory::load_iop_program(std::span<const std::uint8_t> bytes, std::uint32_t
     registers_.load_iop_program(bytes, address, entry);
 }
 
-void Memory::set_translation_context(std::uint8_t asid, bool error_level) noexcept {
+void Memory::set_translation_context(std::uint8_t asid, bool error_level, Privilege privilege) noexcept {
     asid_ = asid;
     error_level_ = error_level;
+    privilege_ = privilege;
+}
+void Memory::set_cpu_context(std::uint32_t status, std::uint32_t entry_hi) noexcept {
+    const auto privilege = (status & (kStatusEXL | kStatusERL)) ? Privilege::Kernel
+                         : static_cast<Privilege>((status & kStatusKSU) >> 3u);
+    set_translation_context(static_cast<std::uint8_t>(entry_hi), (status & kStatusERL) != 0u, privilege);
 }
 
 void Memory::tlb_write(unsigned index, const TlbEntry& entry) {
@@ -265,6 +275,13 @@ std::uint32_t Memory::translate_tlb(std::uint32_t address, std::size_t size, boo
 }
 
 Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool write, const char* what) const {
+    if (privilege_ == Privilege::Reserved ||
+        (privilege_ == Privilege::User && address >= 0x80000000u) ||
+        (privilege_ == Privilege::Supervisor && address >= 0x80000000u &&
+         (address < 0xC0000000u || address >= 0xE0000000u)))
+        throw BusError(BusFault::Privilege, write, static_cast<std::uint8_t>(size), address, std::nullopt,
+                       BusRegion::Unmapped, "EE bus " + access_name(write, size, what) + " at " + hex32(address) +
+                       ": address segment is inaccessible in the current CPU privilege mode");
     if ((address & (size - 1u)) != 0)
         throw BusError(BusFault::Unaligned, write, static_cast<std::uint8_t>(size), address, std::nullopt,
                        BusRegion::Unmapped, std::string("Unaligned guest ") + what);
@@ -280,12 +297,11 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
         return {address - 0x70000000u, BusRegion::Scratchpad, address - 0x70000000u};
     } else if (address >= 0x80000000u && address < 0xC0000000u) {
         physical = address & 0x1FFFFFFFu; // KSEG0 (cached) / KSEG1 (uncached): unmapped.
+    } else if (address < 0x80000000u && error_level_) {
+        // Level-2 error handling uses identity-mapped, uncached kuseg. Do not
+        // apply a 29-bit alias mask: the entire 2 GiB segment is unmapped.
+        physical = address;
     } else {
-        if (address < 0x80000000u && error_level_)
-            throw BusError(BusFault::KusegWithErl, write, static_cast<std::uint8_t>(size), address,
-                           std::nullopt, BusRegion::Unmapped,
-                           "EE bus " + access_name(write, size, what) + " at " + hex32(address) +
-                           ": kuseg access while Status.ERL = 1 (unmapped kuseg is not modeled)");
         bool scratchpad = false;
         physical = translate_tlb(address, size, write, scratchpad);
         if (scratchpad) return {physical, BusRegion::Scratchpad, physical};

@@ -130,12 +130,16 @@ void check_registers(const std::vector<std::uint8_t>& rom) {
     device_refused([&] { (void)m.read32(0xB0000020u); }, "T0_COMP read before any write");
     m.write32(0xB0000020u, 0x12345678u);
     require(m.read32(0xB0000020u) == 0x5678u, "COMP keeps 16 bits");
-    device_refused([&] { (void)m.read32(0xB0000010u); }, "T0_MODE read: compare/overflow flag semantics");
+    require(m.read32(0xB0000010u) == 0u && m.read32(0xB0001810u) == 0x83u,
+            "Tn_MODE retains stopped/running configuration; no enabled interrupts means flags stay clear");
     device_refused([&] { m.write32(0xB0000010u, 0x84u); }, "gating is not modeled");
     device_refused([&] { m.write32(0xB0000010u, 0x180u); }, "timer interrupts need the INTC");
     device_refused([&] { m.write32(0xB0000010u, 0x280u); }, "timer interrupts need the INTC");
     device_refused([&] { m.write32(0xB0000010u, 0xC0u); }, "clear-on-compare is not modeled");
     m.write32(0xB0000010u, 0x100u); // interrupt bit while stopped: nothing can fire
+    require(m.read32(0xB0000010u) == 0x100u, "disabled counter retains interrupt enable");
+    m.write32(0xB0000010u, 0xC00u); // W1C flags do not set them
+    require(m.read32(0xB0000010u) == 0u, "W1C timer flags cannot be set by the guest");
     device_refused([&] { (void)m.read32(0xB0000030u); }, "T0_HOLD: counter hold");
     device_refused([&] { m.write32(0xB0001030u, 0u); }, "T2_HOLD: counter hold");
     device_refused([&] { (void)m.read16(0xB0000000u); }, "32-bit Tn_COUNT/MODE/COMP only");

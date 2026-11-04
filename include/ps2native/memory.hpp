@@ -24,6 +24,7 @@ enum class BusRegion : std::uint8_t {
 
 enum class BusFault : std::uint8_t {
     Unaligned,          // address error exception (not vectored yet)
+    Privilege,          // address segment is inaccessible in the current CPU mode
     OutsideProgramRam,  // ELF program mapping: address outside EE main RAM
     TlbRefill,          // no TLB entry matches
     TlbInvalid,         // matching entry with V = 0
@@ -74,6 +75,7 @@ struct TlbEntry {
 
 class Memory {
 public:
+    enum class Privilege : std::uint8_t { Kernel, Supervisor, User, Reserved };
     static constexpr std::size_t kMainRamBytes = 32u * 1024u * 1024u;
     static constexpr std::size_t kBiosRomBytes = 4u * 1024u * 1024u;
     static constexpr std::size_t kScratchpadBytes = 16u * 1024u;
@@ -125,7 +127,10 @@ public:
     // Index of the entry matching EntryHi's VPN2/ASID (TLBP), if any.
     [[nodiscard]] std::optional<unsigned> tlb_probe(std::uint32_t entry_hi) const;
     // Current ASID (EntryHi) and Status.ERL, which change how addresses translate.
-    void set_translation_context(std::uint8_t asid, bool error_level) noexcept;
+    void set_translation_context(std::uint8_t asid, bool error_level,
+                                 Privilege privilege = Privilege::Kernel) noexcept;
+    // Synchronize ASID, ERL and effective privilege after COP0/exception changes.
+    void set_cpu_context(std::uint32_t status, std::uint32_t entry_hi) noexcept;
     void set_observer(BusObserver* observer) noexcept { observer_ = observer; }
     // EE cycle counter used by the timed EE registers (boot mapping only).
     void set_clock(const std::uint64_t* ee_cycles) noexcept { registers_.set_clock(ee_cycles); }
@@ -163,6 +168,7 @@ private:
     Mapping mapping_{Mapping::ElfProgram};
     std::uint8_t asid_{};
     bool error_level_{};
+    Privilege privilege_{Privilege::Kernel};
     BusObserver* observer_{};
 };
 } // namespace ps2native

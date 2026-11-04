@@ -138,6 +138,22 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
                     "SIF1 byte count and bounded FIFO backpressure");
             require((memory.read32(0xB000C400u)&0x100u)==0 && memory.read32(0xB000C420u)==0 &&
                     (memory.read32(0xB000E010u)&0x40u),"EE source completion and QWC");
+        } else if(mode=="exceptions") {
+            require(state.reg32(2)==48 && memory.read32(direct_test::data)==3,
+                    "guest handler returns to user mode, cancels branch, annuls false likely slot");
+            require(state.cp0(Cop0::Status)==0x10 && !state.delay_pending && !state.indirect_entry_pending,
+                    "ERET restores original user privilege and clears pending transfer");
+            require(memory.read32(direct_test::data+4)==32 && memory.read32(direct_test::data+12)==0x80000020u &&
+                    memory.read32(direct_test::data+20)==36,"SYSCALL/BREAK cause and branch delay flag");
+            require(memory.read32(direct_test::data+8)==memory.read32(direct_test::data+28) &&
+                    memory.read32(direct_test::data+16)==direct_test::text+16 &&
+                    memory.read32(direct_test::data+24)==direct_test::text+28,"exception restart PCs");
+            require(contains(report.trace,"SYSCALL exception -> 0x80000180") &&
+                    contains(report.trace,"BREAK exception -> 0x80000180"),"explicit exception trace");
+            require(memory.read64(direct_test::data+48)==0x3210321032103210ull &&
+                    memory.read64(direct_test::data+56)==0xCDEFCDEFCDEFCDEFull,"PCPYH broadcasts both independent halfwords in AOT/interpreter");
+            require(memory.read64(direct_test::data+64)==0x3210321032103210ull &&
+                    memory.read64(direct_test::data+72)==0x3210321032103210ull,"PCPYLD all operands aliased in AOT/interpreter");
         } else {
             const auto frame=memory.gs().scanout(state.retired_instructions);
             require(frame.width==64 && frame.height==32 && frame.rgba[0]==0 && frame.rgba[2]==32,"Direct ELF guest frame");

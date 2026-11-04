@@ -135,7 +135,10 @@ std::uint32_t EeRegisters::read_timer(unsigned index, unsigned reg) {
             if (!timer.compare) throw DeviceRefusal(name + " read before any write (reset value not verified)");
             return *timer.compare;
         case Mode:
-            throw DeviceRefusal(name + " read: compare/overflow flag semantics are not modeled");
+            // EQUF/OVFF are set when their enabled interrupt occurs (EE User's
+            // Manual, Tn_MODE). This subset refuses counting with CMPE/OVFE,
+            // so neither flag can become set; return the actual retained mode.
+            return timer.mode;
         default:
             throw DeviceRefusal(name + ": counter hold (SBUS capture) is not modeled");
     }
