@@ -8,9 +8,9 @@ namespace {
 void qword(std::vector<std::uint8_t>& ram,unsigned at,std::uint64_t low,std::uint64_t high) {
     for(unsigned b=0;b<8;++b){ram.at(at+b)=static_cast<std::uint8_t>(low>>(8*b));ram.at(at+8+b)=static_cast<std::uint8_t>(high>>(8*b));}
 }
-void arm(Iop& dma,std::vector<std::uint8_t>& ram) {
+void arm(Iop& dma,std::vector<std::uint8_t>& ram,unsigned low=0u) {
     dma.attach_ee_ram(ram);dma.ee_dma_write(0x1000E000u,1);
-    dma.ee_dma_write(0x1000A010u,0x100u);dma.ee_dma_write(0x1000A020u,7);
+    dma.ee_dma_write(0x1000A010u,0x100u|low);dma.ee_dma_write(0x1000A020u,7);
     dma.ee_dma_write(0x1000A000u,0x101u);
 }
 }
@@ -33,6 +33,15 @@ int main() try {
     for(unsigned p=0;p<4;++p)require(gs.vram().read(0,64,0,p%2,p/2)==expected[p],"DMA preserves source pixels exactly");
     require(dma.ee_dma_read(0x1000A010u)==0x170u && !dma.ee_dma_read(0x1000A020u) &&
             !(dma.ee_dma_read(0x1000A000u)&0x100u) && (dma.ee_dma_read(0x1000E010u)&4u),"MADR/QWC/STR and D_STAT reflect the actual transfer");
+    for(unsigned low=1u;low<16u;++low) {
+        dma.reset({},nullptr);gif.reset();gs.reset(0);arm(dma,ram,low);
+        require(dma.ee_dma_read(0x1000A010u)==0x100u,"MADR lower bits cannot select a byte lane");
+        dma.advance_gif_dma(14,gif,gs);
+        for(unsigned p=0;p<4;++p)require(gs.vram().read(0,64,0,p%2,p/2)==expected[p],
+            "all fifteen low-bit aliases transfer bytes from the actual aligned source");
+        require(dma.ee_dma_read(0x1000A010u)==0x170u && !dma.ee_dma_read(0x1000A020u) &&
+            (dma.ee_dma_read(0x1000E010u)&4u),"low-bit aliases preserve actual byte count and completion timing");
+    }
     dma.reset({},nullptr);gif.reset();gs.reset(0);arm(dma,ram);dma.set_ee_dma_suspended(true);
     dma.advance_gif_dma(100,gif,gs);require(dma.ee_dma_read(0x1000A020u)==7,"CPND stalls without consuming data");
     dma.set_ee_dma_suspended(false);dma.advance_gif_dma(114,gif,gs);require(gif.packets().size()==1,"resume transfers original bytes");
@@ -66,6 +75,12 @@ int main() try {
     for(unsigned p=0;p<4;++p)require(gs.vram().read(0,64,0,p%2,p/2)==expected[p],"chained GIF exact source pixels");
     require(gif.packets().size()==1 && (dma.ee_dma_read(0x1000E010u)&4u) &&
             dma.ee_dma_read(0x1000A030u)==0x310u,"END completion and preserved TADR after actual pixels");
+    for(unsigned low=1u;low<16u;++low) {
+        chain(0x300u|low);require(dma.ee_dma_read(0x1000A030u)==0x300u,"TADR low bits cannot select a different tag");
+        dma.advance_gif_dma(18,gif,gs);
+        for(unsigned p=0;p<4;++p)require(gs.vram().read(0,64,0,p%2,p/2)==expected[p],"unaligned tag-register stores fetch the documented qword");
+        require(dma.ee_dma_read(0x1000A030u)==0x310u && (dma.ee_dma_read(0x1000E010u)&4u),"tag aliases retain the true final tag and interrupt");
+    }
     qword(ram,0x400,0x90000007u,~0ull);
     std::copy(ram.begin()+0x100,ram.begin()+0x170,ram.begin()+0x410);
     chain(0x400,0x185);dma.advance_gif_dma(16,gif,gs);

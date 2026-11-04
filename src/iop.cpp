@@ -453,8 +453,9 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
         ee_sif1_chcr_ = value; ee_sif1_chain_end_=!chain; return;
     }
     if (address == 0x1000C410u) {
-        if (value & 15u) throw DeviceRefusal("EE SIF1 MADR must be qword aligned (scratchpad unsupported)");
-        ee_sif1_madr_ = value; return;
+        // EE manual 5.9: the address register's low four bits are zero.
+        // A CPU store of those bits does not fault or select byte lanes.
+        ee_sif1_madr_ = value&~15u; return;
     }
     if (address == 0x1000C420u) { ee_sif1_qwc_ = value & 0xFFFFu; return; }
     if(channel==5u && field==0u && (value&0x100u)) {
@@ -481,7 +482,9 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
         throw DeviceRefusal("EE DMAC channel "+std::to_string(channel)+" transfer engine is not modeled");
     constexpr std::uint32_t masks[]{0xFFFF01FDu,0xFFFFFFF0u,0xFFFFu,0xFFFFFFF0u,
                                    0xFFFFFFF0u,0xFFFFFFF0u,0u,0u,0x3FF0u};
-    if(field!=0u && field!=2u && (value&15u))throw DeviceRefusal("EE DMAC address must be qword aligned");
+    // MADR/TADR/ASR/SADR have qword address fields (EE manual 5.9).
+    // Apply their hardware masks, rather than rejecting a legal MMIO store
+    // when software includes bits that cannot select a DMA byte lane.
     const auto mask=(field==1u && channel>=8u) ? 0x7FFFFFF0u : masks[field];
     ee_dma_setup_[channel][field]=value&mask;
 }

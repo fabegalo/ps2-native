@@ -32,10 +32,10 @@ std::vector<std::uint8_t> packet(std::uint32_t destination_tag=0xC0000400u) {
     for(unsigned w=0;w<4;++w)put(ram,0x110u+4u*w,0xCA110000u+w);
     return ram;
 }
-void arm(Iop& iop,std::vector<std::uint8_t>& ram,std::uint32_t qwc,bool chain=false,std::uint32_t chcr=0x184u) {
+void arm(Iop& iop,std::vector<std::uint8_t>& ram,std::uint32_t qwc,bool chain=false,std::uint32_t chcr=0x184u,unsigned low=0u) {
     iop.attach_ee_ram(ram);iop.ee_dma_write(0x1000E000u,1);
     // No PCR write: the documented clear PCE makes unknown CDE irrelevant.
-    iop.ee_dma_write(0x1000C410u,0x100u);iop.ee_dma_write(0x1000C420u,qwc);
+    iop.ee_dma_write(0x1000C410u,0x100u|low);iop.ee_dma_write(0x1000C420u,qwc);
     if(chain)iop.ee_dma_write(0x1000C430u,0);
     iop.ee_dma_write(0x1000C400u,chain ? chcr : 0x101u);
 }
@@ -54,6 +54,12 @@ void received(Iop& iop,bool flag,bool irq) {
     require(completions(iop)==1,"completed packet raises one destination completion event");
 }
 void transfer_masks() {
+    for(unsigned low=1u;low<16u;++low) {
+        auto ram=packet();Iop iop;iop.reset(receiver(1u<<19),nullptr);arm(iop,ram,2,false,0x184u,low);
+        require(iop.ee_dma_read(0x1000C410u)==0x100u,"SIF1 normal MADR cannot select a sub-qword source");
+        iop.run_until(400);received(iop,true,true);
+        require(iop.ee_dma_read(0x1000C410u)==0x120u,"SIF1 low-bit aliases advance over the same genuine tag and payload");
+    }
     for(const auto masks : {0u,1u<<19,1u<<10,(1u<<19)|(1u<<10)}) {
         auto ram=packet();Iop iop;iop.reset(receiver(masks),nullptr);arm(iop,ram,2);iop.run_until(400);
         received(iop,masks!=0,masks!=0);
