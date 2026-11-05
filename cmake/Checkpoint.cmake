@@ -42,7 +42,9 @@ foreach(source IN LISTS checkpoint_sources)
     string(REPLACE "\r\n" "\n" content "${content}")
     string(APPEND checkpoint_runtime "${content}\n")
 endforeach()
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${checkpoint_headers} ${checkpoint_sources} "${CMAKE_CURRENT_SOURCE_DIR}/src/checkpoint_fields.inc")
+# Runtime-only headers must also trigger a reconfigure: filtering them out of
+# the wire schema must never leave the runtime fingerprint stale after an edit.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${checkpoint_runtime_headers} ${checkpoint_sources} "${CMAKE_CURRENT_SOURCE_DIR}/src/checkpoint_fields.inc")
 string(SHA256 checkpoint_runtime_hash "${checkpoint_runtime}")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/checkpoint_build.hpp" CONTENT
