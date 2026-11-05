@@ -19,10 +19,11 @@ void finish_transfer(Memory& memory) {
     gif.write_fifo(0x6666666655555555ull,0x8888888877777777ull,gs);
     require(gs.vram().read(0,64,0,7,0)==0x88888888u,"restored partial IMAGE transfer finishes at the correct pixel");
 }
-std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const std::uint8_t> payload) {
+std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const std::uint8_t> payload,
+    const char* schema="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88") {
     std::vector<std::uint8_t> bytes{'P','S','2','N','C','P','0','1'};
     const auto integer=[&](std::uint64_t value,unsigned size){for(unsigned i=0;i<size;++i)bytes.push_back(static_cast<std::uint8_t>(value>>(8u*i)));};
-    info.schema_sha256="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88";
+    info.schema_sha256=schema;
     info.payload_sha256=sha256_hex(payload);info.payload_bytes=payload.size();
     for(const auto* value:{&info.schema_sha256,&info.runtime_sha256,&info.bindings_sha256,&info.scenario_sha256,&info.host_metadata,&info.payload_sha256}) {
         integer(value->size(),8);bytes.insert(bytes.end(),value->begin(),value->end());
@@ -97,10 +98,21 @@ int main(int argc,char** argv)try {
     std::vector<std::uint8_t> legacy_payload(current_payload.begin(),current_payload.end());
     legacy_payload.erase(legacy_payload.begin()+flag_offset,legacy_payload.begin()+flag_offset+2);
     const auto legacy_file=directory/"legacy-scalar.ps2ncp";write_file_atomically(legacy_file,legacy_envelope(current_info,legacy_payload));
-    (void)load_checkpoint(current_file,state,memory,context);require(!memory.begin_fpu_arithmetic(),"baseline scalar experiment remains disabled");
+    (void)load_checkpoint(current_file,state,memory,context);
+    const auto exact=checkpoint_state_sha256(state,memory);
+    auto reviewed=context;reviewed.allow_runtime_change=true;
+    for(const auto* schema:{"72d8f630ea9a0befdba0e33bbc9d80394b6a2c29db31cf0a402bd6299876a61e",
+            "cd1aa8bf7755b3926af94afc8385147b755b5de6b335faa25049d9f719960ecd"}) {
+        const auto decoder_file=directory/"decoder-transition.ps2ncp";
+        write_file_atomically(decoder_file,legacy_envelope(current_info,current_payload,schema));
+        rejects([&]{(void)load_checkpoint(decoder_file,resumed,restored,context);},"schema");
+        (void)load_checkpoint(decoder_file,resumed,restored,reviewed);
+        require(checkpoint_state_sha256(resumed,restored)==exact,"audited decoder-only transitions preserve every serialized field");
+    }
+    require(!memory.begin_fpu_arithmetic(),"baseline scalar experiment remains disabled");
     const auto conservative=checkpoint_state_sha256(state,memory);
     rejects([&]{(void)load_checkpoint(legacy_file,resumed,restored,context);},"schema");
-    auto reviewed=context;reviewed.allow_runtime_change=true;(void)load_checkpoint(legacy_file,resumed,restored,reviewed);
+    (void)load_checkpoint(legacy_file,resumed,restored,reviewed);
     require(checkpoint_state_sha256(resumed,restored)==conservative,"legacy migration preserves every old field and conservatively closes the scalar configuration window");
     rejects([&]{restored.diagnostic_ee_early_digit_carry();},"must precede");
     options.max_instructions=32;(void)run_ee_boot(state,memory,nullptr,options);(void)run_ee_boot(resumed,restored,nullptr,options);

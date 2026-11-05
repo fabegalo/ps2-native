@@ -6,6 +6,10 @@ set(checkpoint_runtime_headers ${checkpoint_headers})
 # This header contains only execution helpers/context, not serialized state.
 # Its behavior still participates in the runtime fingerprint below.
 list(FILTER checkpoint_headers EXCLUDE REGEX "/ee_semantics[.]hpp$")
+# Decoded instruction metadata is execution-only too: no MipsOpcode or
+# MipsInstruction is serialized by checkpoint_fields.inc or EEState.
+# Extending the decoder must change the runtime identity, not the wire schema.
+list(FILTER checkpoint_headers EXCLUDE REGEX "/mips[.]hpp$")
 set(checkpoint_schema "ps2n-complete-checkpoint-v1-le-fields\n")
 foreach(header IN LISTS checkpoint_headers)
     file(READ "${header}" content)

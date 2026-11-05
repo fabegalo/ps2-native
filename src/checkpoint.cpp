@@ -277,12 +277,19 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
     const bool reviewed_v1=context.allow_runtime_change &&
         info.schema_sha256=="9199cae351d7ea3f43526fa1dd800d9f6810d80f6c0370974f190695aee3e2cc" &&
         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88";
+    // The decoder-only MADD extension added no serialized fields. Moving
+    // mips.hpp to the runtime fingerprint retains the audited scalar bridge;
+    // both destination fingerprints stay pinned against future field changes.
     const bool reviewed_scalar_transition=context.allow_runtime_change &&
-        std::string_view(PS2N_CHECKPOINT_SCHEMA)=="72d8f630ea9a0befdba0e33bbc9d80394b6a2c29db31cf0a402bd6299876a61e";
+        (std::string_view(PS2N_CHECKPOINT_SCHEMA)=="72d8f630ea9a0befdba0e33bbc9d80394b6a2c29db31cf0a402bd6299876a61e" ||
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="4e87d58b722e40020caec94e9928c087e3f9d86c7e33f5116a76628648e4dc4f");
     const bool legacy_scalar_flags=reviewed_scalar_transition &&
         (info.schema_sha256=="9199cae351d7ea3f43526fa1dd800d9f6810d80f6c0370974f190695aee3e2cc" ||
          info.schema_sha256=="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88");
-    const bool same_scalar_fields=reviewed_scalar_transition && info.schema_sha256=="4553168c0bd7fd198259cc9a8f5ccc7572a3b789e7dca3495ac548162a6768da";
+    const bool same_scalar_fields=reviewed_scalar_transition &&
+        (info.schema_sha256=="4553168c0bd7fd198259cc9a8f5ccc7572a3b789e7dca3495ac548162a6768da" ||
+         info.schema_sha256=="72d8f630ea9a0befdba0e33bbc9d80394b6a2c29db31cf0a402bd6299876a61e" ||
+         info.schema_sha256=="cd1aa8bf7755b3926af94afc8385147b755b5de6b335faa25049d9f719960ecd");
     if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields)
         throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
     if(info.runtime_sha256!=PS2N_CHECKPOINT_RUNTIME && !context.allow_runtime_change)throw std::runtime_error("checkpoint runtime changed; explicit reviewed allow-runtime-change is required");
