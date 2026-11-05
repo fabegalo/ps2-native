@@ -2369,9 +2369,15 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         if(bytes!=1u || !disc_)throw IopStop{name+": CDVD error requires an explicit disc and byte access"};
         return 0; // No media error: invalid/unimplemented operations refuse before issue.
     }
-    if(physical==0x1F40200Au || physical==0x1F40200Bu || physical==0x1F40200Fu) {
+    if(physical==0x1F40200Fu) {
+        if(bytes!=1u)throw IopStop{name+": CDVD disc type requires a byte access"};
+        // ps2sdk SCECdNODISC / CDVD TYPE: 0x00 means no medium. With no
+        // mounted image this drive has no disc; that does not establish its
+        // mechanical status, complete a command, or provide any sector data.
+        return disc_ ? cdvd_type_ : 0x00u;
+    }
+    if(physical==0x1F40200Au || physical==0x1F40200Bu) {
         if(bytes!=1u || !disc_)throw IopStop{name+": requires a byte access and an explicitly mounted disc"};
-        if(physical==0x1F40200Fu)return cdvd_type_;
         // Bits 6-7 are undocumented, not assumed zero. The defined drive
         // flags can be masked/compared through the existing knowledge model.
         if(!undefined_load_) {
