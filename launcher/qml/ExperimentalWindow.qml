@@ -74,8 +74,10 @@ Window {
         }
         Label { text: Experimental.metrics; color: "#a8d6ff"; font.family: "monospace"; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.Wrap }
         ScrollView {
+            id: statusScroll
             Layout.fillWidth: true; Layout.preferredHeight: 95; clip: true
-            TextArea { text: Experimental.status; readOnly: true; wrapMode: Text.Wrap; color: "#f4c36a"; font.pixelSize: 12; background: Rectangle { color: "#182130" } }
+            contentWidth: availableWidth
+            TextArea { width: statusScroll.availableWidth; text: Experimental.status; readOnly: true; wrapMode: Text.Wrap; color: "#f4c36a"; font.pixelSize: 12; background: Rectangle { color: "#182130" } }
         }
     }
 }
