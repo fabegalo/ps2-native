@@ -1,10 +1,238 @@
 # Primeiro jogo comercial — execução parcial, sem jogabilidade
 
-Execução local em 03/11/2026. **A meta de jogabilidade não foi atingida.** O ELF original executa;
-inicialização normal, primeiro frame, menu, controles e gameplay não foram demonstrados.
+Execução local atualizada em 05/11/2026. **A meta de jogabilidade não foi atingida.**
+O diagnóstico experimental produz imagens originais; inicialização normal,
+menu, respostas visuais aos controles e gameplay não foram demonstrados.
 Código original BSD-3-Clause; nenhum código de emulador, firmware, IRX ou jogo foi incorporado.
 
-## Encerramento solicitado — estado final preservado
+## Realinhamento técnico — 05/11/2026
+
+Novo pedido do mantenedor retomou a execução encerrada no registro anterior.
+O mesmo núcleo C++20 atende AOT, interpretação e dispositivos. Nenhuma
+condição por jogo/PC foi acrescentada ao runtime. BIOS original continua
+separada do cenário experimental: o controle original manteve a recusa
+do encoder `0x7E`, EE `0x80007D20` / 17.690.079 instruções.
+
+### Avanço funcional e correções
+
+- `e07dac1`: SQC2 transporta `FloatBounds` pela proveniência já existente
+  de memória; LQC2 restaura os limites no VU. QMTC2 aproveita candidatos
+  finitos da metade baixa do GPR. Escritas independentes invalidam o
+  certificado mesmo com bytes iguais; VF00 permanece constante.
+- A retomada estrita começou em 7.125.000.000 instruções do jogo, antes
+  da perda de informação, com zero origens numéricas incertas. Passou
+  pelo antigo XYZ/DMA em 7.727.172.060; 87 campos comparáveis com o 125
+  tiveram hashes idênticos e 38 capturas adicionais superaram a fronteira.
+  Parou em VSQRT `0x1CD558`, 7.914.035.443 do jogo. A exceção genérica
+  reporta o PC seguinte `0x1CD55C`; o operando foi isolado antes da SQRT.
+- `1d97661`: cancelagem de `1 - [0x3F7FFFF1,0x3F7FFFF2]` produz apenas
+  `0x35600000` ou `0x35700000`. O hull antigo tinha máscara `0x1FFFFF`;
+  a enumeração limitada dos operandos conserva `0x100000`. SQRT usa
+  até 256 combinações esparsas, filtradas pelos limites provados, mesmo
+  quando o intervalo numérico é largo. Domínios densos continuam recusados.
+- A continuação foi salva em 9.114.035.442 e 10.314.035.442 do jogo.
+  O bloqueio seguinte é IOP `0x00062140`, contador 1.367.184.044:
+  `SPU2 KON requires known constant zero left and right voice gain;
+  audible synthesis is not modeled`. Não houve substituição por silêncio.
+  O EE ainda podia esperar com IOP recusado; os números posteriores
+  desse EE não constituem avanço funcional do sistema.
+  Inspeção passiva isolou `SH` / `0xA44501A0`, base conhecida `0xBF900400`,
+  valor conhecido `0x001F`, endereço físico `0x1F9005A0`: ativa as vozes
+  0–4 do core SPU2 1. Seus ganhos L/R conhecidos são 2445/1796,
+  418/1524, 1844/1405, 895/1680 e 1524/1524. A recusa é a ausência
+  de síntese para esses ganhos audíveis, sem bits arbitrários a resolver.
+- `bd6238b`: salvamento e carregamento recusam esse estado parcial de
+  IOP antes de substituir o checkpoint/destino. O CLI o reporta como
+  bloqueio. O sentinela sem ROM do IOP dormente no Direct ELF não é uma
+  instrução recusada. O arquivo diagnóstico após a recusa foi preservado
+  para inspeção, separado dos checkpoints retomáveis.
+- `8f5bb8d`: todos os cabeçalhos usados no fingerprint de runtime passam
+  a provocar reconfiguração do CMake, inclusive os excluídos do esquema
+  de campos. A regra gerada do Ninja inclui `boot.hpp`, `profile.hpp` e
+  `ee_semantics.hpp`; o build incremental terminou sem trabalho pendente.
+
+Os quatro botões foram entregues ao SIO2 real do núcleo, ativos em nível
+baixo. Start: ciclos 8.025.129.087–8.079.240.837 (11 campos); Cross:
+8.256.333.837–8.349.799.587 (19); Up: 8.551.488.837–8.733.501.087
+(37); Down: 8.876.159.337–9.004.059.837 (26). Não houve resposta visual
+verificável: as imagens ainda mostram o indicador circular de carregamento.
+Não confundir isso com menu nem navegação. As hipóteses prévias de encoder,
+GS/UV, reset/timing SPU2, cache e SIO2 continuam explícitas no cenário;
+nenhuma foi promovida a comportamento físico comprovado.
+
+### Checkpoint anterior ao áudio
+
+`out/game-first/superbust-before-audible-spu2.ps2ncp`: PC `0x1C5A6C`,
+10.937.363.474 instruções totais / 10.904.946.798 do jogo,
+10.937.372.580 ciclos EE. IOP ativo `0xB5D8`, contador 1.367.171.572,
+sem recusa. Recuperado do último arquivo válido preservado (9.114 bilhões),
+sem repetir o boot, com salvamento verificado a cada 100 milhões e limite
+de 18 minutos; terminou em 815,954 s. O último estado anteriormente salvo
+após falha do IOP não podia ser usado como ponto de retomada.
+
+Payload de 61.393.914 bytes, SHA-256
+`8ac0e76cd59d7a5497bca94013c14bc7ed03475d0a43c10359b842b002cf62a2`;
+cenário estrito `be4e5be35272efd3349d94f3aad14e7a10741dc5a3f27cc42bcc6a9f127fa994`.
+Runtime do executável de recuperação (profiling compilado, sessão inativa):
+`10ba56b4e4e182fa18a0119d92628dc881d3503f020ecdcd7fd48f66de9ae801`.
+Build normal final (profiling OFF):
+`614fb7b39a1d3c825c1e7b06ef0b510093ebfc6596d8db0a9385ccadcb657f5d`.
+Esquema comum `b32d8b0d82c1d14b0c3f8e5fb8912a2a8495f113256e122b4e924fd34f4e10e2`;
+o opt-in explícito de mudança de runtime continua necessário.
+
+O build normal restaurou em 0,864 s e reproduziu a recusa de KON numa
+continuação limitada a 200 mil instruções (0,117 s só de execução), sem
+salvar o estado recusado. O payload do ponto seguro permaneceu idêntico.
+Duas continuações de 1.000 instruções com IOP ainda ativo concordaram no
+estado completo: `202bc7db52216d357ef3b6e266b396979b8fcf663485be7952cf8f3da9db6f6b`.
+Essa janela curta ainda não executou instruções AOT; a equivalência dos
+motores com AOT efetivo é demonstrada nas janelas abaixo.
+Identidades dos executáveis e fontes locais em
+`out/game-first/realignment-final-build-provenance.json`; preservar os
+binários estáticos correspondentes e recompilar tudo junto ao trocar ABI.
+
+### AOT e baseline reproduzível
+
+`cfc18eb` permite ler palavras originais de jump tables com guarda
+SLTIU/BEQ/LW comprovada em segmento PF_X, sem relaxar relocations ou
+`--table`. Recusa BSS, guarda ausente/desviável e sobreposição com código,
+inclusive instruções descobertas depois. O ELF original passou de 13.168
+instruções/4.332 blocos para 17.336/6.199, com três tabelas e 154 evidências
+de alvos. O módulo local usa também `--entry=0x001D2EF8`, raiz explícita
+do mecanismo existente conferida contra os bytes do ELF: 17.364 instruções,
+6.217 blocos. Descoberta automática do caminho até essa raiz ainda falta.
+
+Geração local pelo CLI existente: `ps2n-aot out/game-first/superbust.elf
+out/game-first/superbust-realigned.cpp --hybrid --entry=0x00100068
+--entry=0x00100084 --entry=0x001D2EF8`. O ELF é conferido por SHA-256
+antes de associar o módulo; nenhum byte original é alterado.
+
+Baseline local: Windows x64, MSVC 19.44.35229 Release `/O2`, sem profiling, sem jogo
+ou compilação concorrentes. Checkpoint `realignment-before-sqrt.ps2ncp`,
+7.914.035.442 do jogo; orçamento 1.000.000, sem captura/trace completo.
+Cinco amostras por motor, intercaladas; relógio só de execução, excluindo
+carga/salvamento e exportação. A raiz adicional só pode ser usada após
+verificação de identidade do ELF e compilação conjunta com o núcleo.
+
+| Módulo/motor | AOT / interpretadas | Mediana (s) | Faixa (s) |
+|---|---:|---:|---:|
+| AOT anterior | 15.320 / 984.680 | 0,550323 | 0,534293–0,569873 |
+| AOT regenerado com tabelas | 15.546 / 984.454 | 0,521497 | 0,520453–0,565326 |
+| Interpretador, comparação inicial | 0 / 1.000.000 | 0,503585 | 0,500379–0,519579 |
+| AOT com raiz explícita | 990.864 / 9.136 | 0,430393 | 0,419924–0,487026 |
+| Interpretador, comparação da raiz | 0 / 1.000.000 | 0,516288 | 0,512297–0,594122 |
+
+Estado completo de **todas** essas amostras, SHA-256:
+`4d545ee5de218678974a2a08bc9371c8bca7bf7bb5cc8574bbfc7af8fd81ed5d`.
+A cobertura 99,0864% e a razão de throughput 1,1996 valem apenas para
+essa janela e raiz local; não comprovam cobertura automática, FPS,
+desempenho do jogo inteiro ou vantagem sobre outro projeto.
+
+Repetição final, depois da otimização de polling, sem profiling ou
+execução/compilação concorrente, mesmo checkpoint/orçamento e cinco
+amostras intercaladas por motor:
+
+| Motor | Mediana (s) | Faixa (s) | Throughput pela mediana |
+|---|---:|---:|---:|
+| AOT anterior à otimização | 0,420983 | 0,419600–0,445996 | 2,375 M instr./s |
+| AOT final | 0,392803 | 0,389986–0,404047 | 2,546 M instr./s |
+| Interpretador final | 0,413145 | 0,413000–0,414590 | 2,420 M instr./s |
+
+As quinze amostras mantiveram o SHA-256 completo acima. Ganho de throughput
+AOT pela retirada do polling repetido: 7,17% nesta janela. Comparação final
+AOT/interpretação: 5,18%; a otimização também beneficia o interpretador,
+portanto a razão histórica de 1,1996 não descreve o build final.
+
+No trace de 20.000 instruções da região ativa, 6.553 passaram pelo
+interpretador: 630 opcodes exclusivos desse motor e 5.923 instruções
+traduzíveis fora dos blocos CFG provados. PCs mais frequentes: `80003B00`,
+`80003B04`, `80003B08` (130 cada), `80002AD8`, `80002AE0` (128 cada),
+incluindo kernel em RAM fora do módulo ELF. Não atribuir todo fallback à FPU.
+
+### Perfil de componentes e sincronização
+
+Configurar com `-DPS2N_ENABLE_PROFILING=ON` e usar `--profile` no CLI;
+o padrão OFF elimina temporizadores por acesso e recusa o pedido explícito
+de perfil. Contadores fixos locais ao host, sem campos serializados ou
+mudança de relógio convidado. O perfil distingue tempo exclusivo e inclusivo;
+o segundo inclui filhos e não deve ser somado entre componentes.
+
+Janela de 100.000 instruções, 90.864 AOT, estado completo
+`85a9cb466dade4f199a0b0bf73e5d789e0a139509fb2820dce42c11f0b8523a2`:
+
+| Componente | Exclusivo antes (ms) | Após reutilizar amostragem (ms) |
+|---|---:|---:|
+| EE/dispatcher/relatório | 28,004 | 23,396 |
+| Sincronização | 26,047 | 22,311 |
+| Dispositivos | 24,020 | 20,374 |
+| Memória EE | 17,487 | 17,836 |
+| IOP | 12,511 | 10,917 |
+| VU | 8,417 | 7,141 |
+| Verificação de código | 6,106 | 6,090 |
+| Provas numéricas | 3,337 | 3,302 |
+| GS | 2,109 | 2,109 |
+| Apresentação | 0 | 0 |
+
+EE, sincronização e dispositivos são os três maiores grupos exclusivos
+medidos. A segunda amostragem de IRQ na mesma fronteira foi removida entre
+dispatcher e motor; instruções seguintes continuam amostradas, incluindo
+delay slots/exceções. As chamadas de sync/IOP caíram de 249.987 para 215.161
+(13,93%), com SHA-256 completo idêntico. Verificação de código permaneceu
+por instrução; custo inclusivo após a mudança: 43,113 ms.
+Uma segunda janela de 100.000 instruções, retomada em 9.114.035.442 do
+jogo, também preservou o estado antes/depois da otimização:
+`580d2443fa52fc92581a923f9853128b3b8ba41547d63af3e9501ab0a19072fe`.
+
+O perfil custa caro nessa janela curta: 128,04 ms ativo contra 58,671 ms
+inativo no build instrumentado anterior. Seus tempos incluem o próprio
+custo dos temporizadores e chamadas sem trabalho pendente; não representam
+frações exatas do build normal. IOP inclui CPU/RAM interna; provas numéricas
+medem as operações instrumentadas, não toda propagação de bits desconhecidos.
+EE é o tempo residual da sessão, incluindo dispatcher, observadores e
+construção do relatório; não é uma medição isolada do pipeline da CPU.
+Sem callback de imagem nessa medição, apresentação é zero; não há FPS ou
+tempo de frame de gameplay para declarar.
+
+### Campos consecutivos e validação final
+
+Janela distinta de 30 milhões de instruções, retomada em 9.114.035.442 do
+jogo, sem profiling/compilação/outro jogo concorrente, callback existente
+com relógio e hash RGBA, sem gravar imagens. Híbrido: 25.793.845 AOT /
+4.206.155 interpretadas (85,9795% AOT), 11,1036 s; interpretação: 12,0894 s.
+Ambos produziram o estado completo
+`3f8afd42bd49e7856379311267c45b75d7df1a6005ac2e61610fb1d0026aa852`.
+
+Sete campos originais consecutivos de 640×224 coincidiram em ciclo e
+SHA-256 RGBA, de 9.146.718.087 a 9.176.233.587 ciclos EE, separados por
+4.919.250 ciclos modelados. Nos seis intervalos completos, mediana host
+1.818,560 ms no híbrido (1.797,830–1.834,470) e 1.970,665 ms no interpretador
+(1.968,220–2.024,590). Uma amostra por motor, incluindo scanout/hash e
+sincronização: é custo de campos do **carregamento**, sem inferência de
+FPS de jogo ou desempenho em tempo real. A cobertura dessa janela maior
+não deve ser substituída pelos 99,0864% da janela curta predominantemente idle.
+
+Build normal OFF: 12 testes focados passaram, cobrindo cache/contexto EE,
+incerteza FPU/VU, CPU/FPU/frame/exceções/timers Direct ELF, microVU e
+checkpoint completo/CLI. Os testes de equivalência com profiling ativo e
+recusa explícita no build OFF passaram; o save com IOP recusado preserva
+o arquivo válido. O controle de BIOS original voltou ao mesmo encoder,
+sem ativar hipóteses. Não foi repetida a suíte inteira localmente.
+CI do código final `8f5bb8d`: seis alvos do
+[núcleo](https://github.com/fabegalo/ps2-native/actions/runs/41968835701) e seis do
+[launcher](https://github.com/fabegalo/ps2-native/actions/runs/41968835789)
+concluídos com sucesso: Windows/Linux/macOS x64 e ARM64. Isso cobre builds
+e regressões sintéticas; a execução comercial descrita foi local no Windows x64.
+
+Evidência local ignorada: `out/game-first/realignment-game*.log`,
+`realignment-benchmark-*.log`, `realignment-benchmark-summary.json`,
+`realignment-fallback-causes.json`, `realignment-frame-comparison.json`,
+`realignment-component-{profile,optimized}.log`. AOT proprietário,
+checkpoints, imagens e traces permanecem locais.
+Medições finais em `realignment-final-benchmark-*.log`, resumo JSON
+correspondente, `realignment-frames*.log`, `realignment-audio-frontier.log`
+e `realignment-audio-parameters.log`. Nenhum ensaio local ficou ativo.
+
+## Encerramento solicitado — estado preservado em 04/11 (histórico)
 
 Execução encerrada a pedido do mantenedor, sem novo ensaio longo.
 O 126 terminou na mesma recusa DMA em 292,052 s desde 7,125 bilhões;

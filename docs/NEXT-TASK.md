@@ -1,6 +1,59 @@
 # Próxima execução — Super Bust-A-Move
 
-## Fronteira atual e retomada rápida
+## Fronteira ativa — realinhamento de 05/11/2026
+
+O novo pedido do mantenedor autorizou retomar a execução. XYZ/VIF1 e a
+SQRT seguinte foram superados por correções genéricas de transporte de
+limites e cancelagem esparsa VU. **Menu, navegação visual e gameplay ainda
+não demonstrados.** Não trocar de título nem afirmar sucesso pelo contador EE.
+
+Bloqueio real: IOP `0x00062140`, contador 1.367.184.044, ao ativar voz:
+`SPU2 KON requires known constant zero left and right voice gain;
+audible synthesis is not modeled`. A implementação atual só prova vozes
+inaudíveis e não pode fabricar áudio, ENVX/ENDX/NAX ou sucesso de KON.
+A escrita é `SH`, palavra `0xA44501A0`, endereço físico `0x1F9005A0`,
+valor conhecido `0x001F`: core SPU2 1, vozes 0–4. Ganhos L/R conhecidos:
+2445/1796, 418/1524, 1844/1405, 895/1680 e 1524/1524.
+
+Retomada local: `out/game-first/superbust-before-audible-spu2.ps2ncp`,
+reconstruído a partir do último ponto válido preservado em 9.114.035.442
+instruções do jogo. PC `0x1C5A6C`, 10.937.363.474 instruções totais /
+10.904.946.798 do jogo, 10.937.372.580 ciclos EE. IOP `0xB5D8`, contador
+1.367.171.572, sem recusa; cerca de 100 mil ciclos EE antes do KON.
+O núcleo agora recusa salvar/restaurar um IOP que já
+falhou. `realignment-after-iop-refusal.ps2ncp` é somente evidência de
+inspeção; não tentar retomá-lo nem usar seu contador EE como progresso.
+Conservar os checkpoints anteriores e a identidade de BIOS/ROM1, console,
+NVM, disco e cenário. A troca de runtime exige revisão e opt-in explícito;
+compilar núcleo, AOT e auxiliar com os mesmos cabeçalhos/defines.
+
+Próximo incremento:
+
+1. Reproduzir esse KON a partir do checkpoint anterior ao áudio e examinar
+   pitch, ADSR, endereços de amostras e modos dessas cinco vozes. Criar regressão
+   sintética do caminho antes de implementar síntese SPU2 compartilhada.
+   Preservar relógio, DMA, IRQ e resultados observáveis; não mutar ganho
+   para zero nem ignorar a ativação. Separar fatos físicos das hipóteses.
+2. Retomar pelo checkpoint após cada correção, com limite e supervisão.
+   Só salvar fronteira válida do sistema completo, incluindo IOP. Verificar
+   menu original, resposta visual a Start/Cross/Up/Down e início de partida.
+3. Conservar a comparação AOT/interpretação por SHA-256 completo. O módulo
+   local com três jump tables e `--entry=0x001D2EF8` atingiu 99,0864% AOT
+   apenas na janela medida. Ainda falta descobrir automaticamente o caminho
+   até essa raiz e traduzir regiões verificadas de kernel em RAM.
+4. Medir sem profiling e sem execução/compilação concorrente. O perfil
+   opcional mostrou EE, sincronização e dispositivos como maiores grupos;
+   a duplicação de polling na mesma fronteira foi eliminada. Manter a
+   verificação de código por instrução enquanto não houver prova equivalente
+   de invalidação. O padrão `PS2N_ENABLE_PROFILING=OFF` não cronometra acessos.
+
+Start/Cross/Up/Down foram aplicados pelo SIO2 durante o carregamento, sem
+resposta visual comprovada. BIOS original mantém a recusa medida do encoder
+`0x7E`; não ativar hipóteses experimentais nesse controle. The Simpsons e a
+validação funcional de outro título ficam após o caminho funcional no alvo.
+Detalhes e baseline em [FIRST-GAME-STATUS](FIRST-GAME-STATUS.md#realinhamento-técnico--05112026).
+
+## Fronteira anterior — 04/11/2026 (histórico)
 
 **Parado a pedido do mantenedor.** Não iniciar outro ensaio sem novo pedido.
 Últimos ajustes concluídos: identidade numérica entre cópias e transporte

@@ -2,7 +2,7 @@
 
 **Registro vivo de progresso e evidências.** Atualizar este arquivo quando houver avanço **verificado**; não reescrever os READMEs, `AGENTS.md` ou `CLAUDE.md` a cada marco. Relatórios detalhados continuam em `docs/M*-STATUS.md`; o trabalho seguinte fica em `docs/NEXT-TASK.md`.
 
-## Estado funcional verificado — 03/11/2026
+## Estado funcional verificado — 05/11/2026
 
 **Protótipo experimental. Não executa o Browser original até o fim, não possui launcher público nem declara jogos comerciais jogáveis.**
 
@@ -16,7 +16,47 @@
 | Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
-## Continuação experimental do jogo — 04/11/2026
+## Realinhamento técnico — 05/11/2026
+
+- Super Bust-A-Move superou a recusa XYZ do DMA VIF1: SQC2/LQC2 e
+  QMTC2 preservam limites numéricos já provados, incluindo cache e RAM.
+  A subtração VU conserva bits esparsos na cancelagem; SQRT enumera esse
+  domínio pequeno sem ampliar para milhões de codificações intermediárias.
+  Nenhum bit desconhecido foi escolhido. Os 87 campos comparáveis
+  conservaram seus hashes; 38 campos adicionais passaram da fronteira.
+- A execução continuou pelos checkpoints, até uma recusa real de áudio:
+  IOP `0x00062140`, contador 1.367.184.044, KON com ganho de voz audível
+  ainda sem síntese SPU2. Start, Cross, Up e Down chegaram pelo SIO2,
+  mas só o indicador de carregamento foi observado. Menu, resposta
+  visual dos controles e gameplay **não foram demonstrados**.
+- O analisador prova três jump tables no segmento executável do ELF,
+  com guarda de limites e exclusão de instruções descobertas. O AOT
+  local cresceu de 13.168 para 17.336 instruções estáticas; uma raiz
+  explícita verificada pelo mecanismo existente acrescenta 28. Em uma
+  janela de um milhão de instruções no build final: 99,0864% AOT,
+  mediana 0,392803 s contra 0,413145 s de interpretação, cinco amostras
+  por motor, estado completo idêntico. Isso não mede FPS nem a cobertura
+  do jogo inteiro. Em outra janela de 30 milhões: 85,9795% AOT e sete
+  campos originais consecutivos idênticos aos do interpretador.
+- Profiling opcional no runtime/CLI separa EE, IOP, VU, GS, memória,
+  dispositivos, verificações, provas numéricas e sincronização. Compila
+  desativado por padrão. A amostragem repetida de interrupções na mesma
+  fronteira foi eliminada: 249.987 para 215.161 chamadas de sincronização
+  na janela de 100 mil instruções, preservando o estado completo. Sem
+  profiling, throughput AOT aumentou 7,17% na janela de um milhão.
+- Checkpoints recusam publicação e retomada de estado com IOP recusado;
+  o sentinela de IOP dormente do Direct ELF continua permitido.
+  Ponto seguro recuperado: `superbust-before-audible-spu2.ps2ncp`,
+  `0x1C5A6C`, 10.904.946.798 instruções do jogo, IOP ainda ativo.
+  Evidências, condições das medições e limites no
+  [relatório](docs/FIRST-GAME-STATUS.md#realinhamento-técnico--05112026).
+- Validação final: 12 testes focados locais, equivalência completa em
+  15 amostras de desempenho e nos 30 milhões de instruções com imagens.
+  CI do código `8f5bb8d`: [núcleo](https://github.com/fabegalo/ps2-native/actions/runs/41968835701)
+  e [launcher](https://github.com/fabegalo/ps2-native/actions/runs/41968835789)
+  aprovados em Windows/Linux/macOS, x64 e ARM64. Nenhum ensaio ficou ativo.
+
+## Continuação experimental do jogo — 04/11/2026 (histórico)
 
 - **Execução encerrada a pedido do mantenedor.** Últimos ajustes preservam
   identidade entre cópias numéricas e proveniência por via de cache,
