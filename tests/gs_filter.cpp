@@ -117,6 +117,6 @@ int main() try {
     GsRegisters triangle_only;setup(triangle_only,true,false,true,4);
     rejects([&]{fractional(triangle_only);},"fractional UV DDA");
     triangle_only.general_write(0x14,0x60);rejects([&]{pixel(triangle_only,0,0,9,9);},"bilinear truncation");
-    GsRegisters invalid;invalid.reset(0);rejects([&]{invalid.diagnostic_texture_precision(8);},"valid modes");
+    GsRegisters invalid;invalid.reset(0);rejects([&]{invalid.diagnostic_texture_precision(16);},"valid modes");
     std::cout<<"Exact level-zero bilinear/nearest, subtexel centers, independent edge wrapping, fixed LOD and explicit rounding boundaries passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

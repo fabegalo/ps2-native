@@ -42,6 +42,10 @@ foreach(source IN LISTS checkpoint_sources)
     string(REPLACE "\r\n" "\n" content "${content}")
     string(APPEND checkpoint_runtime "${content}\n")
 endforeach()
+# Coefficient ROM data is part of audio execution, not the checkpoint layout.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/spu_gaussian.inc" audio_rom)
+string(APPEND checkpoint_runtime "${audio_rom}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/spu_gaussian.inc")
 # Runtime-only headers must also trigger a reconfigure: filtering them out of
 # the wire schema must never leave the runtime fingerprint stale after an edit.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${checkpoint_runtime_headers} ${checkpoint_sources} "${CMAKE_CURRENT_SOURCE_DIR}/src/checkpoint_fields.inc")

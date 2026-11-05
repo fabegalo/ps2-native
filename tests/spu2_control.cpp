@@ -144,6 +144,7 @@ int main() try {
             for(unsigned pair=0;pair<6;++pair) {
                 a.la(8,0xBF900180u+core*0x400u+pair*4u);a.la(9,0xA5C3u);a.sh(9,0,8);a.la(9,0x96u);a.sh(9,2,8);
                 a.raw((0x25u<<26)|(8u<<21)|(9u<<16));a.nop();a.la(10,0xA0000100u+core*0x40u+pair*8u);a.sw(9,0,10);
+                a.raw((0x25u<<26)|(8u<<21)|(9u<<16)|2u);a.nop();a.sh(9,2,8);
                 a.raw((0x25u<<26)|(8u<<21)|(9u<<16)|2u);a.nop();a.andi(9,9,0xFFu);a.sw(9,4,10);
             }
             a.la(8,0xBF900198u+core*0x400u);a.la(9,0xF30u+core*12u);a.sh(9,0,8);
@@ -236,7 +237,7 @@ int main() try {
         if(mode==3u){sh(0xBF9001A4u,0xFFFFu);sh(0xBF900000u,1u);}
         if(mode==4u)sh(0xBF90059Au,0x40u); // disabled core still compares shared RAM addresses
         if(mode==5u){a.la(8,0xBF90000Au);a.lhu(9,0,8);}
-        if(mode==6u){a.la(8,0xBF900340u);a.lhu(9,0,8);}
+        if(mode==6u){a.la(8,0xBF900340u);a.lhu(9,0,8);a.nop();a.addiu(9,9,1);}
         a.label("idle");a.beq(0,0,"idle");a.nop();
         const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
         std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,true);
@@ -258,7 +259,7 @@ int main() try {
             a.sw(9,core*8u+bank*4u,10);
         }
         for(unsigned n=0;n<800u;++n)a.nop();
-        a.la(8,0xBF900340u);a.lhu(9,0,8);a.nop();a.sw(9,16,10);
+        a.la(8,0xBF900340u);a.lhu(9,0,8);a.nop();if(active)a.addiu(9,9,1);a.sw(9,16,10);
         a.label("idle");a.beq(0,0,"idle");a.nop();
         const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> image(4u*1024u*1024u);
         std::copy(code.begin(),code.end(),image.begin());iop.reset(image,nullptr,nullptr,false,std::nullopt,{},false,true);

@@ -97,6 +97,8 @@ public:
     // Independent diagnostic arithmetic assumptions: bit0 nominal rational
     // sprite UV floored to 10.4; bit1 horizontal then vertical bilinear
     // truncation; bit2 nominal rational triangle UV floored to 10.4.
+    // Bit3: linear host-to-local pixel stream for rectangles outside the
+    // manual's alignment constraints (reference-emulator hypothesis).
     // These do not establish physical GS DDA/filter precision. Color/depth
     // interpolation retains its strict precision checks in every mode.
     void diagnostic_texture_precision(unsigned modes);

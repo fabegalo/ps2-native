@@ -74,7 +74,7 @@ void GsRegisters::diagnostic_texture_cache_reset_invalid() {
     texture_flush_generation_=transfer_generation_;
 }
 void GsRegisters::diagnostic_texture_precision(unsigned modes) {
-    if(!modes || (modes&~7u) || event_cycle_ ||
+    if(!modes || (modes&~15u) || event_cycle_ ||
        std::any_of(general_.begin(),general_.end(),[](const auto& value){return value.has_value();}))
         throw DeviceRefusal("diagnostic texture precision needs valid modes before guest activity");
     diagnostic_texture_precision_=modes;

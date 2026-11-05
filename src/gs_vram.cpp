@@ -14,10 +14,14 @@ void GsVram::validate_format(unsigned psm) {
 }
 std::uint32_t GsVram::address(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y) {
     validate_format(psm);
-    if (!width || width > 4032u || width % 64u || base % 256u || x > 2047u || y > 2047u)
-        throw DeviceRefusal("GS VRAM address: invalid base, buffer width or coordinate");
+    // BW is a page-row stride, including zero. BW=0 aliases subsequent
+    // page rows; it does not mean 64 texels or permission to invent pixels.
+    if (width > 4032u || width % 64u || base % 256u || x > 2047u || y > 2047u)
+        throw DeviceRefusal("GS VRAM address: invalid base, buffer width or coordinate; base="+std::to_string(base)+
+            " width="+std::to_string(width)+" psm="+std::to_string(psm)+" x="+std::to_string(x)+" y="+std::to_string(y));
     if (psm == 19u || psm == 20u) {
-        if (width % 128u) throw DeviceRefusal("GS indexed buffer width must be a multiple of 128");
+        // Indexed pages span two 64-texel BW units. The low BW bit does
+        // not contribute to the page-row stride (also used by small mip levels).
         const auto page = (y / (psm == 19u ? 64u : 128u)) * (width / 128u) + x / 128u;
         const auto block = psm == 19u
             ? ((x >> 4) & 1u) | ((y >> 3) & 2u) | ((x >> 3) & 4u) |

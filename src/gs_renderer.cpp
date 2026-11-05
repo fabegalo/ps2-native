@@ -36,8 +36,15 @@ void GsRegisters::start_transfer(std::uint64_t value) {
     const auto x = static_cast<unsigned>((pos >> 32) & 2047u);
     const auto y = static_cast<unsigned>((pos >> 48) & 2047u);
     (void)GsVram::address(base, bw, psm, x, y);
-    if (width % (psm == 0u ? 2u : psm==2u || psm==10u ? 4u : 8u) || (psm == 19u && (x & 1u)) || (psm == 20u && (x & 3u)))
-        throw DeviceRefusal("GS transfer rectangle violates the hardware alignment");
+    const bool unaligned=width % (psm == 0u ? 2u : psm==2u || psm==10u ? 4u : 8u) ||
+        (psm == 19u && (x & 1u)) || (psm == 20u && (x & 3u));
+    // The reference path enforces the manual. This separately selected
+    // experiment consumes the actual packed pixel stream across row edges;
+    // it neither rounds the width nor drops payload bytes or neighbors.
+    if (unaligned && (direction!=0u || !(diagnostic_texture_precision_&8u)))
+        throw DeviceRefusal("GS transfer rectangle violates the hardware alignment; direction="+std::to_string(direction)+
+            " width="+std::to_string(width)+" height="+std::to_string(height)+" psm="+std::to_string(psm)+
+            " x="+std::to_string(x)+" y="+std::to_string(y));
     const auto order = static_cast<unsigned>((pos >> 59) & 3u);
     ++transfer_generation_;
     if (direction == 0u) {

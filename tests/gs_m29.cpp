@@ -32,7 +32,11 @@ void check_vram() {
     vram.write(0,128,0,0,0,0x11223344u,0xFF00FF00u);
     require(vram.read(0,128,0,0,0)==0x80224444u, "bitwise framebuffer mask");
     require(GsVram::address(GsVram::kBytes-256,64,0,8,0)==0u, "VRAM 4 MiB wrap");
-    rejects([&] { (void)GsVram::address(0,0,0,0,0); }, "buffer width");
+    require(GsVram::address(0,0,0,0,32)==0u && GsVram::address(0,0,0,64,32)==8192u,
+            "zero page-row stride aliases rows without changing horizontal pages");
+    vram.write(0,0,0,3,2,0x80765432u);
+    require(vram.read(0,0,0,3,34)==0x80765432u,"zero-stride reads consume the actual aliased VRAM word");
+    rejects([&] { (void)GsVram::address(0,63,0,0,0); }, "buffer width");
     rejects([&] { (void)GsVram::address(0,64,3,0,0); }, "pixel format 3");
     vram.invalidate(); rejects([&] { (void)vram.read(0,128,0,0,0); }, "unwritten bits");
     constexpr std::array<std::array<unsigned,3>,10> depth_vectors{{
@@ -78,7 +82,8 @@ void check_vram() {
     }
     for(unsigned y=0;y<128;++y)for(unsigned x=0;x<256;++x)
         require(vram.read(0,256,19,x,y)==((x+3*y)&255u),"PSMT8 adjacent byte preservation");
-    rejects([&]{(void)GsVram::address(0,64,19,0,0);},"multiple of 128");
+    require(GsVram::address(0,64,19,0,64)==0u && GsVram::address(0,192,19,0,64)==8192u,
+            "indexed BW drops its low 64-texel unit when forming the page-row stride");
     vram.invalidate(); addresses.clear();
     for(unsigned y=0;y<256;++y)for(unsigned x=0;x<256;++x) {
         const auto nibble=GsVram::address(0,256,20,x,y)*2u+((y>>1)&1u);
@@ -104,6 +109,17 @@ void setup_transfer(GsRegisters& gs, unsigned psm, unsigned w, unsigned h, unsig
     gs.general_write(0x52, w | (std::uint64_t{h}<<32)); gs.general_write(0x53,0);
 }
 void check_transfer_gif() {
+    {
+        GsRegisters indexed;indexed.reset(0);indexed.diagnostic_texture_precision(8);
+        indexed.general_write(0x50,(2ull<<48)|(19ull<<56));indexed.general_write(0x51,0);
+        indexed.general_write(0x52,12ull|(2ull<<32));indexed.general_write(0x53,0);
+        indexed.image_write(0x0807060504030201ull,0x100F0E0D0C0B0A09ull);
+        indexed.image_write(0x1817161514131211ull,~0ull);
+        for(unsigned p=0;p<24;++p)require(indexed.vram().read(0,128,19,p%12,p/12)==p+1,
+            "explicit unaligned transfer experiment preserves the real byte stream across 64-bit row boundaries");
+        rejects([&]{(void)indexed.vram().read(0,128,19,12,0);},"unwritten bits");
+        rejects([&]{(void)indexed.vram().read(0,128,19,0,2);},"unwritten bits");
+    }
     {
         GsRegisters indexed;indexed.reset(0);Gif stream;stream.reset();
         indexed.general_write(0x50,(2ull<<48)|(20ull<<56));

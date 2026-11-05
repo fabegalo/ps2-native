@@ -106,6 +106,14 @@ int main(int argc,char** argv)try {
     require(changed==1 && current_payload[flag_offset]==0 && flag_payload[flag_offset]==1 && current_payload[flag_offset+1]==0,
         "only the explicit scalar-experiment boolean changed");
     std::vector<std::uint8_t> legacy_payload(current_payload.begin(),current_payload.end());
+    // Omit the tagged numerical SPU2 extension; these stopped voices have
+    // no optional loop addresses. Locate the tag, never a host struct offset.
+    const std::array<std::uint8_t,8> audio_tag{'S','P','U','2','P','C','M','1'};
+    const auto audio_at=std::search(legacy_payload.begin(),legacy_payload.end(),audio_tag.begin(),audio_tag.end());
+    require(audio_at!=legacy_payload.end(),"current checkpoint has a tagged SPU2 extension");
+    constexpr auto audio_bytes=8u+48u*(3u+16u+12u+1u+64u+40u)+2u;
+    legacy_payload.erase(audio_at,audio_at+audio_bytes);
+    const auto pre_audio_payload=legacy_payload;
     legacy_payload.erase(legacy_payload.begin()+flag_offset,legacy_payload.begin()+flag_offset+2);
     const auto legacy_file=directory/"legacy-scalar.ps2ncp";write_file_atomically(legacy_file,legacy_envelope(current_info,legacy_payload));
     (void)load_checkpoint(current_file,state,memory,context);
@@ -116,7 +124,7 @@ int main(int argc,char** argv)try {
             "3613da6d23479169c5d84e8eea6a68ed75b7acc10e86c5c324238a5cbccf495f",
             "06f3fe6fbdb88d6864fb5e3b18139b95e13d22312976051c0cbcd9406931d695"}) {
         const auto decoder_file=directory/"decoder-transition.ps2ncp";
-        write_file_atomically(decoder_file,legacy_envelope(current_info,current_payload,schema));
+        write_file_atomically(decoder_file,legacy_envelope(current_info,pre_audio_payload,schema));
         rejects([&]{(void)load_checkpoint(decoder_file,resumed,restored,context);},"schema");
         (void)load_checkpoint(decoder_file,resumed,restored,reviewed);
         require(checkpoint_state_sha256(resumed,restored)==exact,"audited decoder-only transitions preserve every serialized field");
@@ -129,6 +137,14 @@ int main(int argc,char** argv)try {
     rejects([&]{restored.diagnostic_ee_early_digit_carry();},"must precede");
     options.max_instructions=32;(void)run_ee_boot(state,memory,nullptr,options);(void)run_ee_boot(resumed,restored,nullptr,options);
     require(checkpoint_state_sha256(state,memory)==checkpoint_state_sha256(resumed,restored),"migrated and current checkpoints continue with identical complete state");
+    const auto strict=checkpoint_state_sha256(state,memory);
+    rejects([&]{refine_checkpoint_texture_precision(state,memory,16);},"additive");
+    require(checkpoint_state_sha256(state,memory)==strict,"invalid texture refinement cannot mutate a checkpoint");
+    refine_checkpoint_texture_precision(state,memory,4);
+    refine_checkpoint_texture_precision(state,memory,5);
+    const auto refined=checkpoint_state_sha256(state,memory);
+    rejects([&]{refine_checkpoint_texture_precision(state,memory,1);},"additive");
+    require(refined!=strict && checkpoint_state_sha256(state,memory)==refined,"explicit refinement adds hypotheses without removing prior modes or touching rejected state");
     std::cout<<"Complete checkpoint, immutable identities, transactional refusals and continuous/resumed state equivalence passed\n";return 0;
 #endif
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

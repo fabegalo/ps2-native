@@ -275,9 +275,11 @@ public:
                 value=range->word;flags=range->flags;
                 if(range->bounded)bounds[lane]=range->bounds;
             }
-            // ACC has extra exception state on real VU hardware. Until that
-            // state is modeled, refuse any exceptional product/sum atomically.
-            if(flags&0xC000u)throw DeviceRefusal("VU multiply exception/ACC state is not modeled");
+            // Ordinary VMUL does not read or write ACC. Its certified clipped
+            // result and MAC/status flags need no hidden accumulator state.
+            // Exceptional ACC writes/accumulations remain explicit refusals.
+            if((flags&0xC000u) && (accumulate || to_accumulator))
+                throw DeviceRefusal("VU multiply exception/ACC state is not modeled");
             if(accumulate) {
                 const auto acc=accumulator_[lane];
                 if(acc.unknown || value.unknown) {
@@ -292,6 +294,8 @@ public:
             result[lane]=value;
             if(!(value.value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
             if(value.value&0x80000000u){mac|=bit<<4u;status|=2u;}
+            if(flags&0x4000u){mac|=bit<<8u;status|=4u;}
+            if(flags&0x8000u){mac|=bit<<12u;status|=8u;}
         }
         if(to_accumulator){
             accumulator_=result;

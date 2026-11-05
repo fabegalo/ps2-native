@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -239,6 +240,19 @@ public:
     [[nodiscard]] std::uint64_t spu2_dma_words(unsigned core) const { return spu2_adma_.at(core).normal_words; }
     [[nodiscard]] std::uint64_t spu2_input_frames(unsigned core) const { return spu2_adma_.at(core).frames; }
     struct Spu2Sample { std::uint64_t cycle; std::int16_t left,right; };
+    // Decoder/envelope state is hardware state; the optional host sink is not.
+    struct Spu2VoiceState {
+        bool modeled{},manual_loop{};
+        std::uint8_t phase{}; // 0 stopped, 1 attack, 2 decay, 3 sustain, 4 release
+        std::int32_t envelope{},previous{},older{},output{};
+        std::uint32_t envelope_counter{},pitch_counter{},next{};
+        std::optional<std::uint32_t> loop;
+        std::array<std::int16_t,32> decoded{};
+        std::uint64_t read{},write{},key_ons{},decoded_samples{},nonzero_samples{};
+    };
+    [[nodiscard]] const Spu2VoiceState& spu2_voice(unsigned core,unsigned voice) const { return spu2_voices_.at(core).at(voice); }
+    using Spu2SampleSink=std::function<void(unsigned,const Spu2Sample&)>;
+    void set_spu2_sample_sink(Spu2SampleSink sink) { spu2_sample_sink_=std::move(sink); }
     [[nodiscard]] const std::optional<Spu2Sample>& spu2_last_sample(unsigned core) const { return spu2_last_sample_.at(core); }
     [[nodiscard]] std::uint64_t spu2_sample_count(unsigned core) const { return spu2_sample_count_.at(core); }
     [[nodiscard]] const std::optional<Spu2Sample>& spu2_last_input(unsigned core) const { return spu2_adma_.at(core).last_input; }
@@ -396,7 +410,12 @@ private:
     void write_spu2_control(std::uint32_t physical,ObservedWord word);
     [[nodiscard]] bool spu2_effects_active(unsigned core) const;
     [[nodiscard]] std::pair<std::uint32_t,std::uint32_t> spu2_effect_area(unsigned core) const;
-    void tick_spu2_quiet();
+    void tick_spu2();
+    [[nodiscard]] std::uint16_t spu2_known_register(std::uint32_t address) const;
+    [[nodiscard]] bool spu2_voice_configured(unsigned core,unsigned voice) const;
+    void start_spu2_voice(unsigned core,unsigned voice);
+    [[nodiscard]] Spu2Sample synthesize_spu2(unsigned core,std::uint64_t cycle);
+    void spu2_ram_irq(std::uint32_t address);
     void validate_spu2_pio(unsigned core,const ObservedWord& control) const;
     void validate_spu2_adma(unsigned core) const;
     void validate_spu2_normal_dma(unsigned core,std::uint32_t words) const;
@@ -510,9 +529,8 @@ private:
     bool diagnostic_spu2_7ca_latch_{};
     bool diagnostic_spu2_reserved_latches_{};
     std::array<std::optional<ObservedWord>,2> spu2_control_;
-    // Abstract voice state: KON makes decoder/envelope state unknown. A
-    // constant zero gain on both channels still proves its mixer output.
-    // KOFF does not prove that an unknown release envelope has finished.
+    // Abstract fallback for insufficient decoder state with both gains
+    // proved zero. Numerical voices below retain real samples and ADSR.
     std::array<std::uint32_t,2> spu2_symbolic_voices_{};
     std::array<std::array<std::optional<std::uint16_t>,4>,2> spu2_keys_;
     std::array<ObservedWord,2> spu2_endx_;
@@ -525,8 +543,8 @@ private:
     bool diagnostic_spu2_effect_address_reserved_zero_{};
     bool diagnostic_spu2_inverted_effect_area_inactive_{};
     std::array<bool,2> spu2_effect_area_dirty_{};
-    // Quiet clocks are available only under the explicit cold-state
-    // experiment: no active voices, inputs, effects or transfers.
+    // Reset-aligned clocks use the explicit cold-state experiment; subsequent
+    // guest KON and transfers advance the same device, RAM and sample edges.
     std::array<std::optional<std::uint64_t>,2> spu2_next_sample_;
     std::array<std::optional<Spu2Sample>,2> spu2_last_sample_;
     std::array<std::uint64_t,2> spu2_sample_count_{};
@@ -561,6 +579,9 @@ private:
     bool diagnostic_spu2_admas_control_latch_{};
     std::uint64_t spu2_adma_bus_available_{};
     unsigned spu2_adma_last_grant_{1u};
+    std::array<std::array<Spu2VoiceState,24>,2> spu2_voices_{};
+    std::array<bool,2> spu2_irq_pending_{};
+    Spu2SampleSink spu2_sample_sink_; // excluded from checkpoints; detached on restore
     void advance_graphics_dma(unsigned channel, std::uint64_t ee_cycle,Vif* vif0,Vif* vif1,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr);
     struct GraphicsDma {
         std::uint64_t cycle{};

@@ -71,13 +71,19 @@ struct CheckpointAccess {
         // not permission to reconfigure arbitrary partially evaluated state.
         memory.diagnostic_ee_early_digit_carry_=true;
     }
+    static void refine_texture(Memory& memory,unsigned modes) {
+        auto& gs=memory.registers_.gs_;
+        if(!modes || (modes&~15u) || (gs.diagnostic_texture_precision_&modes)!=gs.diagnostic_texture_precision_)
+            throw DeviceRefusal("checkpoint texture refinement requires valid additive diagnostic modes");
+        gs.diagnostic_texture_precision_=modes;
+    }
     template<class T> static void prepare_read(T&){}
     template<class T> static void prepare_read(DiagnosticHistory<T>& history){history.sink_=nullptr;}
     template<class T> static void validate(const T&){}
     static void demand(bool condition){if(!condition)throw std::runtime_error("checkpoint modeled state has invalid storage or queue bounds");}
     template<class T> static void validate(const DiagnosticHistory<T>& h){demand((!h.limit_ || h.data_.size()<=h.limit_) && (h.next_==0 || (h.next_<h.data_.size() && h.data_.size()==h.limit_)));}
     static void validate(const Memory& m){demand(m.ram_.size()==Memory::kMainRamBytes && m.scratchpad_.size()==Memory::kScratchpadBytes);}
-    static void validate(const Iop& i){demand(i.ram_.size()==kIopRamBytes && i.ram_known_.size()==kIopRamBytes && (i.spu2_ram_.empty() || i.spu2_ram_.size()==0x100000u) && i.spu2_ram_written_.size()==i.spu2_ram_.size());}
+    static void validate(const Iop& i){demand(i.ram_.size()==kIopRamBytes && i.ram_known_.size()==kIopRamBytes && (i.spu2_ram_.empty() || i.spu2_ram_.size()==0x100000u) && i.spu2_ram_written_.size()==i.spu2_ram_.size());for(const auto& core:i.spu2_voices_)for(const auto& v:core)demand(v.phase<=4 && v.next<0x100000u && (!v.loop || (*v.loop<0x100000u && !(*v.loop&7u))) && v.envelope>=0 && v.envelope<=32767 && v.previous>=-32768 && v.previous<=32767 && v.older>=-32768 && v.older<=32767 && v.output>=-32768 && v.output<=32767 && v.envelope_counter<0x8000u && v.write>=v.read && v.write-v.read<=32 && v.pitch_counter<4096u);}
     static void validate(const GsVram& v){demand(v.words_.size()==GsVram::kBytes/4 && v.known_.size()==v.words_.size());}
     static void validate(const GsRegisters& g){demand(g.triangle_vertices_count_<=g.triangle_vertices_.size());}
     static void validate(const Gif& g){demand(g.path_>=1 && g.path_<=3 && g.nreg_<=16 && g.format_<=3 && (!g.in_packet_ || (g.loops_left_ && g.reg_index_<std::max(1u,g.nreg_))));}
@@ -104,6 +110,7 @@ template<bool Reading> class Archive {
 public:
     static constexpr bool reading=Reading;
     bool legacy_scalar_flags{};
+    bool legacy_spu2{};
     explicit Archive(std::span<const std::uint8_t> input={}):input_(input){}
     std::vector<std::uint8_t> output;
     std::vector<std::shared_ptr<const std::string>> strings;
@@ -273,6 +280,10 @@ std::string checkpoint_state_sha256(const EEState& state,const Memory& memory) {
 void refine_checkpoint_scalar_carry(const EEState& state,Memory& memory) {
     CheckpointAccess::validate_boundary(state,memory);CheckpointAccess::refine_scalar(state,memory);
 }
+void refine_checkpoint_texture_precision(const EEState& state,Memory& memory,unsigned modes) {
+    CheckpointAccess::validate_boundary(state,memory);
+    CheckpointAccess::refine_texture(memory,modes);
+}
 void save_checkpoint(const std::filesystem::path& path,const EEState& state,const Memory& memory,
                      const BootReport& boundary,const CheckpointContext& context) {
     using namespace checkpoint_detail;validate_context(context);CheckpointAccess::validate_boundary(state,memory);
@@ -313,7 +324,8 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
          std::string_view(PS2N_CHECKPOINT_SCHEMA)=="06f3fe6fbdb88d6864fb5e3b18139b95e13d22312976051c0cbcd9406931d695" ||
          // Host profiling adds no hardware fields; boot options/reports now
          // participate only in the runtime fingerprint, never the wire schema.
-         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="b32d8b0d82c1d14b0c3f8e5fb8912a2a8495f113256e122b4e924fd34f4e10e2");
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="b32d8b0d82c1d14b0c3f8e5fb8912a2a8495f113256e122b4e924fd34f4e10e2" ||
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="4d32f9c6e62746ff39398d75d0efb1ae80a7a653a7abb8fb4f4c3a6933ede047");
     const bool legacy_scalar_flags=reviewed_scalar_transition &&
         (info.schema_sha256=="9199cae351d7ea3f43526fa1dd800d9f6810d80f6c0370974f190695aee3e2cc" ||
          info.schema_sha256=="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88");
@@ -326,21 +338,31 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
          info.schema_sha256=="3d2c143346ea6328bb9cb49c48abfc09bfe426f4cabb88a2051625384ed54b1f" ||
          info.schema_sha256=="3613da6d23479169c5d84e8eea6a68ed75b7acc10e86c5c324238a5cbccf495f" ||
          info.schema_sha256=="06f3fe6fbdb88d6864fb5e3b18139b95e13d22312976051c0cbcd9406931d695");
-    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields)
+    // v1 has no numerical voices. Preserve its abstract zero-gain/release
+    // proofs verbatim; no active decoder history is reconstructed or guessed.
+    const bool synthesis_transition=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="4d32f9c6e62746ff39398d75d0efb1ae80a7a653a7abb8fb4f4c3a6933ede047";
+    const bool legacy_spu2=context.allow_runtime_change &&
+        ((synthesis_transition && info.schema_sha256=="b32d8b0d82c1d14b0c3f8e5fb8912a2a8495f113256e122b4e924fd34f4e10e2") ||
+         reviewed_v1 || legacy_scalar_flags || same_scalar_fields);
+    const bool same_spu2_fields=context.allow_runtime_change && synthesis_transition &&
+        (info.schema_sha256=="6a3a20754386bdabd4cc27966faaf222a335b6b7111cab9aa951b06a3739d098" ||
+         info.schema_sha256=="efced2750855b215c91be106204dd31881755498213aed8c78b38806f5ac2e35" ||
+         info.schema_sha256=="baa51041ae4e48bb415e3af985bca1f2451485a3ebd5db633d7e8c45e6b83781");
+    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields && !legacy_spu2 && !same_spu2_fields)
         throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
     if(info.runtime_sha256!=PS2N_CHECKPOINT_RUNTIME && !context.allow_runtime_change)throw std::runtime_error("checkpoint runtime changed; explicit reviewed allow-runtime-change is required");
     if(info.scenario_sha256!=context.scenario_sha256)throw std::runtime_error("checkpoint scenario identity differs");
     if(info.bindings_sha256!=CheckpointAccess::bindings(memory,context.expected_disc_sha256))throw std::runtime_error("checkpoint firmware/profile/NVM/disc identity differs");
     EEState staged_state;Memory staged_memory=memory;
-    Reader a(std::span<const std::uint8_t>(parsed.file).subspan(parsed.payload));a.legacy_scalar_flags=legacy_scalar_flags;
+    Reader a(std::span<const std::uint8_t>(parsed.file).subspan(parsed.payload));a.legacy_scalar_flags=legacy_scalar_flags;a.legacy_spu2=legacy_spu2;
     bool clock{},stalls{};a(clock,stalls,staged_state,staged_memory);
     if(a.remaining() || staged_state.retired_instructions!=info.retired || staged_state.pc!=info.pc || staged_state.cycles()!=info.cycles)
         throw std::runtime_error("checkpoint state/envelope disagree");
     if(CheckpointAccess::bindings(staged_memory,context.expected_disc_sha256)!=info.bindings_sha256)throw std::runtime_error("checkpoint changed immutable firmware bindings");
     if(iop_execution_refused(staged_memory))
         throw std::runtime_error("checkpoint contains an IOP refusal; inspect it without resuming partial execution: "+*staged_memory.iop().stop_reason());
-    if(legacy_scalar_flags) {
-        Writer original;original.legacy_scalar_flags=true;original(clock,stalls,staged_state,staged_memory);
+    if(legacy_scalar_flags || legacy_spu2) {
+        Writer original;original.legacy_scalar_flags=legacy_scalar_flags;original.legacy_spu2=legacy_spu2;original(clock,stalls,staged_state,staged_memory);
         if(sha256_hex(original.output)!=info.payload_sha256)throw std::runtime_error("checkpoint scalar migration changed legacy fields");
     }
     CheckpointAccess::own_strings(staged_memory,std::move(a.strings));

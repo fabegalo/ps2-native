@@ -136,6 +136,21 @@ void ranges() {
 }
 void pipeline() {
     VuControl vu;
+    for(const auto sign:{0u,0x80000000u}) {
+        VuControl clipped;clipped.write_vector(1,{{sign|0x00800000u,0},{0,0}});
+        clipped.write_vector(2,{{0x3F000000u,0},{0,0}});
+        clipped.product(3,1,2,8,4,false,false);
+        require(clipped.observe_vector(3).low.value==sign && clipped.read(17)==(sign?0x888u:0x808u) &&
+            clipped.read(16)==(sign?0x1C7u:0x145u),"plain VMUL flushes signed underflow with real MAC and sticky status flags");
+        bool blocked=false;try{clipped.product(0,1,2,8,4,false,true);}catch(const DeviceRefusal&){blocked=true;}
+        require(blocked,"exceptional ACC writes still require the hidden exception state");
+    }
+    {
+        VuControl clipped;clipped.write_vector(1,{{0x7FFFFFFFu,0},{0,0}});clipped.write_vector(2,{{0x40000000u,0},{0,0}});
+        clipped.product(3,1,2,8,4,false,false);
+        require(clipped.observe_vector(3).low.value==0x7FFFFFFFu && clipped.read(17)==0x8000u && clipped.read(16)==0x208u,
+            "plain VMUL clips overflow and reports overflow independently of zero/sign");
+    }
     vu.write_vector(1,{{0x3F800001,0},{0,0}});
     vu.write_vector(2,{{0x3F800003,0xFFFFFFFF00000000ull},{0,0}});
     vu.write_vector(3,{{0x1234567812345678ull,0},{0,0}});

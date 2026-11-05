@@ -37,4 +37,9 @@ void save_checkpoint(const std::filesystem::path& path, const EEState& state,
 // the experiment selects within strict product bounds, preserving that prefix.
 // Record a new scenario identity before saving the experimental continuation.
 void refine_checkpoint_scalar_carry(const EEState& state,Memory& memory);
+// Explicit additive diagnostic precision experiment at a safe boundary.
+// Accepted integral calculations are unchanged; formerly refused fractional
+// coordinates/filters use the existing documented hypotheses. Save under a
+// new scenario identity. This does not certify physical GS precision.
+void refine_checkpoint_texture_precision(const EEState& state,Memory& memory,unsigned modes);
 } // namespace ps2native
