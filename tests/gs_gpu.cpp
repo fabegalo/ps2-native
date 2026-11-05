@@ -228,11 +228,13 @@ void check_guest(std::shared_ptr<GsGpu> gpu,const std::filesystem::path& output)
     if(!output.empty()) {
         EEState state;Memory memory;prepare_ee_boot(bios,nullptr,state,memory);memory.set_gs_gpu_backend(gpu);
         BootOptions options;options.max_instructions=750;options.stop_at=fixture.stop;
+        const auto batches_before=gpu->stats().batches;
         const auto boundary=run_ee_boot(state,memory,nullptr,options);
-        require(boundary.outcome==BootOutcome::BudgetExhausted && memory.gs().vram().gpu_primitives()>0,
-            "mid-stream checkpoint boundary has executed original GPU primitives");
+        require(boundary.outcome==BootOutcome::BudgetExhausted && memory.gs().vram().gpu_primitives()>0 &&
+            gpu->stats().batches==batches_before,"mid-stream checkpoint boundary retains pending original GPU primitives");
         CheckpointContext context;context.scenario_sha256=std::string(64,'a');
         const auto path=output/"gpu-mid-stream.ps2ncp";save_checkpoint(path,state,memory,boundary,context);
+        require(gpu->stats().batches>batches_before,"checkpoint materialization actually executes the pending GPU batch");
         EEState restored;Memory other;prepare_ee_boot(bios,nullptr,restored,other);
         (void)load_checkpoint(path,restored,other,context);other.set_gs_gpu_backend(gpu);
         options.max_instructions=100000;const auto end=run_ee_boot(restored,other,nullptr,options);

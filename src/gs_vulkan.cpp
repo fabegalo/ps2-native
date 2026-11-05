@@ -207,7 +207,14 @@ void VulkanGs::create_buffer(Buffer& buffer,VkDeviceSize size) {
     VkMemoryRequirements requirements{};GetBufferMemoryRequirements_(device_,buffer.buffer,&requirements);
     std::uint32_t type=memory_.memoryTypeCount;
     for(std::uint32_t n=0;n<memory_.memoryTypeCount;++n)if((requirements.memoryTypeBits&(1u<<n))&&
-        (memory_.memoryTypes[n].propertyFlags&(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))==(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)){type=n;break;}
+        (memory_.memoryTypes[n].propertyFlags&(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))==(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+        // Materialization reads every byte on the CPU. Uncached coherent
+        // memory makes those reads very expensive on discrete GPUs. Keep
+        // the same coherence contract and prefer a CPU-cached type, without
+        // requiring HOST_CACHED on devices that do not expose one.
+        if(type==memory_.memoryTypeCount)type=n;
+        if(memory_.memoryTypes[n].propertyFlags&VK_MEMORY_PROPERTY_HOST_CACHED_BIT){type=n;break;}
+    }
     if(type==memory_.memoryTypeCount)throw DeviceRefusal("GS Vulkan needs host-visible coherent storage memory");
     VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};allocation.allocationSize=requirements.size;allocation.memoryTypeIndex=type;
     check(AllocateMemory_(device_,&allocation,nullptr,&buffer.memory),"allocate VRAM buffer");
