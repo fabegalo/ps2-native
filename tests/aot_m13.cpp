@@ -200,6 +200,26 @@ int test_main(int argc, Char** argv) {
         if (hinted) hints.push_back(m13::kCallback);
         const auto cfg = ps2native::analyze_control_flow(elf, hints);
         require(cfg.jump_tables.size() == 2u, "two proven jump tables");
+        auto shared_segment=m13::build_elf(program,false);
+        write32(shared_segment,108,7); // Same table bytes, PF_R|PF_W|PF_X.
+        const auto executable_data=ps2native::parse_ee_elf(shared_segment);
+        rejects([&]{(void)executable_data.data_word_at(m13::kTableA);},"non-executable");
+        const auto shared_cfg=ps2native::analyze_control_flow(executable_data,{});
+        require(shared_cfg.jump_tables.size()==2u && shared_cfg.unresolved_jumps.size()==2u,
+            "only structurally guarded tables are proved when their segment also permits execution");
+        require(shared_cfg.indirect_entries.contains(program.at("a_case3")) &&
+            !shared_cfg.instructions.contains(program.at("u_case0")) &&
+            !shared_cfg.instructions.contains(program.at("e_case0")),
+            "PF_X cannot substitute for a bound or authorize bypassing its guard");
+        auto not_backed=shared_segment;write32(not_backed,100,3);
+        const auto missing_table=ps2native::analyze_control_flow(ps2native::parse_ee_elf(not_backed),{});
+        require(missing_table.jump_tables.empty(),"executable BSS is not evidence for original table words");
+        auto code_as_table=shared_segment;
+        const auto hi_offset=read32(code_as_table,56)+program.at("select_a_lw")-8u-m13::kTextBase;
+        write32(code_as_table,hi_offset,(read32(code_as_table,hi_offset)&0xFFFF0000u)|(m13::kTextBase>>16u));
+        const auto overlap=ps2native::analyze_control_flow(ps2native::parse_ee_elf(code_as_table),{});
+        require(unresolved_at(overlap,program.at("select_a_jr")).reason.find("overlaps discovered instructions")!=std::string::npos,
+            "a bounded load from actual discovered code does not authorize treating those instructions as pointers");
         const auto& a = table_at(cfg, program.at("select_a_jr"));
         require(a.table_address == m13::kTableA && a.entries == 4u && a.bound_site == program.at("select_a"),
                 "GCC-shape table: address, SLTIU size and bound site");

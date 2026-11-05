@@ -438,7 +438,16 @@ AotControlFlow analyze_control_flow(
                 }
                 const auto source = static_cast<std::uint32_t>(position);
                 try {
-                    const auto target = image.data_word_at(source);
+                    // Linked PS2 images can place guarded tables in a segment
+                    // that also permits execution. The SLTIU/BEQ/LW proof,
+                    // not PF_X alone, identifies these words as table data.
+                    // Keep explicit/relocation-only hints on their stricter
+                    // data accessor and never reinterpret discovered code.
+                    if(graph.instructions.contains(source))
+                        throw std::runtime_error("bounded table overlaps discovered instructions");
+                    std::uint32_t target;
+                    try {target=image.data_word_at(source);}
+                    catch(const std::runtime_error&) {target=image.instruction_at(source);}
                     if (&image.code_segment_at(target) != &jump_segment)
                         problem = "entry " + std::to_string(index) + " leaves the JR's code segment";
                     else
@@ -470,6 +479,10 @@ AotControlFlow analyze_control_flow(
             throw std::runtime_error("Jump table at JR " + hex(table.jump_site) +
                                      ": bound proof invalidated by entry " + hex(*entry) +
                                      " discovered later");
+        for(std::uint32_t index=0;index<table.entries;++index)
+            if(graph.instructions.contains(table.table_address+4u*index))
+                throw std::runtime_error("Jump table at JR "+hex(table.jump_site)+
+                    ": table data overlaps instructions discovered later");
     }
     for (const auto& jump : graph.constant_jumps) {
         if (const auto entry = window_entry(entries, jump.lui_site, jump.jump_site))
