@@ -630,6 +630,31 @@ void vector_q() {
     vu.issue_q(21,0,0,3,3,false);vu.write(28,2);vu.advance_q(28);
     require(vu.q_ready_cycle()==0 && vu.read(16)==0,"VU reset cancels pending FDIV flags");
 }
+void vector_nop() {
+    for(bool interpreted:{false,true}) {
+        Memory memory;memory.reset_for_boot(m20::build_firmware().rom);EEState state;
+        state.pc=0x80001000;state.set_cp0(Cop0::Status,1u<<30u);
+        memory.set_clock(&state.retired_instructions,&state.stall_cycles);
+        memory.write_vu_control(22,0x40000000u);memory.vu_issue_q(0,0,0,3,3,false);
+        memory.write_vu_vector(1,{{0x12345678u,0xFFFF000000000000ull},{0,~0ull}});
+        const auto before=memory.observe_vu_vector(1);const auto status=memory.read_vu_control(16);
+        const auto decoded=decode_mips(state.pc,0x4A0002FFu);
+        require(decoded.opcode==MipsOpcode::Vnop && !decoded.written_gpr() && !decoded.has_delay_slot(),
+            "VNOP has an exact COP2 encoding and no invented destination or control-flow edge");
+        if(interpreted) {
+            memory.write32(state.pc,0x4A0002FFu);std::uint64_t count=0;ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};
+            interpret_instruction(context);require(count==1 && state.retired_instructions==1,"interpreted VNOP retires one real instruction");
+        } else ee::exec<MipsOpcode::Vnop>(state,memory,0,0x4A0002FFu);
+        const auto after=memory.observe_vu_vector(1);
+        require(state.stall_cycles==0 && memory.vu_q_ready_cycle()==7 && memory.read_vu_control(22)==0x40000000u &&
+            memory.read_vu_control(16)==status && before.low.value==after.low.value && before.low.unknown==after.low.unknown &&
+            before.high.value==after.high.value && before.high.unknown==after.high.unknown,
+            "VNOP preserves status and opaque vectors, and does not turn its ordinary slot into WAITQ");
+        state.set_cp0(Cop0::Status,0);
+        rejects([&]{ee::exec<MipsOpcode::Vnop>(state,memory,0,0x4A0002FFu);},"Status.CU2 = 0");
+    }
+    for(auto word:{0x4A2002FFu,0x4A0102FFu,0x4A000AFFu})require(!try_decode_r5900(0,word),"reserved VNOP operand fields refuse");
+}
 void vector_setup() {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_cp0(Cop0::Status,1u<<30);
@@ -840,6 +865,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_setup();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_setup();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

@@ -73,6 +73,20 @@ int main() try {
     rejects([&]{pixel(cache,3,0,8,8);},"cached texture page changed");
     cache.general_write(0x3F,0);pixel(cache,3,0,8,8);
     require(cache.vram().read(0,64,0,3,0)==0x80808080u,"local VRAM copies dirty the same cached pages as host uploads");
+    // Real render-to-texture ping-pong: an earlier source becomes the draw
+    // target while a separate known page is the active texture.
+    upload(cache,64,0x80442210u);
+    cache.general_write(6,64ull|(1ull<<14u)|(3ull<<26u)|(3ull<<30u)|(1ull<<34u)|(1ull<<35u));
+    cache.general_write(0x4C,1u|(1u<<16u));pixel(cache,0,0,8,8);
+    require(cache.vram().read(8192,64,0,0,0)==0x80442210u,
+        "drawing to an earlier sampled page writes actual bytes from a disjoint active texture");
+    cache.general_write(0x4C,1u<<16u);
+    cache.general_write(6,32ull|(1ull<<14u)|(3ull<<26u)|(3ull<<30u)|(1ull<<34u)|(1ull<<35u));
+    const auto before_drawn_texture=cache.vram().pixel_writes();
+    rejects([&]{pixel(cache,4,0,8,8);},"cached texture page changed");
+    require(cache.vram().pixel_writes()==before_drawn_texture,"a later sample cannot invent cache invalidation after drawing changed that texture");
+    cache.general_write(0x3F,0);pixel(cache,4,0,8,8);
+    require(cache.vram().read(0,64,0,4,0)==0x80442210u,"guest TEXFLUSH exposes the real rendered texture bytes");
     GsRegisters uninitialized;setup(uninitialized,false);
     rejects([&]{pixel(uninitialized,0,0,8,8);},"initial TEXFLUSH");
     GsRegisters diagnostic;setup(diagnostic,false,true);pixel(diagnostic,0,0,8,8);

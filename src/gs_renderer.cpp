@@ -122,7 +122,36 @@ void GsRegisters::load_clut(std::uint64_t tex) {
     if(cld>=2u)clut_base_[(cld-2u)&1u]=cbp;
 }
 void GsRegisters::texture_write_guard(unsigned address) const {
-    if(sampled_pages_[address/8192u])
+    // Drawing may overwrite an earlier texture in VRAM. Only feedback into
+    // the currently active texture needs refusal here; subsequent reads of
+    // any changed cached page remain protected by dirty_texture_pages_.
+    const auto mode=(required(0x1A)&1u) ? required(0) : required(0x1B);
+    if(!(mode&16u))return;
+    const auto context=static_cast<unsigned>((mode>>9u)&1u);
+    const auto tex=required(static_cast<std::uint8_t>(6u+context));
+    const auto clamp=required(static_cast<std::uint8_t>(8u+context));
+    const auto range=[](unsigned bits,unsigned mode,unsigned low,unsigned high) {
+        if(mode<2u)return std::pair{0u,(1u<<bits)-1u};
+        if(mode==2u) {
+            if(low>high)throw DeviceRefusal("GS inverted region clamp is not modeled");
+            return std::pair{low,high};
+        }
+        return std::pair{high,high|low};
+    };
+    const auto [xmin,xmax]=range(static_cast<unsigned>((tex>>26u)&15u),static_cast<unsigned>(clamp&3u),
+        static_cast<unsigned>((clamp>>4u)&1023u),static_cast<unsigned>((clamp>>14u)&1023u));
+    const auto [ymin,ymax]=range(static_cast<unsigned>((tex>>30u)&15u),static_cast<unsigned>((clamp>>2u)&3u),
+        static_cast<unsigned>((clamp>>24u)&1023u),static_cast<unsigned>((clamp>>34u)&1023u));
+    const auto psm=static_cast<unsigned>((tex>>20u)&63u);
+    const auto pw=psm<=1u ? 64u : 128u,ph=psm<=1u ? 32u : psm==19u ? 64u : 128u;
+    const auto stride=static_cast<unsigned>((tex>>14u)&63u)*64u/pw;
+    const auto base=static_cast<unsigned>(tex&0x3FFFu)*256u;
+    const auto first=(ymin/ph)*stride+xmin/pw,last=(ymax/ph)*stride+xmax/pw;
+    // A contiguous superset also covers pitch gaps, non-page-aligned TBP
+    // and VRAM wrapping without a per-pixel scan over every texture page.
+    const auto start=(base/8192u+first)%512u;
+    const auto pages=last-first+1u+(base%8192u!=0u);
+    if((address/8192u+512u-start)%512u<pages)
         throw DeviceRefusal("GS drawing aliases sampled texture memory; cache feedback is not modeled");
 }
 void GsRegisters::texture_transfer_write(unsigned address) {
@@ -461,11 +490,13 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
                 const auto color_unknown=!fba && !(color&0x80000000u) ? 0x80000000u : 0u;
                 if(fba && (*fba&1u))color|=0x80000000u;
                 texture_write_guard(GsVram::address(base,bw,psm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
+                texture_transfer_write(GsVram::address(base,bw,psm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
                 vram_.write(base, bw, psm, static_cast<unsigned>(x), static_cast<unsigned>(y), color,
                              write_mask, color_unknown, conditional);
             }
             if (depth_write) {
                 texture_write_guard(GsVram::depth_address(zbase,bw,zpsm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
+                texture_transfer_write(GsVram::depth_address(zbase,bw,zpsm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
                 vram_.write_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y), pixel_z, conditional);
             }
         }
