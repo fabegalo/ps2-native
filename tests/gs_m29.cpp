@@ -435,7 +435,14 @@ void check_drawing_scanout() {
     require(gs.vram().read(0,64,0,2,2)==0x80554433u,"XYZ3 suppresses kick");
     gs.general_write(0,1);gs.general_write(5,0);
     rejects([&]{gs.general_write(5,16u);},"line rasterization");
-    gs.general_write(0,6u|16u); rejects([&]{gs.general_write(5,0);},"texture");
+    gs.general_write(0,6u|16u);
+    const auto before_stq_vertex=gs.vram().revision();
+    gs.general_write(5,0);
+    require(gs.vram().revision()==before_stq_vertex,
+            "first STQ sprite vertex is queued without sampling or drawing");
+    GsRegisters missing_texture;missing_texture.reset(0);configure_draw(missing_texture);
+    missing_texture.general_write(0,6u|16u);missing_texture.general_write(5,0);
+    rejects([&]{missing_texture.general_write(5,16u|(16ull<<16));},"register 6");
     configure_draw(gs); gs.general_write(0x47,1u<<14); gs.general_write(5,0);
     rejects([&]{gs.general_write(5,64u|(64ull<<16));},"alpha/depth");
     gs.write(kGsPmode,8,0,0,{}); rejects([&]{(void)gs.scanout(0);},"disabled");
