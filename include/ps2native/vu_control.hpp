@@ -2,6 +2,7 @@
 #include "ps2native/device_timing.hpp"
 #include "ps2native/ee_fpu.hpp"
 #include "ps2native/vu_float.hpp"
+#include "ps2native/profile.hpp"
 #include <array>
 #include <optional>
 #include <vector>
@@ -192,6 +193,7 @@ public:
         pending_q_.reset();
     }
     void issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,bool square_root) {
+        profiling::Scope profile(profiling::Phase::Vu);
         if(pending_q_)throw DeviceRefusal("VU FDIV pipeline is still occupied");
         const auto a=vectors_.at(left)[left_lane],b=vectors_.at(right)[right_lane];
         if(!square_root && (b.unknown || a.unknown))throw DeviceRefusal("VU Q consumes unknown operands");
@@ -215,6 +217,7 @@ public:
         pending_q_=PendingQ{cycle+7u,value,flags,unknown,bounds};
     }
     void add(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast=4,bool subtract=false) {
+        profiling::Scope profile(profiling::Phase::Vu);
         auto result=vectors_.at(destination);
         std::array<std::optional<FloatBounds>,4> bounds{};
         std::uint32_t mac=0,status=0;
@@ -250,6 +253,7 @@ public:
     }
     void product(unsigned destination,unsigned left,unsigned right,unsigned mask,
                  unsigned broadcast,bool accumulate,bool to_accumulator,bool outer=false) {
+        profiling::Scope profile(profiling::Phase::Vu);
         auto result=to_accumulator ? accumulator_ : vectors_.at(destination);
         std::array<std::optional<FloatBounds>,4> bounds{};
         std::uint32_t mac=0,status=0;
@@ -301,6 +305,7 @@ public:
         unknown_[16]&=~(0xFu|(status<<6u));
     }
     void rotate(unsigned destination,unsigned source,unsigned mask) {
+        profiling::Scope profile(profiling::Phase::Vu);
         const auto input=vectors_.at(source); // alias-safe, including unknown bits
         const auto bounds=vector_bounds_.at(source);
         if(destination)for(unsigned lane=0;lane<4;++lane)

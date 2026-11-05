@@ -1,5 +1,6 @@
 #include "ps2native/vu_float.hpp"
 #include "ps2native/ee_fpu.hpp"
+#include "ps2native/profile.hpp"
 #include <algorithm>
 #include <bit>
 namespace ps2native {
@@ -42,6 +43,7 @@ std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
         std::uint32_t flags=0;const auto value=ee_fpu_add(a.value,b.value,flags);
         return VuFloatResult{{value,0},flags};
     }
+    profiling::Scope profile(profiling::Phase::Bounds);
     if(!fraction_only(a) || !fraction_only(b))return std::nullopt;
     const auto ar=input_bounds(a,a_bounds),br=input_bounds(b,b_bounds);
     if(!ar || !br)return {};
@@ -100,6 +102,7 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsi
         if(const auto value=ee_fpu_multiply(a.value,b.value,flags,diagnostic))
             return VuFloatResult{{*value,0},flags};
     }
+    profiling::Scope profile(profiling::Phase::Bounds);
     if(!fraction_only(a) || !fraction_only(b))return std::nullopt;
     const auto ar=input_bounds(a,a_bounds),br=input_bounds(b,b_bounds);
     if(!ar || !br)return {};
@@ -124,6 +127,7 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsi
     return hull(low.word.value,high.word.value,low.flags,allow_exponent);
 }
 std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a,std::optional<FloatBounds> bounds) {
+    profiling::Scope profile(profiling::Phase::Bounds);
     if(!fraction_only(a))return std::nullopt;
     const auto domain=input_bounds(a,bounds);
     if(!domain)return {};

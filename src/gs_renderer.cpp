@@ -1,5 +1,6 @@
 // Independently implemented from register/VRAM specifications, no emulator code.
 #include "ps2native/gs_registers.hpp"
+#include "ps2native/profile.hpp"
 #include <algorithm>
 #include <string>
 
@@ -89,10 +90,12 @@ void GsRegisters::transfer_data(std::uint64_t data) {
     }
 }
 void GsRegisters::image_write(std::uint64_t low, std::uint64_t high) {
+    profiling::Scope profile(profiling::Phase::Gs);
     transfer_data(low);
     if (transfer_.active) transfer_data(high); // final quadword padding is discarded
 }
 void GsRegisters::load_clut(std::uint64_t tex) {
+    profiling::Scope profile(profiling::Phase::Gs);
     const auto psm=static_cast<unsigned>((tex>>20)&63u),cld=static_cast<unsigned>(tex>>61);
     if((psm!=19u && psm!=20u) || !cld)return;
     if(cld>5u)throw DeviceRefusal("GS reserved CLUT load control");
@@ -208,6 +211,7 @@ std::uint32_t GsRegisters::sample_texture(std::uint64_t tex,std::uint64_t clamp,
     return *color;
 }
 void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
+    profiling::Scope profile(profiling::Phase::Gs);
     const auto prim = required(0x00);
     const auto control = required(0x1A);
     const auto mode = (control & 1u) ? prim : required(0x1B);
@@ -515,6 +519,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     if(triangle)finish_triangle();else first_vertex_.reset();
 }
 Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
+    profiling::Scope profile(profiling::Phase::Gs);
     if (!display_[0]) throw DeviceRefusal("GS scanout: PMODE not written");
     const auto pmode = *display_[0];
     const auto en = pmode & 3u;

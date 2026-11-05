@@ -1,4 +1,5 @@
 #include "ps2native/iop.hpp"
+#include "ps2native/profile.hpp"
 #include "ps2native/vu_control.hpp"
 
 #include <algorithm>
@@ -558,6 +559,7 @@ void Iop::advance_gif_dma(std::uint64_t ee_cycle,Gif& gif,GsRegisters& gs) {
     advance_graphics_dma(2,ee_cycle,nullptr,nullptr,gif,gs);
 }
 void Iop::advance_graphics(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu) {
+    profiling::Scope profile(profiling::Phase::Devices);
     for(unsigned channel=0;channel<3;++channel)advance_graphics_dma(channel,ee_cycle,&vif0,&vif1,gif,gs,&vu);
     advance_vpus(ee_cycle,&vif0,&vif1,&vu,gif,gs);
 }
@@ -984,6 +986,7 @@ void Iop::pump_cdvd() {
 }
 
 void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
+    profiling::Scope profile(profiling::Phase::Iop);
     // EE writes are preceded by a run to the write boundary. Observe the new
     // clock before step() decides whether the next instruction is interrupted.
     // Refreshing only after retirement leaves that decision one generation old.
@@ -2042,6 +2045,7 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
 }
 
 std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char* what) {
+    profiling::Scope profile(profiling::Phase::Devices);
     if(physical>=0x1F900000u && physical<0x1F900800u &&
        (physical&0x3FFu)<0x180u && (physical&15u)==0xAu) {
         if(bytes!=2u)throw IopStop{"SPU2 ENVX requires a halfword read"};
@@ -2470,6 +2474,7 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
 }
 
 void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std::uint32_t> value, const char* what) {
+    profiling::Scope profile(profiling::Phase::Devices);
     if(physical==0x1000002Cu || physical==0x1000002Eu) {
         if(!value)throw IopStop{"SPEED GPIO write requires known pin data"};
         write_speed_gpio(physical,bytes,*value);return;

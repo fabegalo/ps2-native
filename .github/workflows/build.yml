@@ -43,7 +43,7 @@ jobs:
 
       - name: Configure (Unix / Ninja)
         if: runner.os != 'Windows'
-        run: cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_REQUIRE_NINJA_PATH_TEST=ON
+        run: cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_REQUIRE_NINJA_PATH_TEST=ON -DPS2N_ENABLE_PROFILING=${{ matrix.name == 'Linux x86-64' && 'ON' || 'OFF' }}
 
       - name: Configure (Windows / MSVC)
         if: runner.os == 'Windows'

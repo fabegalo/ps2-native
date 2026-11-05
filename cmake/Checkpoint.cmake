@@ -11,6 +11,8 @@ list(FILTER checkpoint_headers EXCLUDE REGEX "/ee_semantics[.]hpp$")
 # Extending the decoder must change the runtime identity, not the wire schema.
 list(FILTER checkpoint_headers EXCLUDE REGEX "/mips[.]hpp$")
 list(FILTER checkpoint_headers EXCLUDE REGEX "/vu_fixed[.]hpp$")
+# Boot options/reports and host profiling counters are never serialized.
+list(FILTER checkpoint_headers EXCLUDE REGEX "/(boot|profile)[.]hpp$")
 set(checkpoint_schema "ps2n-complete-checkpoint-v1-le-fields\n")
 foreach(header IN LISTS checkpoint_headers)
     file(READ "${header}" content)
@@ -29,7 +31,7 @@ string(APPEND checkpoint_schema "${content}")
 string(SHA256 checkpoint_schema_hash "${checkpoint_schema}")
 file(GLOB checkpoint_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 list(SORT checkpoint_sources)
-set(checkpoint_runtime "${checkpoint_schema_hash}\n${CMAKE_CXX_COMPILER_ID}\n${CMAKE_CXX_COMPILER_VERSION}\n${CMAKE_BUILD_TYPE}\n${CMAKE_CXX_FLAGS}\n")
+set(checkpoint_runtime "${checkpoint_schema_hash}\n${CMAKE_CXX_COMPILER_ID}\n${CMAKE_CXX_COMPILER_VERSION}\n${CMAKE_BUILD_TYPE}\n${CMAKE_CXX_FLAGS}\n${PS2N_ENABLE_PROFILING}\n")
 foreach(header IN LISTS checkpoint_runtime_headers)
     file(READ "${header}" content)
     string(REPLACE "\r\n" "\n" content "${content}")
@@ -71,7 +73,7 @@ if(BUILD_TESTING)
     set_tests_properties(native-complete-checkpoint PROPERTIES TIMEOUT 90)
     add_test(NAME native-checkpoint-cli COMMAND "${CMAKE_COMMAND}"
         "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/checkpoint-cli-test" "-DFIXTURE=$<TARGET_FILE:ps2n-make-fixture>"
-        "-DRUNNER=$<TARGET_FILE:ps2n-run>" "-DCHECKPOINT=$<TARGET_FILE:ps2n-checkpoint>"
+        "-DRUNNER=$<TARGET_FILE:ps2n-run>" "-DCHECKPOINT=$<TARGET_FILE:ps2n-checkpoint>" "-DPROFILE_ENABLED=${PS2N_ENABLE_PROFILING}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/checkpoint_cli.cmake")
     set_tests_properties(native-checkpoint-cli PROPERTIES TIMEOUT 90)
 endif()

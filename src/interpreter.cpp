@@ -296,6 +296,7 @@ public:
     }
     static std::optional<VuFloatResult> finite_fpu(MipsOpcode op,ObservedWord a,ObservedWord b,
         const FpuAffine& ar,const FpuAffine& br,bool identical,std::shared_ptr<const std::vector<std::uint32_t>>& candidates,bool diagnostic) {
+        profiling::Scope profile(profiling::Phase::Bounds);
         const auto av=fpu_candidates(a,ar,op==MipsOpcode::DivS ? 512u : 64u),bv=fpu_candidates(b,br,op==MipsOpcode::DivS ? 512u : 64u);
         if(av.empty() || bv.empty() || av.size()*(identical ? 1u : bv.size())>4096u)return {};
         std::vector<std::uint32_t> values;std::optional<std::uint32_t> common_flags;
@@ -377,6 +378,7 @@ public:
     }
     static std::optional<VuFloatResult> range_fpu(MipsOpcode op,ObservedWord a,ObservedWord b,
         const FpuAffine& ar,const FpuAffine& br,std::shared_ptr<const std::vector<FloatBounds>>& ranges,bool diagnostic) {
+        profiling::Scope profile(profiling::Phase::Bounds);
         std::array<std::optional<FloatBounds>,512> classes{};std::optional<std::uint32_t> flags;
         const auto append=[&](std::uint32_t lo,std::uint32_t hi,std::uint32_t next_flags) {
             if((flags && *flags!=next_flags) || lo>hi || ((lo^hi)&0x80000000u))return false;
@@ -610,7 +612,8 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
     auto& memory = ctx.memory;
     state.instruction_pc=state.pc;
     state.instruction_in_delay_slot=state.delay_pending;
-    (void)poll_ee_interrupts(state,memory);
+    if(!ctx.interrupts_sampled)(void)poll_ee_interrupts(state,memory);
+    ctx.interrupts_sampled=false;
     memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi)); memory.set_cache_config(state.cp0(Cop0::Config));
     const auto pc = state.pc;
     state.instruction_pc = pc;

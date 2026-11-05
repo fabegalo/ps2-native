@@ -31,6 +31,9 @@ struct ExecutionContext {
     std::uint64_t budget;
     std::uint32_t stop_pc;
     InstructionObserver* observer{};
+    // The dispatcher already sampled interrupts at this instruction boundary.
+    // Consumed once by the selected engine; later instructions still sample.
+    bool interrupts_sampled{};
 };
 
 namespace ee {

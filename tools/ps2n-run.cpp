@@ -21,6 +21,7 @@ template<class C> int run_main(int argc, C** argv) {
                          "         [--diagnostic-ram=ADDRESS:BYTES] (passive backing RAM)\n"
                          "         [--resume=FILE --checkpoint-out=FILE --checkpoint-every=N]\n"
                          "         [--checkpoint-scenario=SHA256] [--checkpoint-allow-runtime-change]\n";
+            std::cerr << "         [--profile] (requires -DPS2N_ENABLE_PROFILING=ON; host component timings)\n";
             return 2;
         }
         ps2native::BootOptions options;

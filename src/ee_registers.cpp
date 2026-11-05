@@ -106,6 +106,7 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
 // before an EE access are therefore ordered before it, and both EE engines
 // see the same IOP.
 void EeRegisters::sync_iop() {
+    profiling::Scope profile(profiling::Phase::Sync);
     iop_.run_until(now() / kEeCyclesPerIopCycle, &gs_);
     iop_.advance_graphics(now(),vif0_,vif1_,gif_,gs_,vu_control_);
 }
@@ -282,6 +283,7 @@ std::uint32_t EeRegisters::read_timer(unsigned index, unsigned reg) {
 }
 
 std::uint64_t EeRegisters::read(std::uint32_t physical, std::size_t bytes) {
+    profiling::Scope profile(profiling::Phase::Devices);
     if(physical>=0x1F402000u && physical<0x1F402020u) {
         sync_iop();return iop_.ee_cdvd_read(physical,bytes);
     }
@@ -412,6 +414,7 @@ void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint6
 }
 
 void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t value) {
+    profiling::Scope profile(profiling::Phase::Devices);
     if(physical>=0x1F402000u && physical<0x1F402020u) {
         sync_iop();iop_.ee_cdvd_write(physical,bytes,static_cast<std::uint32_t>(value));return;
     }

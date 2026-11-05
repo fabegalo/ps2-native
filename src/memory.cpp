@@ -398,6 +398,7 @@ void Memory::set_storage_unknown(const Target& target, std::size_t size, std::ui
 }
 std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const char* what, bool notify,
                               std::uint64_t* unknown) const {
+    profiling::Scope profile(profiling::Phase::Memory);
     const auto target = resolve(address, size, false, what);
     if(registers_.dma_writes_ram())registers_.sync_iop();
     if (unknown) *unknown = 0;
@@ -473,6 +474,7 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
 }
 void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t value, const char* what,
                        std::uint64_t unknown) {
+    profiling::Scope profile(profiling::Phase::Memory);
     // The lazy IOP must consume old EE source bytes before this CPU store.
     if (registers_.dma_reads_ram() || registers_.dma_writes_ram()) registers_.sync_iop();
     const auto target = resolve(address, size, true, what);

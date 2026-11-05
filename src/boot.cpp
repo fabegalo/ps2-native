@@ -106,6 +106,7 @@ private:
             report_.trace.push_back(std::move(line));
     }
     void present() {
+        profiling::Scope profile(profiling::Phase::Presentation);
         const auto& gs = memory_.gs();
         const auto cycle = state_.cycles();
         if (generation_ != gs.timing_generation()) {
@@ -221,6 +222,7 @@ void prepare_direct_elf(const ElfImage& elf, const AotModule* aot, EEState& stat
 
 BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, const BootOptions& options) {
     BootReport report;
+    profiling::Session profile(options.profile);
     Tracer tracer(options, report, state, memory);
     std::uint64_t executed = 0;
     // An unaligned stop address can never match an instruction PC.
@@ -241,6 +243,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                 state.instruction_pc=state.pc;
                 state.instruction_in_delay_slot=state.delay_pending;
                 (void)poll_ee_interrupts(state,memory);
+                ctx.interrupts_sampled=true;
                 memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi)); memory.set_cache_config(state.cp0(Cop0::Config));
                 // Hybrid mode: every address may continue in the interpreter, so
                 // the AOT-only verified-entry restriction does not apply here.

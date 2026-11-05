@@ -487,6 +487,7 @@ void VuControl::advance_micro_q(std::uint64_t cycle) {
     status.unknown&=~(0x30u|(flags<<6u));pending_q1_.reset();
 }
 void VuControl::advance_micro(std::uint64_t cycle,Gif* gif,GsRegisters* gs) {
+    profiling::Scope profile(profiling::Phase::Vu);
     for(;;) {
         unsigned unit=2;
         for(unsigned n=0;n<2u;++n)if(micro_[n].running && micro_[n].next<=cycle &&

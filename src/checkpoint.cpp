@@ -277,6 +277,8 @@ void save_checkpoint(const std::filesystem::path& path,const EEState& state,cons
                      const BootReport& boundary,const CheckpointContext& context) {
     using namespace checkpoint_detail;validate_context(context);CheckpointAccess::validate_boundary(state,memory);
     if((boundary.outcome!=BootOutcome::BudgetExhausted && boundary.outcome!=BootOutcome::StopAddress) || boundary.pc!=state.pc)throw std::runtime_error("refused/partial instructions are not checkpoint boundaries; keep the previous successful checkpoint");
+    if(iop_execution_refused(memory))
+        throw std::runtime_error("IOP refusal is not a checkpoint boundary; keep the previous successful checkpoint: "+*memory.iop().stop_reason());
     Writer payload;auto clock=CheckpointAccess::clock(memory),stalls=CheckpointAccess::stalls(memory);
     payload(clock,stalls,const_cast<EEState&>(state),const_cast<Memory&>(memory));
     CheckpointInfo info{PS2N_CHECKPOINT_SCHEMA,PS2N_CHECKPOINT_RUNTIME,CheckpointAccess::bindings(memory,context.expected_disc_sha256),context.scenario_sha256,context.host_metadata,sha256_hex(payload.output),state.retired_instructions,state.cycles(),payload.output.size(),state.pc};
@@ -308,7 +310,10 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
          std::string_view(PS2N_CHECKPOINT_SCHEMA)=="3613da6d23479169c5d84e8eea6a68ed75b7acc10e86c5c324238a5cbccf495f" ||
          // SQC2/LQC2 now retain existing numeric metadata. The new methods
          // add no fields to VU, memory or the checkpoint wire format.
-         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="06f3fe6fbdb88d6864fb5e3b18139b95e13d22312976051c0cbcd9406931d695");
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="06f3fe6fbdb88d6864fb5e3b18139b95e13d22312976051c0cbcd9406931d695" ||
+         // Host profiling adds no hardware fields; boot options/reports now
+         // participate only in the runtime fingerprint, never the wire schema.
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="b32d8b0d82c1d14b0c3f8e5fb8912a2a8495f113256e122b4e924fd34f4e10e2");
     const bool legacy_scalar_flags=reviewed_scalar_transition &&
         (info.schema_sha256=="9199cae351d7ea3f43526fa1dd800d9f6810d80f6c0370974f190695aee3e2cc" ||
          info.schema_sha256=="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88");
@@ -319,7 +324,8 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
          info.schema_sha256=="4e87d58b722e40020caec94e9928c087e3f9d86c7e33f5116a76628648e4dc4f" ||
          info.schema_sha256=="830377c10823d2223579db00dc995da1a05a0fcc433a85be4014e50ea96ac772" ||
          info.schema_sha256=="3d2c143346ea6328bb9cb49c48abfc09bfe426f4cabb88a2051625384ed54b1f" ||
-         info.schema_sha256=="3613da6d23479169c5d84e8eea6a68ed75b7acc10e86c5c324238a5cbccf495f");
+         info.schema_sha256=="3613da6d23479169c5d84e8eea6a68ed75b7acc10e86c5c324238a5cbccf495f" ||
+         info.schema_sha256=="06f3fe6fbdb88d6864fb5e3b18139b95e13d22312976051c0cbcd9406931d695");
     if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields)
         throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
     if(info.runtime_sha256!=PS2N_CHECKPOINT_RUNTIME && !context.allow_runtime_change)throw std::runtime_error("checkpoint runtime changed; explicit reviewed allow-runtime-change is required");
@@ -331,6 +337,8 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
     if(a.remaining() || staged_state.retired_instructions!=info.retired || staged_state.pc!=info.pc || staged_state.cycles()!=info.cycles)
         throw std::runtime_error("checkpoint state/envelope disagree");
     if(CheckpointAccess::bindings(staged_memory,context.expected_disc_sha256)!=info.bindings_sha256)throw std::runtime_error("checkpoint changed immutable firmware bindings");
+    if(iop_execution_refused(staged_memory))
+        throw std::runtime_error("checkpoint contains an IOP refusal; inspect it without resuming partial execution: "+*staged_memory.iop().stop_reason());
     if(legacy_scalar_flags) {
         Writer original;original.legacy_scalar_flags=true;original(clock,stalls,staged_state,staged_memory);
         if(sha256_hex(original.output)!=info.payload_sha256)throw std::runtime_error("checkpoint scalar migration changed legacy fields");

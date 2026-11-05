@@ -233,6 +233,35 @@ void vector_memory_bounds() {
         require(!memory.observe_vu_vector_bounds(5,0),"an opaque identical GPR write invalidates old vector bounds");
     }
 }
+void profiling_state_equivalence() {
+    Memory memories[2];EEState states[2];profiling::Profile profile;
+    BootOptions options;options.max_instructions=2;options.tail_instructions=0;
+    std::string expected;
+    for(unsigned pass=0;pass<2;++pass) {
+        auto& memory=memories[pass];auto& state=states[pass];
+        memory.reset_for_boot(m20::build_firmware().rom);
+        state.pc=0x80001000u;state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
+        state.fpr[1]=0x3F800001u;state.fpr[2]=0x3F800003u;
+        memory.write32(state.pc,math(2,3,1,2));memory.write32(state.pc+4u,math(6,4,3,0));
+        options.profile=pass ? &profile : nullptr;
+        if(pass && !profiling::available) {
+            const auto before=checkpoint_state_sha256(state,memory);
+            rejects([&]{(void)run_ee_boot(state,memory,nullptr,options);},"PS2N_ENABLE_PROFILING");
+            require(checkpoint_state_sha256(state,memory)==before,"a disabled profiler refuses before changing guest state");
+            return;
+        }
+        const auto report=run_ee_boot(state,memory,nullptr,options);
+        require(report.retired==2,"profiled execution retires the same instructions");
+        const auto hash=checkpoint_state_sha256(state,memory);
+        if(!pass)expected=hash;
+        else require(hash==expected,"optional host component timers preserve the complete modeled state");
+    }
+    std::uint64_t total=0;for(const auto ns:profile.exclusive_ns)total+=ns;
+    require(total==profile.inclusive_ns[0] && total>0 && profile.calls[0]==1,
+        "exclusive phases partition the session time without double-counting nested work");
+    require(profile.calls[static_cast<unsigned>(profiling::Phase::Memory)] &&
+        profile.calls[static_cast<unsigned>(profiling::Phase::Bounds)],"profiling exercises memory and numeric-proof scopes");
+}
 }
 int main() try {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
@@ -241,6 +270,7 @@ int main() try {
     scalar_carry_experiment();
     copied_numeric_identity();
     vector_memory_bounds();
+    profiling_state_equivalence();
     EEState state;state.set_cp0(Cop0::Status,kStatusCU1);
     std::uint64_t executed=0;ExecutionContext context{state,memory,executed,1000,0xFFFFFFFFu};
     const auto step=[&](std::uint32_t word){state.pc=0x80001000;memory.write32(state.pc,word);interpret_instruction(context);};

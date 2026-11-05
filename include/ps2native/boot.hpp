@@ -4,6 +4,7 @@
 #include "ps2native/ee.hpp"
 #include "ps2native/executable.hpp"
 #include "ps2native/memory.hpp"
+#include "ps2native/profile.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -13,6 +14,14 @@
 
 namespace ps2native {
 class DiagnosticRecorder;
+// Direct ELF deliberately leaves the IOP dormant until a RAM payload is
+// supplied. Its reset/no-ROM sentinel is not a refused guest instruction.
+[[nodiscard]] inline bool iop_execution_refused(const Memory& memory) noexcept {
+    const auto& iop=memory.iop();
+    const bool dormant=memory.mapping()!=Memory::Mapping::HardwareReset &&
+        iop.cycle()==0 && iop.pc()==0xBFC00000u;
+    return iop.stop_reason().has_value() && !dormant;
+}
 enum class TraceLevel : std::uint8_t {
     Events, // COP0/TLB/CACHE events, engine changes and the stop (plus the instruction tail)
     Full    // additionally every instruction and every data bus access
@@ -34,6 +43,8 @@ struct BootOptions {
     // Previously compiled, verified dynamic regions. Lifetimes of their modules
     // and the Memory used for verification must cover this run.
     std::vector<VerifiedAotOverlay> aot_overlays;
+    // Optional host-only profiler; caller owns/reset its fixed-size counters.
+    profiling::Profile* profile{};
 };
 enum class BootOutcome : std::uint8_t {
     BlockPoint,      // execution reached behavior that is not modeled (or a guest fault)

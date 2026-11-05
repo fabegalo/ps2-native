@@ -79,6 +79,16 @@ int main(int argc,char** argv)try {
     BootReport refused;refused.outcome=BootOutcome::BlockPoint;refused.pc=resumed.pc;
     rejects([&]{save_checkpoint(file,resumed,restored,refused,context);},"partial instructions");
     require(inspect_checkpoint(file).payload_sha256==loaded.payload_sha256,"a refused save cannot overwrite the previous safe checkpoint");
+    Memory failed_iop_memory;EEState failed_iop_state;prepare_direct_elf(image,nullptr,failed_iop_state,failed_iop_memory);
+    failed_iop_memory.write32(image.entry,0x1000FFFFu);failed_iop_memory.write32(image.entry+4u,0u);
+    const std::array<std::uint8_t,4> unsupported_iop{0xFFu,0xFFu,0xFFu,0xFFu};
+    failed_iop_memory.load_iop_program(unsupported_iop,0x100u,0x100u);
+    BootOptions failed_iop_options;failed_iop_options.max_instructions=32;failed_iop_options.tail_instructions=0;
+    const auto ee_boundary=run_ee_boot(failed_iop_state,failed_iop_memory,nullptr,failed_iop_options);
+    require(ee_boundary.outcome==BootOutcome::BudgetExhausted && ee_boundary.iop_stop,
+        "fixture isolates a refused IOP instruction while the independent EE still reaches its budget");
+    rejects([&]{save_checkpoint(file,failed_iop_state,failed_iop_memory,ee_boundary,context);},"IOP refusal");
+    require(inspect_checkpoint(file).payload_sha256==loaded.payload_sha256,"an IOP refusal cannot replace the previous successful full-system checkpoint");
     // Derive a legacy-format fixture independently through the public API:
     // toggling the host experiment identifies its sole serialized byte, then
     // the two newly introduced booleans are omitted from an old envelope.
@@ -103,7 +113,8 @@ int main(int argc,char** argv)try {
     auto reviewed=context;reviewed.allow_runtime_change=true;
     for(const auto* schema:{"72d8f630ea9a0befdba0e33bbc9d80394b6a2c29db31cf0a402bd6299876a61e",
             "cd1aa8bf7755b3926af94afc8385147b755b5de6b335faa25049d9f719960ecd",
-            "3613da6d23479169c5d84e8eea6a68ed75b7acc10e86c5c324238a5cbccf495f"}) {
+            "3613da6d23479169c5d84e8eea6a68ed75b7acc10e86c5c324238a5cbccf495f",
+            "06f3fe6fbdb88d6864fb5e3b18139b95e13d22312976051c0cbcd9406931d695"}) {
         const auto decoder_file=directory/"decoder-transition.ps2ncp";
         write_file_atomically(decoder_file,legacy_envelope(current_info,current_payload,schema));
         rejects([&]{(void)load_checkpoint(decoder_file,resumed,restored,context);},"schema");

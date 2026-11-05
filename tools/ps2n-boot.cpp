@@ -40,6 +40,7 @@ int boot_main(int argc, Character** argv) {
                      "                 [--diagnostic-ram=ADDRESS:BYTES] (passive backing RAM)\n"
                      "                 [--resume=FILE --checkpoint-out=FILE --checkpoint-every=N]\n"
                      "                 [--checkpoint-scenario=SHA256] [--checkpoint-allow-runtime-change]\n"
+                     "                 [--profile] (requires -DPS2N_ENABLE_PROFILING=ON; host component timings)\n"
                      "                 [--frame-out=FILE.bmp] (GS VRAM snapshot at stop, when supported)\n"
                      "                 [--assume-video-encoder=0xREG:0xVALUE]... (diagnostic experiments only)\n"
                      "                 [--assume-gs-reset-syncv=0xVALUE] (diagnostic experiment only)\n"

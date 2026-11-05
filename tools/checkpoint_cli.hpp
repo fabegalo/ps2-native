@@ -14,9 +14,12 @@ struct CheckpointOptions {
     // Execution only: excludes checkpoint load/save and host report export.
     // Two clock reads per run/chunk, never per guest instruction.
     mutable double execution_seconds{};
+    bool profile_enabled{};
+    mutable profiling::Profile profile;
     template<class C> bool parse(const std::string& flag,const C* native) {
         const auto path=std::filesystem::path(native).native();
-        if(flag.starts_with("--resume="))resume=path.substr(9);
+        if(flag=="--profile")profile_enabled=true;
+        else if(flag.starts_with("--resume="))resume=path.substr(9);
         else if(flag.starts_with("--checkpoint-out="))output=path.substr(17);
         else if(flag.starts_with("--checkpoint-scenario="))context.scenario_sha256=flag.substr(22);
         else if(flag=="--checkpoint-allow-runtime-change")context.allow_runtime_change=true;
@@ -31,10 +34,18 @@ struct CheckpointOptions {
     BootReport run(EEState& state,Memory& memory,const AotModule* module,const BootOptions& options,
                    std::span<const std::filesystem::path> inputs)const {
         execution_seconds=0;
+        profile={};
         const auto execute=[&](const BootOptions& chunk) {
             const auto start=std::chrono::steady_clock::now();
-            auto report=run_ee_boot(state,memory,module,chunk);
+            auto measured=chunk;
+            if(profile_enabled)measured.profile=&profile;
+            auto report=run_ee_boot(state,memory,module,measured);
             execution_seconds+=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+            if(iop_execution_refused(memory) && report.outcome!=BootOutcome::BlockPoint) {
+                report.outcome=BootOutcome::BlockPoint;report.category="IOP refusal";
+                report.reason=*report.iop_stop;report.pc=state.pc;
+                report.trace.push_back("STOP IOP refusal: "+*report.iop_stop);
+            }
             return report;
         };
         if(resume.empty() && output.empty()) {
@@ -75,6 +86,9 @@ struct CheckpointOptions {
             <<" aot_percent="<<(report.retired ? 100.0*report.aot_instructions/report.retired : 0.0)
             <<" execution_ms="<<execution_seconds*1000.0
             <<" instructions_per_second="<<(execution_seconds>0 ? report.retired/execution_seconds : 0.0)<<'\n';
+        if(profile_enabled)for(unsigned phase=0;phase<profile.calls.size();++phase)
+            std::cout<<"PROFILE component="<<profiling::names[phase]<<" exclusive_ms="<<profile.exclusive_ns[phase]/1.0e6
+                <<" inclusive_ms="<<profile.inclusive_ns[phase]/1.0e6<<" calls="<<profile.calls[phase]<<'\n';
     }
 };
 } // namespace ps2native::cli
