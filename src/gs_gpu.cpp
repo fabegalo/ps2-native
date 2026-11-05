@@ -1,7 +1,14 @@
 #include "ps2native/gs_gpu.hpp"
+#include "ps2native/gs_vram.hpp"
 #include <exception>
 
 namespace ps2native {
+GsGpuResult GsGpu::execute(std::span<std::uint32_t> words,std::span<std::uint32_t> known,
+    std::span<const GsGpuCommand> commands) {
+    if(vram_owner_)vram_owner_->release_gpu();
+    const GsGpuRange all{0u,static_cast<std::uint32_t>(words.size())};
+    return execute(words,known,commands,std::span{&all,1u},std::span{&all,1u});
+}
 #ifdef PS2N_HAS_VULKAN
 std::shared_ptr<GsGpu> create_gs_vulkan();
 #endif

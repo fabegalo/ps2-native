@@ -127,3 +127,62 @@ Falha/timeout de submissão encerra o dispositivo com
 [`ID3D12Device5::RemoveDevice`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device5-removedevice)
 antes de liberar os recursos; runtime sem essa API conserva o caminho CPU.
 DXC compila HLSL durante o build, sem dependência do compilador no runtime.
+
+## Residência incremental — auditoria complementar, 05/11/2026
+
+A revisão desta etapa conserva o fork PS2Recomp fixado em
+`d06a4ab4a6902e0ae324f184c22581c3aa387c36`, selecionado pelo gitlink de
+sotc-vibe-pc identificado acima. No
+[backend OpenGL dessa revisão](https://github.com/LightVelox/PS2Recomp/blob/d06a4ab4a6902e0ae324f184c22581c3aa387c36/ps2xRuntime/src/lib/gs/gpu/gs_gpu_backend.cpp),
+páginas de leitura, destino, CLUT e upload pendente participam das decisões de
+lote. É possível conservar versões de páginas para leitores já enfileirados;
+barreiras ordenam transferências e desenhos, e fences protegem o reuso dos
+buffers circulares. Isso sustenta a necessidade de registrar dependências,
+sem transformar o comportamento da referência em especificação do GS.
+
+O ReXGlue foi fixado em **`c94f5ebdcb3c9d1a460ca48e04f9758448f8d518`**.
+Sua [memória compartilhada](https://github.com/rexglue/rexglue-sdk/blob/c94f5ebdcb3c9d1a460ca48e04f9758448f8d518/src/graphics/shared_memory.cpp)
+separa validade e páginas escritas pela GPU, observa invalidações e reúne
+intervalos de upload. A
+[camada Vulkan](https://github.com/rexglue/rexglue-sdk/blob/c94f5ebdcb3c9d1a460ca48e04f9758448f8d518/src/graphics/vulkan/shared_memory.cpp)
+associa uso de memória a estágios/acessos e recupera buffers de upload segundo
+a conclusão das submissões. Esses contratos são úteis para gerenciar recursos
+do host; o hardware Xenos, suas páginas e suas políticas de readback não
+definem a VRAM do PS2.
+
+O desenho próprio conserva um estado lógico em `GsVram`. Para cada página GS
+de 8 KiB, a localização dos dados recentes é independente das máscaras de
+bits conhecidos. Uma página nunca observada continua desconhecida; estar
+residente não a torna conhecida. Antes de uma escrita CPU parcial numa
+página alterada pela GPU, a página é materializada para preservar os demais
+bits. A próxima submissão envia somente as páginas necessárias modificadas
+pela CPU. Leituras, texturas, CLUT, transferências e scanout usam os mesmos
+acessos coerentes; checkpoints e inspeções completas materializam todo o
+estado pendente. O cache do backend tem proprietário explícito e não é
+serializado como outro estado do console.
+
+O contrato de sincronização continua sustentado por documentação primária:
+
+- [Vulkan: dependências de execução e memória](https://docs.vulkan.org/spec/latest/chapters/synchronization.html).
+  O backend preserva barreiras host→compute, compute→compute entre primitivas
+  e compute→host antes da leitura. Memória host-coherent dispensa operações
+  explícitas de flush/invalidate, mas não dispensa ordenação nem conclusão.
+  A fence com prazo confirma a conclusão de cada lote; uma leitura posterior
+  do mapeamento já concluído pode copiar somente o intervalo pedido.
+- [D3D12: barreiras de recursos](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-resource-barriers-to-synchronize-resource-states-in-direct3d-12)
+  e [readback por buffer](https://learn.microsoft.com/en-us/windows/win32/direct3d12/readback-data-using-heaps).
+  Transições de cópia/UAV e barreiras UAV preservam as dependências; cópias
+  usam intervalos de valores e máscaras. A fence precede o acesso CPU ao
+  readback: `Map` não fornece essa sincronização. Os contadores do lote são
+  lidos separadamente dos bytes da VRAM.
+
+As submissões deste incremento continuam síncronas; residência reduz cópias,
+sem alegação de sobreposição assíncrona. Falha retém sua causa original e
+impede reexecução silenciosa. As regressões próprias comparam o caminho CPU,
+valores e máscaras completos, contadores e fronteiras observáveis, incluindo
+alternância CPU/GPU, sobreposição parcial e continuação de checkpoints.
+Esses testes são independentes das referências; resultados medidos e limites
+pertencem ao [relatório GS GPU](GS-GPU-STATUS.md).
+
+A consulta foi arquitetural. Nenhum código, shader, tabela, algoritmo
+traduzido ou dependência de PS2Recomp GPL ou de ReXGlue foi incorporado.

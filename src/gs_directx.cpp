@@ -7,8 +7,10 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 #include "gs_flat_dxil.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <exception>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -62,10 +64,10 @@ class DirectXGs final : public GsGpu {
     ComPtr<ID3D12QueryHeap> queries_;
     Event event_;
     UINT64 fence_value_{},timestamp_frequency_{};
-    bool poisoned_{};
+    std::exception_ptr failure_;
     bool in_flight_{};
     std::mutex mutex_;
-    GsGpuStats stats_;
+    GsGpuStats stats_{};
     std::string name_;
 
     ComPtr<ID3D12Resource> buffer(UINT64 bytes,D3D12_HEAP_TYPE heap,D3D12_RESOURCE_STATES state,bool uav=false) {
@@ -76,6 +78,7 @@ class DirectXGs final : public GsGpu {
         if(uav)desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         ComPtr<ID3D12Resource> result;
         checked(device_->CreateCommittedResource(&properties,D3D12_HEAP_FLAG_NONE,&desc,state,nullptr,IID_PPV_ARGS(&result)),"buffer allocation");
+        stats_.storage_bytes+=device_->GetResourceAllocationInfo(0,1,&desc).SizeInBytes;
         return result;
     }
     void transition(D3D12_RESOURCE_STATES before,D3D12_RESOURCE_STATES after) {
@@ -149,81 +152,141 @@ public:
         }
     }
     GsGpuResult execute(std::span<std::uint32_t> words,std::span<std::uint32_t> known,
-                        std::span<const GsGpuCommand> primitives) override {
+                        std::span<const GsGpuCommand> primitives,std::span<const GsGpuRange> uploads,
+                        std::span<const GsGpuRange> readbacks) override {
         const std::lock_guard lock(mutex_);
-        if(poisoned_)throw std::runtime_error("GS Direct3D 12 backend refused after an earlier failed batch");
+        if(failure_)std::rethrow_exception(failure_);
         if(words.size_bytes()!=kVramBytes || known.size_bytes()!=kVramBytes || primitives.size()>256u)
             throw std::runtime_error("GS Direct3D 12 invalid VRAM or batch size");
-        if(primitives.empty())return {};
+        for(const auto ranges:{uploads,readbacks})for(const auto& range:ranges)
+            if(!range.word_count||range.first_word>=words.size()||range.word_count>words.size()-range.first_word)
+                throw std::runtime_error("GS Direct3D 12 VRAM synchronization range is out of bounds");
+        for(const auto& p:primitives)
+            if(p.left<0||p.top<0||p.right>2048||p.bottom>2048||p.left>=p.right||p.top>=p.bottom||
+               p.psm>1u||(p.zpsm>1u&&(p.depth_write||((p.test&0x10000u)&&((p.test>>17u)&3u)>=2u)))||
+               p.bw>4032u||!p.bw||p.bw%64u||p.right>static_cast<int>(p.bw))
+                throw std::runtime_error("GS Direct3D 12 received an unsupported or aliased primitive packet");
+        if(primitives.empty()&&uploads.empty()&&readbacks.empty())return {};
         try {
             auto start=Clock::now();
             void* mapped{};const D3D12_RANGE no_read{0,0};
-            checked(upload_->Map(0,&no_read,&mapped),"upload mapping");
-            auto* bytes=static_cast<std::uint8_t*>(mapped);
-            std::memcpy(bytes,words.data(),kVramBytes);std::memcpy(bytes+kVramBytes,known.data(),kVramBytes);
-            std::memset(bytes+kResultOffset,0,256);
-            const D3D12_RANGE written{0,static_cast<SIZE_T>(kBufferBytes)};upload_->Unmap(0,&written);
-            stats_.upload_ns+=elapsed(start);stats_.upload_bytes+=kBufferBytes;
+            if(!uploads.empty()||!primitives.empty()) {
+                checked(upload_->Map(0,&no_read,&mapped),"upload mapping");
+                auto* bytes=static_cast<std::uint8_t*>(mapped);
+                SIZE_T first=static_cast<SIZE_T>(kBufferBytes),last{};
+                for(const auto& range:uploads) {
+                    const auto offset=static_cast<SIZE_T>(range.first_word)*sizeof(std::uint32_t);
+                    const auto size=static_cast<SIZE_T>(range.word_count)*sizeof(std::uint32_t);
+                    std::memcpy(bytes+offset,words.data()+range.first_word,size);
+                    std::memcpy(bytes+kVramBytes+offset,known.data()+range.first_word,size);
+                    first=std::min(first,offset);last=std::max(last,static_cast<SIZE_T>(kVramBytes)+offset+size);
+                    stats_.upload_bytes+=2ull*size;
+                }
+                if(!uploads.empty())++stats_.upload_syncs;
+                if(!primitives.empty()) {
+                    std::memset(bytes+kResultOffset,0,12u);stats_.result_upload_bytes+=12u;
+                    first=std::min(first,static_cast<SIZE_T>(kResultOffset));last=static_cast<SIZE_T>(kResultOffset)+12u;
+                }
+                const D3D12_RANGE written{first,last};upload_->Unmap(0,&written);
+            }
+            stats_.upload_ns+=elapsed(start);
             start=Clock::now();
             checked(allocator_->Reset(),"allocator reset");checked(commands_->Reset(allocator_.Get(),pipeline_.Get()),"command list reset");
-            commands_->CopyBufferRegion(device_memory_.Get(),0,upload_.Get(),0,kBufferBytes);
-            transition(D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            commands_->SetComputeRootSignature(root_.Get());
-            const auto address=device_memory_->GetGPUVirtualAddress();
-            commands_->SetComputeRootUnorderedAccessView(1,address);
-            commands_->SetComputeRootUnorderedAccessView(2,address+kVramBytes);
-            commands_->SetComputeRootUnorderedAccessView(3,address+kResultOffset);
-            if(queries_)commands_->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0);
-            for(const auto& primitive:primitives) {
-                if(primitive.right<=primitive.left || primitive.bottom<=primitive.top)
-                    throw std::runtime_error("GS Direct3D 12 invalid primitive extent");
-                commands_->SetComputeRoot32BitConstants(0,sizeof(GsGpuCommand)/sizeof(std::uint32_t),&primitive,0);
-                commands_->Dispatch(static_cast<UINT>((primitive.right-primitive.left+7)/8),
-                    static_cast<UINT>((primitive.bottom-primitive.top+7)/8),1);
-                // A dispatch is one original primitive. Make every write and
-                // known-bit join visible before the next primitive reads it.
-                D3D12_RESOURCE_BARRIER order{};order.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;
-                order.UAV.pResource=device_memory_.Get();commands_->ResourceBarrier(1,&order);
+            for(const auto& range:uploads) {
+                const auto offset=static_cast<UINT64>(range.first_word)*sizeof(std::uint32_t);
+                const auto size=static_cast<UINT64>(range.word_count)*sizeof(std::uint32_t);
+                commands_->CopyBufferRegion(device_memory_.Get(),offset,upload_.Get(),offset,size);
+                commands_->CopyBufferRegion(device_memory_.Get(),kVramBytes+offset,upload_.Get(),kVramBytes+offset,size);
             }
-            if(queries_) {
-                commands_->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,1);
-                commands_->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0,2,query_readback_.Get(),0);
+            if(!primitives.empty()) {
+                commands_->CopyBufferRegion(device_memory_.Get(),kResultOffset,upload_.Get(),kResultOffset,12u);
+                transition(D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                commands_->SetComputeRootSignature(root_.Get());
+                const auto address=device_memory_->GetGPUVirtualAddress();
+                commands_->SetComputeRootUnorderedAccessView(1,address);
+                commands_->SetComputeRootUnorderedAccessView(2,address+kVramBytes);
+                commands_->SetComputeRootUnorderedAccessView(3,address+kResultOffset);
+                if(queries_)commands_->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0);
+                for(const auto& primitive:primitives) {
+                    commands_->SetComputeRoot32BitConstants(0,sizeof(GsGpuCommand)/sizeof(std::uint32_t),&primitive,0);
+                    commands_->Dispatch(static_cast<UINT>((primitive.right-primitive.left+7)/8),
+                        static_cast<UINT>((primitive.bottom-primitive.top+7)/8),1);
+                    // A dispatch is one original primitive. Make every write and
+                    // known-bit join visible before the next primitive reads it.
+                    D3D12_RESOURCE_BARRIER order{};order.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                    order.UAV.pResource=device_memory_.Get();commands_->ResourceBarrier(1,&order);
+                }
+                if(queries_) {
+                    commands_->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,1);
+                    commands_->ResolveQueryData(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0,2,query_readback_.Get(),0);
+                }
             }
-            transition(D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_COPY_SOURCE);
-            commands_->CopyBufferRegion(readback_.Get(),0,device_memory_.Get(),0,kBufferBytes);
-            transition(D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+            if(!readbacks.empty()||!primitives.empty()) {
+                transition(primitives.empty()?D3D12_RESOURCE_STATE_COPY_DEST:D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    D3D12_RESOURCE_STATE_COPY_SOURCE);
+                for(const auto& range:readbacks) {
+                    const auto offset=static_cast<UINT64>(range.first_word)*sizeof(std::uint32_t);
+                    const auto size=static_cast<UINT64>(range.word_count)*sizeof(std::uint32_t);
+                    commands_->CopyBufferRegion(readback_.Get(),offset,device_memory_.Get(),offset,size);
+                    commands_->CopyBufferRegion(readback_.Get(),kVramBytes+offset,device_memory_.Get(),kVramBytes+offset,size);
+                }
+                if(!primitives.empty())commands_->CopyBufferRegion(readback_.Get(),kResultOffset,device_memory_.Get(),kResultOffset,12u);
+                transition(D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+            }
             checked(commands_->Close(),"batch close");
             ID3D12CommandList* lists[]{commands_.Get()};in_flight_=true;queue_->ExecuteCommandLists(1,lists);
+            ++stats_.submissions;
             const auto signal=++fence_value_;checked(queue_->Signal(fence_.Get(),signal),"batch signal");
             stats_.submit_ns+=elapsed(start);start=Clock::now();
             if(fence_->GetCompletedValue()<signal) {
                 checked(fence_->SetEventOnCompletion(signal,event_.value),"completion event");
+                ++stats_.waits;
                 if(WaitForSingleObject(event_.value,30000)!=WAIT_OBJECT_0)
                     throw std::runtime_error("GS Direct3D 12 rasterization exceeded the 30-second fence deadline");
             }
             in_flight_=false;
             checked(device_->GetDeviceRemovedReason(),"device execution");stats_.wait_ns+=elapsed(start);
-            if(queries_) {
+            if(queries_&&!primitives.empty()) {
                 const D3D12_RANGE query_range{0,16};checked(query_readback_->Map(0,&query_range,&mapped),"timestamp mapping");
                 UINT64 timestamps[2]{};std::memcpy(timestamps,mapped,sizeof(timestamps));query_readback_->Unmap(0,&no_read);
                 const auto ticks=timestamps[1]-timestamps[0];
                 stats_.gpu_ns+=(ticks/timestamp_frequency_)*1000000000ull+
                     ((ticks%timestamp_frequency_)*1000000000ull)/timestamp_frequency_;
             }
-            start=Clock::now();const D3D12_RANGE readable{0,static_cast<SIZE_T>(kBufferBytes)};
-            checked(readback_->Map(0,&readable,&mapped),"readback mapping");
-            bytes=static_cast<std::uint8_t*>(mapped);std::uint32_t result[3]{};
-            std::memcpy(result,bytes+kResultOffset,sizeof(result));
-            if(result[0]) {
-                readback_->Unmap(0,&no_read);
-                throw std::runtime_error("GS Direct3D 12 shader encountered unknown VRAM bits; batch was not published");
+            std::uint32_t result[3]{};
+            if(!readbacks.empty()||!primitives.empty()) {
+                start=Clock::now();
+                SIZE_T first=static_cast<SIZE_T>(kBufferBytes),last{};
+                for(const auto& range:readbacks) {
+                    const auto offset=static_cast<SIZE_T>(range.first_word)*sizeof(std::uint32_t);
+                    const auto size=static_cast<SIZE_T>(range.word_count)*sizeof(std::uint32_t);
+                    first=std::min(first,offset);last=std::max(last,static_cast<SIZE_T>(kVramBytes)+offset+size);
+                }
+                if(!primitives.empty()) {
+                    first=std::min(first,static_cast<SIZE_T>(kResultOffset));last=static_cast<SIZE_T>(kResultOffset)+12u;
+                }
+                const D3D12_RANGE readable{first,last};
+                checked(readback_->Map(0,&readable,&mapped),"readback mapping");
+                const auto* bytes=static_cast<const std::uint8_t*>(mapped);
+                if(!primitives.empty()){std::memcpy(result,bytes+kResultOffset,sizeof(result));stats_.result_readback_bytes+=12u;}
+                if(result[0]) {
+                    readback_->Unmap(0,&no_read);
+                    throw std::runtime_error("GS Direct3D 12 shader encountered unknown VRAM bits; batch was not published");
+                }
+                for(const auto& range:readbacks) {
+                    const auto offset=static_cast<SIZE_T>(range.first_word)*sizeof(std::uint32_t);
+                    const auto size=static_cast<SIZE_T>(range.word_count)*sizeof(std::uint32_t);
+                    std::memcpy(words.data()+range.first_word,bytes+offset,size);
+                    std::memcpy(known.data()+range.first_word,bytes+kVramBytes+offset,size);
+                    stats_.readback_bytes+=2ull*size;
+                }
+                if(!readbacks.empty())++stats_.readback_syncs;
+                readback_->Unmap(0,&no_read);stats_.readback_ns+=elapsed(start);
             }
-            std::memcpy(words.data(),bytes,kVramBytes);std::memcpy(known.data(),bytes+kVramBytes,kVramBytes);
-            readback_->Unmap(0,&no_read);stats_.readback_ns+=elapsed(start);stats_.readback_bytes+=kBufferBytes;
-            ++stats_.batches;stats_.primitives+=primitives.size();
+            if(!primitives.empty()){++stats_.batches;stats_.primitives+=primitives.size();}
             return {result[1],result[2]};
         } catch(...) {
-            poisoned_=true;
+            failure_=std::current_exception();
             if(in_flight_){lifecycle_->RemoveDevice();in_flight_=false;}
             throw;
         }

@@ -537,6 +537,9 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     // Execution selection follows the common GS setup above. Integer compute
     // covers flat primitives only; every other effect retains the CPU path.
     // Prove injective addressing before parallel writes, including the Z plane.
+    auto fallback=textured ? GsGpuFallback::Texture : antialiased ? GsGpuFallback::Antialias :
+        (mode&8u) ? GsGpuFallback::Gouraud : (general_unknown_[1]&0xFFFFFFFFull) ?
+        GsGpuFallback::UncertainColor : GsGpuFallback::Addressing;
     if(vram_.gpu_backend() && !textured && !antialiased && !(mode&8u) &&
        !(general_unknown_[1]&0xFFFFFFFFull) && left<right && top<bottom &&
        bw && static_cast<unsigned>(right)<=bw &&
@@ -557,9 +560,12 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         const bool use_z=zwrite || (ztest && zfunc>=2u);
         const auto depths=use_z ? pages(zbase) : std::optional{std::array<bool,512>{}};
         bool safe=colors.has_value() && depths.has_value();
-        if(safe)for(unsigned page=0;page<512u;++page)
-            if(((*colors)[page] && (*depths)[page]) ||
-               (sampled_pages_[page] && ((*colors)[page] || (*depths)[page])))safe=false;
+        if(safe)for(unsigned page=0;page<512u;++page) {
+            if((*colors)[page] && (*depths)[page])safe=false;
+            if(sampled_pages_[page] && ((*colors)[page] || (*depths)[page])) {
+                safe=false;fallback=GsGpuFallback::TextureHazard;
+            }
+        }
         const auto pabe=general_[0x49].value_or(0u)&1u;
         const bool blend=blending && ((fragment&0x80000000u) || !pabe);
         unsigned color_read=0;
@@ -579,12 +585,12 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         if(safe && (color_read || (ztest && zfunc>=2u))) {
             // Unknown reads retain the synchronous CPU refusal and its cause.
             // A page proof may decline supported pixels; it never invents bits.
-            const auto known=vram_.known_bits();
             for(unsigned page=0;page<512u && safe;++page) {
                 const auto mask=((*colors)[page] ? color_read : 0u) |
                     ((*depths)[page] && ztest && zfunc>=2u ? (zpsm==0u ? 0xFFFFFFFFu : 0xFFFFFFu) : 0u);
-                if(mask)for(unsigned word=page*2048u;word<(page+1u)*2048u;++word)
-                    if((known[word]&mask)!=mask){safe=false;break;}
+                if(mask && !vram_.page_known(page,mask)) {
+                    safe=false;fallback=GsGpuFallback::UnknownDestination;
+                }
             }
         }
         if(safe) {
@@ -605,8 +611,14 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
             return;
         }
     }
-    // Materialize before any CPU operation, even one that subsequently refuses.
-    vram_.record_cpu_fallback();vram_.synchronize();
+    if(!textured && !antialiased && !(mode&8u) && !(general_unknown_[1]&0xFFFFFFFFull)) {
+        if((zwrite || (ztest && zfunc>=2u)) && (zpsm>1u ||
+           (triangle && (vertices[0].z!=z || vertices[1].z!=z))))fallback=GsGpuFallback::Depth;
+        else if(blending && !(fragment&0x80000000u) && !general_[0x49])fallback=GsGpuFallback::Blend;
+    }
+    // Complete earlier draws first. Each CPU access then materializes only
+    // its actual page; texture, framebuffer and Z reads share this boundary.
+    vram_.record_cpu_fallback(fallback);vram_.submit_gpu();
     for (int y = top; y < bottom; ++y) {
         if ((scanmask == 2u && !(y & 1)) || (scanmask == 3u && (y & 1))) continue;
         for (int x = left; x < right; ++x) {
@@ -778,6 +790,13 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     const auto x0 = static_cast<unsigned>((fb >> 32) & 2047u), y0 = static_cast<unsigned>((fb >> 43) & 2047u);
     if (x0 + f.width > 2048u || y0 + f.height > 2048u)
         throw DeviceRefusal("GS scanout: wrapping display rectangle is not modeled");
+    if(vram_.gpu_backend()) {
+        std::array<bool,GsVram::kPages> pages{};
+        for(unsigned y=y0/32u;y<=(y0+f.height-1u)/32u;++y)
+            for(unsigned x=x0/64u;x<=(x0+f.width-1u)/64u;++x)
+                pages[GsVram::address(base,bw,psm,x*64u,y*32u)/GsVram::kPageBytes]=true;
+        vram_.synchronize_pages(pages);
+    }
     f.rgba.reserve(static_cast<std::size_t>(f.stride) * f.height);
     for (unsigned y = 0; y < f.height; ++y)
         for (unsigned x = 0; x < f.width; ++x) {

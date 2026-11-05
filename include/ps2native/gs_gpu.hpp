@@ -5,6 +5,7 @@
 #include <string>
 
 namespace ps2native {
+class GsVram;
 enum class GsGpuApi { Vulkan, DirectX };
 // A validated primitive from the existing GS setup. No guest state lives in
 // this packet. The Vulkan shader consumes the same 32-bit, tightly packed ABI.
@@ -18,20 +19,34 @@ struct GsGpuCommand {
 static_assert(sizeof(GsGpuCommand) == 120u);
 
 struct GsGpuResult { std::uint64_t revisions{}, pixel_writes{}; };
+// Word-aligned portions of the single logical VRAM and its known-bit mask.
+// Ranges are validated by the backend before any work is submitted.
+struct GsGpuRange { std::uint32_t first_word{}, word_count{}; };
 struct GsGpuStats {
     std::uint64_t batches{}, primitives{}, upload_bytes{}, readback_bytes{};
     std::uint64_t upload_ns{}, submit_ns{}, wait_ns{}, readback_ns{}, gpu_ns{};
+    std::uint64_t upload_syncs{}, readback_syncs{}, submissions{}, waits{};
+    std::uint64_t storage_bytes{}, result_upload_bytes{}, result_readback_bytes{};
     bool gpu_timestamps{};
 };
 class GsGpu {
 public:
     virtual ~GsGpu() = default;
-    // Synchronous materialization boundary. Commands execute in order. The
-    // caller owns the one logical VRAM; the device allocation is a cache.
+    // Explicit complete materialization for direct callers. The resident
+    // owner, if any, is safely detached before this standalone operation.
+    GsGpuResult execute(std::span<std::uint32_t> words,
+        std::span<std::uint32_t> known, std::span<const GsGpuCommand> commands);
+    // Commands execute in order and complete before returning. Only the
+    // requested ranges are copied; other device bytes remain resident.
+    // Empty command spans permit upload/readback-only synchronization.
     virtual GsGpuResult execute(std::span<std::uint32_t> words,
-        std::span<std::uint32_t> known, std::span<const GsGpuCommand> commands) = 0;
+        std::span<std::uint32_t> known, std::span<const GsGpuCommand> commands,
+        std::span<const GsGpuRange> uploads, std::span<const GsGpuRange> readbacks) = 0;
     [[nodiscard]] virtual const GsGpuStats& stats() const noexcept = 0;
     [[nodiscard]] virtual const std::string& device_name() const noexcept = 0;
+private:
+    friend class GsVram;
+    mutable GsVram* vram_owner_{};
 };
 // Missing build support, loader or suitable device is reported explicitly.
 // A failure after successful selection propagates from execute, never falls

@@ -131,6 +131,10 @@ int main(int argc,char** argv)try {
         <<",CPU_wait_ms,"<<static_cast<double>(after.wait_ns-before.wait_ns)/1e6
         <<",CPU_readback_ms,"<<static_cast<double>(after.readback_ns-before.readback_ns)/1e6<<'\n'
         <<"upload_bytes,"<<after.upload_bytes-before.upload_bytes<<",readback_bytes,"<<after.readback_bytes-before.readback_bytes<<'\n'
+        <<"upload_syncs,"<<after.upload_syncs-before.upload_syncs<<",readback_syncs,"<<after.readback_syncs-before.readback_syncs
+        <<",submissions,"<<after.submissions-before.submissions<<",waits,"<<after.waits-before.waits<<'\n'
+        <<"result_upload_bytes,"<<after.result_upload_bytes-before.result_upload_bytes<<",result_readback_bytes,"
+        <<after.result_readback_bytes-before.result_readback_bytes<<",backend_storage_bytes,"<<after.storage_bytes<<'\n'
         <<"logical_VRAM_bytes,"<<GsVram::kBytes<<",known_mask_bytes,"<<GsVram::kBytes
         <<",max_command_bytes,"<<primitives*sizeof(GsGpuCommand)<<'\n'
         <<"CPU_fallback_primitives,"<<gpu.gs.vram().cpu_fallbacks()<<"\n";

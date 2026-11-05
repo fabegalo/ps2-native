@@ -7,6 +7,7 @@
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <exception>
 #include <mutex>
 #include <stdexcept>
 #include <vector>
@@ -35,7 +36,8 @@ class VulkanGs final : public GsGpu {
 public:
     ~VulkanGs() override { cleanup(); }
     void initialize();
-    GsGpuResult execute(std::span<std::uint32_t>,std::span<std::uint32_t>,std::span<const GsGpuCommand>) override;
+    GsGpuResult execute(std::span<std::uint32_t>,std::span<std::uint32_t>,std::span<const GsGpuCommand>,
+        std::span<const GsGpuRange>,std::span<const GsGpuRange>) override;
     const GsGpuStats& stats() const noexcept override { return stats_; }
     const std::string& device_name() const noexcept override { return name_; }
 private:
@@ -85,7 +87,8 @@ private:
     VkQueryPool queries_{};
     float timestamp_period_{};
     std::uint32_t timestamp_bits_{};
-    bool in_flight_{},poisoned_{};
+    bool in_flight_{};
+    std::exception_ptr failure_;
     GsGpuStats stats_{};
     std::string name_;
     std::mutex mutex_;
@@ -218,15 +221,21 @@ void VulkanGs::create_buffer(Buffer& buffer,VkDeviceSize size) {
     if(type==memory_.memoryTypeCount)throw DeviceRefusal("GS Vulkan needs host-visible coherent storage memory");
     VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};allocation.allocationSize=requirements.size;allocation.memoryTypeIndex=type;
     check(AllocateMemory_(device_,&allocation,nullptr,&buffer.memory),"allocate VRAM buffer");
+    stats_.storage_bytes+=requirements.size;
     check(BindBufferMemory_(device_,buffer.buffer,buffer.memory,0),"bind VRAM buffer");
     check(MapMemory_(device_,buffer.memory,0,size,0,&buffer.mapped),"map VRAM buffer");
 }
 
-GsGpuResult VulkanGs::execute(std::span<std::uint32_t> words,std::span<std::uint32_t> known,std::span<const GsGpuCommand> commands) {
+GsGpuResult VulkanGs::execute(std::span<std::uint32_t> words,std::span<std::uint32_t> known,
+    std::span<const GsGpuCommand> commands,std::span<const GsGpuRange> uploads,
+    std::span<const GsGpuRange> readbacks) {
     std::lock_guard lock(mutex_);
-    if(poisoned_)throw DeviceRefusal("GS Vulkan backend is stopped after an execution failure");
+    if(failure_)std::rethrow_exception(failure_);
     if(words.size_bytes()!=GsVram::kBytes||known.size_bytes()!=GsVram::kBytes)throw DeviceRefusal("GS Vulkan requires the complete existing 4 MiB VRAM and knowledge mask");
-    if(commands.empty())return {};
+    for(const auto ranges:{uploads,readbacks})for(const auto& range:ranges)
+        if(!range.word_count||range.first_word>=words.size()||range.word_count>words.size()-range.first_word)
+            throw DeviceRefusal("GS Vulkan VRAM synchronization range is out of bounds");
+    if(commands.empty()&&uploads.empty()&&readbacks.empty())return {};
     if(commands.size()>256u)throw DeviceRefusal("GS Vulkan batch exceeds the bounded 256 primitive limit");
     for(const auto& p:commands) {
         // The GS caller additionally proves non-aliasing framebuffer/depth
@@ -237,47 +246,65 @@ GsGpuResult VulkanGs::execute(std::span<std::uint32_t> words,std::span<std::uint
     }
     try {
         auto before=Clock::now();
-        std::memcpy(words_.mapped,words.data(),GsVram::kBytes);std::memcpy(known_.mapped,known.data(),GsVram::kBytes);std::memset(result_.mapped,0,12u);
-        stats_.upload_ns+=elapsed(before);stats_.upload_bytes+=2ull*GsVram::kBytes;
-        before=Clock::now();
-        check(ResetCommandBuffer_(command_,0),"reset commands");
-        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check(BeginCommandBuffer_(command_,&begin),"begin commands");
-        if(queries_){CmdResetQueryPool_(command_,queries_,0,2);CmdWriteTimestamp_(command_,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,queries_,0);}
-        VkMemoryBarrier host_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host_barrier.srcAccessMask=VK_ACCESS_HOST_WRITE_BIT;host_barrier.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
-        CmdPipelineBarrier_(command_,VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&host_barrier,0,nullptr,0,nullptr);
-        CmdBindPipeline_(command_,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline_);
-        CmdBindDescriptorSets_(command_,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&descriptor_set_,0,nullptr);
-        for(const auto& p:commands) {
-            CmdPushConstants_(command_,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(p),&p);
-            CmdDispatch_(command_,(static_cast<std::uint32_t>(p.right-p.left)+7u)/8u,(static_cast<std::uint32_t>(p.bottom-p.top)+7u)/8u,1);
-            VkMemoryBarrier order{VK_STRUCTURE_TYPE_MEMORY_BARRIER};order.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;order.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
-            CmdPipelineBarrier_(command_,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&order,0,nullptr,0,nullptr);
+        for(const auto& range:uploads) {
+            const auto bytes=static_cast<std::size_t>(range.word_count)*sizeof(std::uint32_t);
+            std::memcpy(static_cast<std::uint32_t*>(words_.mapped)+range.first_word,words.data()+range.first_word,bytes);
+            std::memcpy(static_cast<std::uint32_t*>(known_.mapped)+range.first_word,known.data()+range.first_word,bytes);
+            stats_.upload_bytes+=2ull*bytes;
         }
-        VkMemoryBarrier host_read{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host_read.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;host_read.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
-        CmdPipelineBarrier_(command_,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host_read,0,nullptr,0,nullptr);
-        if(queries_)CmdWriteTimestamp_(command_,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,queries_,1);
-        check(EndCommandBuffer_(command_),"end commands");check(ResetFences_(device_,1,&fence_),"reset completion fence");
-        VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.commandBufferCount=1;submit.pCommandBuffers=&command_;
-        check(QueueSubmit_(queue_,1,&submit,fence_),"submit primitives");in_flight_=true;
-        stats_.submit_ns+=elapsed(before);
-        before=Clock::now();
-        const auto wait=WaitForFences_(device_,1,&fence_,VK_TRUE,10'000'000'000ull);
-        stats_.wait_ns+=elapsed(before);check(wait,"wait for primitives (10 second deadline)");in_flight_=false;
-        const auto* result=static_cast<const std::uint32_t*>(result_.mapped);
-        if(result[0])throw DeviceRefusal("GS Vulkan primitive consumed unknown VRAM bits; batch not committed");
-        if(queries_) {
-            std::array<std::uint64_t,2> timestamps{};
-            check(GetQueryPoolResults_(device_,queries_,0,2,sizeof(timestamps),timestamps.data(),sizeof(std::uint64_t),VK_QUERY_RESULT_64_BIT),"read GPU timestamps");
-            const auto mask=timestamp_bits_>=64u?UINT64_MAX:((std::uint64_t{1}<<timestamp_bits_)-1u);
-            stats_.gpu_ns+=static_cast<std::uint64_t>(static_cast<double>((timestamps[1]-timestamps[0])&mask)*timestamp_period_);
+        if(!uploads.empty())++stats_.upload_syncs;
+        if(!commands.empty()){std::memset(result_.mapped,0,12u);stats_.result_upload_bytes+=12u;}
+        stats_.upload_ns+=elapsed(before);
+        std::array<std::uint32_t,3> result{};
+        if(!commands.empty()) {
+            before=Clock::now();
+            check(ResetCommandBuffer_(command_,0),"reset commands");
+            VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            check(BeginCommandBuffer_(command_,&begin),"begin commands");
+            if(queries_){CmdResetQueryPool_(command_,queries_,0,2);CmdWriteTimestamp_(command_,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,queries_,0);}
+            VkMemoryBarrier host_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host_barrier.srcAccessMask=VK_ACCESS_HOST_WRITE_BIT;host_barrier.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
+            CmdPipelineBarrier_(command_,VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&host_barrier,0,nullptr,0,nullptr);
+            CmdBindPipeline_(command_,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline_);
+            CmdBindDescriptorSets_(command_,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&descriptor_set_,0,nullptr);
+            for(const auto& p:commands) {
+                CmdPushConstants_(command_,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(p),&p);
+                CmdDispatch_(command_,(static_cast<std::uint32_t>(p.right-p.left)+7u)/8u,(static_cast<std::uint32_t>(p.bottom-p.top)+7u)/8u,1);
+                VkMemoryBarrier order{VK_STRUCTURE_TYPE_MEMORY_BARRIER};order.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;order.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
+                CmdPipelineBarrier_(command_,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&order,0,nullptr,0,nullptr);
+            }
+            VkMemoryBarrier host_read{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host_read.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;host_read.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+            CmdPipelineBarrier_(command_,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host_read,0,nullptr,0,nullptr);
+            if(queries_)CmdWriteTimestamp_(command_,VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,queries_,1);
+            check(EndCommandBuffer_(command_),"end commands");check(ResetFences_(device_,1,&fence_),"reset completion fence");
+            VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.commandBufferCount=1;submit.pCommandBuffers=&command_;
+            check(QueueSubmit_(queue_,1,&submit,fence_),"submit primitives");in_flight_=true;
+            stats_.submit_ns+=elapsed(before);++stats_.submissions;
+            before=Clock::now();
+            ++stats_.waits;
+            const auto wait=WaitForFences_(device_,1,&fence_,VK_TRUE,10'000'000'000ull);
+            stats_.wait_ns+=elapsed(before);check(wait,"wait for primitives (10 second deadline)");in_flight_=false;
+            before=Clock::now();std::memcpy(result.data(),result_.mapped,12u);
+            stats_.readback_ns+=elapsed(before);stats_.result_readback_bytes+=12u;
+            if(result[0])throw DeviceRefusal("GS Vulkan primitive consumed unknown VRAM bits; batch not committed");
+            if(queries_) {
+                std::array<std::uint64_t,2> timestamps{};
+                check(GetQueryPoolResults_(device_,queries_,0,2,sizeof(timestamps),timestamps.data(),sizeof(std::uint64_t),VK_QUERY_RESULT_64_BIT),"read GPU timestamps");
+                const auto mask=timestamp_bits_>=64u?UINT64_MAX:((std::uint64_t{1}<<timestamp_bits_)-1u);
+                stats_.gpu_ns+=static_cast<std::uint64_t>(static_cast<double>((timestamps[1]-timestamps[0])&mask)*timestamp_period_);
+            }
+            ++stats_.batches;stats_.primitives+=commands.size();
         }
         before=Clock::now();
-        std::memcpy(words.data(),words_.mapped,GsVram::kBytes);std::memcpy(known.data(),known_.mapped,GsVram::kBytes);
-        stats_.readback_ns+=elapsed(before);stats_.readback_bytes+=2ull*GsVram::kBytes;
-        ++stats_.batches;stats_.primitives+=commands.size();
+        for(const auto& range:readbacks) {
+            const auto bytes=static_cast<std::size_t>(range.word_count)*sizeof(std::uint32_t);
+            std::memcpy(words.data()+range.first_word,static_cast<const std::uint32_t*>(words_.mapped)+range.first_word,bytes);
+            std::memcpy(known.data()+range.first_word,static_cast<const std::uint32_t*>(known_.mapped)+range.first_word,bytes);
+            stats_.readback_bytes+=2ull*bytes;
+        }
+        if(!readbacks.empty())++stats_.readback_syncs;
+        stats_.readback_ns+=elapsed(before);
         return {result[1],result[2]};
-    } catch(...) {poisoned_=true;throw;}
+    } catch(...) {failure_=std::current_exception();throw;}
 }
 
 void VulkanGs::cleanup() noexcept {

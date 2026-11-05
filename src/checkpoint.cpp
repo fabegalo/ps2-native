@@ -78,7 +78,10 @@ struct CheckpointAccess {
         gs.diagnostic_texture_precision_=modes;
     }
     template<class T> static void prepare_read(T&){}
-    static void prepare_read(GsVram& v){v.pending_gpu_.clear();v.gpu_.reset();v.gpu_primitives_=v.cpu_fallbacks_=0;}
+    static void prepare_read(GsVram& v){
+        v.detach_gpu();v.pending_gpu_.clear();v.gpu_.reset();v.gpu_primitives_=v.cpu_fallbacks_=0;
+        v.locations_={};v.pending_pages_={};v.knowledge_cached_={};v.fallback_reasons_={};
+    }
     static void prepare_read(VuControl& v){v.invalidate_vu1_aot();v.vu1_aot_stats_={};v.vu1_capture_={};}
     static void prepare_read(Iop& i){i.pad_poll_source_={};}
     template<class T> static void prepare_read(DiagnosticHistory<T>& history){history.sink_=nullptr;}

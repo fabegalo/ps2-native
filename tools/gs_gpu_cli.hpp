@@ -29,8 +29,16 @@ struct GsGpuOptions {
         std::cout<<"GS_GPU primitives="<<s.primitives<<" batches="<<s.batches
             <<" cpu_fallbacks="<<memory.gs().vram().cpu_fallbacks()
             <<" upload_bytes="<<s.upload_bytes<<" readback_bytes="<<s.readback_bytes
+            <<" upload_syncs="<<s.upload_syncs<<" readback_syncs="<<s.readback_syncs
+            <<" submissions="<<s.submissions<<" waits="<<s.waits<<" storage_bytes="<<s.storage_bytes
+            <<" result_upload_bytes="<<s.result_upload_bytes<<" result_readback_bytes="<<s.result_readback_bytes
             <<" gpu_ns="<<s.gpu_ns<<" upload_ns="<<s.upload_ns<<" submit_ns="<<s.submit_ns
             <<" wait_ns="<<s.wait_ns<<" readback_ns="<<s.readback_ns<<'\n';
+        constexpr const char* reasons[]{"texture","AA1","Gouraud","uncertain-color","addressing",
+            "depth","blend","texture-hazard","unknown-destination"};
+        const auto& counts=memory.gs().vram().fallback_reasons();
+        for(unsigned n=0;n<counts.size();++n)if(counts[n])
+            std::cout<<"GS_CPU_FALLBACK reason="<<reasons[n]<<" primitives="<<counts[n]<<'\n';
     }
 };
 } // namespace ps2native::cli
