@@ -75,6 +75,7 @@ std::optional<unsigned> MipsInstruction::written_gpr() const noexcept {
         case MipsOpcode::Xor: case MipsOpcode::Nor: case MipsOpcode::Slt:
         case MipsOpcode::Sltu: case MipsOpcode::Movz: case MipsOpcode::Movn:
         case MipsOpcode::Mult: case MipsOpcode::Multu:
+        case MipsOpcode::Madd: case MipsOpcode::Maddu: case MipsOpcode::Madd1: case MipsOpcode::Maddu1:
         case MipsOpcode::Mfhi: case MipsOpcode::Mflo: case MipsOpcode::Mfsa: case MipsOpcode::Pmfhi: case MipsOpcode::Pmflo: case MipsOpcode::Jalr:
         case MipsOpcode::Mult1: case MipsOpcode::Multu1: case MipsOpcode::Mfhi1:
         case MipsOpcode::Mflo1: case MipsOpcode::Padduw: case MipsOpcode::Pand:
@@ -215,6 +216,10 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
         // as their SPECIAL counterparts) and the MMI1/MMI2/MMI3 sub-tables
         // (sa field).
         switch (funct) {
+            case 0x00: if(sa==0)return make(MipsOpcode::Madd); break;
+            case 0x01: if(sa==0)return make(MipsOpcode::Maddu); break;
+            case 0x20: if(sa==0)return make(MipsOpcode::Madd1); break;
+            case 0x21: if(sa==0)return make(MipsOpcode::Maddu1); break;
             case 0x04: if(rt==0 && sa==0)return make(MipsOpcode::Plzcw); break;
             case 0x10: if (rs == 0 && rt == 0 && sa == 0) return make(MipsOpcode::Mfhi1); break;
             case 0x11: if (rt == 0 && rd == 0 && sa == 0) return make(MipsOpcode::Mthi1); break;

@@ -290,6 +290,55 @@ void disabled_cop0_context() {
     require(state.unknown_gpr_bits[8]==0xF0000000 && state.unknown_gpr_high_bits[8]==0xFF0000,
             "PPACW discards unselected unknown lanes while preserving selected ones");
 }
+void integer_multiply_add() {
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    struct Row {std::uint32_t a,b,hi,lo,signed_hi,unsigned_hi,result;};
+    constexpr Row rows[]{
+        {3,7,0,5,0,0,26},
+        {1,1,0,0xFFFFFFFFu,1,1,0},
+        {0xFFFFFFFFu,2,0,0,0xFFFFFFFFu,1,0xFFFFFFFEu},
+        {0x80000000u,0xFFFFFFFFu,0,0,0,0x7FFFFFFFu,0x80000000u},
+        {1,1,0xFFFFFFFFu,0xFFFFFFFFu,0,0,0},
+        {0x80000000u,0x80000000u,0xC0000000u,0,0,0,0}};
+    for(bool second:{false,true})for(bool unsigned_product:{false,true})for(bool interpreted:{false,true})
+    for(unsigned dest:{0u,8u,9u,10u})for(const auto& row:rows) {
+        EEState state;state.pc=0x80001000;
+        state.set_reg128(8,ee::sx32(row.a),0x123456789ABCDEFull);
+        state.set_reg128(9,ee::sx32(row.b),0x223456789ABCDEFull);
+        state.set_reg128(10,0x11223344,0x323456789ABCDEFull);
+        state.lo=0x1122334455667788ull;state.hi=0x2233445566778899ull;
+        state.lo1=0x33445566778899AAull;state.hi1=0x445566778899AABBull;
+        auto& lo=second ? state.lo1 : state.lo;auto& hi=second ? state.hi1 : state.hi;
+        lo=0x8765432100000000ull|row.lo;hi=0x1234567800000000ull|row.hi;
+        const auto other_lo=second ? state.lo : state.lo1,other_hi=second ? state.hi : state.hi1;
+        const auto upper=state.gpr[dest].high;
+        const auto word=0x70000000u|(8u<<21u)|(9u<<16u)|(dest<<11u)|(second ? 0x20u : 0u)|(unsigned_product ? 1u : 0u);
+        const auto decoded=decode_mips(state.pc,word);
+        const auto expected=second ? (unsigned_product ? MipsOpcode::Maddu1 : MipsOpcode::Madd1) :
+            (unsigned_product ? MipsOpcode::Maddu : MipsOpcode::Madd);
+        require(decoded.opcode==expected && decoded.written_gpr()==(dest ? std::optional<unsigned>{dest} : std::nullopt),
+            "MADD family decodes all pipelines, signedness and destination metadata for the AOT");
+        if(interpreted) {memory.write32(state.pc,word);std::uint64_t count=0;ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};interpret_instruction(context);}
+        else if(second) {
+            if(unsigned_product)ee::exec<MipsOpcode::Maddu1>(state,memory,0,word);else ee::exec<MipsOpcode::Madd1>(state,memory,0,word);
+        } else {
+            if(unsigned_product)ee::exec<MipsOpcode::Maddu>(state,memory,0,word);else ee::exec<MipsOpcode::Madd>(state,memory,0,word);
+        }
+        require(lo==ee::sx32(row.result) && hi==ee::sx32(unsigned_product ? row.unsigned_hi : row.signed_hi),
+            "MADD accumulates true signed/unsigned products, propagates carry and wraps without signed overflow");
+        require((second ? state.lo : state.lo1)==other_lo && (second ? state.hi : state.hi1)==other_hi &&
+            state.reg64(dest)==(dest ? lo : 0) && state.gpr[dest].high==upper,
+            "MADD preserves the other pipeline and destination upper half, including aliases and zero destination");
+        require(!try_decode_r5900(0,word|0x40u),"MADD reserved shift field refuses");
+    }
+    EEState state;state.set_reg64(8,2);state.set_reg64_observed(9,0,1);state.lo=5;state.hi=7;
+    constexpr auto word=0x71095000u;
+    rejects([&]{ee::exec<MipsOpcode::Madd>(state,memory,0,word);},"unknown MMIO bits");
+    require(state.lo==5 && state.hi==7 && state.reg64(10)==0,"unknown MADD input cannot mutate either destination");
+    state.set_reg64(9,0xFFFFFFFFu);
+    rejects([&]{ee::exec<MipsOpcode::Maddu>(state,memory,0,word|1u);},"sign-extended word operands");
+    require(state.lo==5 && state.hi==7,"undefined non-word MADD operands refuse before commit");
+}
 void symbolic_shifts() {
     EEState s;Memory memory;
     // Saved BPC/PCCR pair: restoring PCCR discards all BPC bits.
@@ -791,6 +840,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();symbolic_shifts();register_context();adder();divider();vector_q();vector_setup();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_setup();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

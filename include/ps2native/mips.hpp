@@ -14,7 +14,7 @@ namespace ps2native {
     X(Sll) X(Srl) X(Sra) X(Sllv) X(Srlv) X(Srav) \
     X(Dsll) X(Dsrl) X(Dsra) X(Dsll32) X(Dsrl32) X(Dsra32) X(Dsllv) X(Dsrlv) X(Dsrav) \
     X(Addu) X(Subu) X(Daddu) X(Dsubu) X(And) X(Or) X(Xor) X(Nor) X(Slt) X(Sltu) X(Movz) X(Movn) \
-    X(Mult) X(Multu) X(Div) X(Divu) X(Mfhi) X(Mflo) X(Mthi) X(Mtlo) \
+    X(Mult) X(Multu) X(Madd) X(Maddu) X(Madd1) X(Maddu1) X(Div) X(Divu) X(Mfhi) X(Mflo) X(Mthi) X(Mtlo) \
     X(Addiu) X(Daddiu) X(Slti) X(Sltiu) X(Andi) X(Ori) X(Xori) X(Lui) \
     X(Lb) X(Lbu) X(Lh) X(Lhu) X(Lw) X(Lwu) X(Ld) X(Lq) X(Sb) X(Sh) X(Sw) X(Sd) X(Sq) \
     X(Lwl) X(Lwr) X(Ldl) X(Ldr) X(Swl) X(Swr) X(Sdl) X(Sdr) \

@@ -379,6 +379,21 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         if (s.reg64(t_) != 0u) s.set_reg64(d_, s.reg64(s_));
     // MULT/DIV families: pipeline 0 uses the lower halves of LO/HI, the MMI
     // pipeline-1 forms (MULT1, DIV1, ...) the upper halves, with identical rules.
+    } else if constexpr (Op == O::Madd || Op == O::Maddu || Op == O::Madd1 || Op == O::Maddu1) {
+        // EE instruction manual, MADD/MADDU/MADD1/MADDU1: concatenate
+        // only each accumulator's low word, add modulo 2^64, then independently
+        // sign-extend both resulting words. The other pipeline is untouched.
+        const auto a=s.reg64(s_),b=s.reg64(t_);
+        if(a!=sx32(static_cast<std::uint32_t>(a)) || b!=sx32(static_cast<std::uint32_t>(b)))
+            throw std::runtime_error("EE MADD requires sign-extended word operands; other inputs are undefined");
+        constexpr bool second=Op==O::Madd1 || Op==O::Maddu1;
+        constexpr bool unsigned_product=Op==O::Maddu || Op==O::Maddu1;
+        auto [lo,hi]=second ? std::tie(s.lo1,s.hi1) : std::tie(s.lo,s.hi);
+        const auto product=unsigned_product ? std::uint64_t{static_cast<std::uint32_t>(a)}*static_cast<std::uint32_t>(b) :
+            static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<std::int32_t>(a))*
+                static_cast<std::int64_t>(static_cast<std::int32_t>(b)));
+        const auto accumulator=(std::uint64_t{static_cast<std::uint32_t>(hi)}<<32u)|static_cast<std::uint32_t>(lo);
+        multiply(s,lo,hi,d_,accumulator+product);
     } else if constexpr (Op == O::Mult || Op == O::Mult1) {
         auto [lo, hi] = Op == O::Mult ? std::tie(s.lo, s.hi) : std::tie(s.lo1, s.hi1);
         multiply(s, lo, hi, d_, static_cast<std::uint64_t>(
