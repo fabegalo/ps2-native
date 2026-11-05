@@ -17,6 +17,26 @@
 | Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
+## Otimização AOT medida — 05/11/2026
+
+- `4b113b0` corrige a expectativa antiga de STQ em `native-m29-drawing`;
+  [CI](https://github.com/fabegalo/ps2-native/actions/runs/41993658530)
+  passou nos seis alvos. `4651b36`/`d0fdc39` especializam operandos/GPR,
+  encadeiam delay slots, reutilizam despacho e permitem retomada nativa
+  no interior de blocos, preservando guardas por instrução e semântica única.
+- Cinco pares comerciais de 30 milhões: throughput **+9,50%**, de 2,607
+  para 2,854 milhões de instruções/s; campo real mediano de 1,882 para
+  1,720 s. Na janela curta, **+12,44%**. Cobertura AOT 99,0868%/85,979867%;
+  raízes explícitas anteriores continuam necessárias nesse comparativo.
+- Estado completo, RGBA e PCM idênticos à referência, inclusive após
+  salvar/carregar em 10 + 20 milhões; 27 testes locais passaram. Custo:
+  build AOT 3,63× e executável local 4,60 → 11,23 MiB. Sem alegação de
+  tempo real. [Relatório e limites](docs/AOT-PERFORMANCE-STATUS.md).
+- CI do código `d0fdc39`: [núcleo](https://github.com/fabegalo/ps2-native/actions/runs/41999528499)
+  e [launcher](https://github.com/fabegalo/ps2-native/actions/runs/41999528308)
+  aprovados nos seis alvos. Trabalho paralelo do jogo preservado;
+  nenhum ensaio comercial permanece ativo.
+
 ## Reensaio curto de Simpsons — 05/11/2026
 
 - Diagnóstico híbrido com RTC explícito superou ReadRTC: janela de

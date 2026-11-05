@@ -199,3 +199,13 @@ daquele relatório foi superado por `ps2n-checkpoint inspect`, pela API
 `--checkpoint-scenario=SHA256`. Captura de processo legado Windows x64
 requer `ps2n-capture` e adaptador de salvamento com ABI/imagem idênticas;
 não aplicar adaptador de outra revisão. Evidência no relatório do jogo.
+
+## AOT — continuação independente da compatibilidade
+
+O pacote de desempenho está medido em [AOT-PERFORMANCE-STATUS](AOT-PERFORMANCE-STATUS.md).
+Preservar o trabalho ativo do jogo e os checkpoints originais. Restam
+descoberta automática das raízes ainda explícitas e redução comprovada dos
+custos de memória/sincronização, além de conter o crescimento do build/código.
+Invalidação por páginas exige primeiro cobrir e testar todas as escritas,
+DMA, cache/writeback e restauração. Não retirar polling, verificações ou
+efeitos para aproximar tempo real; repetir a janela comercial pareada.
