@@ -216,7 +216,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     gpr_sio2_epoch_={};sio2_control_epoch_=undefined_sio2_epoch_=0;
     sio2_remote_epoch_=0;sio2_remote_bypass_.reset();
     diagnostic_sio2_port_timing_.reset();
-    sio2_digital_pads_={};sio2_response_status_=0;
+    sio2_digital_pads_={};sio2_response_status_=0;pad_poll_source_={};
     sio2_input_.clear();sio2_output_.clear();sio2_complete_at_.reset();
     diagnostic_sio2_timeout_cycles_=sio2_reply_bytes_=sio2_interrupt_enable_=0;
     sio2_completion_flag_=sio2_response_valid_=false;sio2_diagnostic_control_.reset();
@@ -1553,7 +1553,10 @@ void Iop::start_sio2_infrared(std::uint32_t interrupt_enable) {
             if(tx<2u)throw IopStop{"SIO2 digital pad packet does not contain a command"};
             if(sio2_input_[consumed+1u]==0x42u) {
                 if(tx!=5u)throw IopStop{"SIO2 digital pad supports only a five-byte button poll"};
-                const auto buttons=*sio2_digital_pads_[port];
+                const auto buttons=pad_poll_source_
+                    ? static_cast<std::uint16_t>(pad_poll_source_(port,cycle_)|6u)
+                    : *sio2_digital_pads_[port];
+                sio2_digital_pads_[port]=buttons;
                 for(const auto byte:{0xFFu,0x41u,0x5Au,unsigned(buttons&0xFFu),unsigned(buttons>>8u)})
                     reply.push_back({byte,0});
             } else {

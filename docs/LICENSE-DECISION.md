@@ -15,6 +15,14 @@ Código GPL incorporado/derivado/ligado ao programa pode impor requisitos GPL so
 
 Todos os artefatos AOT derivados de jogos continuam sujeitos aos direitos sobre o código de entrada. Não distribuir jogos, imagens, ELF, BIOS, fontes, logos, boot animations, assets proprietários ou traduzir e publicar código do usuário sem permissão.
 
+**Saída PCM experimental (05/11/2026):** o backend Windows usa APIs do
+SDK do sistema (`waveOut`/Winmm e XInput), sem incorporar um sintetizador
+externo. Nos outros hosts, Qt Multimedia é opcional e ligado dinamicamente
+sob LGPL-3.0, conforme a [documentação do módulo](https://doc.qt.io/qt-6.8/qtmultimedia-index.html#licenses-and-attributions).
+Somente `QAudioSink` recebe PCM produzido pelo SPU2 do projeto; não há
+decodificação de mídia nem código de emuladores externos neste backend.
+As mesmas obrigações de uma futura distribuição Qt continuam aplicáveis.
+
 Fontes consultadas em 03/11/2026:
 - https://github.com/ran-j/PS2Recomp/blob/main/LICENSE
 - https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Docs/License.txt

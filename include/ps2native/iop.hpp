@@ -197,6 +197,12 @@ public:
     // Host input for an explicitly attached digital pad. Active-low bits;
     // a packet already started retains its sampled reply.
     void set_sio2_digital_pad_buttons(unsigned port,std::uint16_t buttons);
+    // HOST_INPUT_BEGIN (not serialized)
+    // Sampled only by a real 01/42 digital-pad poll. The returned active-low
+    // value is latched into that packet; this never creates a guest poll.
+    using PadPollSource=std::function<std::uint16_t(unsigned,std::uint64_t)>;
+    void set_pad_poll_source(PadPollSource source) { pad_poll_source_=std::move(source); }
+    // HOST_INPUT_END
     void diagnostic_sio2_unplugged_ports(unsigned mask,std::uint32_t timeout_cycles);
     void diagnostic_sio2_dma_word_cycles(std::uint32_t cycles);
     [[nodiscard]] std::uint64_t sio2_dma_words(unsigned channel) const { return sio2_dma_.at(channel).words; }
@@ -453,6 +459,9 @@ private:
     std::optional<bool> sio2_remote_bypass_; // bit 0 only; no cold value or upper bits inferred
     std::optional<unsigned> diagnostic_sio2_port_timing_;
     std::array<std::optional<std::uint16_t>,2> sio2_digital_pads_;
+    // HOST_INPUT_BEGIN (not serialized)
+    PadPollSource pad_poll_source_;
+    // HOST_INPUT_END
     std::uint32_t sio2_response_status_{};
     std::vector<std::uint8_t> sio2_input_;
     std::deque<ObservedWord> sio2_output_,sio2_pending_reply_;

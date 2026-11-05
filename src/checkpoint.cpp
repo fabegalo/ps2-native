@@ -78,6 +78,7 @@ struct CheckpointAccess {
         gs.diagnostic_texture_precision_=modes;
     }
     template<class T> static void prepare_read(T&){}
+    static void prepare_read(Iop& i){i.pad_poll_source_={};}
     template<class T> static void prepare_read(DiagnosticHistory<T>& history){history.sink_=nullptr;}
     template<class T> static void validate(const T&){}
     static void demand(bool condition){if(!condition)throw std::runtime_error("checkpoint modeled state has invalid storage or queue bounds");}

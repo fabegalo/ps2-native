@@ -22,6 +22,18 @@ ApplicationWindow {
 
     function navigate(index) { currentPage = index }
     function showGame(id) { currentPage = 1; libraryPage.select(id) }
+    ExperimentalWindow { id: experimentalWindow }
+    Component.onCompleted: { if (openExperimentalSession) experimentalWindow.show() }
+    Shortcut { sequence: "Ctrl+T"; onActivated: experimentalWindow.show() }
+    Button {
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 12
+        z: 30
+        text: qsTr("Modo de Teste Experimental") + " (Ctrl+T)"
+        onClicked: experimentalWindow.show()
+    }
+    onClosing: Experimental.stop()
 
     // Automation hook (tests and screenshots): shows a page, or a page in a given state.
     function automationShow(name) {

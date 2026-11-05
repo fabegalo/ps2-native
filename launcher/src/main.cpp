@@ -6,6 +6,7 @@
 #include "icon_provider.hpp"
 #include "launcher.hpp"
 #include "translation.hpp"
+#include "experimental_session.hpp"
 
 #include <QCommandLineParser>
 #include <QDir>
@@ -54,7 +55,8 @@ int main(int argc, char* argv[]) {
                                         QStringLiteral("Run the boot diagnostic on the active BIOS (automation)."));
     const QCommandLineOption window_size({QStringLiteral("window-size")}, QStringLiteral("Initial window size WxH."),
                                          QStringLiteral("size"));
-    parser.addOptions({data_dir, automate, import_option, screenshots, expect_entries, expect_valid, diagnostic, window_size});
+    const QCommandLineOption experimental({QStringLiteral("experimental-session")},QStringLiteral("Open the experimental checkpoint session panel with a local manifest (does not start it)."),QStringLiteral("manifest"));
+    parser.addOptions({data_dir, automate, import_option, screenshots, expect_entries, expect_valid, diagnostic, window_size, experimental});
     parser.process(app);
 
     QString data = parser.value(data_dir);
@@ -63,6 +65,10 @@ int main(int argc, char* argv[]) {
     data = QDir(data).absolutePath();
 
     ps2launcher::Launcher launcher(data);
+    ps2launcher::ExperimentalSession session;
+    if(parser.isSet(experimental))session.setManifest(parser.value(experimental));
+    qmlRegisterSingletonInstance("PS2Native.Backend",1,0,"Experimental",&session);
+    qmlRegisterType<ps2launcher::GameView>("PS2Native.Backend",1,0,"GameView");
     qmlRegisterSingletonInstance("PS2Native.Backend", 1, 0, "Launcher", &launcher);
     qmlRegisterUncreatableType<ps2launcher::EntryListModel>("PS2Native.Backend", 1, 0, "EntryListModel", QStringLiteral("backend"));
     qmlRegisterUncreatableType<ps2launcher::EntryFilterModel>("PS2Native.Backend", 1, 0, "EntryFilterModel", QStringLiteral("backend"));
@@ -90,11 +96,13 @@ int main(int argc, char* argv[]) {
         if (parts.size() == 2) initial = QSize(parts[0].toInt(), parts[1].toInt());
     }
     engine.rootContext()->setContextProperty(QStringLiteral("initialWindowSize"), initial);
+    engine.rootContext()->setContextProperty(QStringLiteral("openExperimentalSession"),parser.isSet(experimental));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); },
                      Qt::QueuedConnection);
     engine.load(QUrl(QStringLiteral("qrc:/qt/qml/PS2Native/qml/Main.qml")));
     if (engine.rootObjects().isEmpty()) return 1;
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &launcher, [&launcher] { launcher.flush(); });
+    QObject::connect(&app,&QCoreApplication::aboutToQuit,&session,&ps2launcher::ExperimentalSession::stop);
 
     launcher.initialize();
     std::unique_ptr<ps2launcher::Automation> automation;

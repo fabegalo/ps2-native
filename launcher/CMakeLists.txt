@@ -22,6 +22,8 @@ qt_add_executable(ps2-native WIN32 MACOSX_BUNDLE
     src/diagnostic_runner.cpp src/diagnostic_runner.hpp
     src/icon_provider.cpp src/icon_provider.hpp
     src/automation.cpp src/automation.hpp
+    src/experimental_session.cpp src/experimental_session.hpp
+    src/host_audio.cpp src/host_audio.hpp
     src/qt_support.hpp src/translation.hpp)
 set_target_properties(ps2-native PROPERTIES
     AUTOMOC ON
@@ -35,6 +37,32 @@ target_compile_definitions(ps2-native PRIVATE PS2N_VERSION="${PROJECT_VERSION}")
 target_include_directories(ps2-native PRIVATE src)
 target_link_libraries(ps2-native PRIVATE ps2n_frontend
     Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Svg)
+if(WIN32)
+    target_link_libraries(ps2-native PRIVATE winmm)
+else()
+    find_package(Qt6 6.4 QUIET COMPONENTS Multimedia)
+    if(TARGET Qt6::Multimedia)
+        target_link_libraries(ps2-native PRIVATE Qt6::Multimedia)
+        target_compile_definitions(ps2-native PRIVATE PS2N_QT_AUDIO)
+    endif()
+endif()
+# Local, offline AOT only. No proprietary translation is shipped or compiled
+# at runtime. Empty sources keep the explicit interpreter path available.
+set(PS2N_SESSION_AOT_SOURCE "" CACHE FILEPATH "Local ELF AOT translation for experimental Qt sessions")
+set(PS2N_SESSION_AUX_AOT_SOURCE "" CACHE FILEPATH "Optional second local ELF AOT translation")
+foreach(kind IN ITEMS AOT AUX_AOT)
+    if(PS2N_SESSION_${kind}_SOURCE)
+        string(TOLOWER "${kind}" symbol)
+        add_library(ps2n-session-${symbol} OBJECT)
+        ps2n_target_aot_source(ps2n-session-${symbol} "${PS2N_SESSION_${kind}_SOURCE}")
+        target_link_libraries(ps2n-session-${symbol} PRIVATE ps2n_core)
+        target_compile_definitions(ps2n-session-${symbol} PRIVATE
+            aot_module=session_${symbol}_module idle_aot_module=session_${symbol}_module
+            run_recompiled=run_session_${symbol} run_idle_recompiled=run_session_idle_${symbol})
+        target_link_libraries(ps2-native PRIVATE ps2n-session-${symbol})
+        target_compile_definitions(ps2-native PRIVATE PS2N_SESSION_${kind})
+    endif()
+endforeach()
 if(MSVC)
     target_compile_options(ps2-native PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
 else()
@@ -84,7 +112,8 @@ qt_add_qml_module(ps2-native
         qml/BiosDetails.qml
         qml/DiagnosticPanel.qml
         qml/SettingsPage.qml
-        qml/AboutPage.qml)
+        qml/AboutPage.qml
+        qml/ExperimentalWindow.qml)
 
 # Artwork: the project banner (docs/assets) and the original application icon.
 set_source_files_properties("${PROJECT_SOURCE_DIR}/docs/assets/ps2-native-banner.webp"
@@ -110,6 +139,23 @@ if(APPLE)
 endif()
 
 if(BUILD_TESTING)
+    qt_add_executable(ps2n-experimental-tests
+        ../tests/experimental_session.cpp
+        src/experimental_session.cpp src/experimental_session.hpp
+        src/host_audio.cpp src/host_audio.hpp)
+    set_target_properties(ps2n-experimental-tests PROPERTIES AUTOMOC ON)
+    target_include_directories(ps2n-experimental-tests PRIVATE src ../tests)
+    target_link_libraries(ps2n-experimental-tests PRIVATE ps2n_frontend Qt6::Quick)
+    if(WIN32)
+        target_link_libraries(ps2n-experimental-tests PRIVATE winmm)
+    elseif(TARGET Qt6::Multimedia)
+        target_link_libraries(ps2n-experimental-tests PRIVATE Qt6::Multimedia)
+        target_compile_definitions(ps2n-experimental-tests PRIVATE PS2N_QT_AUDIO)
+    endif()
+    if(MSVC)
+        target_compile_options(ps2n-experimental-tests PRIVATE /utf-8)
+    endif()
+    add_test(NAME launcher-experimental-session COMMAND ps2n-experimental-tests)
     # Scripted run of the real window (offscreen platform): import a synthetic
     # ROM0 and ISO, identify them, visit every page, persist; then a second run
     # restores the library from disk. Requires Qt's offscreen platform plugin.
@@ -139,10 +185,10 @@ if(BUILD_TESTING)
         endif()
         get_filename_component(PS2N_QT_BIN "${PS2N_QT_CORE_LOCATION}" DIRECTORY)
         if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
-            set_tests_properties(launcher-ui-import launcher-ui-restore PROPERTIES
+            set_tests_properties(launcher-ui-import launcher-ui-restore launcher-experimental-session PROPERTIES
                 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${PS2N_QT_BIN}")
         endif()
     endif()
-    set_tests_properties(launcher-ui-import launcher-ui-restore PROPERTIES
+    set_tests_properties(launcher-ui-import launcher-ui-restore launcher-experimental-session PROPERTIES
         ENVIRONMENT "${PS2N_LAUNCHER_TEST_ENV}" TIMEOUT 300)
 endif()

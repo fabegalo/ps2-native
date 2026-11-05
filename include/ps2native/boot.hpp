@@ -35,6 +35,10 @@ struct BootOptions {
     // Zero retains the original unlimited text trace. Diagnostic CLI runs use
     // a bound; the recorder remains the source of the circular event history.
     std::size_t max_trace_events{};
+    // Interactive workers request short budgets frequently. Device histories
+    // remain in the machine/checkpoint; copying their entire lifetime into
+    // every transient report is optional and has no guest-visible effect.
+    bool copy_device_histories{true};
     // Optional address at which to stop (diagnostics/tests); the BIOS never "returns".
     std::optional<std::uint32_t> stop_at;
     // Optional headless presentation hook, called at modeled VBLANK starts.

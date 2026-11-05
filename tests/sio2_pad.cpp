@@ -13,7 +13,7 @@ void packet(m20::Assembler& a,unsigned port,unsigned size,unsigned command){
     a.la(8,0xBF808260u);
     for(unsigned n=0;n<size;++n){a.la(9,n==0 ? 1u : n==1 ? command : 0u);a.sb(9,0,8);}
 }
-void fifo(unsigned ports,std::uint16_t buttons,unsigned cycles,unsigned bad=0u) {
+void fifo(unsigned ports,std::uint16_t buttons,unsigned cycles,unsigned bad=0u,bool host=false) {
     m20::Assembler a(kEeResetVector);sw(a,0xBF801070u,0);sw(a,0xBF801078u,0);sw(a,0xBF808268u,0x3BCu);
     for(unsigned p=0;p<ports;++p)packet(a,p,bad==2 ? 4u : 5u,bad==1 ? 0x43u : bad==4 ? 0u : 0x42u);
     sw(a,0xBF808200u+ports*4u,0);sw(a,0xBF808268u,0x3B1u);a.label("started");
@@ -25,6 +25,10 @@ void fifo(unsigned ports,std::uint16_t buttons,unsigned cycles,unsigned bad=0u) 
     a.la(8,0xBF801070u);a.lw(9,0,8);a.nop();a.la(11,1u<<17u);a.r(9,11,9,0,0x24u);a.sw(9,20,10);
     const auto data=rom(a);Iop iop;iop.reset(data,nullptr);
     for(unsigned p=0;p<(bad==3 ? 1u : ports);++p)iop.diagnostic_sio2_digital_pad(p,buttons,cycles);
+    unsigned polls=0;
+    if(host)iop.set_pad_poll_source([&](unsigned port,std::uint64_t cycle){
+        require(port<ports && cycle>0,"host source receives actual port and IOP clock");++polls;return buttons;
+    });
     const auto due=(a.at("started")-kEeResetVector)/4u-1u+cycles;
     iop.run_until(due-1u);
     if(bad==2u || bad==3u){require(iop.stopped(),"unsupported packet size or unconfigured port refuses");return;}
@@ -36,9 +40,11 @@ void fifo(unsigned ports,std::uint16_t buttons,unsigned cycles,unsigned bad=0u) 
     const auto status=(ports==2u ? 0x1200u : 0x1100u)|(bad ? 0xC000u|((ports==2u ? 3u : 1u)<<16u) : 0u);
     require(iop.ee_read(0x310u,4)==status && (iop.ee_read(0x314u,4)&(1u<<17u)),
         "status counts the addressed ports and completion drives the serial IRQ");
+    if(host)require(polls==(bad?0u:ports),"host input is sampled once per real 01/42 poll, never for configuration packets");
     rejects([&]{iop.diagnostic_sio2_digital_pad(0,0,cycles);},"before execution");
     iop.reset(data,nullptr);iop.diagnostic_sio2_infrared_timeout(cycles);iop.run_until(1000);
     require(iop.stopped(),"reset never silently attaches a controller");
+    if(host)require(polls==(bad?0u:ports),"reset detaches host input callback");
 }
 void dma() {
     m20::Assembler a(kEeResetVector);sw(a,0xBF801070u,0);sw(a,0xBF808268u,0x3BCu);
@@ -96,6 +102,7 @@ void live_buttons() {
 int main() try {
     for(unsigned ports=1;ports<=2;++ports)for(const auto buttons:{0xFFFFu,0xA55Au,0u})for(const auto cycles:{32u,64u})fifo(ports,static_cast<std::uint16_t>(buttons),cycles);
     for(unsigned bad=1;bad<=4;++bad)fifo(2,0xFFFFu,32,bad);
+    fifo(2,0xBFFFu,32,0,true);fifo(2,0xFFF7u,32,1,true);
     Iop iop;iop.reset({},nullptr);rejects([&]{iop.diagnostic_sio2_digital_pad(2,0,32);},"port 0/1");
     rejects([&]{iop.diagnostic_sio2_digital_pad(0,0,0);},"positive packet");
     iop.diagnostic_sio2_digital_pad(0,0,32);rejects([&]{iop.diagnostic_sio2_unplugged_ports(1,32);},"conflicts");

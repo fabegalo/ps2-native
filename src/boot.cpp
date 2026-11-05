@@ -320,10 +320,12 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
         report.iop_instructions = iop.cycle();
         report.iop_pc = iop.pc();
         report.iop_stop = iop.stop_reason();
-        for (const auto& event : iop.events())
-            report.iop_events.push_back("IOP " + std::to_string(event.cycle) + " " + event.text);
-        report.video_encoder_transactions = memory.video_encoder().transactions();
-        report.gif_packets = memory.gif().packets();
+        if (options.copy_device_histories) {
+            for (const auto& event : iop.events())
+                report.iop_events.push_back("IOP " + std::to_string(event.cycle) + " " + event.text);
+            report.video_encoder_transactions = memory.video_encoder().transactions();
+            report.gif_packets = memory.gif().packets();
+        }
     }
     tracer.finish();
     std::ostringstream stop;

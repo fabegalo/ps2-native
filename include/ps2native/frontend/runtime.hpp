@@ -4,10 +4,9 @@
 // firmware's own screens. What the runtime cannot do yet is reported here with
 // its reason so the UI disables it explicitly instead of faking it.
 //
-// Today only the boot diagnostic exists: the ps2n-boot tool run as a child
-// process (crash-isolated from the UI). Future runtime components (AOT game
-// runtime, controller, audio, faithful GS and Native renderers) plug in behind
-// RuntimeSession without changing the UI contract.
+// Original boot remains a crash-isolated ps2n-boot diagnostic. The Qt
+// experimental checkpoint session implements RuntimeSession with the same
+// EE/IOP/GS/SPU2 core; normal boot capabilities remain independently gated.
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -47,10 +46,13 @@ struct SessionRequest {
     std::filesystem::path nvm;          // empty: none
     std::optional<std::filesystem::path> disc; // empty: firmware only (Browser)
     RendererMode renderer{RendererMode::GsFaithful};
+    // Explicit local manifest for a reviewed checkpoint experiment. Empty for
+    // original boot; the experimental implementation refuses original boot.
+    std::filesystem::path experimental_manifest;
 };
-enum class SessionState : std::uint8_t { Idle, Starting, Running, Stopped, Failed };
-// Implemented by the future runtime. No implementation exists today, and the
-// launcher refuses to start one (capability_status(...).available is false).
+enum class SessionState : std::uint8_t { Idle, Starting, Running, Paused, Stopping, Stopped, Failed };
+// Experimental checkpoint sessions implement this contract. This does not
+// enable DiscBoot or FirmwareBrowser in the original boot path.
 class RuntimeSession {
 public:
     virtual ~RuntimeSession() = default;

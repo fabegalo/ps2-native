@@ -68,7 +68,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build libgl-dev \
             qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-declarative-dev-tools qt6-svg-dev \
-            qt6-qpa-plugins qt6-image-formats-plugins \
+            qt6-qpa-plugins qt6-image-formats-plugins qt6-multimedia-dev \
             qml6-module-qtqml-workerscript qml6-module-qtquick qml6-module-qtquick-controls \
             qml6-module-qtquick-dialogs qml6-module-qtquick-layouts qml6-module-qtquick-templates \
             qml6-module-qtquick-window qml6-module-qtquick-shapes qml6-module-qtqml-models \
@@ -140,7 +140,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build launcher and its tools
-        run: cmake --build out/build --config Release --parallel 2 --target ps2-native ps2n-boot ps2n-frontend-tests ps2n-launcher-fixtures
+        run: cmake --build out/build --config Release --parallel 2 --target ps2-native ps2n-boot ps2n-frontend-tests ps2n-experimental-tests ps2n-launcher-fixtures
 
       - name: Test launcher core and UI
         run: ctest --test-dir out/build -C Release -R "^launcher-" --output-on-failure
