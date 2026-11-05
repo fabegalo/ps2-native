@@ -18,6 +18,15 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **Checkpoints preservados após a atualização de FPU `e0cfc2f`:** migração
+  explícita dos esquemas anteriores, sem reinterpretar layout C++ nem
+  repetir o boot. O leitor reserializa todos os campos legados e exige
+  o SHA-256 original antes de publicar a restauração. O novo experimento
+  escalar fica desativado e sua ativação tardia é proibida. Sete testes
+  focados passaram; checkpoint real de 7,2 bilhões carregou em 1,13 s,
+  com duas continuações de 1.000 instruções idênticas. A fronteira de
+  7,727 bilhões carregou em 1,09 s e reproduziu a mesma recusa DMA em
+  2.060 instruções/0,0384 s. Menu e partida continuam pendentes.
 - **Retomada na fronteira em menos de um segundo:** checkpoint completo
   em `0x80002ACC`, 7.759.586.676 instruções totais (7.727.170.000 do
   jogo). Carrega em 0,826 s e reproduz a recusa gráfica após só 2.060

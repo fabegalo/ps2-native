@@ -4,6 +4,39 @@ Execução local em 03/11/2026. **A meta de jogabilidade não foi atingida.** O 
 inicialização normal, primeiro frame, menu, controles e gameplay não foram demonstrados.
 Código original BSD-3-Clause; nenhum código de emulador, firmware, IRX ou jogo foi incorporado.
 
+## Compatibilidade dos checkpoints após a atualização de FPU
+
+A `main` recebeu `e0cfc2f`, que acrescentou duas flags de configuração
+escalar ao estado. Os checkpoints dos ensaios anteriores continuam
+utilizáveis por uma migração explícita, limitada aos hashes de origem
+auditados e ao esquema de destino
+`72d8f630ea9a0befdba0e33bbc9d80394b6a2c29db31cf0a402bd6299876a61e`.
+O carregamento exige `allow_runtime_change`, reserializa todos os campos
+antigos e compara seu SHA-256 com o payload original antes de substituir
+o estado de destino. O experimento escalar não existia nas revisões
+anteriores: fica desativado. Como seu histórico aritmético não era
+registrado, a janela de configuração é fechada conservadoramente;
+não se permite ativá-lo depois da restauração. Nenhum bit de hardware
+desconhecido é preenchido pela migração.
+
+Núcleo, AOT e harness recompilados com os mesmos cabeçalhos;
+runtime local `9df78bdbd6c63e6d149cabab796d22f547b8ac88f85380a2a6e186bf8d6f95e5`.
+Sete testes focados passaram, incluindo equivalência entre migração e
+estado atual, continuação, recusa sem opt-in e guarda de configuração.
+`checkpoint-scalar-migration-real.log`: o checkpoint real de 7,2 bilhões
+carregou em 1,130 s. Duas continuações de 1.000 instruções terminaram em
+7.232.417.676 totais, PC `0x1D2F08`, IOP ciclo 904.052.219, com estado
+completo idêntico, SHA-256
+`bb3a164a785c5cd997b812675a2418956822af40aa62eea588eac6d0d479b798`.
+O novo hash inclui as duas flags host, enquanto a verificação interna
+comprova byte a byte o payload legado.
+
+`superbust-menu123-frontier.log`: restauração do checkpoint 121 em
+1,091 s, PC `0x80002ACC`; a mesma recusa DMA foi reproduzida em
+2.060 instruções/0,038364 s, 7.727.172.060 do jogo, 7.759.590.114
+ciclos EE, IOP `0xB46C` / 969.948.764. Esse teste preserva a retomada
+rápida; não demonstra que a nova FPU corrigiu coordenadas já calculadas.
+
 ## Checkpoints completos — retomada do ensaio 111
 
 O 111 superou a recusa UV do 110 e terminou em CVT.W.S `0x186DFC`,

@@ -19,8 +19,19 @@ void finish_transfer(Memory& memory) {
     gif.write_fifo(0x6666666655555555ull,0x8888888877777777ull,gs);
     require(gs.vram().read(0,64,0,7,0)==0x88888888u,"restored partial IMAGE transfer finishes at the correct pixel");
 }
+std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const std::uint8_t> payload) {
+    std::vector<std::uint8_t> bytes{'P','S','2','N','C','P','0','1'};
+    const auto integer=[&](std::uint64_t value,unsigned size){for(unsigned i=0;i<size;++i)bytes.push_back(static_cast<std::uint8_t>(value>>(8u*i)));};
+    info.schema_sha256="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88";
+    info.payload_sha256=sha256_hex(payload);info.payload_bytes=payload.size();
+    for(const auto* value:{&info.schema_sha256,&info.runtime_sha256,&info.bindings_sha256,&info.scenario_sha256,&info.host_metadata,&info.payload_sha256}) {
+        integer(value->size(),8);bytes.insert(bytes.end(),value->begin(),value->end());
+    }
+    integer(info.retired,8);integer(info.cycles,8);integer(info.payload_bytes,8);integer(info.pc,4);
+    bytes.insert(bytes.end(),payload.begin(),payload.end());return bytes;
+}
 int main(int argc,char** argv)try {
-    if(argc!=2 && argc!=4)return 2;const auto directory=std::filesystem::path(argv[1]);ps2native::create_directories(directory);
+    if(argc!=2)return 2;const auto directory=std::filesystem::path(argv[1]);ps2native::create_directories(directory);
     auto image=program();Memory memory;EEState state;prepare_direct_elf(image,nullptr,state,memory);
     memory.diagnostic_data_cache(true);state.set_cp0(Cop0::Config,0x10003);memory.set_cache_config(0x10003);memory.write32(0x80000300u,0x12345678u);
     require(memory.diagnostic_ram(0x300,4).value==0,"checkpoint fixture has a dirty cached word absent from backing RAM");
@@ -67,15 +78,33 @@ int main(int argc,char** argv)try {
     BootReport refused;refused.outcome=BootOutcome::BlockPoint;refused.pc=resumed.pc;
     rejects([&]{save_checkpoint(file,resumed,restored,refused,context);},"partial instructions");
     require(inspect_checkpoint(file).payload_sha256==loaded.payload_sha256,"a refused save cannot overwrite the previous safe checkpoint");
-    if(argc==4 && std::string_view(argv[2])=="--legacy") {
-        auto reviewed=context;reviewed.allow_runtime_change=true;
-        (void)load_checkpoint(argv[3],resumed,restored,reviewed);
-        require(checkpoint_state_sha256(resumed,restored)==before,"verified legacy writer and current reader encode identical modeled fields");
-        (void)run_ee_boot(resumed,restored,nullptr,options);
-        finish_transfer(restored);restored.vu_advance_q(resumed.cycles());
-        require(checkpoint_state_sha256(resumed,restored)==expected,"legacy save/current restore continues with identical complete state");
-        std::cout<<"Verified cross-layout save/restore equivalence passed\n";
-    }
+    // Derive a legacy-format fixture independently through the public API:
+    // toggling the host experiment identifies its sole serialized byte, then
+    // the two newly introduced booleans are omitted from an old envelope.
+    const auto current_file=directory/"migration-current.ps2ncp",flag_file=directory/"migration-flag.ps2ncp";
+    save_checkpoint(current_file,state,memory,continuous,context);const auto current_info=inspect_checkpoint(current_file);
+    memory.diagnostic_ee_early_digit_carry();
+    auto flag_context=context;auto flag_identity=image.bytes;flag_identity.push_back(1);flag_context.scenario_sha256=sha256_hex(flag_identity);
+    save_checkpoint(flag_file,state,memory,continuous,flag_context);
+    const auto current_bytes=read_file(current_file),flag_bytes=read_file(flag_file);
+    const auto current_payload=std::span<const std::uint8_t>(current_bytes).last(static_cast<std::size_t>(current_info.payload_bytes));
+    const auto flag_payload=std::span<const std::uint8_t>(flag_bytes).last(static_cast<std::size_t>(inspect_checkpoint(flag_file).payload_bytes));
+    std::size_t changed=0,flag_offset=0;
+    require(current_payload.size()==flag_payload.size(),"scalar flag does not change serialized lengths");
+    for(std::size_t i=0;i<current_payload.size();++i)if(current_payload[i]!=flag_payload[i]){++changed;flag_offset=i;}
+    require(changed==1 && current_payload[flag_offset]==0 && flag_payload[flag_offset]==1 && current_payload[flag_offset+1]==0,
+        "only the explicit scalar-experiment boolean changed");
+    std::vector<std::uint8_t> legacy_payload(current_payload.begin(),current_payload.end());
+    legacy_payload.erase(legacy_payload.begin()+flag_offset,legacy_payload.begin()+flag_offset+2);
+    const auto legacy_file=directory/"legacy-scalar.ps2ncp";write_file_atomically(legacy_file,legacy_envelope(current_info,legacy_payload));
+    (void)load_checkpoint(current_file,state,memory,context);require(!memory.begin_fpu_arithmetic(),"baseline scalar experiment remains disabled");
+    const auto conservative=checkpoint_state_sha256(state,memory);
+    rejects([&]{(void)load_checkpoint(legacy_file,resumed,restored,context);},"schema");
+    auto reviewed=context;reviewed.allow_runtime_change=true;(void)load_checkpoint(legacy_file,resumed,restored,reviewed);
+    require(checkpoint_state_sha256(resumed,restored)==conservative,"legacy migration preserves every old field and conservatively closes the scalar configuration window");
+    rejects([&]{restored.diagnostic_ee_early_digit_carry();},"must precede");
+    options.max_instructions=32;(void)run_ee_boot(state,memory,nullptr,options);(void)run_ee_boot(resumed,restored,nullptr,options);
+    require(checkpoint_state_sha256(state,memory)==checkpoint_state_sha256(resumed,restored),"migrated and current checkpoints continue with identical complete state");
     std::cout<<"Complete checkpoint, immutable identities, transactional refusals and continuous/resumed state equivalence passed\n";return 0;
 #endif
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

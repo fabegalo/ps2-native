@@ -90,6 +90,8 @@ extern "C" std::size_t ps2n_checkpoint_cache_clock_offset(){return CheckpointAcc
 namespace checkpoint_detail {
 template<bool Reading> class Archive {
 public:
+    static constexpr bool reading=Reading;
+    bool legacy_scalar_flags{};
     explicit Archive(std::span<const std::uint8_t> input={}):input_(input){}
     std::vector<std::uint8_t> output;
     std::vector<std::shared_ptr<const std::string>> strings;
@@ -275,15 +277,27 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
     const bool reviewed_v1=context.allow_runtime_change &&
         info.schema_sha256=="9199cae351d7ea3f43526fa1dd800d9f6810d80f6c0370974f190695aee3e2cc" &&
         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88";
-    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1)throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
+    const bool reviewed_scalar_transition=context.allow_runtime_change &&
+        std::string_view(PS2N_CHECKPOINT_SCHEMA)=="72d8f630ea9a0befdba0e33bbc9d80394b6a2c29db31cf0a402bd6299876a61e";
+    const bool legacy_scalar_flags=reviewed_scalar_transition &&
+        (info.schema_sha256=="9199cae351d7ea3f43526fa1dd800d9f6810d80f6c0370974f190695aee3e2cc" ||
+         info.schema_sha256=="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88");
+    const bool same_scalar_fields=reviewed_scalar_transition && info.schema_sha256=="4553168c0bd7fd198259cc9a8f5ccc7572a3b789e7dca3495ac548162a6768da";
+    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields)
+        throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
     if(info.runtime_sha256!=PS2N_CHECKPOINT_RUNTIME && !context.allow_runtime_change)throw std::runtime_error("checkpoint runtime changed; explicit reviewed allow-runtime-change is required");
     if(info.scenario_sha256!=context.scenario_sha256)throw std::runtime_error("checkpoint scenario identity differs");
     if(info.bindings_sha256!=CheckpointAccess::bindings(memory,context.expected_disc_sha256))throw std::runtime_error("checkpoint firmware/profile/NVM/disc identity differs");
     EEState staged_state;Memory staged_memory=memory;
-    Reader a(std::span<const std::uint8_t>(parsed.file).subspan(parsed.payload));bool clock{},stalls{};a(clock,stalls,staged_state,staged_memory);
+    Reader a(std::span<const std::uint8_t>(parsed.file).subspan(parsed.payload));a.legacy_scalar_flags=legacy_scalar_flags;
+    bool clock{},stalls{};a(clock,stalls,staged_state,staged_memory);
     if(a.remaining() || staged_state.retired_instructions!=info.retired || staged_state.pc!=info.pc || staged_state.cycles()!=info.cycles)
         throw std::runtime_error("checkpoint state/envelope disagree");
     if(CheckpointAccess::bindings(staged_memory,context.expected_disc_sha256)!=info.bindings_sha256)throw std::runtime_error("checkpoint changed immutable firmware bindings");
+    if(legacy_scalar_flags) {
+        Writer original;original.legacy_scalar_flags=true;original(clock,stalls,staged_state,staged_memory);
+        if(sha256_hex(original.output)!=info.payload_sha256)throw std::runtime_error("checkpoint scalar migration changed legacy fields");
+    }
     CheckpointAccess::own_strings(staged_memory,std::move(a.strings));
     state=std::move(staged_state);memory=std::move(staged_memory);CheckpointAccess::bind(memory,state,clock,stalls);
     return info;

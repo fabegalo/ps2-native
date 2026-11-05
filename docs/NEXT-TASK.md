@@ -5,8 +5,18 @@
 Usar `out/game-first/superbust-menu121-latest.ps2ncp`: checkpoint completo
 verificado em `0x80002ACC`, 7.759.586.676 instruções totais,
 7.759.588.054 ciclos EE, 7.727.170.000 instruções do jogo. Carrega em
-0,826 s; apenas 2.060 instruções/0,0395 s até o bloqueio atual.
-Não repetir desde o boot nem voltar ao checkpoint de 7,2 bilhões.
+0,826 s no runtime anterior; após a atualização FPU `e0cfc2f`, migração
+verificada em 1,091 s e apenas 2.060 instruções/0,0384 s até o bloqueio.
+Não repetir desde o boot para diagnosticar essa recusa.
+
+Checkpoints anteriores às novas flags escalares têm migração explícita,
+com opt-in de runtime e SHA-256 dos campos antigos revalidado. Experimento
+escalar desativado; ativação tardia recusada. Sete testes focados passaram.
+O 123 executa a partir de `superbust-live-6000.ps2ncp` para aplicar a nova
+prova estrita de MUL antes dos cálculos gráficos, sem repetir os seis
+bilhões iniciais. Log `superbust-menu-123.log`; entrada `superbust-pad123.txt`
+solta (`FFFF`), checkpoints periódicos e prazo de 15 minutos supervisionado.
+Núcleo, AOT e harness foram recompilados com a mesma revisão/cabeçalhos.
 
 Recusa atual: DMA gráfico VIF1 lê XYZ2 incerto em payload REGLIST;
 EE reportado `0x1CE460`, 7.727.172.060 do jogo, IOP ativo `0xB46C`
