@@ -85,7 +85,7 @@ void check_decoder() {
             "unsupported R5900 instruction");
     rejects([] { (void)decode_mips(0u, (5u << 21) | (13u << 16) | (11u << 11) | 0x1au); }, // DIV, rd != 0
             "unsupported R5900 instruction");
-    rejects([] { (void)decode_mips(0u, 0x70000000u); }, "unsupported R5900 instruction"); // MMI
+    rejects([] { (void)decode_mips(0u, 0x70000040u); }, "unsupported R5900 instruction"); // MADD reserved sa != 0
     require(decode_mips(0u, 0x0000000fu).opcode == MipsOpcode::Sync, "SYNC decoded");
     require(decode_mips(0u, 0x0000040fu).opcode == MipsOpcode::Sync, "SYNC.P decoded");
     const auto beql = decode_mips(0u, 0x50000000u);

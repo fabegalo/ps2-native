@@ -174,7 +174,7 @@ void check_interpreter_stops(const std::vector<std::uint8_t>& rom) {
                 (state.cp0(Cop0::Status) & kStatusEXL), "synchronous exception enters bootstrap vector");
     }
     expect(0x46000804u, "unsupported", "(COP1/FPU) not implemented by the interpreter"); // SQRT.S reserved FS
-    expect(0x70000000u, "unsupported", "(MMI) not implemented");
+    expect(0x70000040u, "unsupported", "(MMI) not implemented"); // MADD reserved sa != 0
     expect(0xC0080000u, "unsupported", "(other)"); // LL is absent on the R5900.
     expect(0x42000006u, "not modeled", "TLBWR");
     expect(0xBC000000u, "not modeled", "CACHE operation 0x00000000");

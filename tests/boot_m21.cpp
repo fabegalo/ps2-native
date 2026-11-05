@@ -44,8 +44,8 @@ void check_decode() {
     require(!div1->written_gpr(), "DIV1 writes no GPR");
     rejects([] { (void)decode_r5900(0u, 0x70000468u); }, "(MMI) not implemented"); // PSUBUW (MMI1 sa 0x11)
     rejects([] { (void)decode_r5900(0u, 0x7000081Au); }, "(MMI) not implemented"); // DIV1 with rd != 0
-    rejects([] { (void)decode_r5900(0u, 0x70000000u); }, "(MMI) not implemented"); // MADD
-    rejects([] { (void)decode_mips(0u, 0x70000000u); }, "AOT unsupported R5900 instruction");
+    rejects([] { (void)decode_r5900(0u, 0x70000040u); }, "(MMI) not implemented"); // MADD reserved sa != 0
+    rejects([] { (void)decode_mips(0u, 0x70000040u); }, "AOT unsupported R5900 instruction");
 }
 
 void check_semantics() {
