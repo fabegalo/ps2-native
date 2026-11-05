@@ -88,8 +88,8 @@ Flickable {
                             required property var modelData
                             Layout.fillWidth: true
                             key: modelData.key
-                            name: modelData.name
-                            reason: modelData.reason
+                            name: Theme.capabilityName(modelData)
+                            reason: Theme.capabilityReason(modelData)
                             available: modelData.available
                         }
                     }

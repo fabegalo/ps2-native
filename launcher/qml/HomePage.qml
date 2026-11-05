@@ -15,6 +15,8 @@ Flickable {
     readonly property var bios: Launcher.activeBios
     readonly property bool biosReady: bios.status === "valid"
     readonly property bool wide: width > 1180
+    // Below this width the hero actions move under the status text instead of squeezing it.
+    readonly property bool stackHero: width < 1100
 
     contentWidth: width
     contentHeight: column.implicitHeight + Theme.pagePadding * 2
@@ -29,10 +31,10 @@ Flickable {
         width: page.width - Theme.pagePadding * 2
         spacing: 24
 
-        // Hero
+        // Hero: a banner kept compact so the status cards stay in view, then the system state.
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: heroImage.height + heroBar.height
+            Layout.preferredHeight: heroImage.height + heroBar.implicitHeight + heroBar.anchors.topMargin + 26
             radius: Theme.radiusLarge + 2
             color: Theme.surface
             border.color: Theme.alpha(Theme.accent, 0.3)
@@ -43,7 +45,7 @@ Flickable {
                 width: parent.width - 2
                 x: 1
                 y: 1
-                height: Math.round(Math.min(width / 3.0, 360))
+                height: Math.round(Math.max(150, Math.min(width / 4.2, 280, page.height * 0.34)))
                 source: "qrc:/ps2native/assets/banner.webp"
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
@@ -63,7 +65,7 @@ Flickable {
                         anchors.centerIn: parent
                         text: "ps2-native"
                         color: Theme.text
-                        font.pixelSize: 64
+                        font.pixelSize: 56
                         font.weight: Font.Bold
                     }
                 }
@@ -78,48 +80,54 @@ Flickable {
                     }
                 }
             }
-            RowLayout {
+            GridLayout {
                 id: heroBar
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: heroImage.bottom
                 anchors.leftMargin: 28
                 anchors.rightMargin: 28
-                height: implicitHeight + 28
-                spacing: 16
-                Column {
+                anchors.topMargin: 6
+                columns: page.stackHero ? 1 : 2
+                columnSpacing: 24
+                rowSpacing: 16
+
+                ColumnLayout {
                     Layout.fillWidth: true
-                    Layout.bottomMargin: 24
+                    Layout.alignment: Qt.AlignVCenter
                     spacing: 6
-                    Row {
+                    RowLayout {
+                        Layout.fillWidth: true
                         spacing: 10
                         Rectangle {
-                            width: 8
-                            height: 8
+                            Layout.preferredWidth: 8
+                            Layout.preferredHeight: 8
                             radius: 4
                             color: page.biosReady ? Theme.success : Theme.warning
-                            anchors.verticalCenter: parent.verticalCenter
                         }
                         Text {
+                            Layout.fillWidth: true
                             text: page.biosReady ? qsTr("System ready for diagnostics") : qsTr("Set up your system")
                             color: Theme.text
                             font.pixelSize: Theme.subtitleSize + 2
                             font.weight: Font.Bold
+                            elide: Text.ElideRight
                         }
                     }
                     Text {
-                        width: parent.width
+                        Layout.fillWidth: true
                         text: page.biosReady
-                              ? qsTr("BIOS %1 (%2, %3). The firmware boots up to the first hardware ps2-native does not model yet; the Browser and games are not reachable today.")
+                              ? qsTr("BIOS %1 (%2, %3). Run the boot diagnostic to see how far the original firmware gets. The Browser and games cannot be opened from the launcher yet.")
                                   .arg(page.bios.info.version).arg(page.bios.info.region).arg(page.bios.info.romver)
                               : qsTr("Import the BIOS dumped from your own console to run the boot diagnostic. ps2-native never bundles or downloads firmware.")
                         color: Theme.textMuted
                         font.pixelSize: Theme.bodySize
+                        lineHeight: 1.15
                         wrapMode: Text.WordWrap
                     }
                 }
                 Row {
-                    Layout.bottomMargin: 24
+                    Layout.alignment: page.stackHero ? Qt.AlignLeft : (Qt.AlignRight | Qt.AlignVCenter)
                     spacing: 10
                     AppButton {
                         text: qsTr("Enter PS2 Browser")
@@ -149,7 +157,7 @@ Flickable {
         // Status cards
         GridLayout {
             Layout.fillWidth: true
-            columns: page.width > 1100 ? 3 : 1
+            columns: page.width > 1060 ? 3 : 1
             columnSpacing: Theme.gap
             rowSpacing: Theme.gap
 
@@ -171,40 +179,59 @@ Flickable {
                             small: true
                         }
                     }
-                    InfoRow {
+                    Text {
                         Layout.fillWidth: true
-                        labelWidth: 110
-                        label: qsTr("BIOS")
-                        value: page.biosReady ? qsTr("%1 · version %2 · %3").arg(page.bios.title).arg(page.bios.info.version).arg(page.bios.info.console_kind) : qsTr("None selected")
+                        visible: !page.biosReady
+                        text: qsTr("No active BIOS. Import a ROM0 dump from your own console: the core verifies it by SHA-256 and ROMVER and references it where it is.")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.bodySize - 1
+                        lineHeight: 1.15
+                        wrapMode: Text.WordWrap
                     }
                     InfoRow {
                         Layout.fillWidth: true
-                        labelWidth: 110
+                        labelWidth: 96
+                        label: qsTr("BIOS")
+                        value: page.biosReady ? qsTr("%1 · version %2 · %3").arg(page.bios.title).arg(page.bios.info.version).arg(page.bios.info.console_kind) : ""
+                    }
+                    InfoRow {
+                        Layout.fillWidth: true
+                        labelWidth: 96
                         label: qsTr("ROMVER")
                         value: page.biosReady ? page.bios.info.romver : ""
                         mono: true
                     }
                     InfoRow {
                         Layout.fillWidth: true
-                        labelWidth: 110
+                        labelWidth: 96
                         label: qsTr("Console")
                         value: page.biosReady ? (page.bios.consoleProfile || qsTr("No profile (board registers refuse reads)")) : ""
                     }
                     InfoRow {
                         Layout.fillWidth: true
-                        labelWidth: 110
+                        labelWidth: 96
                         label: qsTr("NVM")
                         value: !page.biosReady ? "" : page.bios.nvmStatus === "valid" ? qsTr("%1 · validated").arg(page.bios.nvmInfo.model_name)
                              : page.bios.nvmStatus.length > 0 ? Theme.statusLabel(page.bios.nvmStatus) : qsTr("Not attached")
                         valueColor: page.bios.nvmStatus === "invalid" ? Theme.danger : Theme.text
                     }
                     Item { Layout.fillHeight: true }
-                    AppButton {
-                        text: qsTr("Manage BIOS")
-                        iconName: "chevron-right"
-                        variant: "ghost"
-                        compact: true
-                        onClicked: page.navigate(2)
+                    Row {
+                        spacing: 8
+                        AppButton {
+                            visible: !page.biosReady
+                            text: qsTr("Import BIOS")
+                            iconName: "plus"
+                            compact: true
+                            onClicked: page.requestImportBios()
+                        }
+                        AppButton {
+                            text: qsTr("Manage BIOS")
+                            iconName: "chevron-right"
+                            variant: "ghost"
+                            compact: true
+                            onClicked: page.navigate(2)
+                        }
                     }
                 }
             }
@@ -225,17 +252,23 @@ Flickable {
                         spacing: 10
                         StatTile {
                             Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
                             value: Launcher.formatCount(Launcher.gameCount)
                             label: qsTr("Disc images")
                         }
                         StatTile {
                             Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
                             value: Launcher.formatCount(Launcher.identifiedGameCount)
                             label: qsTr("Identified PS2")
                             tone: Theme.info
                         }
                         StatTile {
                             Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
                             value: Launcher.formatCount(Launcher.issueGameCount)
                             label: qsTr("Need attention")
                             tone: Launcher.issueGameCount > 0 ? Theme.warning : Theme.textFaint
@@ -243,7 +276,7 @@ Flickable {
                     }
                     Text {
                         Layout.fillWidth: true
-                        text: qsTr("Games are identified from their disc (serial, region, video mode). Starting them needs the AOT game runtime, which is not implemented yet.")
+                        text: qsTr("Games are identified from their disc (serial, region, video mode). Starting them from the launcher is not available yet: game execution is still an experimental diagnostic.")
                         color: Theme.textFaint
                         font.pixelSize: Theme.captionSize + 1
                         wrapMode: Text.WordWrap
@@ -286,8 +319,8 @@ Flickable {
                             required property var modelData
                             Layout.fillWidth: true
                             key: modelData.key
-                            name: modelData.name
-                            reason: modelData.reason
+                            name: Theme.capabilityName(modelData)
+                            reason: Theme.capabilityReason(modelData)
                             available: modelData.available
                             showReason: false
                         }

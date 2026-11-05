@@ -267,7 +267,7 @@ Revisar a evidência original e os limites de cada etapa nos relatórios [docs](
 
 ## Launcher — ícone Windows e idiomas
 
-Ícone Windows embutido no executável; seleção Automático/English/Português (Brasil), persistente e com troca imediata. Catálogo com 334 textos da interface; saída técnica original preservada. Quatro testes focados do launcher aprovados no Windows x64, incluindo alternância de idioma e persistência. CI do novo commit local pendente; detalhes e limites em [LAUNCHER](docs/LAUNCHER.md).
+Ícone Windows embutido no executável; seleção Automático/English/Português (Brasil), persistente e com troca imediata. Catálogo com 356 textos da interface (incluindo capacidades do runtime e avisos de importação) e página Início ajustada (Hero compacto/responsivo, cartão Sistema com estado vazio explícito, contadores da Biblioteca sem corte de texto e descrições de capacidades alinhadas ao estado experimental atual); saída técnica original preservada. Quatro testes focados do launcher e capturas em 1360×860 e 1000×660 aprovados no Windows x64. Detalhes e limites em [LAUNCHER](docs/LAUNCHER.md).
 
 ## CI do launcher corrigida
 

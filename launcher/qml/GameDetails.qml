@@ -144,7 +144,7 @@ Rectangle {
                     iconName: "play"
                     variant: "primary"
                     available: false
-                    reason: qsTr("Not available yet: the AOT game runtime is not implemented. ps2-native will not pretend to boot a game.")
+                    reason: qsTr("Not available yet: game execution is still an experimental diagnostic. ps2-native will not pretend to boot a game.")
                 }
                 RowLayout {
                     Layout.fillWidth: true

@@ -15,14 +15,19 @@ constexpr std::array kCapabilities{
     CapabilityStatus{Capability::FirmwareBrowser, "PS2 Browser", false,
                      "The original firmware does not reach the Browser yet: its boot stops at hardware that is not modeled."},
     CapabilityStatus{Capability::DiscBoot, "Game boot", false,
-                     "The AOT game runtime is not implemented: discs can be registered and identified, not started."},
-    CapabilityStatus{Capability::Controller, "Controller input", false, "SIO2 and pad emulation are not implemented."},
-    CapabilityStatus{Capability::Audio, "Audio", false, "SPU2 is not implemented."},
-    CapabilityStatus{Capability::MemoryCards, "Memory cards", false, "Memory card emulation is not implemented."},
+                     "Discs can be registered and identified. Game execution exists only as an experimental "
+                     "diagnostic, without demonstrated gameplay; the launcher cannot start a game."},
+    CapabilityStatus{Capability::Controller, "Controller input", false,
+                     "SIO2 pad transfers are partial and experimental; there is no controller mapping."},
+    CapabilityStatus{Capability::Audio, "Audio", false,
+                     "SPU2 is only partially modeled (registers and transfers); there is no audio output."},
+    CapabilityStatus{Capability::MemoryCards, "Memory cards", false,
+                     "Memory Card slots are reported empty; card emulation is not implemented."},
     CapabilityStatus{Capability::GsFaithful, "GS faithful renderer", false,
-                     "GS local memory and rendering are not implemented (control registers only)."},
+                     "An experimental GS model (local memory, sprites, scanout) runs only in diagnostics; it is "
+                     "not a validated renderer yet."},
     CapabilityStatus{Capability::GsNative, "Native renderer", false,
-                     "Depends on the faithful GS reference, which does not exist yet."},
+                     "Depends on the faithful GS reference, which is not validated yet."},
 };
 constexpr std::string_view kResult = "# result ";
 constexpr std::string_view kBlock = "# block point ";

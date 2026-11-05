@@ -92,10 +92,13 @@ QtObject {
         case "invalid-image": return qsTr("The file could not be read as a PlayStation disc image.")
         case "unsupported-format": return qsTr("Compressed images cannot be read yet. Register the uncompressed ISO instead.")
         case "not-ps2": return qsTr("This is a PlayStation disc. Only PlayStation 2 software is in scope.")
-        case "runtime-unavailable": return qsTr("Identified PlayStation 2 disc. Games cannot run yet: the AOT game runtime is not implemented, and ps2-native never fakes a boot.")
+        case "runtime-unavailable": return qsTr("Identified PlayStation 2 disc. Games cannot be started from the launcher yet: game execution is still an experimental diagnostic, and ps2-native never fakes a boot.")
         }
         return ""
     }
+    // Runtime capability texts come from the core in English; the catalog translates them.
+    function capabilityName(capability) { return qsTranslate("Runtime", capability.name) }
+    function capabilityReason(capability) { return qsTranslate("Runtime", capability.reason) }
     function statusColor(status) {
         switch (status) {
         case "valid": return success

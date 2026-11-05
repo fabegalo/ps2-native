@@ -208,7 +208,7 @@ Flickable {
                     Layout.fillWidth: true
                     available: false
                     title: qsTr("Internal resolution, aspect ratio, V-Sync")
-                    description: qsTr("Not available: GS local memory and rendering are not implemented.")
+                    description: qsTr("Not available: the experimental GS model runs only in diagnostics and is not a validated renderer yet.")
                     iconName: "monitor"
                     Icon { name: "lock"; size: 18; color: Theme.textFaint }
                 }
@@ -233,8 +233,8 @@ Flickable {
                         required property var modelData
                         Layout.fillWidth: true
                         available: modelData.available
-                        title: modelData.name
-                        description: modelData.reason
+                        title: Theme.capabilityName(modelData)
+                        description: Theme.capabilityReason(modelData)
                         iconName: modelData.key === "controller" ? "gamepad" : modelData.key === "audio" ? "speaker" : "memory"
                         Icon { name: "lock"; size: 18; color: Theme.textFaint }
                     }
