@@ -213,17 +213,28 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     const auto mode = (control & 1u) ? prim : required(0x1B);
     const auto type = static_cast<unsigned>(prim & 7u);
     const bool triangle=type>=3u && type<=5u;
-    if (type != 0u && type != 6u && !triangle) throw DeviceRefusal("GS line/reserved primitive is not modeled");
+    const bool line=type==1u || type==2u;
+    if(type==7u)throw DeviceRefusal("GS reserved primitive type 7");
     const bool textured=(mode&16u)!=0u,blended=(mode&64u)!=0u;
-    if(textured && !triangle && (type!=6u || !(mode&256u)))
+    if(textured && !triangle && !line && (type!=6u || !(mode&256u)))
         throw DeviceRefusal("GS texture drawing supports UV sprites only");
     const auto context = static_cast<std::uint8_t>((mode >> 9) & 1u);
     const auto offset = required(static_cast<std::uint8_t>(0x18u + context));
-    const auto uv=textured && !triangle ? required(3) : general_[3].value_or(0);
+    const auto uv=textured && !triangle && !line ? required(3) : general_[3].value_or(0);
     const Vertex v{static_cast<int>(value & 0xFFFFu) - static_cast<int>(offset & 0xFFFFu),
                    static_cast<int>((value >> 16) & 0xFFFFu) - static_cast<int>((offset >> 32) & 0xFFFFu),
                    static_cast<int>(uv&0x3FFFu),static_cast<int>((uv>>16)&0x3FFFu),
                    static_cast<std::uint32_t>(value>>32u)&((index&7u)==4u ? 0xFFFFFFu : 0xFFFFFFFFu),general_[1],general_[2],general_[3],general_unknown_[1]};
+    if(line) {
+        if(!first_vertex_){first_vertex_=v;return;}
+        if(index==0x0Cu || index==0x0Du) {
+            if(type==2u)first_vertex_=v;else first_vertex_.reset();
+            return;
+        }
+        throw DeviceRefusal("GS line rasterization is not modeled: 10.4 coordinates ("+
+            std::to_string(first_vertex_->x)+","+std::to_string(first_vertex_->y)+") -> ("+
+            std::to_string(v.x)+","+std::to_string(v.y)+"), mode="+std::to_string(mode));
+    }
     std::array<Vertex,3> vertices{};
     const auto finish_triangle=[&] {
         if(type==3u)triangle_vertices_count_=0;
