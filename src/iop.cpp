@@ -2,6 +2,7 @@
 #include "ps2native/vu_control.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -232,6 +233,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     // depends on them, except IsC/SwC, which must be clear to run from ROM).
     cop0_[Sr] = kSrBev;
     hardware_ = hardware;
+    rtc_epoch_.reset();
     nvm_ = nvm;
     s_params_.clear();
     s_command_.reset();boot_certify_request_.reset();dvd_playback_forbid_requested_=false;diagnostic_forbid_dvdp_error_clear_=false;
@@ -917,6 +919,15 @@ void Iop::pump_sif0() {
         *chcr&=~0x100u;ee_dstat_|=0x20u;
         events_.push_back({cycle_,"SIF0 EE destination complete"});
     }
+}
+
+void Iop::configure_rtc(std::uint64_t utc_epoch_seconds) {
+    if(cycle_ || stop_)throw DeviceRefusal("RTC input must be supplied in active reset state before execution");
+    // Only the documented two-digit 2000..2099 calendar is represented.
+    // Both bounds are expressed in UTC for the hardware's JST calendar.
+    if(utc_epoch_seconds<946652400ull || utc_epoch_seconds>=4102412400ull)
+        throw DeviceRefusal("RTC input is outside the supported 2000..2099 JST calendar");
+    rtc_epoch_=utc_epoch_seconds;
 }
 
 void Iop::mount_disc(std::shared_ptr<DiscImage> disc,DiscMedium medium,bool diagnostic_cav_nominal_timing) {
@@ -2903,6 +2914,24 @@ void Iop::mechacon_command(std::uint8_t command, const char* what) {
     s_results_.clear();
     s_command_ = command;
     switch (command) {
+        case 0x08: { // ReadRTC: real calendar input, not an NVM or RPC substitute.
+            if(!s_params_.empty())throw IopStop{name+": ReadRTC takes no parameters"};
+            if(!rtc_epoch_)throw IopStop{name+": RTC initial time has not been supplied by the host"};
+            const auto utc=*rtc_epoch_+cycle_/36864000ull;
+            if(utc>=4102412400ull)throw IopStop{name+": RTC century rollover is not established"};
+            using namespace std::chrono;
+            const sys_seconds local{seconds{static_cast<std::int64_t>(utc+9u*3600u)}};
+            const auto day=floor<days>(local);const year_month_day date{day};const hh_mm_ss time{local-day};
+            const auto bcd=[](unsigned value){return static_cast<std::uint8_t>((value/10u)*16u+value%10u);};
+            // The supplied RTC is healthy/running. The full snapshot is
+            // latched by this command, including when its FIFO is read later.
+            const std::array<std::uint8_t,8> reply{0,bcd(static_cast<unsigned>(time.seconds().count())),
+                bcd(static_cast<unsigned>(time.minutes().count())),bcd(static_cast<unsigned>(time.hours().count())),0,
+                bcd(static_cast<unsigned>(date.day())),bcd(static_cast<unsigned>(date.month())),
+                bcd(static_cast<unsigned>(int(date.year())-2000))};
+            for(const auto byte:reply)s_results_.push_back(byte);
+            break;
+        }
         case 0x03: // MechaconVersion: four bytes from this console profile.
             if(s_params_.size()!=1u || s_params_[0]!=0u)
                 throw IopStop{name+": only the parameter-free MechaconVersion subcommand is modeled"};

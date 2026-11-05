@@ -191,6 +191,8 @@ public:
     void diagnostic_sio2_reset_clears_completion() { registers_.diagnostic_sio2_reset_clears_completion(); }
     void diagnostic_sio2_unplugged_ports(unsigned mask,std::uint32_t cycles) { registers_.diagnostic_sio2_unplugged_ports(mask,cycles); }
     [[nodiscard]] const Iop& iop() const noexcept { return registers_.iop(); }
+    // External healthy RTC input, configured before guest execution.
+    void configure_rtc(std::uint64_t utc_epoch_seconds);
     void diagnostic_spu2_7ca_latch() { registers_.diagnostic_spu2_7ca_latch(); }
     void diagnostic_spu2_reserved_latches() { registers_.diagnostic_spu2_reserved_latches(); }
     void mount_disc(std::shared_ptr<DiscImage> disc,Iop::DiscMedium medium,bool diagnostic_cav_nominal_timing=false) {

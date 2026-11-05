@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-mecha-rtc tests/mecha_rtc.cpp)
+    target_link_libraries(ps2n-mecha-rtc PRIVATE ps2n_core)
+    add_test(NAME native-mecha-rtc COMMAND ps2n-mecha-rtc "${CMAKE_CURRENT_BINARY_DIR}/rtc-test")
+    set_tests_properties(native-mecha-rtc PROPERTIES TIMEOUT 30)
     add_executable(ps2n-gs-filter tests/gs_filter.cpp)
     target_link_libraries(ps2n-gs-filter PRIVATE ps2n_core)
     add_test(NAME native-gs-filter COMMAND ps2n-gs-filter)

@@ -107,6 +107,11 @@ public:
         if(cycle_)throw DeviceRefusal("Wakeup alarm experiment requires reset state before execution");
         diagnostic_wakeup_alarm_disabled_=true;
     }
+    // Explicit healthy, running RTC input at reset, expressed as UTC Unix
+    // seconds. SCMD 08 returns JST/BCD and advances only with IOP cycles.
+    // This immutable host input is pinned by complete-checkpoint bindings;
+    // an absent input remains unknown and is never seeded from ROM/NVM.
+    void configure_rtc(std::uint64_t utc_epoch_seconds);
     // Last recognized BootCertify input, never an authentication-success flag.
     [[nodiscard]] const std::optional<std::array<std::uint8_t,4>>& boot_certify_request() const noexcept {
         return boot_certify_request_;
@@ -254,6 +259,19 @@ public:
     [[nodiscard]] std::uint32_t diagnostic_istat() const noexcept { return istat_; }
     [[nodiscard]] std::size_t diagnostic_sif0_fifo_words() const noexcept { return sif0_fifo_.size(); }
     [[nodiscard]] std::size_t diagnostic_sif1_fifo_words() const noexcept { return sif1_fifo_.size(); }
+    [[nodiscard]] std::optional<std::uint32_t> diagnostic_latch(std::uint32_t address) const {
+        if(address==0x1F801070u)return istat_;
+        const auto* value=latch(address);return value ? *value : std::nullopt;
+    }
+    [[nodiscard]] std::optional<std::uint32_t> diagnostic_cop0(unsigned n) const {return cop0_.at(n);}
+    [[nodiscard]] std::pair<std::uint32_t,bool> diagnostic_sio2_irq() const {return {sio2_interrupt_enable_,sio2_completion_flag_};}
+    [[nodiscard]] ObservedWord diagnostic_ram_observed(std::uint32_t at) const {
+        if(at>ram_.size()-4u)return {0,~0u};
+        ObservedWord word{0,0};for(unsigned b=0;b<4;++b) {
+            word.value|=std::uint32_t{ram_[at+b]}<<(b*8u);
+            word.unknown|=(std::uint32_t{static_cast<std::uint8_t>(~ram_known_[at+b])})<<(b*8u);
+        }return word;
+    }
     [[nodiscard]] std::uint32_t gpr(unsigned index) const noexcept { return gpr_[index & 31u]; }
 
 private:
@@ -428,6 +446,7 @@ private:
     bool sio2_completion_flag_{},sio2_response_valid_{};
     std::array<std::optional<std::uint32_t>, 16> cop0_{};
     const ConsoleHardware* hardware_{};
+    std::optional<std::uint64_t> rtc_epoch_; // immutable external input, like ROM/NVM/disc bindings
     // Bus configuration as written; empty value: unknown (reset value never
     // established, or an unknown value written back).
     std::vector<std::pair<std::uint32_t, std::optional<std::uint32_t>>> latches_;

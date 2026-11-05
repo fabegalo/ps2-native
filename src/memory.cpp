@@ -8,6 +8,10 @@
 #include <string>
 
 namespace ps2native {
+void Memory::configure_rtc(std::uint64_t utc_epoch_seconds) {
+    if(cache_clock_ && *cache_clock_)throw DeviceRefusal("RTC input must precede EE execution");
+    registers_.configure_rtc(utc_epoch_seconds);
+}
 ObservedDoubleword Memory::diagnostic_ram(std::uint32_t offset, std::size_t bytes) const {
     if (!bytes || bytes > 8u || offset >= ram_.size() || bytes > ram_.size() - offset)
         throw std::out_of_range("diagnostic RAM range outside backing memory");
