@@ -90,7 +90,7 @@ void GsVram::enqueue_gpu(const GsGpuCommand& command) {
 void GsVram::submit_gpu() const {
     execute_pending();
 }
-void GsVram::execute_pending(const std::array<bool,kPages>* read_pages) const {
+void GsVram::execute_pending(const std::array<bool,kPages>* read_pages,unsigned read_page) const {
     if(pending_gpu_.empty())return;
     acquire_gpu();
     std::vector<GsGpuRange> uploads;
@@ -99,25 +99,24 @@ void GsVram::execute_pending(const std::array<bool,kPages>* read_pages) const {
         else uploads.push_back({page*2048u,2048u});
     }
     std::vector<GsGpuRange> reads;
-    if(read_pages)for(unsigned page=0;page<kPages;++page)
-        if((*read_pages)[page] && (pending_pages_[page] || locations_[page]==Location::Gpu)) {
+    const auto requested=[&](unsigned page){return page==read_page || (read_pages && (*read_pages)[page]);};
+    if(read_pages || read_page<kPages)for(unsigned page=0;page<kPages;++page)
+        if(requested(page) && (pending_pages_[page] || locations_[page]==Location::Gpu)) {
             if(!reads.empty() && reads.back().first_word+reads.back().word_count==page*2048u)reads.back().word_count+=2048u;
             else reads.push_back({page*2048u,2048u});
         }
     const auto result=gpu_->execute(words_,known_,pending_gpu_,uploads,reads);
     revision_+=result.revisions;pixel_writes_+=result.pixel_writes;
     for(unsigned page=0;page<kPages;++page)if(pending_pages_[page])locations_[page]=Location::Gpu;
-    if(read_pages)for(unsigned page=0;page<kPages;++page)
-        if((*read_pages)[page] && locations_[page]==Location::Gpu) {
+    if(read_pages || read_page<kPages)for(unsigned page=0;page<kPages;++page)
+        if(requested(page) && locations_[page]==Location::Gpu) {
             locations_[page]=Location::Equal;knowledge_cached_[page]=false;
         }
     pending_gpu_.clear();pending_pages_={};
 }
 void GsVram::synchronize_page(unsigned page) const {
     if(!gpu_)return;
-    if(!pending_gpu_.empty()) {
-        std::array<bool,kPages> pages{};pages[page]=true;execute_pending(&pages);return;
-    }
+    if(!pending_gpu_.empty()){execute_pending(nullptr,page);return;}
     if(locations_[page]!=Location::Gpu)return;
     const GsGpuRange range{page*2048u,2048u};
     (void)gpu_->execute(words_,known_,{}, {},std::span{&range,1u});
@@ -190,7 +189,7 @@ std::uint32_t GsVram::address(std::uint32_t base, unsigned width, unsigned psm, 
 }
 std::uint32_t GsVram::read(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y) const {
     const auto addr = address(base, width, psm, x, y);
-    synchronize_page(addr/kPageBytes);
+    if(gpu_)synchronize_page(addr/kPageBytes);
     const auto at = addr / 4u, shift = (addr & 3u) * 8u + (psm == 20u ? (y & 2u) * 2u : 0u);
     const auto bits = psm == 20u ? 15u : psm == 19u ? 255u : psm==2u || psm==10u ? 0xFFFFu : psm == 1u ? 0xFFFFFFu : 0xFFFFFFFFu;
     if (((known_[at] >> shift) & bits) != bits) throw DeviceRefusal("GS VRAM read: pixel contains unwritten bits");
@@ -209,13 +208,15 @@ void GsVram::write(std::uint32_t base, unsigned width, unsigned psm, unsigned x,
 }
 void GsVram::write_word(unsigned at, std::uint32_t value, std::uint32_t mask,
                         std::uint32_t unknown, bool conditional) {
-    synchronize_page(at/2048u);
+    if(gpu_){
+        synchronize_page(at/2048u);
+        locations_[at/2048u]=Location::Cpu;knowledge_cached_[at/2048u]=false;
+    }
     const auto next = (words_[at] & ~mask) | (value & mask);
     auto knowledge = (known_[at] & ~mask) | (mask & ~unknown);
     // Join draw/skip branches. Only bits proved equal in both remain known.
     if (conditional) knowledge &= known_[at] & ~(words_[at] ^ next);
     words_[at] = next; known_[at] = knowledge; ++revision_;
-    if(gpu_){locations_[at/2048u]=Location::Cpu;knowledge_cached_[at/2048u]=false;}
 }
 std::uint32_t GsVram::depth_address(std::uint32_t base, unsigned width, unsigned psm,
                                   unsigned x, unsigned y) {
@@ -233,7 +234,7 @@ std::uint32_t GsVram::depth_address(std::uint32_t base, unsigned width, unsigned
 std::uint32_t GsVram::read_depth(std::uint32_t base, unsigned width, unsigned psm,
                                unsigned x, unsigned y) const {
     const auto address = depth_address(base, width, psm, x, y);
-    synchronize_page(address/kPageBytes);
+    if(gpu_)synchronize_page(address/kPageBytes);
     const auto shift = (address & 2u) * 8u;
     const auto mask = psm == 0u ? 0xFFFFFFFFu : psm == 1u ? 0xFFFFFFu : 0xFFFFu;
     if (((known_[address / 4u] >> shift) & mask) != mask)
@@ -249,7 +250,7 @@ void GsVram::write_depth(std::uint32_t base, unsigned width, unsigned psm,
 }
 std::uint32_t GsVram::word_at(std::uint32_t byte_address) const {
     if (byte_address >= kBytes || byte_address % 4u) throw DeviceRefusal("GS VRAM raw address out of range");
-    synchronize_page(byte_address/kPageBytes);
+    if(gpu_)synchronize_page(byte_address/kPageBytes);
     if (known_[byte_address / 4u] != 0xFFFFFFFFu) throw DeviceRefusal("GS VRAM read: word contains unwritten bits");
     return words_[byte_address / 4u];
 }
