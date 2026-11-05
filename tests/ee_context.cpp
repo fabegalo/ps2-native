@@ -655,6 +655,55 @@ void vector_nop() {
     }
     for(auto word:{0x4A2002FFu,0x4A0102FFu,0x4A000AFFu})require(!try_decode_r5900(0,word),"reserved VNOP operand fields refuse");
 }
+void vector_fixed() {
+    constexpr unsigned fractions[]{0,4,12,15};
+    constexpr std::uint32_t positive[]{1,24,6144,49152},below_one[]{0,15,4095,32767};
+    for(unsigned kind=0;kind<4u;++kind) {
+        require(vu_float_to_fixed({0x3FC00000u,0},fractions[kind]).value==positive[kind] &&
+            vu_float_to_fixed({0xBFC00000u,0},fractions[kind]).value==0u-positive[kind] &&
+            vu_float_to_fixed({0x3F7FFFFFu,0},fractions[kind]).value==below_one[kind],
+            "FTOI scales each fixed-point format and truncates either sign toward zero");
+        for(auto input:{0x007FFFFFu,0x80000001u})require(vu_float_to_fixed({input,0},fractions[kind]).value==0,
+            "FTOI flushes denormal inputs and negative zero without host FP behavior");
+        require(vu_float_to_fixed({0x7F800000u,0},fractions[kind]).value==0x7FFFFFFFu &&
+            vu_float_to_fixed({0xFF800000u,0},fractions[kind]).value==0x80000000u,
+            "finite PS2 exponent 255 clamps to signed integer limits");
+        for(bool interpreted:{false,true})for(unsigned destination:{4u,5u,0u}) {
+            Memory memory;memory.reset_for_boot(m20::build_firmware().rom);EEState state;
+            state.pc=0x80001000;state.set_cp0(Cop0::Status,1u<<30u);state.fcr31=0x0183FFFFu;
+            memory.write_vu_vector(4,{{0xBFC000003FC00000ull,0},{0x000000017F800000ull,0}});
+            const auto status=memory.read_vu_control(16),mac=memory.read_vu_control(17);
+            const auto word=0x4BE0017Cu|(4u<<11u)|(destination<<16u)|kind;
+            const auto decoded=decode_mips(state.pc,word);
+            require(decoded.opcode==MipsOpcode::Vftoi && !decoded.written_gpr(),"all VFTOI encodings use the shared AOT vector operation");
+            if(interpreted) {memory.write32(state.pc,word);std::uint64_t count=0;ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};interpret_instruction(context);}
+            else ee::exec<MipsOpcode::Vftoi>(state,memory,0,word);
+            const auto result=memory.observe_vu_vector(destination);
+            require(!result.low.unknown && !result.high.unknown &&
+                result.low.value==(destination ? positive[kind]|(std::uint64_t{0u-positive[kind]}<<32u) : 0u) &&
+                result.high.value==(destination ? 0x7FFFFFFFu : 0x3F80000000000000ull),
+                "macro FTOI agrees on all lanes, aliases and immutable VF00 through both execution paths");
+            require(memory.read_vu_control(16)==status && memory.read_vu_control(17)==mac && state.fcr31==0x0183FFFFu,
+                "fixed conversion changes neither VU flags nor the separate EE FCR31");
+        }
+    }
+    const auto dropped=vu_float_to_fixed({0x3FC00000u,0xFFFu},4);
+    require(dropped.value==24 && !dropped.unknown,"discarded subpixel fraction uncertainty cannot affect the integer");
+    const auto bounded=vu_float_to_fixed({0x3F800000u,0x7FFFFFu},4);
+    require(bounded.value==16 && bounded.unknown==15,"FTOI preserves the full uncertain fixed integer range");
+    rejects([&]{(void)vu_float_to_fixed({0,0x80000000u},4);},"sign/exponent");
+    rejects([&]{(void)vu_float_to_fixed({0,0},1);},"fractional width");
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);EEState state;state.set_cp0(Cop0::Status,1u<<30u);
+    memory.write_vu_vector(4,{{0x3FC00000u,0xFFFFFFFF00000000ull},{0,~0ull}});
+    memory.write_vu_vector(5,{{0x1234567800000000ull,0},{0xAABBCCDDEEFF0011ull,0}});
+    ee::exec<MipsOpcode::Vftoi>(state,memory,0,0x4B05217Du);
+    const auto masked=memory.observe_vu_vector(5);
+    require(masked.low.value==0x1234567800000018ull && masked.high.value==0xAABBCCDDEEFF0011ull,
+        "VFTOI ignores opaque unselected inputs and preserves the destination mask");
+    memory.write_vu_vector(4,{{0,0x80000000u},{0,0}});
+    rejects([&]{ee::exec<MipsOpcode::Vftoi>(state,memory,0,0x4B05217Du);},"sign/exponent");
+    require(memory.observe_vu_vector(5).low.value==masked.low.value,"unproven conversion refuses transactionally");
+}
 void vector_setup() {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_cp0(Cop0::Status,1u<<30);
@@ -865,6 +914,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_setup();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_setup();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

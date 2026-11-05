@@ -1,6 +1,7 @@
 // Independent implementation of VU manual 6.0 integer LIW/pipeline behavior.
 #include "ps2native/vu_control.hpp"
 #include "ps2native/gif.hpp"
+#include "ps2native/vu_fixed.hpp"
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -148,32 +149,8 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper(unsigned unit,std::uint32_t
         const auto bit=8u>>lane;if(!(mask&bit))continue;
         const auto a=vectors[fs][lane];
         if(fixed) {
-            if(a.unknown&0xFF800000u)throw DeviceRefusal("FTOI consumes unknown VF sign/exponent bits");
-            // VU manual 2.1-2.3: signed 32-bit fixed point, truncate toward
-            // zero and clamp conversion overflow without changing flags.
-            // Exponent zero is zero; exponent 255 remains a finite PS2 input.
             constexpr unsigned fractions[]{0,4,12,15};
-            const auto convert=[&](std::uint32_t input) {
-                const auto exponent=(input>>23u)&255u;
-                const int scaled=static_cast<int>(exponent)-127+static_cast<int>(fractions[extended&3u]);
-                std::uint32_t value=0;
-                if(exponent && scaled>=0) {
-                    if(scaled>=31)value=(input&0x80000000u) ? 0x80000000u : 0x7FFFFFFFu;
-                    else {
-                        const auto mantissa=0x800000u|(input&0x7FFFFFu);
-                        const auto magnitude=scaled>=23 ? mantissa<<static_cast<unsigned>(scaled-23) : mantissa>>static_cast<unsigned>(23-scaled);
-                        value=(input&0x80000000u) ? 0u-magnitude : magnitude;
-                    }
-                }
-                return value;
-            };
-            // With a fixed sign/exponent, conversion is monotone. Preserve
-            // every possible integer between the endpoints, including all
-            // lower carry bits. Subpixel fraction uncertainty often vanishes.
-            const auto low=convert(a.value&~a.unknown),high=convert(a.value|a.unknown);
-            const auto different=low^high;
-            const auto unknown=different ? ~0u>>(32u-std::bit_width(different)) : 0u;
-            result.output.words[lane]={low&~unknown,unknown};continue;
+            result.output.words[lane]=vu_float_to_fixed(a,fractions[extended&3u]);continue;
         }
         const auto b=broadcast==5u ? (unit ? vu1_controls_[6] : observe(22)) : vectors[ft][broadcast<4u ? broadcast : lane];
         if(comparison) {

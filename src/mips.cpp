@@ -277,6 +277,7 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
         }
     } else if (op == 0x12) {
         if (word==0x4A0002FFu) return make(MipsOpcode::Vnop);
+        if (rs>=16u && (word&0x7FCu)==0x17Cu) return make(MipsOpcode::Vftoi);
         if (word==0x4A0003BFu) return make(MipsOpcode::Vwaitq);
         if (rs>=16u && (word&0x7FFu)==0x33Cu) return make(MipsOpcode::Vmove);
         if (rs>=16u && (word&0x7FFu)==0x3BCu) return make(MipsOpcode::Vdiv);

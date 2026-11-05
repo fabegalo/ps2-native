@@ -10,6 +10,7 @@ list(FILTER checkpoint_headers EXCLUDE REGEX "/ee_semantics[.]hpp$")
 # MipsInstruction is serialized by checkpoint_fields.inc or EEState.
 # Extending the decoder must change the runtime identity, not the wire schema.
 list(FILTER checkpoint_headers EXCLUDE REGEX "/mips[.]hpp$")
+list(FILTER checkpoint_headers EXCLUDE REGEX "/vu_fixed[.]hpp$")
 set(checkpoint_schema "ps2n-complete-checkpoint-v1-le-fields\n")
 foreach(header IN LISTS checkpoint_headers)
     file(READ "${header}" content)
