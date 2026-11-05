@@ -25,8 +25,10 @@
   cache mantém certificados sem confundir dados residentes com RAM/DMA.
   Sete testes focados e BIOS original passaram. Nova fronteira: DMA VIF1
   em `0x1CE460` / 7.727.172.060 do jogo, com coordenadas XYZ incertas.
-  O 122 testa Start mais cedo pela entrada SIO2, sem alterar o fluxo pelo
-  host. Animação parcial comprovada; menu, navegação e partida pendentes.
+  O 122 aplicou Start por 31 campos; 57 frames comparáveis mantiveram
+  os mesmos hashes, sem resposta visual comprovada. Animação parcial
+  comprovada; menu, navegação e partida pendentes.
+  CI `9113b7a`: núcleo e launcher aprovados nos seis alvos.
   [Evidência](docs/FIRST-GAME-STATUS.md#continuações-por-checkpoint--113-a-121).
 - **Checkpoint completo funcionando no jogo real:** o ensaio 111 foi
   capturado em 6.032.416.676 e 7.232.416.676 instruções totais, sem

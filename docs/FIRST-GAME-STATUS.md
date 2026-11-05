@@ -155,7 +155,9 @@ domínios FPU, checkpoint completo e CLI periódico. BIOS original repetida
 com runner atual: mesmos 17.690.079/`0x80007D20`, sem hipótese do encoder.
 A CI inicial do checkpoint detectou uma expectativa antiga de recusa CVT;
 o teste foi atualizado para verificar o resultado/domínio certificado.
-CI da revisão final deve ser conferida nos seis alvos.
+CI da revisão `9113b7a`: [núcleo](https://github.com/fabegalo/ps2-native/actions/runs/41947644566)
+e [launcher](https://github.com/fabegalo/ps2-native/actions/runs/41947644578)
+aprovados em Windows x64/ARM64, Linux x64/ARM64 e macOS Intel/Apple Silicon.
 
 Capturas reais de 640x224 mostram uma animação com logotipo no canto,
 sem menu demonstrado. Start foi aplicado no 118/119, mas a recusa ocorreu
@@ -163,6 +165,15 @@ no mesmo campo, sem resposta visual comprovada. O 122 aplica Start mais
 cedo, por SIO2, para testar a possibilidade de avançar pela abertura usando
 o controle. Isso é entrada convidada normal, sem salto de PC, alteração da
 RAM do jogo ou sucesso sintetizado. Up/Down/Cross no menu e partida pendem.
+
+O 122 terminou: retomou 7,4 bilhões em 0,834544 s, aplicou Start em
+7.434.819.087 ciclos/campo 42 e soltou em 7.587.315.837/campo 73,
+31 campos. Os 57 frames comparáveis com o 117 tiveram exatamente os mesmos
+hashes; atingiu a mesma recusa/contagens, em 170,199 s. Não se demonstrou
+resposta visual de Start. Arquivos reais `superbust-menu122-vblank-87.bmp`
+e `.png`, 640x224, 6.023 pixels RGB não pretos, RGBA SHA-256
+`795b25e7a3d14b09885350a6bfb1f6bbb649356f7956b4db9c28f16fa8198bf9`.
+Nenhum processo de ensaio ou observador permaneceu ativo.
 
 ## Seleção e identidade — dados da execução inicial
 

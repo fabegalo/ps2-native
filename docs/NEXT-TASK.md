@@ -16,12 +16,19 @@ também incertas. Não substituir pelos bits zero do hull ou ignorar o DMA.
 Preservar proveniência por cache/writeback/DMA e provar os efeitos gráficos,
 ou completar a precisão aritmética antes de consumir esses bits.
 
-**122 em execução**, continuação de 7,4 bilhões com Start aplicado antes
-da animação, para verificar uma transição permitida pelo próprio jogo.
-Log `superbust-menu-122.log`, entrada `superbust-pad122.txt`; processo
-limitado a 15 minutos/16 bilhões. Conferir retorno e capturas reais antes
-de afirmar efeito de Start. Ainda faltam menu, Up/Down/Cross e partida.
+**122 concluído**, continuação de 7,4 bilhões com Start aplicado antes
+da animação. Pressionado em 7.434.819.087 ciclos, solto em 7.587.315.837:
+31 campos. Os 57 frames comparáveis com o 117 tiveram hashes idênticos;
+retornou à mesma recusa, sem menu/resposta visual demonstrados.
+Log `superbust-menu-122.log`, entrada `superbust-pad122.txt` solta (`FFFF`).
+Nenhum ensaio ou observador ficou em execução. Ainda faltam menu,
+Up/Down/Cross e partida. Para reconstruir certificados já descartados
+antes do checkpoint de fronteira, há também `superbust-menu117-latest.ps2ncp`
+em 7,725 bilhões, anterior aos flushes do pacote atual.
 Dados completos em [FIRST-GAME-STATUS](FIRST-GAME-STATUS.md).
+Revisão de código `9113b7a`: sete testes focados e BIOS original passaram;
+CI do núcleo e launcher aprovada nos seis alvos. Último registro documental
+não altera código nem exige repetir essa matriz.
 
 ## Histórico imediato
 
