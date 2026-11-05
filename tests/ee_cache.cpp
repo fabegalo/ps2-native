@@ -187,7 +187,43 @@ void provenance_visibility_and_ways() {
     (void)remember(0x80002300u);(void)remember(0x80003300u);
     require(certificate(0x80001300u)==resident,"replacement publishes or preserves both ways without broad certificate invalidation");
 }
+void native_byte_lanes() {
+    // Independent byte oracle for RAM, cache-line boundaries and scratchpad.
+    for (const auto base : {0xA0003038u,0x80003038u,0x70000038u}) {
+        Memory memory;initialize(memory);
+        if (base==0x70000038u) memory.tlb_write(0,{0,0x70000000u,0x80000000u,0});
+        std::array<std::uint8_t,16> bytes{},masks{};
+        memory.write64(base,0);memory.write64(base+8,0);
+        struct Write { unsigned offset,width;std::uint64_t value,unknown; };
+        constexpr std::array writes{
+            Write{0,8,0xF1E2D3C4B5A69788ull,0x8001020408102040ull},
+            Write{8,8,0xFFEEDDCCBBAA9988ull,0x1020408001020408ull},
+            Write{2,2,0x1234,0x8001},Write{7,1,0xEF,0x10},
+            Write{4,4,0x87654321,0},Write{8,4,0x12345678,0xFF00000Fu},
+            Write{0,1,0x55,0},Write{14,2,0xCAFE,0x0F00},
+            Write{8,8,0x123456789ABCDEF0ull,0}
+        };
+        for (const auto& write : writes) {
+            const auto address=base+write.offset;
+            if (write.width==8) memory.store64_observed(address,{write.value,write.unknown});
+            else if (write.width==4) memory.store32_observed(address,{static_cast<std::uint32_t>(write.value),static_cast<std::uint32_t>(write.unknown)});
+            else if (write.width==2) memory.store16_observed(address,{static_cast<std::uint32_t>(write.value),static_cast<std::uint32_t>(write.unknown)});
+            else memory.store8_observed(address,{static_cast<std::uint32_t>(write.value),static_cast<std::uint32_t>(write.unknown)});
+            for (unsigned i=0;i<write.width;++i) {
+                masks[write.offset+i]=static_cast<std::uint8_t>(write.unknown>>(i*8u));
+                bytes[write.offset+i]=static_cast<std::uint8_t>((write.value & ~write.unknown)>>(i*8u));
+            }
+            for (unsigned offset=0;offset<16;offset+=8) {
+                const auto observed=memory.load64_observed(base+offset);
+                for (unsigned i=0;i<8;++i)
+                    require(((observed.value>>(i*8u))&255u)==bytes[offset+i] &&
+                            ((observed.unknown>>(i*8u))&255u)==masks[offset+i],
+                            "native accesses preserve byte lanes and independent unknown masks");
+            }
+        }
+    }
+}
 int main() try {
-    visibility_and_tags();replacement_and_knowledge();mapping_and_locks();interpreter_and_shared_memory();gif_dma_visibility();cached_provenance();provenance_visibility_and_ways();
+    visibility_and_tags();replacement_and_knowledge();mapping_and_locks();interpreter_and_shared_memory();gif_dma_visibility();cached_provenance();provenance_visibility_and_ways();native_byte_lanes();
     std::cout<<"EE D-cache: visibility, tags, LRF, knowledge, mapping, locks and shared CPU semantics passed\n";
 } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}

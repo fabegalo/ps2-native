@@ -173,6 +173,29 @@ void check_relocation_evidence(const m13::Program& program, const std::vector<st
     write32(dynamic_bytes,segment.file_offset+site-segment.vaddr,(0x23u<<26)|(m13::t0<<21)|(m13::t0<<16));
     const auto dynamic_cfg=ps2native::analyze_control_flow(ps2native::parse_ee_elf(dynamic_bytes),{});
     require(!dynamic_cfg.instructions.contains(m13::kCallback),"unproved load-derived callback seeds nothing");
+
+    auto copied_bytes=m13::build_elf(program,false);
+    const auto copied_image=ps2native::parse_ee_elf(copied_bytes);
+    const auto patch_instruction=[&](const char* label,std::uint32_t word) {
+        const auto pc=program.at(label);const auto& code=copied_image.code_segment_at(pc);
+        write32(copied_bytes,code.file_offset+pc-code.vaddr,word);
+    };
+    // The address is constructed in t0, copied to t2 and then called through
+    // t2. No symbol, relocation or manually supplied root establishes it.
+    constexpr unsigned copied_register=10;
+    patch_instruction("callback_lo_unpaired",(m13::t0<<21)|(copied_register<<11)|0x21u);
+    patch_instruction("callback_call",(copied_register<<21)|(m13::ra<<11)|0x09u);
+    const auto copied_cfg=ps2native::analyze_control_flow(ps2native::parse_ee_elf(copied_bytes),{});
+    require(copied_cfg.instructions.contains(m13::kCallback) &&
+            std::any_of(copied_cfg.constant_jumps.begin(),copied_cfg.constant_jumps.end(),[&](const auto& jump) {
+                return jump.jump_site==program.at("callback_call") && jump.target==m13::kCallback;
+            }),"constant propagation through a GPR copy discovers a stripped callback");
+    const std::array bypass{program.at("callback_lo_unpaired")};
+    const auto bypass_cfg=ps2native::analyze_control_flow(ps2native::parse_ee_elf(copied_bytes),bypass);
+    require(!bypass_cfg.instructions.contains(m13::kCallback),"entry bypassing address construction cannot prove a copied callback");
+    patch_instruction("callback_lo",(0x23u<<26)|(m13::t0<<21)|(m13::t0<<16));
+    const auto copied_load_cfg=ps2native::analyze_control_flow(ps2native::parse_ee_elf(copied_bytes),{});
+    require(!copied_load_cfg.instructions.contains(m13::kCallback),"copying an unproved load does not make its target static");
 }
 } // namespace
 

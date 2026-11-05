@@ -6,8 +6,8 @@
 
 namespace ps2native::profiling {
 // Host-only, opt-in wall-time attribution. No guest clocks or serialized fields.
-enum class Phase : unsigned { Ee, Iop, Vu, Gs, Memory, Devices, CodeChecks, Bounds, Sync, Presentation, Count };
-inline constexpr std::array names{"ee", "iop", "vu", "gs", "memory", "devices", "code_checks", "numeric_bounds", "sync", "presentation"};
+enum class Phase : unsigned { Ee, Iop, Vu, Gs, Memory, Devices, CodeChecks, Bounds, Sync, Presentation, Dispatch, Count };
+inline constexpr std::array names{"ee", "iop", "vu", "gs", "memory", "devices", "code_checks", "numeric_bounds", "sync", "presentation", "dispatch"};
 struct Profile {
     std::array<std::uint64_t,static_cast<unsigned>(Phase::Count)> exclusive_ns{},inclusive_ns{},calls{};
 };

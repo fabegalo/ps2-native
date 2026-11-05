@@ -3,11 +3,11 @@
 #include "ps2native/sha256.hpp"
 #include "ps2native/diagnostics.hpp"
 
-#include <deque>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace ps2native {
 namespace {
@@ -70,8 +70,11 @@ public:
             }
         }
         if (options_.tail_instructions != 0) {
-            if (tail_.size() == options_.tail_instructions) tail_.pop_front();
-            tail_.push_back(r);
+            if (tail_.size() < options_.tail_instructions) tail_.push_back(r);
+            else {
+                tail_[tail_next_]=r;
+                if (++tail_next_==tail_.size()) tail_next_=0;
+            }
         }
     }
     void on_bus_access(const BusAccess& access) override {
@@ -97,7 +100,8 @@ public:
             if(*engine_==ExecutionEngine::Aot)--report_.aot_instructions;
             else --report_.interpreted_instructions;
         }
-        for (const auto& r : tail_) report_.tail.push_back(instruction_line(r));
+        for (std::size_t i=0;i<tail_.size();++i)
+            report_.tail.push_back(instruction_line(tail_[(tail_next_+i)%tail_.size()]));
     }
 
 private:
@@ -135,7 +139,8 @@ private:
     std::optional<std::uint64_t> next_frame_;
     std::uint64_t sequence_{};
     std::optional<ExecutionEngine> engine_;
-    std::deque<RetiredInstruction> tail_;
+    std::vector<RetiredInstruction> tail_;
+    std::size_t tail_next_{};
 };
 
 class ObserverScope {
@@ -227,6 +232,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
     std::uint64_t executed = 0;
     // An unaligned stop address can never match an instruction PC.
     ExecutionContext ctx{state, memory, executed, options.max_instructions, 0xFFFFFFFFu, &tracer};
+    AotDispatchCache dispatch;
     const auto start_retired = state.retired_instructions;
     ObserverScope scope(memory, &tracer, options, state);
     {
@@ -248,11 +254,15 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                 // Hybrid mode: every address may continue in the interpreter, so
                 // the AOT-only verified-entry restriction does not apply here.
                 state.indirect_entry_pending = false;
-                const auto* block = aot != nullptr ? find_aot_block(*aot, state.pc) : nullptr;
-                for (const auto& overlay : options.aot_overlays) {
-                    const auto* candidate = find_aot_block(overlay.module_for(memory),state.pc);
-                    if (candidate && block) throw std::runtime_error("overlapping AOT modules at " + hex32(state.pc));
-                    if (candidate) block = candidate;
+                const AotBlock* block;
+                {
+                    profiling::Scope lookup_profile(profiling::Phase::Dispatch);
+                    block = aot != nullptr ? dispatch.find(*aot, state.pc) : nullptr;
+                    for (const auto& overlay : options.aot_overlays) {
+                        const auto* candidate = dispatch.find(overlay.module_for(memory),state.pc);
+                        if (candidate && block) throw std::runtime_error("overlapping AOT modules at " + hex32(state.pc));
+                        if (candidate) block = candidate;
+                    }
                 }
                 if (block != nullptr) {
                     const auto before = executed;

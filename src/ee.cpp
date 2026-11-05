@@ -1,4 +1,4 @@
-#include "ps2native/ee.hpp"
+#include "ps2native/ee_semantics.hpp"
 #include "ps2native/memory.hpp"
 
 #include <cstddef>
@@ -6,6 +6,10 @@
 #include <stdexcept>
 
 namespace ps2native {
+void ee::unknown_gpr_operand(unsigned index, unsigned width) {
+    throw std::runtime_error("EE GPR " + std::to_string(index) + " consumes unknown MMIO bits (" +
+                             std::to_string(width) + "-bit operand)");
+}
 void enter_ee_exception(EEState& state, std::uint32_t code, std::uint32_t pc, bool in_delay_slot) {
     if (code > 31u) throw std::invalid_argument("invalid EE exception code");
     const auto status = state.cp0(Cop0::Status);
@@ -58,63 +62,33 @@ void check_index(std::size_t index, std::size_t count) {
 }
 } // namespace
 std::uint32_t EEState::reg32(unsigned index) const {
-    check_index(index, gpr.size());
-    if ((unknown_gprs & (1u << index)) && (unknown_gpr_bits[index] & 0xFFFFFFFFull))
-        throw std::runtime_error("EE GPR " + std::to_string(index) + " consumes unknown MMIO bits (32-bit operand)");
-    return index == 0 ? 0u : static_cast<std::uint32_t>(gpr[index].low);
+    return ee::read_gpr32(*this,index);
 }
 std::uint64_t EEState::reg64(unsigned index) const {
-    check_index(index, gpr.size());
-    if (unknown_gprs & (1u << index))
-        throw std::runtime_error("EE GPR " + std::to_string(index) + " consumes unknown MMIO bits (64-bit operand)");
-    return index == 0 ? 0u : gpr[index].low;
+    return ee::read_gpr64(*this,index);
 }
 Register128 EEState::reg128(unsigned index) const {
-    check_index(index, gpr.size());
-    if ((unknown_gprs & (1u << index)) || unknown_gpr_high_bits[index])
-        throw std::runtime_error("EE GPR " + std::to_string(index) + " consumes unknown MMIO bits (128-bit operand)");
-    return index == 0 ? Register128{} : gpr[index];
+    return ee::read_gpr128(*this,index);
 }
 void EEState::set_reg32(unsigned index, std::uint32_t value) {
-    check_index(index, gpr.size());
-    forget_reg_candidates(index);
-    if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
-    if (index != 0) gpr[index].low = value;
+    ee::write_gpr32(*this,index,value);
 }
 void EEState::set_reg32_sign_extended(unsigned index, std::uint32_t value) {
-    check_index(index, gpr.size());
-    forget_reg_candidates(index);
-    if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
-    if (index != 0) {
-        const auto signed_value = value < 0x80000000u
-            ? static_cast<std::int64_t>(value)
-            : static_cast<std::int64_t>(value) - 0x100000000ll;
-        gpr[index].low = static_cast<std::uint64_t>(signed_value);
-    }
+    ee::write_gpr32_signed(*this,index,value);
 }
 void EEState::set_reg64(unsigned index, std::uint64_t value) {
-    check_index(index, gpr.size());
-    forget_reg_candidates(index);
-    if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
-    if (index != 0) gpr[index].low = value;
+    ee::write_gpr64(*this,index,value);
 }
 void EEState::set_reg64_observed(unsigned index, std::uint64_t value, std::uint64_t unknown) {
-    set_reg64(index, value & ~unknown);
-    if (index != 0 && unknown) {
-        unknown_gpr_bits[index] = unknown;
-        unknown_gprs |= 1u << index;
-    }
+    ee::write_gpr64_observed(*this,index,value,unknown);
 }
 void EEState::set_reg128(unsigned index, std::uint64_t low, std::uint64_t high) {
-    check_index(index, gpr.size());
-    forget_reg_candidates(index);
-    if (unknown_gprs) { unknown_gpr_bits[index] = 0; unknown_gprs &= ~(1u << index); }
-    unknown_gpr_high_bits[index] = 0;
-    if (index != 0) gpr[index] = {low, high};
+    ee::write_gpr128(*this,index,low,high);
 }
 void EEState::forget_reg_candidates(unsigned index) noexcept {
-    if(candidate_gprs&(1u<<index)) {
-        gpr_candidates[index]={};candidate_gprs&=~(1u<<index);
+    if (candidate_gprs & (1u << index)) {
+        gpr_candidates[index] = {};
+        candidate_gprs &= ~(1u << index);
     }
 }
 std::shared_ptr<const std::vector<std::uint64_t>> EEState::reg64_candidates(unsigned index) const {
@@ -138,12 +112,7 @@ void EEState::set_reg64_candidates(unsigned index,std::vector<std::uint64_t> val
 }
 void EEState::set_reg128_observed(unsigned index, std::uint64_t low, std::uint64_t high,
                                   std::uint64_t unknown_low, std::uint64_t unknown_high) {
-    set_reg128(index,low&~unknown_low,high&~unknown_high);
-    if (index!=0) {
-        unknown_gpr_bits[index]=unknown_low;
-        unknown_gpr_high_bits[index]=unknown_high;
-        if (unknown_low) unknown_gprs|=1u<<index;
-    }
+    ee::write_gpr128_observed(*this,index,low,high,unknown_low,unknown_high);
 }
 EEState ee_reset_state() {
     EEState state;

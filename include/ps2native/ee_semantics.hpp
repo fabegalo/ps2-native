@@ -14,6 +14,16 @@
 #include <bit>
 #include <tuple>
 
+// Real translations can exceed a compiler's global heuristic inline budget.
+// These small execution boundaries must still expose constants to codegen.
+#if defined(_MSC_VER)
+#define PS2N_EE_INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+#define PS2N_EE_INLINE inline __attribute__((always_inline))
+#else
+#define PS2N_EE_INLINE inline
+#endif
+
 namespace ps2native {
 enum class ExecutionEngine : std::uint8_t { Aot, Interpreter };
 
@@ -36,6 +46,42 @@ struct ExecutionContext {
     bool interrupts_sampled{};
 };
 
+struct AotBlock;
+struct AotModule;
+// Per-dispatch-run cache of immutable module metadata, never executable bytes.
+// Module identity is part of every key, including cached interpreter misses.
+class AotDispatchCache {
+public:
+    [[nodiscard]] const AotBlock* find(const AotModule& module, std::uint32_t pc) noexcept;
+private:
+    struct Entry { const AotModule* module{}; std::uint32_t pc{}; const AotBlock* block{}; };
+    std::array<Entry,256> entries_{};
+};
+
+[[noreturn]] void aot_code_modified(std::uint32_t pc);
+[[noreturn]] void aot_delay_transfer_refused();
+
+// Visible to the host compiler so constant PCs, words and delay-slot flags
+// specialize the guard together with the instruction. Fetch and interrupt
+// sampling stay at every instruction boundary, including after DMA/observers.
+PS2N_EE_INLINE bool aot_enter_checked(ExecutionContext& ctx, std::uint32_t pc, std::uint32_t word, bool has_delay_slot) {
+    auto& state = ctx.state;
+    if (state.pc != pc) return false;
+    if (ctx.executed >= ctx.budget || (!state.delay_pending && state.pc == ctx.stop_pc)) return false;
+    state.instruction_pc=pc;
+    state.instruction_in_delay_slot=state.delay_pending;
+    const auto sampled=ctx.interrupts_sampled;ctx.interrupts_sampled=false;
+    if (!sampled && poll_ee_interrupts(state,ctx.memory)) return false;
+    if (has_delay_slot && state.delay_pending)
+        aot_delay_transfer_refused();
+    {
+        profiling::Scope profile(profiling::Phase::CodeChecks);
+        if (ctx.memory.fetch32(pc) != word) aot_code_modified(pc);
+    }
+    if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Aot);
+    return true;
+}
+
 namespace ee {
 constexpr std::uint64_t sx32(std::uint32_t value) {
     return static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<std::int32_t>(value)));
@@ -50,6 +96,67 @@ constexpr std::uint32_t simm32(std::uint32_t word) {
 }
 constexpr std::uint64_t simm64(std::uint32_t word) { return sx32(simm32(word)); }
 constexpr std::uint64_t zimm(std::uint32_t word) { return word & 0xffffu; }
+// Shared by EEState's public accessors and decoded/AOT semantics. Keeping the
+// definitions visible here lets constant register indices fold without LTO,
+// while retaining the same bounds, symbolic-bit and candidate-domain rules.
+inline void check_gpr_index(unsigned index) {
+    if (index >= 32u) throw std::out_of_range("Invalid R5900 GPR index");
+}
+[[noreturn]] void unknown_gpr_operand(unsigned index, unsigned width);
+PS2N_EE_INLINE std::uint32_t read_gpr32(const EEState& state, unsigned index) {
+    check_gpr_index(index);
+    if ((state.unknown_gprs & (1u << index)) && (state.unknown_gpr_bits[index] & 0xFFFFFFFFull))
+        unknown_gpr_operand(index,32);
+    return index == 0 ? 0u : static_cast<std::uint32_t>(state.gpr[index].low);
+}
+PS2N_EE_INLINE std::uint64_t read_gpr64(const EEState& state, unsigned index) {
+    check_gpr_index(index);
+    if (state.unknown_gprs & (1u << index))
+        unknown_gpr_operand(index,64);
+    return index == 0 ? 0u : state.gpr[index].low;
+}
+PS2N_EE_INLINE Register128 read_gpr128(const EEState& state, unsigned index) {
+    check_gpr_index(index);
+    if ((state.unknown_gprs & (1u << index)) || state.unknown_gpr_high_bits[index])
+        unknown_gpr_operand(index,128);
+    return index == 0 ? Register128{} : state.gpr[index];
+}
+PS2N_EE_INLINE void write_gpr64(EEState& state, unsigned index, std::uint64_t value) {
+    check_gpr_index(index);
+    if (state.candidate_gprs & (1u << index)) state.forget_reg_candidates(index);
+    if (state.unknown_gprs) {
+        state.unknown_gpr_bits[index] = 0;
+        state.unknown_gprs &= ~(1u << index);
+    }
+    if (index != 0) state.gpr[index].low = value;
+}
+PS2N_EE_INLINE void write_gpr32(EEState& state, unsigned index, std::uint32_t value) {
+    write_gpr64(state,index,value);
+}
+PS2N_EE_INLINE void write_gpr32_signed(EEState& state, unsigned index, std::uint32_t value) {
+    write_gpr64(state,index,sx32(value));
+}
+PS2N_EE_INLINE void write_gpr64_observed(EEState& state, unsigned index, std::uint64_t value, std::uint64_t unknown) {
+    write_gpr64(state,index,value & ~unknown);
+    if (index != 0 && unknown) {
+        state.unknown_gpr_bits[index] = unknown;
+        state.unknown_gprs |= 1u << index;
+    }
+}
+PS2N_EE_INLINE void write_gpr128(EEState& state, unsigned index, std::uint64_t low, std::uint64_t high) {
+    write_gpr64(state,index,low);
+    state.unknown_gpr_high_bits[index] = 0;
+    if (index != 0) state.gpr[index].high = high;
+}
+PS2N_EE_INLINE void write_gpr128_observed(EEState& state, unsigned index, std::uint64_t low, std::uint64_t high,
+                                 std::uint64_t unknown_low, std::uint64_t unknown_high) {
+    write_gpr128(state,index,low & ~unknown_low,high & ~unknown_high);
+    if (index != 0) {
+        state.unknown_gpr_bits[index] = unknown_low;
+        state.unknown_gpr_high_bits[index] = unknown_high;
+        if (unknown_low) state.unknown_gprs |= 1u << index;
+    }
+}
 inline std::uint64_t raw_gpr64(const EEState& state, unsigned index) {
     return index == 0 ? 0u : state.gpr[index].low;
 }
@@ -129,7 +236,7 @@ inline bool negative_gpr64(const EEState& state,unsigned index) {
 }
 // Effective address: lower 32 bits of rs plus the sign-extended offset.
 inline std::uint32_t effective_address(const EEState& state, std::uint32_t word) {
-    return state.reg32(rs(word)) + simm32(word);
+    return read_gpr32(state,rs(word)) + simm32(word);
 }
 
 // Branch/jump bookkeeping of the instruction in flight.
@@ -139,7 +246,7 @@ struct InstructionFrame {
     std::uint32_t pending_target{};
 };
 // Starts executing the instruction at pc: the default next PC is pc + 4.
-inline InstructionFrame begin(EEState& state, std::uint32_t pc) {
+PS2N_EE_INLINE InstructionFrame begin(EEState& state, std::uint32_t pc) {
     const InstructionFrame frame{state.delay_pending, state.delay_indirect, state.delay_target};
     state.instruction_pc = pc;
     state.instruction_in_delay_slot = frame.in_delay_slot;
@@ -150,7 +257,7 @@ inline InstructionFrame begin(EEState& state, std::uint32_t pc) {
 }
 // Retires the instruction. Returns true when it completed a delay slot, i.e.
 // control left the straight-line sequence (the caller returns to dispatch).
-inline bool retire(ExecutionContext& ctx, const InstructionFrame& frame) {
+PS2N_EE_INLINE bool retire(ExecutionContext& ctx, const InstructionFrame& frame) {
     ++ctx.executed;
     ++ctx.state.retired_instructions;
     if (!frame.in_delay_slot) return false;
@@ -173,7 +280,7 @@ inline void branch(EEState& state, bool taken, std::uint32_t pc, std::uint32_t w
 inline void multiply(EEState& s, std::uint64_t& lo, std::uint64_t& hi, unsigned rd, std::uint64_t product) {
     lo = sx32(static_cast<std::uint32_t>(product));
     hi = sx32(static_cast<std::uint32_t>(product >> 32));
-    s.set_reg64(rd, lo);
+    write_gpr64(s,rd, lo);
 }
 // R5900 DIV/DIVU never trap: overflow and division by zero have defined results.
 inline void divide_signed(std::uint64_t& lo, std::uint64_t& hi, std::uint32_t dividend, std::uint32_t divisor) {
@@ -203,8 +310,11 @@ inline void divide_unsigned(std::uint64_t& lo, std::uint64_t& hi, std::uint32_t 
 template <MipsOpcode>
 inline constexpr bool kSystemInstruction = false;
 
-template <MipsOpcode Op>
-inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
+template <MipsOpcode Op, std::uint64_t StaticWord = 0x100000000ull>
+PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t word) {
+    // The interpreter keeps a decoded word; generated AOT fixes it in the
+    // template even when the host compiler chooses an out-of-line body.
+    const auto w = StaticWord <= 0xFFFFFFFFull ? static_cast<std::uint32_t>(StaticWord) : word;
     using O = MipsOpcode;
     [[maybe_unused]] const unsigned s_ = rs(w);
     [[maybe_unused]] const unsigned t_ = rt(w);
@@ -286,13 +396,13 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         } else if constexpr (Op == O::Cfc2) {
             const auto word=m.observe_vu_control(rd(w));
             const auto unknown=std::uint64_t{word.unknown} | ((word.unknown&0x80000000u) ? 0xFFFFFFFF00000000ull : 0u);
-            s.set_reg64_observed(t_,sx32(word.value),unknown);
+            write_gpr64_observed(s,t_,sx32(word.value),unknown);
         } else if constexpr (Op == O::Ctc2)
             m.write_vu_control_observed(rd(w),{static_cast<std::uint32_t>(raw_gpr64(s,t_)),
                                               static_cast<std::uint32_t>(s.unknown_gpr_bits[t_])});
         else if constexpr (Op == O::Qmfc2) {
             const auto word=m.observe_vu_vector(d_);
-            s.set_reg128_observed(t_,word.low.value,word.high.value,word.low.unknown,word.high.unknown);
+            write_gpr128_observed(s,t_,word.low.value,word.high.value,word.low.unknown,word.high.unknown);
         } else if constexpr (Op == O::Qmtc2) {
             const auto value=t_ ? s.gpr[t_] : Register128{};
             m.write_vu_vector(d_,{{value.low,s.unknown_gpr_bits[t_]},{value.high,s.unknown_gpr_high_bits[t_]}});
@@ -381,7 +491,7 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             value=sx32(static_cast<std::uint32_t>(value));
             if(unknown&0x80000000u)unknown|=0xFFFFFFFF00000000ull;
         }
-        s.set_reg64_observed(d_,value,unknown);
+        write_gpr64_observed(s,d_,value,unknown);
     } else if constexpr (Op==O::Addu || Op==O::Subu || Op==O::Daddu || Op==O::Dsubu) {
         constexpr bool wide=Op==O::Daddu || Op==O::Dsubu,subtract=Op==O::Subu || Op==O::Dsubu;
         constexpr auto mask=wide ? ~0ull : 0xFFFFFFFFull;
@@ -408,42 +518,42 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             value=sx32(static_cast<std::uint32_t>(value));
             if(unknown&0x80000000u)unknown|=0xFFFFFFFF00000000ull;
         }
-        s.set_reg64_observed(d_,value,unknown);
+        write_gpr64_observed(s,d_,value,unknown);
     } else if constexpr (Op == O::And) {
         if(finite_binary(s,d_,s_,t_,[](auto a,auto b){return a&b;}))return;
         const auto a = raw_gpr64(s, s_), b = raw_gpr64(s, t_);
         const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];
         const auto unknown = (ua | ub) & ~((~a & ~ua) | (~b & ~ub));
-        s.set_reg64_observed(d_, a & b, unknown);
+        write_gpr64_observed(s,d_, a & b, unknown);
     } else if constexpr (Op == O::Or) {
         if(finite_binary(s,d_,s_,t_,[](auto a,auto b){return a|b;}))return;
         const auto a = raw_gpr64(s, s_), b = raw_gpr64(s, t_);
         const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];
-        s.set_reg64_observed(d_, a | b, (ua | ub) & ~((a & ~ua) | (b & ~ub)));
+        write_gpr64_observed(s,d_, a | b, (ua | ub) & ~((a & ~ua) | (b & ~ub)));
     } else if constexpr (Op == O::Xor) {
         if(finite_binary(s,d_,s_,t_,[](auto a,auto b){return a^b;}))return;
-        s.set_reg64_observed(d_, raw_gpr64(s, s_) ^ raw_gpr64(s, t_),
+        write_gpr64_observed(s,d_, raw_gpr64(s, s_) ^ raw_gpr64(s, t_),
                             s_ == t_ ? 0u : s.unknown_gpr_bits[s_] | s.unknown_gpr_bits[t_]);
     } else if constexpr (Op == O::Nor) {
         if(finite_binary(s,d_,s_,t_,[](auto a,auto b){return ~(a|b);} ))return;
         const auto a = raw_gpr64(s, s_), b = raw_gpr64(s, t_);
         const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];
-        s.set_reg64_observed(d_, ~(a | b), (ua | ub) & ~((a & ~ua) | (b & ~ub)));
+        write_gpr64_observed(s,d_, ~(a | b), (ua | ub) & ~((a & ~ua) | (b & ~ub)));
     } else if constexpr (Op == O::Slt) {
-        s.set_reg64(d_,s_!=t_ && less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],raw_gpr64(s,t_),s.unknown_gpr_bits[t_],true,s.reg64_candidates(s_).get(),s.reg64_candidates(t_).get()));
+        write_gpr64(s,d_,s_!=t_ && less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],raw_gpr64(s,t_),s.unknown_gpr_bits[t_],true,s.reg64_candidates(s_).get(),s.reg64_candidates(t_).get()));
     } else if constexpr (Op == O::Sltu) {
-        s.set_reg64(d_,s_!=t_ && less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],raw_gpr64(s,t_),s.unknown_gpr_bits[t_],false,s.reg64_candidates(s_).get(),s.reg64_candidates(t_).get()));
+        write_gpr64(s,d_,s_!=t_ && less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],raw_gpr64(s,t_),s.unknown_gpr_bits[t_],false,s.reg64_candidates(s_).get(),s.reg64_candidates(t_).get()));
     } else if constexpr (Op == O::Movz) {
-        if (s.reg64(t_) == 0u) s.set_reg64(d_, s.reg64(s_));
+        if (read_gpr64(s,t_) == 0u) write_gpr64(s,d_, read_gpr64(s,s_));
     } else if constexpr (Op == O::Movn) {
-        if (s.reg64(t_) != 0u) s.set_reg64(d_, s.reg64(s_));
+        if (read_gpr64(s,t_) != 0u) write_gpr64(s,d_, read_gpr64(s,s_));
     // MULT/DIV families: pipeline 0 uses the lower halves of LO/HI, the MMI
     // pipeline-1 forms (MULT1, DIV1, ...) the upper halves, with identical rules.
     } else if constexpr (Op == O::Madd || Op == O::Maddu || Op == O::Madd1 || Op == O::Maddu1) {
         // EE instruction manual, MADD/MADDU/MADD1/MADDU1: concatenate
         // only each accumulator's low word, add modulo 2^64, then independently
         // sign-extend both resulting words. The other pipeline is untouched.
-        const auto a=s.reg64(s_),b=s.reg64(t_);
+        const auto a=read_gpr64(s,s_),b=read_gpr64(s,t_);
         if(a!=sx32(static_cast<std::uint32_t>(a)) || b!=sx32(static_cast<std::uint32_t>(b)))
             throw std::runtime_error("EE MADD requires sign-extended word operands; other inputs are undefined");
         constexpr bool second=Op==O::Madd1 || Op==O::Maddu1;
@@ -457,49 +567,49 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     } else if constexpr (Op == O::Mult || Op == O::Mult1) {
         auto [lo, hi] = Op == O::Mult ? std::tie(s.lo, s.hi) : std::tie(s.lo1, s.hi1);
         multiply(s, lo, hi, d_, static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(static_cast<std::int32_t>(s.reg32(s_))) *
-            static_cast<std::int64_t>(static_cast<std::int32_t>(s.reg32(t_)))));
+            static_cast<std::int64_t>(static_cast<std::int32_t>(read_gpr32(s,s_))) *
+            static_cast<std::int64_t>(static_cast<std::int32_t>(read_gpr32(s,t_)))));
     } else if constexpr (Op == O::Multu || Op == O::Multu1) {
         auto [lo, hi] = Op == O::Multu ? std::tie(s.lo, s.hi) : std::tie(s.lo1, s.hi1);
-        multiply(s, lo, hi, d_, static_cast<std::uint64_t>(s.reg32(s_)) * s.reg32(t_));
+        multiply(s, lo, hi, d_, static_cast<std::uint64_t>(read_gpr32(s,s_)) * read_gpr32(s,t_));
     } else if constexpr (Op == O::Div || Op == O::Div1) {
         auto [lo, hi] = Op == O::Div ? std::tie(s.lo, s.hi) : std::tie(s.lo1, s.hi1);
-        divide_signed(lo, hi, s.reg32(s_), s.reg32(t_));
+        divide_signed(lo, hi, read_gpr32(s,s_), read_gpr32(s,t_));
     } else if constexpr (Op == O::Divu || Op == O::Divu1) {
         auto [lo, hi] = Op == O::Divu ? std::tie(s.lo, s.hi) : std::tie(s.lo1, s.hi1);
-        divide_unsigned(lo, hi, s.reg32(s_), s.reg32(t_));
+        divide_unsigned(lo, hi, read_gpr32(s,s_), read_gpr32(s,t_));
     } else if constexpr (Op == O::Mfhi) {
-        s.set_reg64(d_, s.hi);
+        write_gpr64(s,d_, s.hi);
     } else if constexpr (Op == O::Mflo) {
-        s.set_reg64(d_, s.lo);
+        write_gpr64(s,d_, s.lo);
     } else if constexpr (Op == O::Mthi) {
-        s.hi = s.reg64(s_);
+        s.hi = read_gpr64(s,s_);
     } else if constexpr (Op == O::Mtlo) {
-        s.lo = s.reg64(s_);
+        s.lo = read_gpr64(s,s_);
     } else if constexpr (Op == O::Mfhi1) {
-        s.set_reg64(d_, s.hi1);
+        write_gpr64(s,d_, s.hi1);
     } else if constexpr (Op == O::Mflo1) {
-        s.set_reg64(d_, s.lo1);
+        write_gpr64(s,d_, s.lo1);
     } else if constexpr (Op == O::Mthi1) {
-        s.hi1 = s.reg64(s_);
+        s.hi1 = read_gpr64(s,s_);
     } else if constexpr (Op == O::Mtlo1) {
-        s.lo1 = s.reg64(s_);
+        s.lo1 = read_gpr64(s,s_);
     } else if constexpr (Op == O::Mfsa) {
-        s.set_reg64(d_,s.shift_amount);
+        write_gpr64(s,d_,s.shift_amount);
     } else if constexpr (Op == O::Mtsa) {
-        s.shift_amount=s.reg64(s_);
+        s.shift_amount=read_gpr64(s,s_);
     } else if constexpr (Op == O::Pmfhi) {
-        s.set_reg128(d_,s.hi,s.hi1);
+        write_gpr128(s,d_,s.hi,s.hi1);
     } else if constexpr (Op == O::Pmflo) {
-        s.set_reg128(d_,s.lo,s.lo1);
+        write_gpr128(s,d_,s.lo,s.lo1);
     } else if constexpr (Op == O::Pmthi) {
-        const auto value=s.reg128(s_);s.hi=value.low;s.hi1=value.high;
+        const auto value=read_gpr128(s,s_);s.hi=value.low;s.hi1=value.high;
     } else if constexpr (Op == O::Pmtlo) {
-        const auto value=s.reg128(s_);s.lo=value.low;s.lo1=value.high;
+        const auto value=read_gpr128(s,s_);s.lo=value.low;s.lo1=value.high;
     // PADDUW: four 32-bit lanes, unsigned saturation at 0xFFFFFFFF; all 128 bits written.
     } else if constexpr (Op == O::Padduw) {
-        const auto a = s.reg128(s_);
-        const auto b = s.reg128(t_);
+        const auto a = read_gpr128(s,s_);
+        const auto b = read_gpr128(s,t_);
         auto lanes = [](std::uint64_t x, std::uint64_t y) {
             std::uint64_t out = 0;
             for (unsigned shift = 0; shift < 64u; shift += 32u) {
@@ -508,37 +618,37 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             }
             return out;
         };
-        s.set_reg128(d_, lanes(a.low, b.low), lanes(a.high, b.high));
+        write_gpr128(s,d_, lanes(a.low, b.low), lanes(a.high, b.high));
     // PCPYH: broadcast the low halfword independently in each 64-bit half.
     } else if constexpr (Op == O::Pcpyh) {
-        const auto source = s.reg128(t_);
+        const auto source = read_gpr128(s,t_);
         constexpr auto repeat = 0x0001000100010001ull;
-        s.set_reg128(d_, (source.low & 0xFFFFu) * repeat, (source.high & 0xFFFFu) * repeat);
+        write_gpr128(s,d_, (source.low & 0xFFFFu) * repeat, (source.high & 0xFFFFu) * repeat);
     } else if constexpr (Op == O::Pcpyld) {
-        s.set_reg128_observed(d_,raw_gpr64(s,t_),raw_gpr64(s,s_),s.unknown_gpr_bits[t_],s.unknown_gpr_bits[s_]);
+        write_gpr128_observed(s,d_,raw_gpr64(s,t_),raw_gpr64(s,s_),s.unknown_gpr_bits[t_],s.unknown_gpr_bits[s_]);
     } else if constexpr (Op == O::Plzcw) {
         // EE Instruction Set v6 p.215: count the leading sign bits minus
         // one independently in the low two words; preserve upper 64 bits.
-        const auto source=s.reg64(s_);
+        const auto source=read_gpr64(s,s_);
         std::uint64_t result=0;
         for(unsigned shift:{0u,32u}) {
             const auto word=static_cast<std::uint32_t>(source>>shift);
             const auto normalized=(word&0x80000000u) ? ~word : word;
             result|=std::uint64_t(std::countl_zero(normalized)-1)<<shift;
         }
-        s.set_reg64(d_,result);
+        write_gpr64(s,d_,result);
     } else if constexpr (Op == O::Pcpyud) {
-        s.set_reg128_observed(d_,s_ ? s.gpr[s_].high : 0u,t_ ? s.gpr[t_].high : 0u,
+        write_gpr128_observed(s,d_,s_ ? s.gpr[s_].high : 0u,t_ ? s.gpr[t_].high : 0u,
                              s.unknown_gpr_high_bits[s_],s.unknown_gpr_high_bits[t_]);
     } else if constexpr (Op == O::Pextlw || Op == O::Pextuw) {
         const auto a=s_ ? s.gpr[s_] : Register128{},b=t_ ? s.gpr[t_] : Register128{};
         const auto x=Op==O::Pextlw?a.low:a.high, y=Op==O::Pextlw?b.low:b.high;
         const auto ux=Op==O::Pextlw?s.unknown_gpr_bits[s_]:s.unknown_gpr_high_bits[s_];
         const auto uy=Op==O::Pextlw?s.unknown_gpr_bits[t_]:s.unknown_gpr_high_bits[t_];
-        s.set_reg128_observed(d_,(y&0xFFFFFFFFu)|(x<<32u),(y>>32u)|(x&0xFFFFFFFF00000000ull),
+        write_gpr128_observed(s,d_,(y&0xFFFFFFFFu)|(x<<32u),(y>>32u)|(x&0xFFFFFFFF00000000ull),
                              (uy&0xFFFFFFFFu)|(ux<<32u),(uy>>32u)|(ux&0xFFFFFFFF00000000ull));
     } else if constexpr (Op == O::Psubb || Op == O::Psubw) {
-        const auto x=s.reg128(s_),y=s.reg128(t_);
+        const auto x=read_gpr128(s,s_),y=read_gpr128(s,t_);
         const auto subtract=[](std::uint64_t a,std::uint64_t b) {
             std::uint64_t result=0;
             constexpr unsigned width=Op==O::Psubw ? 32u : 8u;
@@ -547,45 +657,45 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
                 result|=(((a>>bit)-(b>>bit))&mask)<<bit;
             return result;
         };
-        s.set_reg128(d_,subtract(x.low,y.low),subtract(x.high,y.high));
+        write_gpr128(s,d_,subtract(x.low,y.low),subtract(x.high,y.high));
     } else if constexpr (Op == O::Ppacw) {
         const auto a=s_ ? s.gpr[s_] : Register128{},b=t_ ? s.gpr[t_] : Register128{};
-        s.set_reg128_observed(d_,(b.low&0xFFFFFFFFu)|(b.high<<32u),(a.low&0xFFFFFFFFu)|(a.high<<32u),
+        write_gpr128_observed(s,d_,(b.low&0xFFFFFFFFu)|(b.high<<32u),(a.low&0xFFFFFFFFu)|(a.high<<32u),
             (s.unknown_gpr_bits[t_]&0xFFFFFFFFu)|(s.unknown_gpr_high_bits[t_]<<32u),
             (s.unknown_gpr_bits[s_]&0xFFFFFFFFu)|(s.unknown_gpr_high_bits[s_]<<32u));
     // PAND/PXOR/POR/PNOR: bitwise over all 128 bits.
     } else if constexpr (Op == O::Pand || Op == O::Pxor || Op == O::Por || Op == O::Pnor) {
-        const auto a = s.reg128(s_);
-        const auto b = s.reg128(t_);
+        const auto a = read_gpr128(s,s_);
+        const auto b = read_gpr128(s,t_);
         auto op = [](std::uint64_t x, std::uint64_t y) -> std::uint64_t {
             if constexpr (Op == O::Pand) return x & y;
             else if constexpr (Op == O::Pxor) return x ^ y;
             else if constexpr (Op == O::Por) return x | y;
             else return ~(x | y);
         };
-        s.set_reg128(d_, op(a.low, b.low), op(a.high, b.high));
+        write_gpr128(s,d_, op(a.low, b.low), op(a.high, b.high));
     } else if constexpr (Op == O::Addiu) {
         if(finite_unary(s,t_,s_,[w](auto value){return sx32(static_cast<std::uint32_t>(value)+simm32(w));}))return;
-        s.set_reg32_sign_extended(t_, s.reg32(s_) + simm32(w));
+        write_gpr32_signed(s,t_, read_gpr32(s,s_) + simm32(w));
     } else if constexpr (Op == O::Daddiu) {
         if(finite_unary(s,t_,s_,[w](auto value){return value+simm64(w);}))return;
-        s.set_reg64(t_, s.reg64(s_) + simm64(w));
+        write_gpr64(s,t_, read_gpr64(s,s_) + simm64(w));
     } else if constexpr (Op == O::Slti) {
-        s.set_reg64(t_,less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],simm64(w),0,true,s.reg64_candidates(s_).get()));
+        write_gpr64(s,t_,less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],simm64(w),0,true,s.reg64_candidates(s_).get()));
     } else if constexpr (Op == O::Sltiu) {
-        s.set_reg64(t_,less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],simm64(w),0,false,s.reg64_candidates(s_).get()));
+        write_gpr64(s,t_,less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],simm64(w),0,false,s.reg64_candidates(s_).get()));
     // Logical immediates are zero-extended and act on all 64 bits.
     } else if constexpr (Op == O::Andi) {
         if(finite_unary(s,t_,s_,[w](auto value){return value&zimm(w);}))return;
-        s.set_reg64_observed(t_, raw_gpr64(s, s_) & zimm(w), s.unknown_gpr_bits[s_] & zimm(w));
+        write_gpr64_observed(s,t_, raw_gpr64(s, s_) & zimm(w), s.unknown_gpr_bits[s_] & zimm(w));
     } else if constexpr (Op == O::Ori) {
         if(finite_unary(s,t_,s_,[w](auto value){return value|zimm(w);}))return;
-        s.set_reg64_observed(t_, raw_gpr64(s, s_) | zimm(w), s.unknown_gpr_bits[s_] & ~zimm(w));
+        write_gpr64_observed(s,t_, raw_gpr64(s, s_) | zimm(w), s.unknown_gpr_bits[s_] & ~zimm(w));
     } else if constexpr (Op == O::Xori) {
         if(finite_unary(s,t_,s_,[w](auto value){return value^zimm(w);}))return;
-        s.set_reg64_observed(t_, raw_gpr64(s, s_) ^ zimm(w), s.unknown_gpr_bits[s_]);
+        write_gpr64_observed(s,t_, raw_gpr64(s, s_) ^ zimm(w), s.unknown_gpr_bits[s_]);
     } else if constexpr (Op == O::Lui) {
-        s.set_reg32_sign_extended(t_, (w & 0xffffu) << 16);
+        write_gpr32_signed(s,t_, (w & 0xffffu) << 16);
     } else if constexpr (Op == O::Lb || Op == O::Lbu || Op == O::Lh || Op == O::Lhu) {
         constexpr bool half=Op==O::Lh || Op==O::Lhu;
         constexpr bool signed_load=Op==O::Lb || Op==O::Lh;
@@ -597,7 +707,7 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             if(value&sign)value|=extension;
             if(unknown&sign)unknown|=extension;
         }
-        s.set_reg64_observed(t_,value,unknown);
+        write_gpr64_observed(s,t_,value,unknown);
     } else if constexpr (Op == O::Lwl || Op == O::Lwr || Op == O::Ldl || Op == O::Ldr) {
         constexpr bool wide=Op==O::Ldl || Op==O::Ldr;
         constexpr bool left=Op==O::Lwl || Op==O::Ldl;
@@ -621,7 +731,7 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             }
         }
         if constexpr(!wide)unknown=(unknown&0xFFFFFFFFu)|((unknown&0x80000000u) ? 0xFFFFFFFF00000000ull : 0u);
-        s.set_reg64_observed(t_,wide ? result : sx32(static_cast<std::uint32_t>(result)),unknown);
+        write_gpr64_observed(s,t_,wide ? result : sx32(static_cast<std::uint32_t>(result)),unknown);
     } else if constexpr (Op == O::Swl || Op == O::Swr || Op == O::Sdl || Op == O::Sdr) {
         constexpr unsigned bytes=(Op==O::Sdl || Op==O::Sdr) ? 8u : 4u;
         constexpr bool left=Op==O::Swl || Op==O::Sdl;
@@ -661,15 +771,15 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             }
         }
         const auto unknown = std::uint64_t{word.unknown} | ((word.unknown & 0x80000000u) ? 0xFFFFFFFF00000000ull : 0u);
-        s.set_reg64_observed(t_,Op==O::Lw ? sx32(word.value) : word.value,Op==O::Lw ? unknown : word.unknown);
+        write_gpr64_observed(s,t_,Op==O::Lw ? sx32(word.value) : word.value,Op==O::Lw ? unknown : word.unknown);
     } else if constexpr (Op == O::Ld) {
         const auto word=m.load64_observed(effective_address(s,w));
-        s.set_reg64_observed(t_,word.value,word.unknown);
+        write_gpr64_observed(s,t_,word.value,word.unknown);
     // LQ/SQ silently clear the low four address bits (no address error).
     } else if constexpr (Op == O::Lq) {
         const auto quad = effective_address(s, w) & ~15u;
         const auto low = m.load64_observed(quad),high=m.load64_observed(quad+8u);
-        s.set_reg128_observed(t_,low.value,high.value,low.unknown,high.unknown);
+        write_gpr128_observed(s,t_,low.value,high.value,low.unknown,high.unknown);
     } else if constexpr (Op == O::Sb) {
         m.store8_observed(effective_address(s,w),{static_cast<std::uint32_t>(raw_gpr64(s,t_)),static_cast<std::uint32_t>(s.unknown_gpr_bits[t_])});
     } else if constexpr (Op == O::Sh) {
@@ -682,11 +792,11 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             m.store32_observed(address,word);
             if(candidates)m.remember_fpu_relation(address,word,finite_word_relation(m,word,*candidates));
         }
-        else m.write32(effective_address(s, w), s.reg32(t_));
+        else m.write32(effective_address(s, w), read_gpr32(s,t_));
     } else if constexpr (Op == O::Sd) {
         const auto unknown=s.unknown_gpr_bits[t_];
         if (unknown) m.store64_observed(effective_address(s,w),{raw_gpr64(s,t_),unknown});
-        else m.write64(effective_address(s,w),s.reg64(t_));
+        else m.write64(effective_address(s,w),read_gpr64(s,t_));
     } else if constexpr (Op == O::Sq) {
         const auto quad = effective_address(s, w) & ~15u;
         const auto unknown_low=s.unknown_gpr_bits[t_],unknown_high=s.unknown_gpr_high_bits[t_];
@@ -694,7 +804,7 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             const auto value=t_ ? s.gpr[t_] : Register128{};
             m.store128_observed(quad,{{value.low,unknown_low},{value.high,unknown_high}});
         } else {
-            const auto value=s.reg128(t_);
+            const auto value=read_gpr128(s,t_);
             m.write128(quad,value.low,value.high);
         }
     // R5900 branches compare the full lower 64 bits. The condition reads rs
@@ -744,36 +854,36 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         constexpr bool positive=Op==O::Bc1t || Op==O::Bc1tl;
         branch(s,condition==positive,pc,w,Op==O::Bc1fl || Op==O::Bc1tl);
     } else if constexpr (Op == O::Beq || Op == O::Beql) {
-        branch(s, s.reg64(s_) == s.reg64(t_), pc, w, Op == O::Beql);
+        branch(s, read_gpr64(s,s_) == read_gpr64(s,t_), pc, w, Op == O::Beql);
     } else if constexpr (Op == O::Bne || Op == O::Bnel) {
-        branch(s, s.reg64(s_) != s.reg64(t_), pc, w, Op == O::Bnel);
+        branch(s, read_gpr64(s,s_) != read_gpr64(s,t_), pc, w, Op == O::Bnel);
     } else if constexpr (Op == O::Blez || Op == O::Blezl) {
-        branch(s, s64(s.reg64(s_)) <= 0, pc, w, Op == O::Blezl);
+        branch(s, s64(read_gpr64(s,s_)) <= 0, pc, w, Op == O::Blezl);
     } else if constexpr (Op == O::Bgtz || Op == O::Bgtzl) {
-        branch(s, s64(s.reg64(s_)) > 0, pc, w, Op == O::Bgtzl);
+        branch(s, s64(read_gpr64(s,s_)) > 0, pc, w, Op == O::Bgtzl);
     } else if constexpr (Op == O::Bltz || Op == O::Bltzl || Op == O::Bltzal || Op == O::Bltzall) {
         const bool taken = negative_gpr64(s,s_);
-        if constexpr (Op == O::Bltzal || Op == O::Bltzall) s.set_reg32_sign_extended(31u, pc + 8u);
+        if constexpr (Op == O::Bltzal || Op == O::Bltzall) write_gpr32_signed(s,31u, pc + 8u);
         branch(s, taken, pc, w, Op == O::Bltzl || Op == O::Bltzall);
     } else if constexpr (Op == O::Bgez || Op == O::Bgezl || Op == O::Bgezal || Op == O::Bgezall) {
         const bool taken = !negative_gpr64(s,s_);
-        if constexpr (Op == O::Bgezal || Op == O::Bgezall) s.set_reg32_sign_extended(31u, pc + 8u);
+        if constexpr (Op == O::Bgezal || Op == O::Bgezall) write_gpr32_signed(s,31u, pc + 8u);
         branch(s, taken, pc, w, Op == O::Bgezl || Op == O::Bgezall);
     } else if constexpr (Op == O::J) {
         s.delay_pending = true;
         s.delay_target = mips_jump_target(pc, w);
     } else if constexpr (Op == O::Jal) {
-        s.set_reg32_sign_extended(31u, pc + 8u);
+        write_gpr32_signed(s,31u, pc + 8u);
         s.delay_pending = true;
         s.delay_target = mips_jump_target(pc, w);
     } else if constexpr (Op == O::Jr) {
         s.delay_pending = true;
         s.delay_indirect = true;
-        s.delay_target = s.reg32(s_);
+        s.delay_target = read_gpr32(s,s_);
     } else if constexpr (Op == O::Jalr) {
         // Deliberate order: JALR rs==rd must read its target BEFORE writing link.
-        s.delay_target = s.reg32(s_);
-        s.set_reg32_sign_extended(d_, pc + 8u);
+        s.delay_target = read_gpr32(s,s_);
+        write_gpr32_signed(s,d_, pc + 8u);
         s.delay_pending = true;
         s.delay_indirect = true;
     } else {
@@ -782,3 +892,4 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
 }
 } // namespace ee
 } // namespace ps2native
+#undef PS2N_EE_INLINE

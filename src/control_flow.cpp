@@ -161,44 +161,49 @@ std::optional<std::uint32_t> window_entry(const std::set<std::uint32_t>& entries
     return std::nullopt;
 }
 
-// Proves that the JR register is one constant on every path reaching the JR:
-//   lui r, %hi ; [ori r, r, imm | addiu r, r, imm]... ; jr r
-// over straight-line, discovered instructions, where nothing else writes r.
-// The LUI must not sit in a delay slot (a nullified likely slot would skip it);
-// entries between the LUI and the JR are rejected by the caller.
+// Propagate constants through a discovered straight-line suffix. Copies and
+// address arithmetic may use different GPRs; no loads, caller values, delay-slot
+// definitions or incoming paths bypassing a contributing LUI become evidence.
 std::variant<AotConstantJump, std::string> prove_constant_target(const AotControlFlow& graph,
                                                                  std::uint32_t jump_site) {
-    const auto reg = graph.instructions.at(jump_site).rs;
-    std::optional<std::uint32_t> lui_site;
-    for (std::uint32_t distance = 1; distance <= kMaxBoundDistance && jump_site >= 4u * distance; ++distance) {
-        const auto pc = jump_site - 4u * distance;
-        const auto found = graph.instructions.find(pc);
-        if (found == graph.instructions.end() || found->second.has_delay_slot()) break;
-        if (found->second.opcode == MipsOpcode::Lui && found->second.rt == reg) {
-            lui_site = pc;
-            break;
+    auto first=jump_site;
+    for (unsigned distance=1;distance<=kMaxBoundDistance && jump_site>=4u*distance;++distance) {
+        const auto pc=jump_site-4u*distance;
+        const auto found=graph.instructions.find(pc);
+        if (found==graph.instructions.end() || found->second.has_delay_slot()) break;
+        first=pc;
+    }
+    if (first>=4u) {
+        const auto previous=graph.instructions.find(first-4u);
+        if (previous!=graph.instructions.end() && previous->second.has_delay_slot()) first+=4u;
+    }
+    struct Constant { std::uint32_t value{},lui{}; };
+    std::array<std::optional<Constant>,32> registers{};
+    registers[0]=Constant{};
+    for (auto pc=first;pc<jump_site;pc+=4u) {
+        const auto& instruction=graph.instructions.at(pc);
+        const auto written=instruction.written_gpr();
+        if (!written) continue;
+        const auto a=registers[instruction.rs],b=registers[instruction.rt];
+        std::optional<Constant> result;
+        using O=MipsOpcode;
+        if (instruction.opcode==O::Lui) result=Constant{(instruction.word&0xFFFFu)<<16u,pc};
+        else if (a && a->lui && (instruction.opcode==O::Ori || instruction.opcode==O::Addiu || instruction.opcode==O::Daddiu)) {
+            const auto value=instruction.opcode==O::Ori ? a->value|(instruction.word&0xFFFFu)
+                : a->value+mips_sign_extended_imm(instruction.word);
+            result=Constant{value,a->lui};
+        } else if (a && b && (instruction.opcode==O::Addu || instruction.opcode==O::Daddu ||
+                             instruction.opcode==O::Or)) {
+            const auto origin=!a->lui ? b->lui : !b->lui ? a->lui : std::min(a->lui,b->lui);
+            const auto value=instruction.opcode==O::Or ? a->value|b->value : a->value+b->value;
+            result=Constant{value,origin};
         }
+        registers[*written]=result;
     }
-    if (!lui_site) return std::string("no LUI of the JR register in the straight-line code before it");
-    if (*lui_site >= 4u) {
-        const auto previous = graph.instructions.find(*lui_site - 4u);
-        if (previous != graph.instructions.end() && previous->second.has_delay_slot())
-            return "LUI at " + hex(*lui_site) + " is a branch delay slot";
-    }
-    auto value = (graph.instructions.at(*lui_site).word & 0xffffu) << 16;
-    for (auto pc = *lui_site + 4u; pc < jump_site; pc += 4u) {
-        const auto& instruction = graph.instructions.at(pc);
-        const auto written = instruction.written_gpr();
-        if (!written || *written != reg) continue;
-        if (instruction.opcode == MipsOpcode::Ori && instruction.rs == reg)
-            value |= instruction.word & 0xffffu;
-        else if (instruction.opcode == MipsOpcode::Addiu && instruction.rs == reg)
-            value += static_cast<std::uint32_t>(mips_sign_extended_imm(instruction.word));
-        else
-            return "JR register rewritten by " + std::string(mips_opcode_name(instruction.opcode)) + " at " +
-                   hex(pc);
-    }
-    return AotConstantJump{jump_site, *lui_site, value};
+    const auto target=registers[graph.instructions.at(jump_site).rs];
+    if (!target || !target->lui)
+        return std::string("no constant LUI-derived target in the straight-line code before JR");
+    return AotConstantJump{jump_site,target->lui,target->value};
 }
 } // namespace
 

@@ -19,7 +19,9 @@ if(PS2N_ENABLE_PROFILING)
 endif()
 if(MSVC)
     target_compile_options(ps2n_core PRIVATE /W4 /permissive-)
-    target_compile_options(ps2n_core PUBLIC /utf-8)
+    # Large static translations specialize operands without depending on LTO.
+    # COFF's ordinary section limit is too small for real guest images.
+    target_compile_options(ps2n_core PUBLIC /utf-8 /bigobj)
 else()
     target_compile_options(ps2n_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()

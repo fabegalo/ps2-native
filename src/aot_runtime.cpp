@@ -22,34 +22,36 @@ const AotBlock* find_aot_block(const AotModule& module, std::uint32_t pc) noexce
     return it != end && it->address == pc ? it : nullptr;
 }
 
+const AotBlock* AotDispatchCache::find(const AotModule& module, std::uint32_t pc) noexcept {
+    auto& entry=entries_[((pc>>2u)^(pc>>12u)) & (entries_.size()-1u)];
+    if (entry.module!=&module || entry.pc!=pc) {
+        entry={&module,pc,find_aot_block(module,pc)};
+    }
+    return entry.block;
+}
+
 bool is_verified_indirect_entry(const AotModule& module, std::uint32_t pc) noexcept {
     return std::binary_search(module.indirect_entries,
                               module.indirect_entries + module.indirect_entry_count, pc);
 }
 
 bool aot_enter(ExecutionContext& ctx, std::uint32_t pc, std::uint32_t word, bool has_delay_slot) {
-    auto& state = ctx.state;
-    if (state.pc != pc) return false;
-    if (ctx.executed >= ctx.budget || (!state.delay_pending && state.pc == ctx.stop_pc)) return false;
-    state.instruction_pc=pc;
-    state.instruction_in_delay_slot=state.delay_pending;
-    const auto sampled=ctx.interrupts_sampled;ctx.interrupts_sampled=false;
-    if (!sampled && poll_ee_interrupts(state,ctx.memory)) return false;
-    if (has_delay_slot && state.delay_pending)
-        throw std::runtime_error("Control transfer in an active delay slot is unsupported");
-    {
-        profiling::Scope profile(profiling::Phase::CodeChecks);
-        if (ctx.memory.fetch32(pc) != word)
-            throw std::runtime_error("AOT executable code modified at " + hex32(pc));
-    }
-    if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Aot);
-    return true;
+    return aot_enter_checked(ctx,pc,word,has_delay_slot);
+}
+
+void aot_code_modified(std::uint32_t pc) {
+    throw std::runtime_error("AOT executable code modified at " + hex32(pc));
+}
+
+void aot_delay_transfer_refused() {
+    throw std::runtime_error("Control transfer in an active delay slot is unsupported");
 }
 
 std::uint64_t run_aot_module(const AotModule& module, EEState& state, Memory& memory,
                              std::uint32_t stop_pc, std::uint64_t max_instructions) {
     std::uint64_t executed = 0;
     ExecutionContext ctx{state, memory, executed, max_instructions, stop_pc};
+    AotDispatchCache dispatch;
     while (true) {
         if (!state.delay_pending && state.pc == stop_pc) {
             state.indirect_entry_pending = false; // Host return address.
@@ -60,7 +62,11 @@ std::uint64_t run_aot_module(const AotModule& module, EEState& state, Memory& me
         (void)poll_ee_interrupts(state,memory);
         ctx.interrupts_sampled=true;
         memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi)); memory.set_cache_config(state.cp0(Cop0::Config));
-        const auto* block = find_aot_block(module, state.pc);
+        const AotBlock* block;
+        {
+            profiling::Scope lookup_profile(profiling::Phase::Dispatch);
+            block=dispatch.find(module,state.pc);
+        }
         if (block == nullptr)
             throw std::runtime_error("AOT target not compiled (indirect jump/dynamic code) at " +
                                      hex32(state.pc));

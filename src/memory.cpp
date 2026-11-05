@@ -2,6 +2,8 @@
 #include "ps2native/ee.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <cstring>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -26,6 +28,30 @@ ObservedDoubleword Memory::diagnostic_ram(std::uint32_t offset, std::size_t byte
     return result;
 }
 namespace {
+// memcpy permits unaligned host storage and avoids aliasing assumptions.
+// Guest ordering is handled by the caller before accessing RAM/cache bytes.
+std::uint64_t load_little(const std::uint8_t* bytes, std::size_t size) noexcept {
+    if constexpr (std::endian::native==std::endian::little) {
+        switch (size) {
+            case 1: return *bytes;
+            case 2: { std::uint16_t value;std::memcpy(&value,bytes,2);return value; }
+            case 4: { std::uint32_t value;std::memcpy(&value,bytes,4);return value; }
+            case 8: { std::uint64_t value;std::memcpy(&value,bytes,8);return value; }
+        }
+    }
+    std::uint64_t value=0;
+    for (std::size_t i=0;i<size;++i) value|=std::uint64_t{bytes[i]}<<(8u*i);
+    return value;
+}
+void store_little(std::uint8_t* bytes, std::size_t size, std::uint64_t value) noexcept {
+    if constexpr (std::endian::native==std::endian::little) {
+        // Copy from the full 64-bit object: its first size bytes are exactly
+        // the enabled low bytes on little-endian hosts, including partial SW.
+        std::memcpy(bytes,&value,size);
+    } else {
+        for (std::size_t i=0;i<size;++i) bytes[i]=static_cast<std::uint8_t>(value>>(8u*i));
+    }
+}
 std::string hex32(std::uint32_t value) {
     std::ostringstream stream;
     stream << "0x" << std::uppercase << std::hex << std::setw(8) << std::setfill('0') << value;
@@ -375,25 +401,31 @@ std::uint64_t Memory::storage_unknown(const Target& target, std::size_t size) co
     if (unknown_words_.empty() || target.region == BusRegion::BiosRom || target.region == BusRegion::Rom1) return 0;
     const auto base = target.offset | (target.region == BusRegion::Scratchpad ? 0x80000000u : 0u);
     std::uint64_t unknown = 0;
-    for (std::size_t i = 0; i < size; ++i) {
+    for (std::size_t i = 0; i < size;) {
         const auto key = base + static_cast<std::uint32_t>(i);
+        const auto count=std::min(size-i,std::size_t{4u-(key&3u)});
+        const auto mask=(1ull<<(count*8u))-1u;
         const auto it = unknown_words_.find(key & ~3u);
         if (it != unknown_words_.end())
-            unknown |= std::uint64_t{(it->second >> ((key & 3u) * 8u)) & 0xFFu} << (i * 8u);
+            unknown |= ((it->second >> ((key & 3u) * 8u)) & mask) << (i * 8u);
+        i+=count;
     }
     return unknown;
 }
 void Memory::set_storage_unknown(const Target& target, std::size_t size, std::uint64_t unknown) const {
     if (!unknown && unknown_words_.empty()) return;
     const auto base = target.offset | (target.region == BusRegion::Scratchpad ? 0x80000000u : 0u);
-    for (std::size_t i = 0; i < size; ++i) {
+    for (std::size_t i = 0; i < size;) {
         const auto key = base + static_cast<std::uint32_t>(i);
+        const auto count=std::min(size-i,std::size_t{4u-(key&3u)});
         const auto shift = (key & 3u) * 8u;
-        const auto bits = static_cast<std::uint32_t>((unknown >> (i * 8u)) & 0xFFu) << shift;
+        const auto mask=static_cast<std::uint32_t>((1ull<<(count*8u))-1u)<<shift;
+        const auto bits=static_cast<std::uint32_t>(unknown>>(i*8u))<<shift & mask;
         const auto it = unknown_words_.find(key & ~3u);
-        const auto next = (it == unknown_words_.end() ? 0u : it->second & ~(0xFFu << shift)) | bits;
+        const auto next = (it == unknown_words_.end() ? 0u : it->second & ~mask) | bits;
         if (next) unknown_words_[key & ~3u] = next;
         else if (it != unknown_words_.end()) unknown_words_.erase(it);
+        i+=count;
     }
 }
 std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const char* what, bool notify,
@@ -406,12 +438,9 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
     try {
     if (notify && data_cache_model_ && uses_data_cache(target)) {
         const auto& line = data_cache_line(address,target);
-        std::uint64_t symbolic=0;
-        for(std::size_t i=0;i<size;++i) {
-            const auto offset=(address&63u)+i;
-            value |= std::uint64_t{line.bytes[offset]}<<(8u*i);
-            symbolic |= std::uint64_t{line.unknown[offset]}<<(8u*i);
-        }
+        const auto offset=address&63u;
+        value=load_little(line.bytes.data()+offset,size);
+        const auto symbolic=load_little(line.unknown.data()+offset,size);
         if(symbolic && !unknown) throw DeviceRefusal("read consumes unknown D-cache bits");
         if(unknown) *unknown=symbolic;
     } else if (target.region==BusRegion::VuMemory) {
@@ -461,8 +490,7 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
         const auto& storage = target.region == BusRegion::BiosRom ? rom_
                             : target.region == BusRegion::Rom1 ? rom1_
                             : target.region == BusRegion::Scratchpad ? scratchpad_ : ram_;
-        for (std::size_t i = 0; i < size; ++i)
-            value |= static_cast<std::uint64_t>(storage[target.offset + i]) << (8u * i);
+        value=load_little(storage.data()+target.offset,size);
     }
     } catch(const DeviceRefusal& error) {
         throw device_refusal(BusFault::Device,false,size,address,target.physical,target.region,what,error.what());
@@ -490,11 +518,9 @@ void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t val
     try {
     if (data_cache_model_ && uses_data_cache(target)) {
         auto& line = data_cache_line(address,target);
-        for(std::size_t i=0;i<size;++i) {
-            const auto offset=(address&63u)+i;
-            line.bytes[offset]=static_cast<std::uint8_t>(value>>(8u*i));
-            line.unknown[offset]=static_cast<std::uint8_t>(unknown>>(8u*i));
-        }
+        const auto offset=address&63u;
+        store_little(line.bytes.data()+offset,size,value);
+        store_little(line.unknown.data()+offset,size,unknown);
         if(!(line.tag&8u)) line.tag|=64u;
     } else if (target.region==BusRegion::VuMemory) {
         try {registers_.write_vu_memory(target.physical,size,{value,unknown});}
@@ -512,8 +538,7 @@ void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t val
         }
     } else {
         auto& storage = target.region == BusRegion::Scratchpad ? scratchpad_ : ram_;
-        for (std::size_t i = 0; i < size; ++i)
-            storage[target.offset + i] = static_cast<std::uint8_t>(value >> (8u * i));
+        store_little(storage.data()+target.offset,size,value);
         set_storage_unknown(target, size, unknown);
     }
     } catch(const DeviceRefusal& error) {
