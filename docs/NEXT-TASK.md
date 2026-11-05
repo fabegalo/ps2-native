@@ -166,6 +166,14 @@ parcial após a recusa. Faltam cerca de 23,7 milhões até a fronteira atual.
 Diagnóstico em `superbust-menu112-diagnostic`; entrada manual
 `superbust-pad112.txt`. A retomada anterior levou 60,72 s até a nova recusa.
 
+## Última verificação curta — Simpsons, 05/11/2026
+
+ReadRTC superado com UTC externo explícito. Janela de 120 milhões de
+instruções, sem imagem; nova recusa IOP `0x267DC` / 17.733.070 em CDVD
+HOWTO `0x1F402006`, fora do modo ocioso 2048/`0x80` suportado.
+Ensaio encerrado, sem checkpoint novo. Não altera a tarefa ativa de
+Super Bust-A-Move. Evidência no relatório do primeiro jogo.
+
 ## Checkpoint preservado — Simpsons
 
 Continuação de The Simpsons: Hit & Run (SLUS-20624), ensaio 5: EE

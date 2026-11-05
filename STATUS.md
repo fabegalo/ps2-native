@@ -17,6 +17,17 @@
 | Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
+## Reensaio curto de Simpsons — 05/11/2026
+
+- Diagnóstico híbrido com RTC explícito superou ReadRTC: janela de
+  120.000.000 instruções do jogo em 43,2943 s. Novo bloqueio no IOP
+  `0x267DC` / 17.733.070: escrita em CDVD HOWTO `0x1F402006` solicita
+  comportamento fora do modo ocioso de dados 2048/`0x80` suportado.
+- Zero GIF/pixels/frames do jogo; PMODE não escrito. Continua antes da
+  abertura/menu. Injeção experimental após firmware parcial, não boot normal.
+  Sem mudança no núcleo, benchmark, testes adicionais ou CI. Ensaio encerrado;
+  [evidência](docs/FIRST-GAME-STATUS.md#reensaio-curto-de-simpsons--05112026).
+
 ## SPU2 audível e menu original — 05/11/2026
 
 - `446f61c` implementa síntese no SPU2 existente, compartilhada entre

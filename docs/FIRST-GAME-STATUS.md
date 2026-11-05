@@ -907,6 +907,24 @@ Fontes independentes: [EE Core](https://docs.alexrp.com/mips/ee.pdf),
 [resultados medidos de FPU](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/cpu/ee_fpu/muldiv.expected).
 Nenhum código GPL, firmware, módulo ou código traduzido comercial foi integrado.
 
+### Reensaio curto de Simpsons — 05/11/2026
+
+Diagnóstico local recompilado a partir da árvore atual (`499b1b3`, com as
+alterações locais preexistentes de GS/checkpoint), sem modificar o núcleo.
+Mesmo ELF/ISO SLUS-20624 e firmware do ensaio anterior; injeção experimental
+após firmware parcial, **não boot normal**. RTC recebeu explicitamente o
+UTC do host no reset (`1793864084`), avançando pelos ciclos emulados.
+
+A janela híbrida executou **120.000.000 instruções do jogo** em 43,2943 s
+(amostra única, sem benchmark). Superou ReadRTC; IOP recusou em `0x267DC`,
+após 17.733.070 instruções: escrita SB em `0x1F402006`, `CDVD HOWTO supports
+idle 2048-byte data mode 0x80 only`. EE observado no fim do lote: `0x80003780`;
+não é o PC exato da primeira recusa IOP. SIF1/SIF0: 1.632/1.424 bytes.
+**Zero pacotes GIF do jogo, zero pixels, zero frames; PMODE não escrito.**
+Sem abertura, menu ou gameplay. Log ignorado:
+`out/game-first/simpsons-quick-20261105.log`. Sem checkpoint publicado,
+sem correção de subsistema, testes adicionais ou CI; ensaio encerrado.
+
 ### Reensaio de Simpsons — 04/11/2026
 
 A pedido do usuário, The Simpsons: Hit & Run foi repetido no núcleo
