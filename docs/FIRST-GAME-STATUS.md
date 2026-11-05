@@ -1,11 +1,230 @@
-# Primeiro jogo comercial — execução parcial, sem jogabilidade
+# Primeiro jogo comercial — menu interativo, partida ainda bloqueada
 
-Execução local atualizada em 05/11/2026. **A meta de jogabilidade não foi atingida.**
-O diagnóstico experimental produz imagens originais; inicialização normal,
-menu, respostas visuais aos controles e gameplay não foram demonstrados.
-Código original BSD-3-Clause; nenhum código de emulador, firmware, IRX ou jogo foi incorporado.
+Execução local atualizada em 05/11/2026. **A meta de gameplay não foi atingida.**
+O diagnóstico experimental sintetiza áudio real e alcança título/menu originais,
+com navegação visual por Start, Down e Up. Cross inicia a transição, mas AA1
+bloqueia a primeira partida. Boot original completo e fidelidade física das
+hipóteses de diagnóstico continuam sem comprovação.
+Código original BSD-3-Clause; firmware, jogo, traces, AOT proprietário e capturas
+ficam locais e não foram incorporados ao repositório.
 
-## Realinhamento técnico — 05/11/2026
+## SPU2 audível e menu original — 05/11/2026
+
+### Síntese e vozes reais
+
+`446f61c` implementa o caminho numérico no IOP/SPU2 existente, com a mesma RAM
+compartilhada de 2 MiB, DMA e relógio de 768 ciclos IOP por amostra a 48 kHz.
+Não existe segundo SPU2 nem desvio por título/serial/PC. KON/KOFF são consumidos
+na borda de amostra; cada voz conserva decoder ADPCM, histórico dos preditores,
+FIFO limitado, pitch/fração, interpolação Gaussiana, ADSR e endereços. Mixagem
+estéreo aplica ganhos assinados, roteamento de voz, MMIX, volume mestre e saída
+do core 0 para o core 1. ENVX/ENDX/LSAX/NAX e captura RAM evoluem com o estado.
+Comparadores de RAM acionam IRQ9; a desativação do IRQ reconhece a fonte.
+
+A recusa original foi reproduzida: IOP 0x62140, contador 1.367.184.044,
+SH 0xA44501A0 em 0x1F9005A0, valor conhecido 0x001F. Registros reais do core 1:
+
+| Voz | Ganhos L/R | Pitch | ADSR1 / ADSR2 | SSA em halfwords |
+|---|---|---:|---|---|
+| 0 | 2445 / 1796 | 1866 | 0x80FF / 0x5FC9 | 0x09658 |
+| 1 | 418 / 1524 | 8877 | 0x80FF / 0x5FC9 | 0x1A138 |
+| 2 | 1844 / 1405 | 3325 | 0x80FF / 0x5FC9 | 0x1E058 |
+| 3 | 895 / 1680 | 1398 | 0x80FF / 0x5FCE | 0x2AC10 |
+| 4 | 1524 / 1524 | 1110 | 0x80FF / 0x5FC9 | 0x38C90 |
+
+Os primeiros oito halfwords de cada bloco eram zeros conhecidos na RAM já
+transferida. O silêncio inicial é dado do jogo; não foi usado como substituto
+do decoder. Na retomada medida de um milhão a partir de
+`superbust-spu2-game1-10938363474.ps2ncp`, as cinco vozes chegam à fase sustain,
+envelope 32759, com um KON cada e estas contagens numéricas:
+
+| Voz | NAX | Amostras decodificadas | Saídas pós-envelope não nulas |
+|---|---|---:|---:|
+| 0 | 0x09685 | 156 | 253 |
+| 1 | 0x1A1FB | 680 | 297 |
+| 2 | 0x1E0A4 | 264 | 257 |
+| 3 | 0x2AC33 | 120 | 232 |
+| 4 | 0x38CAC | 96 | 201 |
+
+NAX é a próxima leitura comprimida, não um cursor de PCM. Pitch menor que um
+pode produzir mais saídas que amostras decodificadas. Todos esses contadores
+foram obtidos do dispositivo; nenhum ganho foi reduzido a zero.
+
+O callback opcional de captura é host-only, removido no reset/restauro, sem
+entrar no checkpoint. O gravador comum exporta PCM estéreo contíguo e recusa
+sobrescrever arquivo existente. O WAV final é
+`out/game-first/superbust-spu2-game9.wav`: 426.108 bytes, 48.000 Hz, 16 bits,
+106.516 quadros (2,219083 s), 104.306 com pelo menos um canal não nulo,
+pico absoluto 24.780 e RMS conjunto 4.562,56. SHA-256:
+`5133196683395cfbd14db9fd519e80a864e663cde2d2faf2f55ade3ffce85ed1`.
+A captura veio da execução real registrada em `spu2-game10.log`; o prefixo
+`game9` dos artefatos foi conservado pelo auxiliar local. Não há backend de
+áudio do host nem alegação de escuta/comparação com uma captura física.
+
+Noise, sweeps de volume, reverb/ADMA audível e padrões ADPCM reservados ainda
+recusam o que não foi calculado. Tráfego desconhecido de decoder/captura não
+pode fabricar ausência de IRQ. Bits ENDX ainda desconhecidos podem ser
+transportados e mascarados pelo convidado, mas seu consumo sem prova recusa.
+O checkpoint acrescenta a extensão numérica identificada por `SPU2PCM1`.
+A migração revisada conserva todos os campos antigos e não inventa histórico
+de vozes ativas. `2816288` corrige a fixture RTC legada para remover essa
+extensão ao construir bytes do formato anterior, com checksum/len reais.
+
+Referências comportamentais: [documentação SPU](https://psx-spx.consoledev.net/soundprocessingunitspu/),
+[PS2tek](https://psi-rockin.github.io/ps2tek/) e consulta às implementações
+PCSX2/PS2Recomp. Filtros, coeficientes numéricos e registros são fatos técnicos;
+nenhuma implementação GPL foi copiada, derivada ou vinculada.
+
+### Continuação, correções e botões
+
+A execução continuou após o KON, corrigindo cada fronteira seguinte:
+
+- GS: BW=0 conserva seu stride de páginas zero; PSMT8/T4 descartam o bit baixo
+  do stride em unidades de 64 pixels ao formar páginas de 128 pixels.
+- Precisão UV de sprite: opção racional explícita foi acrescentada ao cenário
+  anterior de triângulos; comportamento DDA físico permanece não verificado.
+- Upload real PSMT8 de 500x296: experimento genérico separado consome todos os
+  bytes lineares através das linhas desalinhadas, preservando vizinhos. O
+  modo original continua recusando dimensões fora da restrição documentada.
+- SPU2: leitura/modificação/escrita do bitmap alto de roteamento consome só
+  as oito vozes válidas; bits reservados desconhecidos 8..15 não contaminam
+  esse consumo. Isso supera a recusa IOP 0x673F0, SH 0xA4830000 em 0x1F90018E.
+- VU: VMUL comum sem ACC trata underflow/overflow com resultado limitado e
+  flags MAC/status, incluindo sticky. A sequência real em 0x1CD52C/0x1CD530
+  foi isolada antes da operação. Casos excepcionais que escrevem/consomem
+  ACC permanecem recusados. Núcleo, AOT e auxiliar foram recompilados juntos;
+  o código AOT contém semântica VU inline e não pode reutilizar objetos antigos.
+
+As hipóteses adicionais são identificadas: cenário anterior
+`be4e5be35272efd3349d94f3aad14e7a10741dc5a3f27cc42bcc6a9f127fa994`,
+UV de sprite no cenário
+`37a7ef65533a5bbb2d0bd46b12b96b483876d7dd4576a9da10a37adb880be696`,
+e upload linear desalinhado no cenário atual
+`69cd4ee9ac13c10fb6234909b0bb543c105ec2bffda9fae62901fedda16c43bb`
+(modo GS 13). Permanecem também as hipóteses prévias de encoder/reset GS,
+cache, SIO2 e timing/reset SPU2. Nenhuma foi ativada na BIOS original.
+
+Capturas são scanout real de campos nativos 640x224, sem imagem substituta,
+redesenho de tela ou deinterlace. Artefatos locais:
+
+| Evidência | Arquivo em out/game-first | Ciclo EE |
+|---|---|---:|
+| Logo TAITO | superbust-spu2-game3-vblank-595.bmp | registrado no log game3 |
+| Título PUSH START | superbust-spu2-game7-vblank-664.bmp | 11.621.100.837 |
+| Menu, 1P PUZZLE | superbust-spu2-game9-vblank-747.bmp | 12.039.237.087 |
+| Down, CPU BATTLE | superbust-spu2-game9-vblank-768.bmp | 12.142.541.337 |
+| Up, 1P PUZZLE | superbust-spu2-game9-vblank-778.bmp | 12.201.572.337 |
+
+Botões ativos em nível baixo no SIO2, sem modificar estado de menu pelo host:
+Start 0xFFF7 em 11.675.212.587, solto em 11.714.566.587; Down 0xFFBF em
+12.108.106.587–12.147.460.587; Up 0xFFEF em 12.162.218.337–12.206.491.587;
+Cross 0xBFFF em 12.221.249.337–12.265.522.587. Start faz a transição título/menu;
+Down/Up mudam a seleção visível. Cross inicia a transição seguinte; não há
+frame de partida nem prova de gameplay. O ensaio game7 que encontrou IOP
+recusado não autoriza tratar seu EE posterior como avanço; a continuação
+validada retomou um checkpoint com IOP ativo antes dessa recusa.
+
+### Ponto seguro e bloqueio seguinte
+
+`out/game-first/superbust-before-game-shading.ps2ncp`:
+
+- EE 0x1CE45C; 12.334.692.440 instruções totais / 12.302.275.764 do jogo;
+  12.334.707.186 ciclos EE. IOP 0xAE98, contador 1.541.838.398, ativo.
+- 63.226.756 bytes; payload SHA-256
+  `d36bca69377f93e139b67c4de8ca86d3f672165738de065470b34f81bcb74e5a`;
+  arquivo SHA-256 `624f740e1f6c04f1fc306f4d38a88cc43a8d2fe55e011c6733b02c586188eb20`.
+- Esquema `4d32f9c6e62746ff39398d75d0efb1ae80a7a653a7abb8fb4f4c3a6933ede047`;
+  cenário atual acima. Firmware, NVM e disco são os mesmos inputs verificados.
+  Troca de runtime exige revisão explícita; o checkpoint antigo foi preservado.
+
+A retomada final executou somente mais 1.000 instruções e reproduziu:
+`GS shading, fog or antialiasing is not modeled; primitive=5 mode=197 FGE=0 AA1=1 IIP=0`.
+EE 0x1CE458, 12.334.693.440 totais / 12.302.276.764 do jogo,
+12.334.708.186 ciclos EE; IOP 0xAE94, contador 1.541.838.523, sem recusa.
+PRIM=0xC5 é triangle fan com AA1/ABE; RGBAQ=0. O estado recusado não foi salvo.
+
+O [suplemento do manual GS](https://www.scribd.com/document/718537990/GS-Users-Manual-Supplement)
+descreve uma faixa externa de borda com cobertura e alfa, além de impedir
+escrita Z na cobertura parcial. O alfa original e ABE também influem na
+seleção do alfa de saída. Mesmo RGB/alpha zero não autoriza eliminar o fan:
+profundidade e alfa armazenado podem continuar observáveis. Faltam implementar
+e verificar esse caminho e sua precisão de borda; a recusa foi preservada.
+
+### Testes, equivalência e desempenho
+
+Build Release MSVC 19.44, C++20, /O2 /DNDEBUG, `PS2N_ENABLE_PROFILING=OFF`.
+Checkpoints completos evitam reexecutar o boot. Carregamento, SHA-256 completo,
+exportação e escrita de checkpoints ficam fora do cronômetro. Janelas sem
+callback de áudio e sem jogo/compilação concorrente; comparação longa com
+callback de hashes de campos igual nos dois builds. AOT local usa as três
+jump tables, raiz 0x1D2EF8 e bloco idle verificado de RAM, não firmware traduzido
+comitado. Isso mede janelas específicas, não FPS nem cobertura do jogo inteiro.
+
+| Janela | Amostras por motor | Antes, AOT | Atual, AOT | Atual, interpretação | Cobertura AOT atual |
+|---|---:|---:|---:|---:|---:|
+| 1 milhão, antes da SQRT | 5 intercaladas | 0,392573 s | 0,404929 s | 0,423091 s | 99,0864% |
+| 30 milhões, sete campos | 3 intercaladas antes/atual | 14,2723 s | 14,9009 s | 12,6156 s (amostra anterior) | 85,9795% |
+| 1 milhão, passagem VMUL/menu | 5 intercaladas | não aplicável | 0,453949 s | 0,470434 s | 96,1243% |
+
+Valores repetidos são medianas. A janela longa pareada teve 4,40% a mais de
+tempo; seus pares variaram entre 12 e 15,5 s, com carga externa variável.
+Não comparar sua mediana com a amostra anterior do interpretador para inferir
+ganho entre motores. A medição preliminar com baseline sem callback de campos
+foi excluída da comparação antes/depois. Na janela curta, tempo aumentou 3,15%
+(throughput caiu 3,05%) contra o binário anterior otimizado. O ganho histórico
+de 7,17% do polling não foi integralmente conservado no novo build; a mudança
+que remove polling duplicado continua presente. Não atribuir a regressão
+inteira ao custo aritmético do áudio nem anunciar otimização sem evidência.
+
+Estado completo AOT/interpretação foi idêntico nas cinco repetições de cada
+janela curta e na longa, incluindo decoder, envelope e RAM SPU2. SHA-256 atual
+na janela de 1 milhão antiga: `be2b4c110a3e798b8c658124ca4a67cefc1013a03e40594233a38a6be24bdddf`;
+na de 30 milhões: `ea3a9afc7ca79aa5770aff9533aea9375f24aaae1e0aa6ebfd0db7a1d8d820a5`;
+na passagem VMUL/menu: `04d73b5455ec6c053ba6af08e72dfbcaebd383f64a2d12b2d0dbf53a37b076d4`.
+Removendo apenas a extensão numérica inativa, os payloads das duas janelas
+antigas recuperam exatamente os hashes do baseline
+`4d545ee5de218678974a2a08bc9371c8bca7bf7bb5cc8574bbfc7af8fd81ed5d` e
+`3f8afd42bd49e7856379311267c45b75d7df1a6005ac2e61610fb1d0026aa852`.
+Os sete campos também conservam ciclos e hashes do baseline e do interpretador.
+
+Outra janela real com as cinco vozes ativas produziu hash
+`e3e990457ed22eb02289094c61d0e5912da12734fef0b5d1297a9f282fe7f4b1`
+em todas as dez retomadas. Nela o híbrido caiu integralmente no interpretador
+(0% AOT); medianas 0,503684 s híbrido e 0,477198 s interpretação direta.
+Isso não constitui ganho AOT nem equivalência exercitando blocos AOT ativos;
+a janela VMUL/menu acima cobre esse segundo caso com áudio ativo.
+
+Microensaio sintético sem profiling/captura, sete pares intercalados de
+10 milhões de ciclos IOP, mesmos comandos e posições de instrução, só KON
+0 versus 1: medianas 0,920884 s inativo e 0,931371 s com uma voz ADPCM,
+aproximadamente 13 mil bordas durante a região cronometrada (13.151 incluindo aquecimento).
+Diferença estimada 10,487 ms, cerca de 0,805 microsegundo por borda/voz.
+Há dispersão com pares negativos; o ensaio inclui custo do IOP e não prova
+sozinho um gargalo específico. Nenhuma otimização especulativa foi aplicada.
+
+17 testes focados passaram (`spu2-vu-tests2.log`, 18,21 s), cobrindo síntese,
+DMA, PIO, ADMA, registros, IRQ, WAV, checkpoint completo, GS e VU.
+`native-mecha-rtc` passou isoladamente após corrigir sua fixture (7,94 s).
+A síntese testa os cinco filtros, pitch inteiro/fracionário/zero, ADSR linear
+e exponencial, loop/KOFF/ENDX, ganhos estéreo assinados e IRQ compartilhado.
+Retomada sintética com voz ativa compara amostra por amostra e estado completo.
+
+Controle final via `ps2n-dev` / `ps2n-debug`, BIOS original sem hipóteses:
+`out/spu2-original-dev-build/ps2n-dev/runs/1793859026036637/execute.log`,
+EE 0x80007D20 / 17.690.079 instruções, mesma recusa medida do encoder 0x7E.
+CI do código final `2816288`: [núcleo](https://github.com/fabegalo/ps2-native/actions/runs/41978015826)
+e [launcher](https://github.com/fabegalo/ps2-native/actions/runs/41978015684)
+aprovados nos seis alvos Windows/Linux/macOS, x64 e ARM64, incluindo AOT
+e caminhos longos. Mudança documental posterior não altera o código validado.
+A primeira CI do núcleo detectou apenas a fixture RTC antiga, corrigida no
+segundo commit; não foi ocultada como falha de infraestrutura.
+
+Logs de jogo, WAV, frames, checkpoints e binários permanecem locais em
+`out/game-first` / `out/dev-tools-build`, sem firmware/dados privados no Git.
+`spu2-final-evidence.json` reúne hashes dos artefatos, checkpoint, compilação
+e amostras de desempenho. Nenhum processo de jogo deve permanecer ativo.
+
+## Realinhamento técnico — 05/11/2026 (histórico anterior ao SPU2)
 
 Novo pedido do mantenedor retomou a execução encerrada no registro anterior.
 O mesmo núcleo C++20 atende AOT, interpretação e dispositivos. Nenhuma

@@ -1,57 +1,61 @@
 # Próxima execução — Super Bust-A-Move
 
-## Fronteira ativa — realinhamento de 05/11/2026
+## Fronteira ativa — menu e AA1, 05/11/2026
 
-O novo pedido do mantenedor autorizou retomar a execução. XYZ/VIF1 e a
-SQRT seguinte foram superados por correções genéricas de transporte de
-limites e cancelagem esparsa VU. **Menu, navegação visual e gameplay ainda
-não demonstrados.** Não trocar de título nem afirmar sucesso pelo contador EE.
+O KON audível foi superado por síntese real no SPU2 existente. O diagnóstico
+alcançou o título e o GAME MENU original: Start abriu o menu, Down selecionou
+CPU BATTLE e Up retornou a 1P PUZZLE. Cross iniciou a transição para a partida.
+**Primeira partida e gameplay ainda não demonstrados.** Não trocar de título.
 
-Bloqueio real: IOP `0x00062140`, contador 1.367.184.044, ao ativar voz:
-`SPU2 KON requires known constant zero left and right voice gain;
-audible synthesis is not modeled`. A implementação atual só prova vozes
-inaudíveis e não pode fabricar áudio, ENVX/ENDX/NAX ou sucesso de KON.
-A escrita é `SH`, palavra `0xA44501A0`, endereço físico `0x1F9005A0`,
-valor conhecido `0x001F`: core SPU2 1, vozes 0–4. Ganhos L/R conhecidos:
-2445/1796, 418/1524, 1844/1405, 895/1680 e 1524/1524.
+Bloqueio atual: GS triangle fan, PRIM 0xC5 (197), AA1=1, ABE=1, FGE=0,
+IIP=0. Recusa em EE 0x1CE458, 12.334.693.440 instruções totais /
+12.302.276.764 do jogo, 12.334.708.186 ciclos EE. IOP 0xAE94,
+contador 1.541.838.523, sem recusa. AA1 exige cobertura de borda, seleção
+de alfa e controle de escrita Z; não aceitar simplesmente remover esse bit,
+ignorar os triângulos ou declarar a partida iniciada pelo contador.
 
-Retomada local: `out/game-first/superbust-before-audible-spu2.ps2ncp`,
-reconstruído a partir do último ponto válido preservado em 9.114.035.442
-instruções do jogo. PC `0x1C5A6C`, 10.937.363.474 instruções totais /
-10.904.946.798 do jogo, 10.937.372.580 ciclos EE. IOP `0xB5D8`, contador
-1.367.171.572, sem recusa; cerca de 100 mil ciclos EE antes do KON.
-O núcleo agora recusa salvar/restaurar um IOP que já
-falhou. `realignment-after-iop-refusal.ps2ncp` é somente evidência de
-inspeção; não tentar retomá-lo nem usar seu contador EE como progresso.
-Conservar os checkpoints anteriores e a identidade de BIOS/ROM1, console,
-NVM, disco e cenário. A troca de runtime exige revisão e opt-in explícito;
-compilar núcleo, AOT e auxiliar com os mesmos cabeçalhos/defines.
+Retomar de `out/game-first/superbust-before-game-shading.ps2ncp`:
+
+- EE 0x1CE45C; 12.334.692.440 instruções totais / 12.302.275.764 do jogo;
+  12.334.707.186 ciclos EE. IOP ativo 0xAE98, contador 1.541.838.398.
+- Somente 1.000 instruções até a recusa. Payload SHA-256
+  `d36bca69377f93e139b67c4de8ca86d3f672165738de065470b34f81bcb74e5a`.
+- Esquema `4d32f9c6e62746ff39398d75d0efb1ae80a7a653a7abb8fb4f4c3a6933ede047`;
+  cenário `69cd4ee9ac13c10fb6234909b0bb543c105ec2bffda9fae62901fedda16c43bb`.
+  Esse cenário inclui as hipóteses anteriores, UV racional de sprites e
+  upload linear desalinhado (modo GS 13); não é boot original validado.
+- Preservar os pontos anteriores, ROM0/ROM1, console, NVM e disco fixados.
+  Troca de runtime exige revisão e opt-in explícito. Recompilar núcleo,
+  AOT e auxiliar juntos: os cabeçalhos inline VU fazem parte do executável AOT.
 
 Próximo incremento:
 
-1. Reproduzir esse KON a partir do checkpoint anterior ao áudio e examinar
-   pitch, ADSR, endereços de amostras e modos dessas cinco vozes. Criar regressão
-   sintética do caminho antes de implementar síntese SPU2 compartilhada.
-   Preservar relógio, DMA, IRQ e resultados observáveis; não mutar ganho
-   para zero nem ignorar a ativação. Separar fatos físicos das hipóteses.
-2. Retomar pelo checkpoint após cada correção, com limite e supervisão.
-   Só salvar fronteira válida do sistema completo, incluindo IOP. Verificar
-   menu original, resposta visual a Start/Cross/Up/Down e início de partida.
-3. Conservar a comparação AOT/interpretação por SHA-256 completo. O módulo
-   local com três jump tables e `--entry=0x001D2EF8` atingiu 99,0864% AOT
-   apenas na janela medida. Ainda falta descobrir automaticamente o caminho
-   até essa raiz e traduzir regiões verificadas de kernel em RAM.
-4. Medir sem profiling e sem execução/compilação concorrente. O perfil
-   opcional mostrou EE, sincronização e dispositivos como maiores grupos;
-   a duplicação de polling na mesma fronteira foi eliminada. Manter a
-   verificação de código por instrução enquanto não houver prova equivalente
-   de invalidação. O padrão `PS2N_ENABLE_PROFILING=OFF` não cronometra acessos.
+1. Isolar os vértices e a configuração completa desse fan a partir do ponto
+   seguro. Implementar AA1 genericamente a partir da especificação, incluindo
+   alfa/cobertura, testes e Z somente nos pixels de cobertura completa.
+   Precisão de borda não comprovada deve permanecer hipótese identificada;
+   preservar recusa no modo original enquanto faltar prova.
+2. Retomar com limite e supervisão após cada correção. Salvar apenas estado
+   válido do sistema inteiro e verificar a primeira partida com controles,
+   áudio real e frames originais. O menu já tem evidência visual dos botões;
+   não repetir bilhões de instruções desde o boot.
+3. Preservar equivalência AOT/interpretação com o estado numérico SPU2,
+   além de PCM, DMA e IRQ. Noise, sweep, reverb/ADMA audível e ausência de
+   IRQ com tráfego não modelado continuam limites reais, sem retorno falso.
+4. Investigar a regressão medida de 3,15% na janela curta sem profiling.
+   Cobertura continua 99,0864%/85,9795% nas janelas anteriores; no novo
+   trecho de um milhão até o menu foi 96,1243%, com estado idêntico.
+   A otimização antiga de polling permanece, mas o ganho histórico de
+   7,17% não foi integralmente conservado no novo tempo medido. Não
+   otimizar trocando semântica ou retirando síntese/verificações.
 
-Start/Cross/Up/Down foram aplicados pelo SIO2 durante o carregamento, sem
-resposta visual comprovada. BIOS original mantém a recusa medida do encoder
-`0x7E`; não ativar hipóteses experimentais nesse controle. The Simpsons e a
-validação funcional de outro título ficam após o caminho funcional no alvo.
-Detalhes e baseline em [FIRST-GAME-STATUS](FIRST-GAME-STATUS.md#realinhamento-técnico--05112026).
+WAV real: `out/game-first/superbust-spu2-game9.wav`, 106.516 quadros a
+48 kHz, 104.306 com sinal. Frames de Down/Up: `superbust-spu2-game9-vblank-768.bmp`
+e `-778.bmp`. Proveniência e medidas locais em `spu2-final-evidence.json`.
+O controle original da BIOS manteve a recusa do encoder 0x7E em EE
+0x80007D20 / 17.690.079 instruções. Não ligar hipóteses nesse controle.
+Detalhes em [FIRST-GAME-STATUS](FIRST-GAME-STATUS.md#spu2-audível-e-menu-original--05112026).
+Nenhum ensaio deve permanecer ativo ao concluir a tarefa.
 
 ## Fronteira anterior — 04/11/2026 (histórico)
 

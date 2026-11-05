@@ -12,11 +12,50 @@
 | Boot EE | ROM0 reais, COP0/TLB, memória, RDRAM, início do kernel em RAM e AOT híbrido com trace | CPU e dispositivos ainda parciais |
 | Direct ELF | BOOT2 de ISO pelo loader comum, ambiente bare-metal, Count/Compare, SYSCALL/BREAK para handler convidado, usuário/supervisor/ERL e overlays AOT verificados | Não instala kernel/serviços; ELF comercial executado, sem imagem ou jogabilidade |
 | IOP | Inicialização R3000A, NVM externa, MECHACON, timers/VBLANK, SIF e EE→IOP SIF1 com bytes reais | Sem linker IRX, SIF0, RPC ou serviços completos; DMA/timing ainda parciais |
-| GS/GIF | VRAM 4 MiB, CT32/24 e índices T4/T8, profundidade, sprites UV/CLUT/blending, PATH2/3 e scanout; primeiras capturas reais de Super Bust-A-Move no diagnóstico experimental | Boot original e gameplay não comprovados; hipóteses explícitas e formatos/efeitos/timing parciais |
+| GS/GIF | VRAM 4 MiB, CT32/24 e índices T4/T8, profundidade, sprites UV/CLUT/blending, PATH2/3 e scanout; título e menu original de Super Bust-A-Move com navegação visual no diagnóstico experimental | Primeira partida bloqueada por AA1; boot original não concluído; hipóteses explícitas e formatos/efeitos/timing parciais |
+| SPU2 | Síntese ADPCM/Gaussiana, pitch, ADSR, KON/KOFF, loop/ENDX/NAX, IRQ de RAM, mix estéreo e WAV real; estado numérico completo em checkpoints | Sem backend de áudio do host; noise, sweeps e fontes audíveis de efeitos/ADMA ainda recusados; timing físico não certificado |
 | Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
-## Realinhamento técnico — 05/11/2026
+## SPU2 audível e menu original — 05/11/2026
+
+- `446f61c` implementa síntese no SPU2 existente, compartilhada entre
+  interpretação/AOT e todos os hosts. O KON `0x001F` em `0x1F9005A0`
+  foi superado com as cinco vozes reais; decoder, envelope, NAX e PCM
+  evoluem sem zerar ganhos ou ignorar vozes. WAV local de 48 kHz/16 bits:
+  `out/game-first/superbust-spu2-game9.wav`, 106.516 quadros estéreo,
+  104.306 com sinal. Testes cobrem filtros, pitch, ADSR, loop, registros,
+  DMA/IRQ e retomada com PCM idêntico.
+- A continuação corrigiu genericamente o bitmap alto de vozes SPU2,
+  endereçamento GS e flags de underflow/overflow de VMUL sem ACC.
+  Precisão racional de UV de sprites e uploads desalinhados são hipóteses
+  adicionais explícitas, desativadas no modo original e com cenário próprio.
+- Frames reais mostram TAITO, título e GAME MENU. Start abre o menu;
+  Down seleciona CPU BATTLE e Up retorna a 1P PUZZLE. Cross inicia a
+  transição; **primeira partida e gameplay ainda não demonstrados**.
+  Novo bloqueio: GS triangle fan `PRIM=0xC5`, AA1=1, EE `0x1CE458`,
+  12.334.693.440 instruções totais / 12.302.276.764 do jogo; IOP ativo.
+- Checkpoint completo seguro: `superbust-before-game-shading.ps2ncp`,
+  EE `0x1CE45C`, 12.334.692.440 totais / 12.302.275.764 do jogo,
+  somente 1.000 instruções antes da recusa. Pontos anteriores preservados.
+- Sem profiling: 99,0864% AOT na janela de um milhão e 85,9795% na
+  de 30 milhões foram preservados, com estado completo equivalente e
+  sete campos iguais. A integração custou 3,15% a mais no tempo mediano
+  da janela curta contra o binário anterior; o ganho histórico de 7,17%
+  não pode ser declarado preservado integralmente no novo build.
+  Na janela longa pareada, tempo mediano aumentou 4,40%, com dispersão.
+  No trecho ativo até o menu: 96,1243% AOT e estado igual à interpretação.
+- Validação local: 17 testes focados passaram; `native-mecha-rtc` passou
+  após `2816288` corrigir sua fixture antiga para o formato sem a extensão
+  de áudio. Controle `ps2n-dev` com BIOS original continua em
+  `0x80007D20` / 17.690.079 instruções, recusa do encoder `0x7E`.
+  Código final `2816288`: [núcleo](https://github.com/fabegalo/ps2-native/actions/runs/41978015826)
+  e [launcher](https://github.com/fabegalo/ps2-native/actions/runs/41978015684)
+  aprovados nos seis alvos Windows/Linux/macOS, x64 e ARM64.
+  Nenhum ensaio permanece ativo. Medições detalhadas no
+  [relatório](docs/FIRST-GAME-STATUS.md#spu2-audível-e-menu-original--05112026).
+
+## Realinhamento técnico — 05/11/2026 (histórico anterior ao SPU2)
 
 - Super Bust-A-Move superou a recusa XYZ do DMA VIF1: SQC2/LQC2 e
   QMTC2 preservam limites numéricos já provados, incluindo cache e RAM.
