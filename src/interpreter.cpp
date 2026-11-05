@@ -661,18 +661,36 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         case MipsOpcode::CvtWS: case MipsOpcode::CvtSW: {
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"FPU conversion with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
-            cpu.require_fpr_known(ee::rd(word),"FPU conversion");
             const auto input=state.fpr[ee::rd(word)];
             std::uint32_t result=0;
             if(instruction.opcode==MipsOpcode::CvtWS) {
-                const int exponent=static_cast<int>((input>>23u)&255u)-127;
-                if(exponent>=31)result=(input&0x80000000u) ? 0x80000000u : 0x7FFFFFFFu;
-                else if(exponent>=0) {
-                    const auto mantissa=(input&0x7FFFFFu)|0x800000u;
+                const auto convert=[](std::uint32_t bits) {
+                    const int exponent=static_cast<int>((bits>>23u)&255u)-127;
+                    if(exponent>=31)return (bits&0x80000000u) ? 0x80000000u : 0x7FFFFFFFu;
+                    if(exponent<0)return 0u;
+                    const auto mantissa=(bits&0x7FFFFFu)|0x800000u;
                     const auto magnitude=exponent>=23 ? mantissa<<(exponent-23) : mantissa>>(23-exponent);
-                    result=(input&0x80000000u) ? 0u-magnitude : magnitude;
+                    return (bits&0x80000000u) ? 0u-magnitude : magnitude;
+                };
+                const auto unknown=state.unknown_fpr_bits[ee::rd(word)];
+                result=convert(input&~unknown);
+                if(unknown) {
+                    // For a fixed sign/exponent, truncation and saturation are
+                    // monotone in the fraction. Equal endpoint results prove
+                    // every admitted encoding has the same integer result.
+                    // Partition uncertain signs/exponents; never pick bits.
+                    const auto high_unknown=unknown&0xFF800000u;
+                    auto subset=high_unknown;
+                    for(;;) {
+                        const auto low=(input&~unknown)|subset;
+                        if(convert(low)!=result || convert(low|(unknown&0x7FFFFFu))!=result)
+                            cpu.stop(StopKind::NotModeled,"FPU conversion consumes unknown FPR bits with different integer results");
+                        if(!subset)break;
+                        subset=(subset-1u)&high_unknown;
+                    }
                 }
             } else {
+                cpu.require_fpr_known(ee::rd(word),"FPU conversion");
                 const auto magnitude=(input&0x80000000u) ? 0u-input : input;
                 if(magnitude) {
                     const auto exponent=31u-std::countl_zero(magnitude);

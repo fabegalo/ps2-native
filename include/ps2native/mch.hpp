@@ -80,6 +80,7 @@ inline constexpr std::size_t kPs2RdramDevices = 2u;
 }
 
 class MchRegisters {
+    friend struct CheckpointAccess;
 public:
     explicit MchRegisters(std::size_t rdram_devices = kPs2RdramDevices) : chain_(rdram_devices) {}
     // Hardware reset: RDRAMs at power-on, no transaction in progress.

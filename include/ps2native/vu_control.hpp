@@ -13,6 +13,7 @@ class GsRegisters;
 // reset of idle VUs and a shared, clocked microinstruction engine. Unsupported
 // instructions stop with their real micro PC; they never finish successfully.
 class VuControl {
+    friend struct CheckpointAccess;
 public:
     VuControl() { reset(); }
     void reset() {

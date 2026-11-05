@@ -4,6 +4,7 @@
 
 namespace ps2native {
 class GsVram {
+    friend struct CheckpointAccess;
 public:
     static constexpr std::uint32_t kBytes = 4u * 1024u * 1024u;
     GsVram();

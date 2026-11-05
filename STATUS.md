@@ -18,11 +18,24 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **Checkpoint completo funcionando no jogo real:** o ensaio 111 foi
+  capturado em 6.032.416.676 e 7.232.416.676 instruções totais, sem
+  reiniciar o processo nem alterar estado convidado. O segundo carregou
+  em 0,857 s no PC `0x1D2F0C`; duas continuações de 1.000 instruções
+  produziram estado completo idêntico. CPU, caches, bits desconhecidos,
+  domínios simbólicos e dispositivos pendentes são serializados;
+  ROM0/ROM1, console, NVM, disco e cenário são vinculados por identidade.
+  `ps2n-boot/run --resume` e salvamento periódico disponíveis. O 111
+  superou UV e parou em CVT.W.S `0x186DFC` / 7.323.722.395 do jogo.
+  A prova genérica do inteiro único superou CVT no 112: nova recusa
+  DIV.S `0x186E60` / 7.323.722.420, só 60,72 s desde o checkpoint.
+  Menu e gameplay continuam pendentes. Detalhes e arquivos locais no
+  [relatório](docs/FIRST-GAME-STATUS.md#checkpoints-completos--retomada-do-ensaio-111).
 - **110 superou as recusas VU do 108/109:** EE `0x1CE45C` /
   7.284.393.384 instruções, IOP ativo `0xAE98` / 914.601.294.
   Nova fronteira: precisão da interpolação UV de triângulos no GS.
   Só aviso, créditos e Acclaim comprovados; scanout final preto.
-  **111 em execução**, com as novas ferramentas de análise/diagnóstico,
+  **111 concluído acima**, com as novas ferramentas de análise/diagnóstico,
   fontes verificadas e hipótese UV racional explicitamente selecionada.
   A precisão física dessa hipótese não está demonstrada; a referência GS
   continua recusando os casos fracionários. Seis testes focados e BIOS

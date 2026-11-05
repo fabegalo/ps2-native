@@ -4,6 +4,7 @@
 #include "ps2native/sha256.hpp"
 #include "ps2native/disc.hpp"
 #include "diagnostic_cli.hpp"
+#include "checkpoint_cli.hpp"
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -17,11 +18,14 @@ template<class C> int run_main(int argc, C** argv) {
                          "         [--disc] [--trace=events|full] [--trace-out=FILE] [--tail=N]\n"
                          "         [--iop-image=raw.bin --iop-load=ADDRESS --iop-entry=ADDRESS]\n";
             std::cerr << "         [--diagnostic-dir=DIR --diagnostic-ring=N --diagnostic-stream-bytes=N]\n"
-                         "         [--diagnostic-ram=ADDRESS:BYTES] (passive backing RAM)\n";
+                         "         [--diagnostic-ram=ADDRESS:BYTES] (passive backing RAM)\n"
+                         "         [--resume=FILE --checkpoint-out=FILE --checkpoint-every=N]\n"
+                         "         [--checkpoint-scenario=SHA256] [--checkpoint-allow-runtime-change]\n";
             return 2;
         }
         ps2native::BootOptions options;
         ps2native::cli::DiagnosticOptions diagnostic;
+        ps2native::cli::CheckpointOptions checkpoint;
         std::filesystem::path frame;
         std::filesystem::path iop_image;
         std::optional<std::uint32_t> iop_load, iop_entry;
@@ -37,7 +41,7 @@ template<class C> int run_main(int argc, C** argv) {
                 if (used != value.size() || n > max) throw std::runtime_error("numeric option out of range");
                 return n;
             };
-            if (diagnostic.parse(flag)) {}
+            if (diagnostic.parse(flag) || checkpoint.parse(flag,argv[i])) {}
             else if (flag.starts_with("--budget=")) options.max_instructions = number(9, ~0ull);
             else if (flag.starts_with("--stop=")) options.stop_at = static_cast<std::uint32_t>(number(7, 0xFFFFFFFFu));
             else if (flag.starts_with("--frame=")) frame = std::filesystem::path(argv[i]).native().substr(8);
@@ -69,7 +73,7 @@ template<class C> int run_main(int argc, C** argv) {
         const std::array protected_inputs{std::filesystem::path(argv[1]), iop_image};
         diagnostic.attach(options, protected_inputs);
         const auto start = std::chrono::steady_clock::now();
-        const auto report = ps2native::run_ee_boot(state, memory, module, options);
+        const auto report = checkpoint.run(state, memory, module, options, protected_inputs);
         diagnostic.finish(report, state, memory);
         const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-start).count();
         std::cout << "Direct ELF bare-metal (no BIOS services), sha256 " << ps2native::sha256_hex(elf.bytes)

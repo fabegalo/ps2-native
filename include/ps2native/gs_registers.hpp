@@ -50,6 +50,7 @@ inline constexpr std::uint64_t kCsrFlush = 1ull << 8;
 inline constexpr std::uint64_t kCsrReset = 1ull << 9;
 
 class GsRegisters {
+    friend struct CheckpointAccess;
 public:
     // HBLANK source for the EE timers: lines start at `epoch` and repeat
     // every `period` EE cycles; the first edge is one period after `epoch`.

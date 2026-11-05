@@ -24,6 +24,7 @@ inline constexpr std::uint32_t kGifStat = 0x10003020u;
 inline constexpr std::uint32_t kGifFifo = 0x10006000u;
 
 class Gif {
+    friend struct CheckpointAccess;
 public:
     void reset();
     [[nodiscard]] std::uint32_t read_stat() const;

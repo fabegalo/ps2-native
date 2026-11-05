@@ -86,6 +86,7 @@ struct DiagnosticAssumptions {
 
 // The slave and the transactions that reach it (shared by both masters).
 class VideoEncoderBus {
+    friend struct CheckpointAccess;
 public:
     void reset(const DiagnosticAssumptions* assumptions);
     // Write transaction: `bytes` after the address byte (register pointer,
@@ -126,6 +127,7 @@ private:
 //   0x18 reset: 8-bit 0, a ~555-iteration delay, then 16-bit 1
 //   0x07, 0x0A-0x0D configuration (start-up values), latched
 class VideoEncoderMaster {
+    friend struct CheckpointAccess;
 public:
     enum class Layout : std::uint8_t { Halfword1A, Byte190x };
     explicit VideoEncoderMaster(Layout layout) : layout_(layout) {}

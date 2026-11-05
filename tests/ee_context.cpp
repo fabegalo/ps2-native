@@ -698,6 +698,17 @@ void conversions_and_partial_loads() {
             require(s.fpr[2]==row[1] && s.fcr31==0x0183C079,"FPU conversion truncates/clamps and preserves status");
         }
     }
+    for(const auto bits:{0x4329B5C0u,0xC329B5C0u}) {
+        s.pc=0x80001000;s.fpr[1]=bits;s.unknown_fpr_bits[1]=0x3Fu;
+        memory.write32(s.pc,0x460008A4u);interpret_instruction(ctx);
+        require(s.fpr[2]==(bits&0x80000000u ? 0xFFFFFF57u : 169u) && s.unknown_fpr_bits[2]==0 && s.fcr31==0x0183C079,
+            "CVT.W.S proves discarded uncertain fractional bits cannot change the integer or status");
+    }
+    s.pc=0x80001000;s.fpr[1]=0x3F000000u;s.unknown_fpr_bits[1]=0x807FFFFFu;
+    memory.write32(s.pc,0x460008A4u);interpret_instruction(ctx);
+    require(s.fpr[2]==0,"uncertain sub-unit magnitude and sign still truncate to a proven zero");
+    s.pc=0x80001000;s.fpr[1]=0x3F000000u;s.unknown_fpr_bits[1]=0x00800000u;
+    rejects([&]{interpret_instruction(ctx);},"different integer results");s.unknown_fpr_bits[1]=0;
     memory.write64(0x80002000,0x8776655443322110ull);
     s.set_reg32(8,0x80002000);
     constexpr std::uint64_t old=0xFFEEDDCCBBAA9988ull;

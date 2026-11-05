@@ -6,7 +6,7 @@ em `0x1CE45C` / 7.284.393.384 por precisão DDA de UV triangular no GS.
 IOP ativo `0xAE98` / 914.601.294. Superou as recusas VU do 108/109,
 mas só aviso, créditos e Acclaim foram observados; scanout final preto.
 
-**111 em execução**, novas ferramentas locais e núcleo em
+**111 concluído; 112 retomado por checkpoint**, novas ferramentas locais e núcleo em
 `out/dev-tools-build`. Núcleo, cabeçalhos, AOT e auxiliares recompilados
 juntos, com hashes registrados em `superbust-menu111-build-provenance.json`.
 Log `out/game-first/superbust-menu-111.log`; entrada `superbust-pad111.txt`,
@@ -29,7 +29,21 @@ em idle verificado. Capturas locais, nenhuma escrita host em RAM convidada.
 Diagnóstico limitado a 90 minutos/16 bilhões e sempre supervisionado.
 Captura econômica por padrão; habilitar todos os campos perto da fronteira
 7,18 bilhões. Não consumir as 256 capturas com Acclaim alternado.
-Sem save-state completo: backing de RAM não restaura cache/dispositivos.
+Checkpoint completo disponível: `out/game-first/superbust-live-7200.ps2ncp`
+preserva 7,2 bilhões do jogo (7.232.416.676 totais), PC `0x1D2F0C`.
+Carregamento real em 0,857 s, duas continuações de 1.000 instruções com
+mesmo estado completo. **Não repetir o prefixo desde o boot.** Restaurar
+com os mesmos BIOS/ROM1, hardware, NVM e disco verificados; recompilar
+núcleo/AOT/harness juntos e autorizar explicitamente alteração de runtime
+quando a correção preservar o esquema. O 111 acabou em CVT.W.S
+`0x186DFC` / 7.323.722.395 do jogo, IOP ativo `0x47A40`.
+O backing de RAM antigo continua insuficiente para retomada.
+O 112 superou CVT por prova de resultado inteiro único e encontrou DIV.S
+`0x186E60` / 7.323.722.420, IOP ativo `0x47888` / 919.517.436.
+Usar `superbust-menu112-latest.ps2ncp` (7,3 bilhões do jogo), não o estado
+parcial após a recusa. Faltam cerca de 23,7 milhões até a fronteira atual.
+Diagnóstico em `superbust-menu112-diagnostic`; entrada manual
+`superbust-pad112.txt`. A retomada anterior levou 60,72 s até a nova recusa.
 
 ## Checkpoint preservado — Simpsons
 
@@ -49,5 +63,10 @@ Logs `out/game-first/simpsons-trial-{2,3,4,5}.log`; relatório
 Usar `ps2n-dev init/run/replay` para perfis locais novos, e `ps2n-debug log`
 para resumir os logs existentes sem repetir a execução. O build gerenciado
 é exclusivo por perfil; preservar os builds/processos ativos do jogo.
-Comandos e garantias em [DEV-TOOLS](DEV-TOOLS.md). Checkpoint completo
-continua indisponível; backing de RAM não é uma retomada válida.
+Comandos anteriores em [DEV-TOOLS](DEV-TOOLS.md); o limite de checkpoint
+daquele relatório foi superado por `ps2n-checkpoint inspect`, pela API
+`save_checkpoint/load_checkpoint` e pelos runners com `--resume=FILE`,
+`--checkpoint-out=FILE`, `--checkpoint-every=N` e
+`--checkpoint-scenario=SHA256`. Captura de processo legado Windows x64
+requer `ps2n-capture` e adaptador de salvamento com ABI/imagem idênticas;
+não aplicar adaptador de outra revisão. Evidência no relatório do jogo.

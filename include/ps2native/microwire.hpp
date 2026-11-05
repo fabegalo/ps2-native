@@ -11,6 +11,7 @@
 
 namespace ps2native {
 class Microwire64x16 {
+    friend struct CheckpointAccess;
 public:
     enum class Presence { Unknown, Present, Disconnected };
     void reset() { *this=Microwire64x16{}; }

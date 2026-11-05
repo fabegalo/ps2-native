@@ -77,6 +77,7 @@ struct TlbEntry {
 };
 
 class Memory {
+    friend struct CheckpointAccess;
 public:
     enum class Privilege : std::uint8_t { Kernel, Supervisor, User, Reserved };
     static constexpr std::size_t kMainRamBytes = 32u * 1024u * 1024u;
@@ -277,6 +278,9 @@ private:
     struct StoredFpuRelation {ObservedWord word;FpuAffine relation;std::uint64_t dma_generation;};
     std::unordered_map<std::uint32_t,StoredFpuRelation> fpu_relations_;
     std::uint64_t fpu_origin_{};
+    // Own diagnostic provenance strings reconstructed from a checkpoint.
+    // Guest state stores their contents; no host pointer is serialized.
+    std::vector<std::shared_ptr<const std::string>> checkpoint_origins_;
     // EE register reads can have side effects (timers sample the clock).
     mutable EeRegisters registers_;
     std::vector<std::uint8_t> rom_;

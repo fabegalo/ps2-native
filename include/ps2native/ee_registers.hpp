@@ -55,6 +55,7 @@ inline constexpr std::uint32_t kIntcMask = 0x1000F010u;
 inline constexpr std::uint32_t kIntcSources = 0x7FFFu;
 
 class EeRegisters {
+    friend struct CheckpointAccess;
 public:
     // State after a hardware reset of the console `hardware` (nullptr: none
     // selected, so board-specific registers refuse reads), with the IOP at its

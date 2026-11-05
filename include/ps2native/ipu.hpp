@@ -10,6 +10,7 @@ namespace ps2native {
 // and conversion remain explicit refusals. Table execution is synchronous once
 // all input bytes exist; this is a functional model, not IPU pipeline timing.
 class IpuRegisters {
+    friend struct CheckpointAccess;
 public:
     static constexpr std::uint32_t kControl=0x10002010u;
     static constexpr std::uint32_t kCommand=0x10002000u,kPosition=0x10002020u;

@@ -13,6 +13,7 @@ struct DiscEntry {
 // Read-only ISO 9660 user sectors. No disc copies, firmware search or host
 // filesystem paths from the guest. Compressed images/CUE are not accepted here.
 class DiscImage {
+    friend struct CheckpointAccess;
 public:
     explicit DiscImage(const std::filesystem::path& path);
     void read_sector(std::uint32_t lba, std::span<std::uint8_t,2048> out);

@@ -52,6 +52,7 @@ inline constexpr std::uint8_t kRetailToolBoardId = 0xFFu;
 inline constexpr std::uint32_t kDev9Revision = 0x1F80146Eu;
 
 class Iop {
+    friend struct CheckpointAccess;
 public:
     // External machine event, not a ROM/NVM value (ps2sdk wakeup reasons).
     enum class PowerEvent : std::uint8_t { FrontPanelPowerOn=0, MainReset=1, Alarm=2, ExternalDevice=3 };

@@ -92,6 +92,7 @@ struct RdramSerialRequest {
 // during the SD packet, and the SINT packet before it is 0). The BIOS ends its
 // chain enumeration on any value whose SDEVID differs from 0x1F.
 class RdramChain {
+    friend struct CheckpointAccess;
 public:
     struct Device {
         bool sio_ready{};      // SIO pin initialization received since power-on

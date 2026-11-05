@@ -13,6 +13,7 @@ class VuControl;
 // order; VIF1 DIRECT data starts on the next qword boundary. Unsupported commands
 // fail explicitly; MPG/UNPACK and MSCAL use the same shared, clocked VU.
 class Vif {
+    friend struct CheckpointAccess;
 public:
     enum class Unit { Vu0, Vu1 };
     explicit Vif(Unit unit=Unit::Vu1) : unit_(unit) {}

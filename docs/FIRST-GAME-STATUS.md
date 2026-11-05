@@ -4,7 +4,94 @@ Execução local em 03/11/2026. **A meta de jogabilidade não foi atingida.** O 
 inicialização normal, primeiro frame, menu, controles e gameplay não foram demonstrados.
 Código original BSD-3-Clause; nenhum código de emulador, firmware, IRX ou jogo foi incorporado.
 
-## Seleção e identidade
+## Checkpoints completos — retomada do ensaio 111
+
+O 111 superou a recusa UV do 110 e terminou em CVT.W.S `0x186DFC`,
+7.323.722.395 instruções do jogo; IOP `0x47A40` / 919.517.433 ativo.
+7.356.139.465 ciclos EE, 394 stalls, 3.072,17 s; 383.994.854 escritas
+de pixels e SIF1/SIF0 2.822.736/1.817.216 bytes. As capturas posteriores
+ao Acclaim mostram uma animação parcial, sem menu comprovado.
+`ps2n-debug log/report` das ferramentas novas identificou a recusa e os
+bits desconhecidos de F0. Logs e imagens reais permanecem ignorados em
+`out/game-first/superbust-menu-111.log` e `superbust-menu111-diagnostic`.
+
+Foi criado um formato binário completo, por campos explícitos, sem
+endereços host, handles ou callbacks. Preserva EE/COP0/COP1/VU, cache
+sujo e tags, memória e incerteza, relações/domínios com identidade
+compartilhada, IOP com load/branch pendente, DMA/SIF/CDVD/SIO2/SPU2,
+GIF/VIF/GS/VRAM e temporização. Ponteiros externos de relógio/RAM são
+validados e religados. Firmware, perfil, NVM e disco precisam ser
+reapresentados com a mesma identidade; o disco exige SHA-256 fixado.
+Checksum, limites de tamanho, esquema e cenário são verificados antes
+de substituir o destino. Mudança de runtime exige opt-in explícito;
+mudança de esquema é recusada. Salvamento atômico somente após retorno
+bem-sucedido do executor; uma recusa parcial mantém o checkpoint anterior.
+
+Para preservar o próprio 111, já em execução sem essa API, `ps2n-capture`
+pausou o host na entrada verificada de `run_ee_boot`, entre chunks.
+Adaptador compilado com os cabeçalhos/ABI exatos do processo 11b87b0,
+imagem SHA-256 `9084f7988190150f689899edbea9ee955a8de8b491f2da07ddc46bb7ff62b321`.
+O mapa foi aceito somente com seção de código idêntica. Teste separado
+comprovou equivalência entre o salvador legado e o leitor atual, inclusive
+continuação. A única adição de layout atual é propriedade host de strings
+de diagnóstico restauradas; os campos serializados coincidem. O processo
+original foi retomado após cada captura; nenhuma instrução/ciclo convidado
+foi suprimido ou estado de hardware inventado.
+
+| Checkpoint local | Instruções totais | PC | Payload SHA-256 |
+|---|---:|---|---|
+| `superbust-live-6000.ps2ncp` | 6.032.416.676 | `0x81FD0` | `17c3d26eee750ba1eadc5a5d2ac2ebbc34248c233b3c19eb5093137d007dd01b` |
+| `superbust-live-7200.ps2ncp` | 7.232.416.676 | `0x1D2F0C` | `e91844ddbcddea11af618f77594766d8b0ec98453a284459dc2c169d3949219b` |
+
+O prefixo de firmware tem 32.416.676 instruções: o segundo checkpoint
+preserva exatamente 7,2 bilhões do jogo. Seus 59.930.607 bytes de payload
+carregaram em **0,856724 s**, com os mesmos dados locais e hipóteses do
+111. Duas continuações reais de 1.000 instruções chegaram a `0x1D2F08`,
+7.232.417.676 totais, estado SHA-256
+`b650f12dacda94ff43b4a0d67c6dcc682b5590a1d5499c92c8cd43967209c9a7`.
+O checkpoint anterior carregou em 0,823251 s. Isso mede retomada e evita
+repetir o prefixo; não representa aceleração das instruções ou FPS.
+Evidências `checkpoint-real-{verify,7200-verify}.log` locais.
+
+`ps2n-checkpoint inspect FILE` valida e mostra PC, contagens, hashes e
+metadados. `ps2n-boot` e `ps2n-run` aceitam `--resume=FILE`,
+`--checkpoint-out=FILE`, `--checkpoint-every=N` (padrão 100 milhões)
+e `--checkpoint-scenario=SHA256` do cenário explícito.
+`--checkpoint-allow-runtime-change` permite somente a revisão consciente
+do runtime; não ignora esquema, firmware, NVM, disco ou cenário.
+Scripts externos precisam preservar também seu estado host nos metadados;
+a captura legada foi retomada com entrada manual e todos os botões soltos.
+AOT é religado aos mesmos bytes/identidades e mantém suas guardas.
+
+Testes focados passaram: estado contínuo versus retomado, cache sujo,
+bits desconhecidos, domínios compartilhados, branch/load IOP pendentes,
+GIF/IMAGE pela metade e Q pendente; CLI periódico versus execução contínua
+com payload completo idêntico; recusas de cenário, corrupção e instrução
+parcial sem destruir o último checkpoint. Formato e `.ps2ncp` são locais,
+ignorados pelo Git; nenhum firmware, jogo ou estado proprietário foi comitado.
+As hipóteses de hardware do 111 permanecem experimentais. O checkpoint
+não comprova menu, controles, áudio ou jogabilidade.
+
+Continuação 112: o mesmo checkpoint foi carregado, sem boot ou reinjeção
+do ELF, com núcleo/AOT/harness recompilados juntos. O CVT.W.S agora prova
+resultado único quando todos os valores permitidos pela máscara de bits
+convertem para o mesmo inteiro; continua recusando resultados divergentes.
+F0 `4329B5C0`, máscara `3F`, converte para 169 em todas as 64 variantes.
+O [manual EE, página 356](https://studylib.net/doc/28989088/ee-insns)
+define truncamento para zero e saturação por sinal. Consultado também
+[PS2Recomp](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/ps2xRuntime/include/ps2_runtime_macros.h#L856):
+seu uso de arredondamento host não foi adotado. Implementação independente
+por inteiros e prova dos extremos, sem copiar código GPL.
+
+O 112 superou CVT e parou 25 instruções depois, em DIV.S `0x186E60`,
+7.323.722.420 do jogo, IOP ativo `0x47888` / 919.517.436.
+Foram executadas só 123.722.420 instruções após a retomada, em 60,7225 s;
+o prefixo de 7,2 bilhões foi preservado. Último checkpoint periódico
+`superbust-menu112-latest.ps2ncp`, 7,3 bilhões do jogo, antes da recusa.
+Cinco frames reais parciais, sem menu. Três testes focados aprovados:
+contexto EE/conversões, checkpoint completo e CLI periódico.
+
+## Seleção e identidade (execução inicial)
 
 - `games/` contém Shadow of the Colossus (USA), ISO 9660 de DVD, e Tetris Plus (USA), CD CUE/BIN.
   O segundo tem `BOOT`, executável `PS-X EXE` e serial `SLUS-00338`: é PS1, não um ELF R5900.

@@ -10,6 +10,7 @@ using DeviceEventSink = std::function<void(std::string_view, std::uint64_t, std:
 // Existing device histories retain their unlimited default. Diagnostics can
 // bound them and observe events at their source without changing device state.
 template<class T> class DiagnosticHistory {
+    friend struct CheckpointAccess;
 public:
     void configure(std::size_t limit, std::function<void(const T&)> sink) {
         (void)items(); limit_ = limit; sink_ = std::move(sink);
