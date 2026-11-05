@@ -30,6 +30,8 @@ void check_boundaries(const ps2native::ElfImage& elf) {
             const auto resumed=run_ee_boot(state,memory,module,options);
             if (resumed.outcome!=BootOutcome::StopAddress || state.reg32(2)!=37u || state.retired_instructions!=37u)
                 throw std::runtime_error("AOT continuation across budget/delay slot failed");
+            if (engine && (report.interpreted_instructions || resumed.interpreted_instructions))
+                throw std::runtime_error("Proven instruction interior fell back to interpretation on resume");
         }
     }
     // A store after dispatch must remain visible at the next instruction,

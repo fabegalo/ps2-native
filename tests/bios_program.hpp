@@ -413,8 +413,8 @@ inline void emit_m22_core(Assembler& a, std::uint32_t table_rom) {
     a.ori(t0, t0, 0x0004u);          // CU1 cleared again
     a.mtc0(t0, Status);
     // Constant JR shapes for the AOT proof, all executed at run time. Only the
-    // first is provable; the never-taken branches make the code after the
-    // other three discoverable without that proof.
+    // first and its exact GPR copy are provable; the never-taken branches
+    // also make the deliberately unproved paths discoverable.
     a.label("m22_jumps");
     a.bne(zero, zero, "m22_rewritten_target");
     a.nop();
@@ -433,7 +433,7 @@ inline void emit_m22_core(Assembler& a, std::uint32_t table_rom) {
     const auto rewritten_target = a.here() + 24u;
     a.lui(t1, rewritten_target >> 16);
     a.ori(t1, t1, rewritten_target & 0xffffu);
-    a.addu(t1, t1, zero);            // same value, but not a LUI/ORI/ADDIU step
+    a.addu(t1, t1, zero);            // exact copy preserves the constant proof
     a.label("m22_rewritten_jr");
     a.jr(t1);
     a.nop();

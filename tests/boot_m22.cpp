@@ -246,10 +246,11 @@ void check_results(const EEState& state, const Memory& memory, const std::string
     require((state.cp0(Cop0::Status) & kStatusCU1) == 0u, run + ": CU1 cleared again");
 }
 
-// Constant LUI/ORI/JR: one provable site, four that must stay runtime-checked.
+// Constant setup and an exact GPR copy are provable; bypassed/delay-slot
+// definitions and targets outside the image stay runtime-checked.
 void check_constant_jumps(const BiosImage& bios, const m20::Firmware& fw) {
     const auto graph = analyze_control_flow(bios_code_image(bios), {}, {}, true);
-    require(graph.constant_jumps.size() == 1u, "exactly one constant JR proven");
+    require(graph.constant_jumps.size() == 2u, "constant JR and copied constant JR proven");
     const auto& jump = graph.constant_jumps.front();
     require(jump.jump_site == fw.at("m22_const_jr") && jump.lui_site == fw.at("m22_const_jr") - 8u &&
             jump.target == fw.at("m22_const_target"), "constant JR site, LUI and target");
@@ -265,13 +266,16 @@ void check_constant_jumps(const BiosImage& bios, const m20::Firmware& fw) {
                                 return j.site == fw.at(site) && j.reason.find(reason) != std::string::npos;
                             }), std::string(site) + " unresolved: " + reason);
     };
-    unresolved("m22_rewritten_jr", "not a constant target: JR register rewritten by Addu at 0x" +
-                                       hex8(fw.at("m22_rewritten_jr") - 4u));
+    require(std::any_of(graph.constant_jumps.begin(),graph.constant_jumps.end(),[&](const auto& copied) {
+                return copied.jump_site==fw.at("m22_rewritten_jr") &&
+                       copied.lui_site==fw.at("m22_rewritten_jr")-12u &&
+                       copied.target==fw.at("m22_rewritten_target");
+            }),"ADDU with architectural zero preserves the proven constant target");
     unresolved("m22_entered_jr", "constant target window is entered at 0x" + hex8(fw.at("m22_entered_jr")) +
                                      ", bypassing the LUI");
-    unresolved("m22_slot_jr", "LUI at 0x" + hex8(fw.at("m22_slot_jr") - 8u) + " is a branch delay slot");
+    unresolved("m22_slot_jr", "no constant LUI-derived target in the straight-line code before JR");
     unresolved("m22_outside_jr", "constant target 0x80200000 is not code in the image");
-    require(graph.unresolved_jumps.size() == 4u, "no other unresolved JR");
+    require(graph.unresolved_jumps.size() == 3u, "no other unresolved JR");
     const auto& module = aot_module();
     require(find_aot_block(module, fw.at("m22_const_target")) != nullptr, "constant target translated");
 }
