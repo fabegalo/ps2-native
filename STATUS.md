@@ -518,3 +518,29 @@ Revisar a evidência original e os limites de cada etapa nos relatórios [docs](
 - Sem save-state completo ou checkpoint de RAM; sem nova interface visual.
   O trabalho paralelo do jogo e as hipóteses originais permanecem separados.
   Comandos, medições, referências e limites em [DEV-TOOLS](docs/DEV-TOOLS.md).
+
+## VU1 AOT nativo — 05/11/2026
+
+- `d6f0bd3` integra microprogramas VU1 ao `ps2n-aot`, particionamento,
+  manifesto e build C++20 existentes. Captura opcional após MPG conserva
+  valores e máscaras, raízes reais e modo numérico; seleção verifica a
+  imagem integral por SHA-256. Escritas, restauração e PCs sem prova
+  invalidam a seleção ou seguem explicitamente pelo interpretador.
+- Semântica de pares upper/lower compartilhada com o interpretador,
+  especializada por constantes no código nativo. Sem compilação durante
+  gameplay, fast-math, dependência AVX, hacks por jogo ou alterações no launcher.
+- Quatorze testes focados passaram; a versão em cinco partições mais
+  dispatcher também compilou e passou a equivalência. Incluem pipelines,
+  ACC, Q, flags, branches/delays/wrap, memória, MPG, XGKICK/GIF, sprite RGBA,
+  IRQ e checkpoint completo. P é preservado, mas EFU/P continua sem execução
+  modelada; instruções não suportadas mantêm as recusas existentes.
+- Fixture própria: **5,828 → 6,841 milhões de pares LIW/s (+17,40%)**,
+  1,373 → 1,170 ms por microprograma. No cenário integrado curto,
+  **1,941 → 2,238 ms (+15,28% de tempo; −13,25% de throughput)**: não houve
+  ganho integrado. Geração CLI 0,097 s; compilação da unidade nativa 3,065 s.
+- O checkpoint comercial disponível não executa VU1: conserva apenas os
+  pares sentinela de reset. A janela EE de 30 milhões manteve estado completo,
+  seis campos RGBA e PCM idênticos. **Microprograma comercial VU1 e seu ganho
+  integrado continuam pendentes**; nenhuma alegação de FPS comercial.
+- Método, cobertura, medições comerciais finais e CI em
+  [VU1-AOT-STATUS](docs/VU1-AOT-STATUS.md).

@@ -226,3 +226,26 @@ explícitas continua pendente; o particionamento já foi integrado.
 Invalidação por páginas exige primeiro cobrir e testar todas as escritas,
 DMA, cache/writeback e restauração. Não retirar polling, verificações ou
 efeitos para aproximar tempo real; repetir a janela comercial pareada.
+
+## Continuação independente — VU1 AOT, 05/11/2026
+
+A primeira versão funcional está em `d6f0bd3`: geração offline pelo AOT
+existente, seleção por identidade, invalidação, fallback explícito e
+fixture própria com geometria GS, IRQ e checkpoints equivalentes. A tarefa
+interativa do jogo acima permanece preservada; nenhum ensaio foi deixado ativo.
+
+O próximo trabalho VU1 exige uma captura válida de invocação comercial:
+observar MPG e raízes de início com `--vu1-capture=out/<perfil>/vu1`, gerar
+`ps2n-aot --vu1` com todas as entradas observadas, compilar pelo manifesto
+existente e repetir a mesma janela com `--vu1-interpreter`. Conferir estado
+completo, ciclos/IRQ, RGBA e PCM; registrar tempo por campo e custo de build.
+O checkpoint atual de Super Bust-A-Move tem apenas sentinelas VU1 e zero
+instruções dessa unidade em 30 milhões EE; não executar esse conteúdo
+artificialmente para anunciar validação comercial.
+
+Priorizar a regressão do cenário integrado curto antes de ampliar cobertura:
+a fixture isolada ganhou 17,40%, mas a integração curta consumiu 15,28% mais
+tempo. P/EFU, controles I/M/D/T e prova de alvos indiretos ainda faltam;
+não remover recusas ou pipelines. Mudanças na imagem integral recompilam
+suas partições; reuso parcial entre imagens distintas ainda não existe.
+Evidência e limites em [VU1-AOT-STATUS](VU1-AOT-STATUS.md).
