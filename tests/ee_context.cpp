@@ -546,7 +546,27 @@ void vector_q() {
     memory.write_vu_vector(5,{{0xBF800000u,0},{0,0}});
     rejects([&]{ee::exec<MipsOpcode::Vsqrt>(s,memory,0,0x4A0503BDu);},"negative input");
     require(memory.vu_q_ready_cycle()==0 && memory.read_vu_control(22)==0x3FB504F3u,"failed SQRT leaves pipeline unchanged");
-    require(!try_decode_r5900(0,0x4A2503BDu) && !try_decode_r5900(0,0x4A000BBFu),"reserved SQRT/WAITQ fields refuse");
+    // Manual (fsf=0) and EE assembler/ROM (fsf=1) encodings use ftf,
+    // not fsf, as the input selector. Unknown unselected fields are harmless.
+    for(unsigned lane=0;lane<4u;++lane)for(unsigned fsf=0;fsf<2u;++fsf)for(bool interpreted:{false,true}) {
+        std::array<std::uint32_t,4> values{},unknowns{};unknowns.fill(~0u);
+        values[lane]=0x41C80000u;unknowns[lane]=0;
+        memory.write_vu_vector(5,{{values[0]|(std::uint64_t{values[1]}<<32u),unknowns[0]|(std::uint64_t{unknowns[1]}<<32u)},
+            {values[2]|(std::uint64_t{values[3]}<<32u),unknowns[2]|(std::uint64_t{unknowns[3]}<<32u)}});
+        const auto word=0x4A0503BDu|(lane<<23u)|(fsf<<21u);
+        const auto decoded=try_decode_r5900(s.pc,word);
+        require(decoded && decoded->opcode==MipsOpcode::Vsqrt,"both established VSQRT encodings decode for every ftf lane");
+        memory.write_vu_control(22,0x40000000u);
+        const auto cycle=s.cycles();
+        if(interpreted) {memory.write32(s.pc,word);interpret_instruction(ctx);}
+        else ee::exec<MipsOpcode::Vsqrt>(s,memory,0,word);
+        require(memory.vu_q_ready_cycle()==cycle+7 && memory.read_vu_control(22)==0x40000000u,
+            "both shared execution paths preserve the old Q and the true seven-cycle SQRT latency");
+        s.stall(7);
+        require(memory.read_vu_control(22)==0x40A00000u,"VSQRT reads the selected known ftf lane with no dependency on fsf");
+    }
+    require(!try_decode_r5900(0,0x4A4503BDu) && !try_decode_r5900(0,0x4A250BBDu) &&
+        !try_decode_r5900(0,0x4A000BBFu),"remaining reserved SQRT/WAITQ fields refuse");
     VuControl vu;
     vu.issue_q(0,0,0,3,0,false); // 1/0
     require(vu.read(16)==0,"FDIV flags remain pending with Q");
