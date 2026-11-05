@@ -89,8 +89,15 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     const auto word0 = static_cast<std::uint32_t>(rom[0]) | (static_cast<std::uint32_t>(rom[1]) << 8) |
                        (static_cast<std::uint32_t>(rom[2]) << 16) | (static_cast<std::uint32_t>(rom[3]) << 24);
     require(memory.read32(0xBFC00000u) == word0 && memory.read32(0x9FC00000u) == word0, "ROM0 through KSEG1/KSEG0");
+    require(memory.fetch32(0xBFC00000u)==word0 && memory.fetch32(0x9FC00000u)==word0,"ROM instruction aliases");
     memory.write32(0x80001000u, 0xCAFEF00Du);
     require(memory.read32(0xA0001000u) == 0xCAFEF00Du, "RAM through KSEG0 and KSEG1");
+    require(memory.fetch32(0x80001000u)==0xCAFEF00Du,"fetch reads current RAM bytes");
+    memory.store32_observed(0xA0001000u,{0xCAFEF00Du,0x100u});
+    device_refused([&]{(void)memory.fetch32(0x80001000u);},"unknown RAM bits");
+    memory.write32(0xA0001000u,0xCAFEF00Du);
+    bus_fault([&]{(void)memory.fetch32(0x80001002u);},BusFault::Unaligned,"instruction fetch");
+    device_refused([&]{(void)memory.fetch32(0xB000F000u);},"instruction fetch from device registers");
     bus_fault([&] { memory.write32(0xBFC00000u, 1u); }, BusFault::RomWrite, "write to ROM");
     bus_fault([&] { (void)memory.read32(0x80000002u); }, BusFault::Unaligned, "Unaligned guest LW");
     require(memory.read32(0x00001000u)==0xCAFEF00Du,"ERL kuseg bypasses the TLB");

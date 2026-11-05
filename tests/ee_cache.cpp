@@ -22,10 +22,12 @@ void visibility_and_tags() {
     op(m,0x12,0,{0,0});
     require(op(m,0x10,0).unknown==0xF87u,"guest tag initialization defines PFN only");
     m.write32(0xA0002000u,0x11223344u);
+    require(m.fetch32(0x80002000u)==0x11223344u,"instruction fetch reads backing storage");
     require(m.read32(0x80002000u)==0x11223344u,"cache miss refills real RAM");
     tag=op(m,0x10,0);
     require(tag.value==0x2030u && tag.unknown==0xF87u,"refill records physical tag, valid and LRF");
     m.write16(0x80002002u,0xABCDu);
+    require(m.fetch32(0x80002000u)==0x11223344u,"instruction fetch does not see a dirty D-cache store");
     const auto prior_tag=op(m,0x10,0);
     require(m.diagnostic_ram(0x2000,4).value==0x11223344u &&
             op(m,0x10,0).value==prior_tag.value,"diagnostic reads backing RAM without cache refill/writeback");
@@ -37,6 +39,7 @@ void visibility_and_tags() {
     op(m,0x1C,0x80003000u);
     require(m.read32(0xA0002000u)==0x87654321u,"hit writeback miss does nothing");
     op(m,0x1C,0x80002000u);
+    require(m.fetch32(0x80002000u)==0xABCD3344u,"instruction fetch sees cache writeback immediately");
     require(m.read32(0xA0002000u)==0xABCD3344u && op(m,0x10,0).value==0x2030u,
             "hit writeback publishes dirty data and preserves valid/PFN/LRF");
     m.write32(0x80002000u,7);

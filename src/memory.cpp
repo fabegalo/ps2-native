@@ -669,6 +669,21 @@ void Memory::store128_observed(std::uint32_t address, ObservedQuadword word) {
     store64_observed(address+8u,word.high);
 }
 std::uint32_t Memory::fetch32(std::uint32_t address) const {
-    return static_cast<std::uint32_t>(read_le(address, 4, "instruction fetch", false));
+    profiling::Scope profile(profiling::Phase::Memory);
+    // Fetch never observes the data cache or emits a data-bus callback. Resolve
+    // every access (including privilege/TLB/alignment) and read the current
+    // storage word, so CPU stores, DMA and cache writeback remain visible.
+    const auto target=resolve(address,4,false,"instruction fetch");
+    if(target.region!=BusRegion::MainRam && target.region!=BusRegion::Scratchpad &&
+       target.region!=BusRegion::BiosRom && target.region!=BusRegion::Rom1)
+        return static_cast<std::uint32_t>(read_le(address,4,"instruction fetch",false));
+    if(registers_.dma_writes_ram())registers_.sync_iop();
+    if(storage_unknown(target,4))
+        throw device_refusal(BusFault::Device,false,4,address,target.physical,target.region,
+                             "instruction fetch","read consumes unknown RAM bits");
+    const auto& storage=target.region==BusRegion::MainRam ? ram_
+                       : target.region==BusRegion::Scratchpad ? scratchpad_
+                       : target.region==BusRegion::BiosRom ? rom_ : rom1_;
+    return static_cast<std::uint32_t>(load_little(storage.data()+target.offset,4));
 }
 }  // namespace ps2native
