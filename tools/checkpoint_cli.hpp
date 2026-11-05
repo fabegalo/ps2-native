@@ -32,10 +32,16 @@ struct CheckpointOptions {
         return true;
     }
     BootReport run(EEState& state,Memory& memory,const AotModule* module,const BootOptions& options,
-                   std::span<const std::filesystem::path> inputs)const {
+                   std::span<const std::filesystem::path> inputs,
+                   const std::function<void(Memory&)>& host_prepare={})const {
         execution_seconds=0;
         profile={};
+        bool host_prepared=false;
         const auto execute=[&](const BootOptions& chunk) {
+            if(!host_prepared) {
+                if(host_prepare)host_prepare(memory);
+                host_prepared=true;
+            }
             const auto start=std::chrono::steady_clock::now();
             auto measured=chunk;
             if(profile_enabled)measured.profile=&profile;

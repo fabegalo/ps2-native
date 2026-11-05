@@ -15,6 +15,8 @@ list(FILTER checkpoint_headers EXCLUDE REGEX "/vu_fixed[.]hpp$")
 list(FILTER checkpoint_headers EXCLUDE REGEX "/(boot|profile)[.]hpp$")
 # Offline code-generation artifacts contain no serialized machine state.
 list(FILTER checkpoint_headers EXCLUDE REGEX "/aot_sources[.]hpp$")
+# VU native artifacts and shared execution helpers have no checkpoint fields.
+list(FILTER checkpoint_headers EXCLUDE REGEX "/(vu_aot|vu_aot_runtime|vu_micro_ops)[.]hpp$")
 set(checkpoint_schema "ps2n-complete-checkpoint-v1-le-fields\n")
 foreach(header IN LISTS checkpoint_headers)
     file(READ "${header}" content)

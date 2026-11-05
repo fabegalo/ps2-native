@@ -210,6 +210,12 @@ public:
     }
     void vu_integer_store(unsigned source,unsigned base,unsigned mask) {registers_.vu_integer_store(source,base,mask);}
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return registers_.observe_vu_data(address);}
+    // HOST_INPUT_BEGIN
+    void enable_vu1_aot(bool enabled) {registers_.enable_vu1_aot(enabled);}
+    [[nodiscard]] const VuAotStats& vu1_aot_stats() const {return registers_.vu1_aot_stats();}
+    [[nodiscard]] VuAotImage capture_vu1_micro() const {return registers_.capture_vu1_micro();}
+    void set_vu1_capture(VuControl::Vu1Capture capture) {registers_.set_vu1_capture(std::move(capture));}
+    // HOST_INPUT_END
     void diagnostic_vu_power_two_carry() {registers_.diagnostic_vu_power_two_carry();}
     // External-reference hypothesis only; not a measured scalar EE carry tree.
     // Configure before any scalar arithmetic attempt. Ordinary boot is strict.

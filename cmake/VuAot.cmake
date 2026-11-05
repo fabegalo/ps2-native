@@ -1,0 +1,16 @@
+# VU1 uses the existing content-verified AOT source manifest/build machinery.
+# These are local artifacts; no compiler is launched by the runtime.
+set(PS2N_VU1_AOT_SOURCES "" CACHE STRING "Semicolon-separated offline ps2n-aot --vu1 source dispatchers")
+foreach(target IN ITEMS ps2n-boot ps2n-boot-hybrid ps2n-run ps2n-run-hybrid)
+    if(TARGET ${target})
+        foreach(source IN LISTS PS2N_VU1_AOT_SOURCES)
+            ps2n_target_aot_source(${target} "${source}")
+        endforeach()
+    endif()
+endforeach()
+if(BUILD_TESTING)
+    add_executable(ps2n-vu-aot-cli tests/vu_aot_cli.cpp)
+    target_link_libraries(ps2n-vu-aot-cli PRIVATE ps2n_core)
+    add_test(NAME native-vu1-aot-cli COMMAND ps2n-vu-aot-cli "${CMAKE_CURRENT_BINARY_DIR}/vu-aot-cli-owned")
+    set_tests_properties(native-vu1-aot-cli PROPERTIES TIMEOUT 30)
+endif()

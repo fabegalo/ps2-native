@@ -3,6 +3,10 @@
 #include "ps2native/ee_fpu.hpp"
 #include "ps2native/vu_float.hpp"
 #include "ps2native/profile.hpp"
+    // HOST_INPUT_BEGIN
+#include "ps2native/vu_aot_runtime.hpp"
+#include <functional>
+    // HOST_INPUT_END
 #include <array>
 #include <optional>
 #include <vector>
@@ -18,6 +22,9 @@ class VuControl {
 public:
     VuControl() { reset(); }
     void reset() {
+    // HOST_INPUT_BEGIN
+        invalidate_vu1_aot();vu1_aot_stats_={};
+    // HOST_INPUT_END
         diagnostic_power_two_carry_=false;
         micro_={};
         path1_.reset();
@@ -103,6 +110,18 @@ public:
         registers_[28] = value & 0x0C0Cu;
         registers_[29] = (micro_[0].running ? 1u : 0u)|(micro_[1].running ? 256u : 0u);
     }
+    // HOST_INPUT_BEGIN
+    template<std::uint32_t Low,std::uint32_t Upper> void execute_micro_native(Gif* gif,GsRegisters* gs);
+    void enable_vu1_aot(bool enabled) noexcept {vu1_aot_enabled_=enabled;}
+    [[nodiscard]] const VuAotStats& vu1_aot_stats() const noexcept {return vu1_aot_stats_;}
+    [[nodiscard]] VuAotFallback vu1_aot_fallback() const noexcept {return vu1_aot_fallback_;}
+    [[nodiscard]] VuAotImage capture_vu1_micro() const;
+    [[nodiscard]] bool vu1_diagnostic_power_two_carry() const noexcept {return diagnostic_power_two_carry_;}
+    // Optional passive capture at genuine MSCAL/MSCNT boundaries.
+    using Vu1Capture=std::function<void(const VuControl&,std::uint32_t)>;
+    void set_vu1_capture(Vu1Capture capture) {vu1_capture_=std::move(capture);vu1_capture_dirty_=true;}
+    void invalidate_vu1_aot() noexcept {vu1_aot_checked_=false;vu1_aot_selected_=nullptr;vu1_capture_dirty_=true;}
+    // HOST_INPUT_END
     void start_micro(unsigned unit,std::uint32_t instruction_address,std::uint64_t ee_cycle,
                      ObservedWord itop={0,0x3FFu},ObservedWord top={0,0x3FFu});
     void advance_micro(std::uint64_t ee_cycle,Gif* gif=nullptr,GsRegisters* gs=nullptr);
@@ -116,6 +135,9 @@ public:
         for(const auto& unit:micro_)if(unit.running || unit.instructions)throw DeviceRefusal("VU carry experiment must precede micro execution");
         if(pending_q_ || pending_q1_ || path1_)throw DeviceRefusal("VU carry experiment requires idle hardware");
         diagnostic_power_two_carry_=true;
+    // HOST_INPUT_BEGIN
+        invalidate_vu1_aot();
+    // HOST_INPUT_END
     }
     [[nodiscard]] bool path1_transfer_pending() const noexcept {return path1_.has_value();}
     [[nodiscard]] bool path1_end_on_kick() const noexcept {return (path1_ && path1_->end_on_kick) || (queued_path1_ && queued_path1_->end_on_kick);}
@@ -355,6 +377,9 @@ public:
             (void)memory_word((physical+static_cast<std::uint32_t>(byte))&~3u);
         for(std::size_t byte=0;byte<bytes;++byte) {
             const auto address=physical+static_cast<std::uint32_t>(byte);
+    // HOST_INPUT_BEGIN
+            if(address>=0x11008000u && address<0x1100C000u)invalidate_vu1_aot();
+    // HOST_INPUT_END
             auto& word=memory_word(address&~3u);
             const auto shift=(address&3u)*8u,mask=0xFFu<<shift;
             word.value=(word.value&~mask)|(static_cast<std::uint32_t>((value.value&~value.unknown)>>(byte*8u))<<shift&mask);
@@ -394,6 +419,16 @@ private:
     [[nodiscard]] ObservedWord micro_integer(unsigned unit,unsigned index,bool forwarded,unsigned bypass_delay=1) const;
     void retire_micro_integers(unsigned unit);
     [[nodiscard]] MicroFmac evaluate_micro_upper(unsigned unit,std::uint32_t instruction) const;
+    // HOST_INPUT_BEGIN
+    template<int Unit,std::int64_t Instruction> [[nodiscard]] MicroFmac evaluate_micro_upper_shared(unsigned unit,std::uint32_t instruction) const;
+    template<int Unit,std::int64_t Low,std::int64_t Upper> void issue_micro_shared(unsigned unit,std::uint32_t low,std::uint32_t upper,Gif* gif,GsRegisters* gs);
+    bool try_vu1_aot(Gif* gif,GsRegisters* gs);
+    bool vu1_aot_enabled_{true},vu1_aot_checked_{},vu1_capture_dirty_{true};
+    const VuAotModule* vu1_aot_selected_{};
+    VuAotStats vu1_aot_stats_{};
+    VuAotFallback vu1_aot_fallback_{VuAotFallback::None};
+    Vu1Capture vu1_capture_;
+    // HOST_INPUT_END
     std::array<MicroState,2> micro_{};
     struct Path1 {
         std::uint32_t address{};

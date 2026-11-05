@@ -10,7 +10,7 @@ add_library(ps2n_core STATIC
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
     src/interpreter.cpp src/boot.cpp src/diagnostics.cpp src/analysis.cpp src/ee_registers.cpp
     src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp src/nvm.cpp
-    src/video_encoder.cpp src/gif.cpp src/gs_vram.cpp src/gs_renderer.cpp src/framebuffer.cpp src/vu_micro.cpp
+    src/video_encoder.cpp src/gif.cpp src/gs_vram.cpp src/gs_renderer.cpp src/framebuffer.cpp src/vu_micro.cpp src/vu_aot.cpp
     src/iop_spu2.cpp src/audio.cpp)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 option(PS2N_ENABLE_PROFILING "Compile optional host component timers (diagnostic builds only)" OFF)
@@ -438,12 +438,40 @@ endif()
 
 include(cmake/DirectElf.cmake)
 include(cmake/BiosBoot.cmake)
+include(cmake/VuAot.cmake)
 include(cmake/DevTools.cmake)
 include(cmake/Checkpoint.cmake)
 if(BUILD_TESTING)
     add_executable(ps2n-ipu-tables tests/ipu_tables.cpp)
     target_link_libraries(ps2n-ipu-tables PRIVATE ps2n_core)
     add_test(NAME native-ipu-tables COMMAND ps2n-ipu-tables)
+
+    # Original VU1 bytes -> the existing offline AOT tool -> real host code.
+    # Runtime registration is linked directly so static archive extraction
+    # cannot discard the generated module's automatic registration.
+    add_executable(ps2n-vu-aot-fixture tests/vu_aot_make_fixture.cpp)
+    target_link_libraries(ps2n-vu-aot-fixture PRIVATE ps2n_core)
+    set(VU_AOT_IMAGE "${FIXTURE_DIR}/vu-aot.bin")
+    set(VU_AOT_SOURCE "${FIXTURE_DIR}/vu_aot.cpp")
+    set(VU_EE_IMAGE "${FIXTURE_DIR}/vu-ee.elf")
+    set(VU_EE_SOURCE "${FIXTURE_DIR}/vu_ee_aot.cpp")
+    add_custom_command(OUTPUT "${VU_AOT_IMAGE}" "${VU_EE_IMAGE}"
+        COMMAND $<TARGET_FILE:ps2n-vu-aot-fixture> "${VU_AOT_IMAGE}" vu
+        COMMAND $<TARGET_FILE:ps2n-vu-aot-fixture> "${VU_EE_IMAGE}" ee
+        DEPENDS ps2n-vu-aot-fixture VERBATIM)
+    add_custom_command(OUTPUT "${VU_AOT_SOURCE}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${VU_AOT_IMAGE}" "${VU_AOT_SOURCE}" --vu1
+            --entry=0 --entry=512 --entry=1024 --entry=2048 --entry=16376
+        DEPENDS ps2n-aot "${VU_AOT_IMAGE}" VERBATIM)
+    add_custom_command(OUTPUT "${VU_EE_SOURCE}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${VU_EE_IMAGE}" "${VU_EE_SOURCE}"
+        DEPENDS ps2n-aot "${VU_EE_IMAGE}" VERBATIM)
+    add_executable(ps2n-vu-aot-tests tests/vu_aot.cpp "${VU_AOT_SOURCE}" "${VU_EE_SOURCE}")
+    target_link_libraries(ps2n-vu-aot-tests PRIVATE ps2n_core)
+    add_test(NAME native-vu1-aot COMMAND ps2n-vu-aot-tests "${CMAKE_CURRENT_BINARY_DIR}/vu-aot-checkpoints")
+    set_tests_properties(native-vu1-aot PROPERTIES TIMEOUT 90)
+    add_executable(ps2n-vu-aot-bench tests/vu_aot_bench.cpp "${VU_AOT_SOURCE}" "${VU_EE_SOURCE}")
+    target_link_libraries(ps2n-vu-aot-bench PRIVATE ps2n_core)
 endif()
 
 # Desktop launcher (Qt 6 Quick). Optional: AUTO builds it only when Qt is found,

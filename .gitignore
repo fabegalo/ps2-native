@@ -40,5 +40,8 @@ boot-trace*.txt
 *.ndjson
 *.ps2n-state
 *.ps2ncp
+*.vu1
+*.ps2nvu
+vu1_*.entries
 /dev-local/
 ps2n-dev/

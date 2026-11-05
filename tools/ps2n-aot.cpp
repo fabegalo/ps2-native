@@ -1,6 +1,7 @@
 #include "ps2native/core.hpp"
 #include "ps2native/aot_sources.hpp"
 #include "ps2native/disc.hpp"
+#include "ps2native/vu_aot.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -14,7 +15,8 @@ template <typename Character>
 int aot_main(int argc, Character** argv) {
     if (argc < 3) {
         std::cerr << "Usage: ps2n-aot <owned-mips-elf|disc.iso> <output.cpp> [--split] [--disc] [--hybrid] [--entry=0xADDRESS ...] [--table=0xADDRESS:COUNT ...]\n"
-                     "       ps2n-aot <your-rom0.bin> <output.cpp> --bios [--expect-sha256=HEX] [--entry=0xADDRESS ...]\n";
+                     "       ps2n-aot <your-rom0.bin> <output.cpp> --bios [--expect-sha256=HEX] [--entry=0xADDRESS ...]\n"
+                     "       ps2n-aot <vu1-image.bin|capture.vu1> <output.cpp> --vu1 [--entry=BYTE_PC ...] [--split[=BUCKET_BYTES]]\n";
         return 2;
     }
     try {
@@ -23,6 +25,8 @@ int aot_main(int argc, Character** argv) {
         std::uint32_t partition_bytes=65536;
         bool bios_input = false;
         bool disc_input = false;
+        bool vu1_input = false;
+        bool vu1_carry = false;
         std::optional<std::string> expected_sha256;
         auto parse_u32 = [](const std::string& value, const std::string& label) {
             if (value.empty() || value[0] == '-')
@@ -60,13 +64,19 @@ int aot_main(int argc, Character** argv) {
                 bios_input = true;
             } else if (flag == "--disc") {
                 disc_input = true;
+            } else if (flag == "--vu1") {
+                vu1_input = true;
+            } else if (flag == "--vu1-diagnostic-power-two-carry") {
+                vu1_carry = true;
             } else if (flag.starts_with("--expect-sha256=")) {
                 expected_sha256 = flag.substr(16);
             } else {
-                throw std::runtime_error("Unrecognized argument; expected --entry, --table, --split, --hybrid, --disc, --bios or --expect-sha256");
+                throw std::runtime_error("Unrecognized argument; expected --entry, --table, --split, --hybrid, --disc, --bios, --vu1, --vu1-diagnostic-power-two-carry or --expect-sha256");
             }
         }
-        if (bios_input && disc_input) throw std::runtime_error("--bios and --disc are mutually exclusive");
+        if (unsigned(bios_input)+unsigned(disc_input)+unsigned(vu1_input)>1u)
+            throw std::runtime_error("--bios, --disc and --vu1 are mutually exclusive");
+        if (vu1_carry && !vu1_input)throw std::runtime_error("--vu1-diagnostic-power-two-carry requires --vu1");
         if (ps2native::file_exists(std::filesystem::path(argv[2])) &&
             ps2native::files_equivalent(std::filesystem::path(argv[1]),std::filesystem::path(argv[2])))
             throw std::runtime_error("AOT output must not overwrite its input");
@@ -79,6 +89,34 @@ int aot_main(int argc, Character** argv) {
             throw std::runtime_error("AOT manifest must not overwrite its input");
         if (!split_output && ps2native::file_exists(manifest))
             throw std::runtime_error("Existing partitioned AOT output requires --split");
+        if(vu1_input) {
+            if(!options.jump_tables.empty() || options.interpreter_boundaries)
+                throw std::runtime_error("--vu1 does not accept EE --table/--hybrid options");
+            const auto image=ps2native::parse_vu1_aot_image(input);
+            ps2native::VuAotOptions vu_options;
+            if(!options.additional_function_entries.empty())vu_options.entries=options.additional_function_entries;
+            vu_options.diagnostic_power_two_carry=vu1_carry;
+            const auto identity=ps2native::vu1_aot_identity(image,vu1_carry);
+            if(expected_sha256 && *expected_sha256!=identity)throw std::runtime_error("VU1 AOT identity does not match --expect-sha256");
+            bool updated=false;
+            if(split_output) {
+                const auto sources=ps2native::generate_vu1_aot_sources(image,vu_options,
+                    ps2native::path_utf8(output.filename()),partition_bytes);
+                for(const auto& unit:sources.partitions) {
+                    const auto path=output.parent_path()/unit.name;
+                    if(ps2native::file_exists(path) && ps2native::files_equivalent(path,std::filesystem::path(argv[1])))
+                        throw std::runtime_error("AOT partition must not overwrite its input");
+                }
+                updated=ps2native::write_aot_sources(output,sources);
+            } else updated=ps2native::write_text_if_changed(output,ps2native::generate_vu1_aot_cpp(image,vu_options));
+            const auto graph=ps2native::analyze_vu1_aot(image,vu_options);
+            std::cout<<(updated ? "VU1 AOT source generated" : "VU1 AOT unchanged; reused")
+                     <<"; identity "<<identity<<"; native pairs "<<graph.instructions.size()
+                     <<"; interpreter boundaries "<<graph.boundaries.size()<<'\n';
+            for(const auto& boundary:graph.boundaries)std::cout<<"VU1 interpreter boundary 0x"<<std::hex
+                <<boundary.pc<<std::dec<<": "<<boundary.reason<<'\n';
+            return 0;
+        }
         const auto generate=[&](const ps2native::ElfImage& image) {
             if (split_output) {
                 const auto sources=ps2native::generate_aot_sources(image,options,

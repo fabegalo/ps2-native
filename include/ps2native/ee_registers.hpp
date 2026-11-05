@@ -131,6 +131,12 @@ public:
     }
     void vu_integer_store(unsigned source,unsigned base,unsigned mask) {vu_control_.integer_store(source,base,mask);}
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return vu_control_.observe_data(address);}
+    // HOST_INPUT_BEGIN
+    void enable_vu1_aot(bool enabled) {vu_control_.enable_vu1_aot(enabled);}
+    [[nodiscard]] const VuAotStats& vu1_aot_stats() const {return vu_control_.vu1_aot_stats();}
+    [[nodiscard]] VuAotImage capture_vu1_micro() const {return vu_control_.capture_vu1_micro();}
+    void set_vu1_capture(VuControl::Vu1Capture capture) {vu_control_.set_vu1_capture(std::move(capture));}
+    // HOST_INPUT_END
     void diagnostic_vu_power_two_carry() {vu_control_.diagnostic_power_two_carry();}
     [[nodiscard]] std::optional<FloatBounds> observe_vu_vector_bounds(unsigned index,unsigned lane) const {return vu_control_.observe_vector_bounds(index,lane);}
     void restore_vu_vector_bounds(unsigned index,unsigned lane,FloatBounds bounds) {vu_control_.restore_vector_bounds(index,lane,bounds);}
