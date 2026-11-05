@@ -181,6 +181,7 @@ private:
         std::uint32_t z{};
         std::optional<std::uint64_t> rgbaq,st,uv;
         std::uint64_t rgbaq_unknown{};
+        std::uint64_t st_unknown{};
     };
     std::optional<Vertex> first_vertex_;
     std::array<Vertex,2> triangle_vertices_{};

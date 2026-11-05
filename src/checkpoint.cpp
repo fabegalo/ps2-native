@@ -111,6 +111,7 @@ public:
     static constexpr bool reading=Reading;
     bool legacy_scalar_flags{};
     bool legacy_spu2{};
+    bool legacy_vertex_st{};
     explicit Archive(std::span<const std::uint8_t> input={}):input_(input){}
     std::vector<std::uint8_t> output;
     std::vector<std::shared_ptr<const std::string>> strings;
@@ -325,7 +326,8 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
          // Host profiling adds no hardware fields; boot options/reports now
          // participate only in the runtime fingerprint, never the wire schema.
          std::string_view(PS2N_CHECKPOINT_SCHEMA)=="b32d8b0d82c1d14b0c3f8e5fb8912a2a8495f113256e122b4e924fd34f4e10e2" ||
-         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="4d32f9c6e62746ff39398d75d0efb1ae80a7a653a7abb8fb4f4c3a6933ede047");
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="4d32f9c6e62746ff39398d75d0efb1ae80a7a653a7abb8fb4f4c3a6933ede047" ||
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="c649550347ab1c003a8b8e441e3241a8917c893acb09a3a5262c2ad2a6fc2ee6");
     const bool legacy_scalar_flags=reviewed_scalar_transition &&
         (info.schema_sha256=="9199cae351d7ea3f43526fa1dd800d9f6810d80f6c0370974f190695aee3e2cc" ||
          info.schema_sha256=="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88");
@@ -340,7 +342,8 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
          info.schema_sha256=="06f3fe6fbdb88d6864fb5e3b18139b95e13d22312976051c0cbcd9406931d695");
     // v1 has no numerical voices. Preserve its abstract zero-gain/release
     // proofs verbatim; no active decoder history is reconstructed or guessed.
-    const bool synthesis_transition=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="4d32f9c6e62746ff39398d75d0efb1ae80a7a653a7abb8fb4f4c3a6933ede047";
+    const bool st_transition=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="c649550347ab1c003a8b8e441e3241a8917c893acb09a3a5262c2ad2a6fc2ee6";
+    const bool synthesis_transition=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="4d32f9c6e62746ff39398d75d0efb1ae80a7a653a7abb8fb4f4c3a6933ede047" || st_transition;
     const bool legacy_spu2=context.allow_runtime_change &&
         ((synthesis_transition && info.schema_sha256=="b32d8b0d82c1d14b0c3f8e5fb8912a2a8495f113256e122b4e924fd34f4e10e2") ||
          reviewed_v1 || legacy_scalar_flags || same_scalar_fields);
@@ -348,21 +351,27 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
         (info.schema_sha256=="6a3a20754386bdabd4cc27966faaf222a335b6b7111cab9aa951b06a3739d098" ||
          info.schema_sha256=="efced2750855b215c91be106204dd31881755498213aed8c78b38806f5ac2e35" ||
          info.schema_sha256=="baa51041ae4e48bb415e3af985bca1f2451485a3ebd5db633d7e8c45e6b83781");
-    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields && !legacy_spu2 && !same_spu2_fields)
+    // The old Vertex codec did not retain ST uncertainty. Every old field
+    // is reserialized and checked below; retained ST is conservatively
+    // unknown, rather than inventing certainty for a newly supported path.
+    const bool legacy_vertex_st=context.allow_runtime_change && st_transition &&
+        (info.schema_sha256=="4d32f9c6e62746ff39398d75d0efb1ae80a7a653a7abb8fb4f4c3a6933ede047" ||
+         reviewed_v1 || legacy_scalar_flags || same_scalar_fields || legacy_spu2 || same_spu2_fields);
+    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields && !legacy_spu2 && !same_spu2_fields && !legacy_vertex_st)
         throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
     if(info.runtime_sha256!=PS2N_CHECKPOINT_RUNTIME && !context.allow_runtime_change)throw std::runtime_error("checkpoint runtime changed; explicit reviewed allow-runtime-change is required");
     if(info.scenario_sha256!=context.scenario_sha256)throw std::runtime_error("checkpoint scenario identity differs");
     if(info.bindings_sha256!=CheckpointAccess::bindings(memory,context.expected_disc_sha256))throw std::runtime_error("checkpoint firmware/profile/NVM/disc identity differs");
     EEState staged_state;Memory staged_memory=memory;
-    Reader a(std::span<const std::uint8_t>(parsed.file).subspan(parsed.payload));a.legacy_scalar_flags=legacy_scalar_flags;a.legacy_spu2=legacy_spu2;
+    Reader a(std::span<const std::uint8_t>(parsed.file).subspan(parsed.payload));a.legacy_scalar_flags=legacy_scalar_flags;a.legacy_spu2=legacy_spu2;a.legacy_vertex_st=legacy_vertex_st;
     bool clock{},stalls{};a(clock,stalls,staged_state,staged_memory);
     if(a.remaining() || staged_state.retired_instructions!=info.retired || staged_state.pc!=info.pc || staged_state.cycles()!=info.cycles)
         throw std::runtime_error("checkpoint state/envelope disagree");
     if(CheckpointAccess::bindings(staged_memory,context.expected_disc_sha256)!=info.bindings_sha256)throw std::runtime_error("checkpoint changed immutable firmware bindings");
     if(iop_execution_refused(staged_memory))
         throw std::runtime_error("checkpoint contains an IOP refusal; inspect it without resuming partial execution: "+*staged_memory.iop().stop_reason());
-    if(legacy_scalar_flags || legacy_spu2) {
-        Writer original;original.legacy_scalar_flags=legacy_scalar_flags;original.legacy_spu2=legacy_spu2;original(clock,stalls,staged_state,staged_memory);
+    if(legacy_scalar_flags || legacy_spu2 || legacy_vertex_st) {
+        Writer original;original.legacy_scalar_flags=legacy_scalar_flags;original.legacy_spu2=legacy_spu2;original.legacy_vertex_st=legacy_vertex_st;original(clock,stalls,staged_state,staged_memory);
         if(sha256_hex(original.output)!=info.payload_sha256)throw std::runtime_error("checkpoint scalar migration changed legacy fields");
     }
     CheckpointAccess::own_strings(staged_memory,std::move(a.strings));

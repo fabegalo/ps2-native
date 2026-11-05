@@ -57,6 +57,10 @@ int main(int argc,char** argv)try {
     // transition without publishing any firmware or real checkpoint bytes.
     const auto current=read_file(file);auto info=inspect_checkpoint(file);
     std::vector<std::uint8_t> payload(current.end()-info.payload_bytes,current.end());
+    const std::array<std::uint8_t,8> st_tag{'G','S','S','T','U','N','K','1'};
+    const auto st_at=std::search(payload.begin(),payload.end(),st_tag.begin(),st_tag.end());
+    require(st_at!=payload.end(),"checkpoint contains the tagged per-vertex ST uncertainty extension");
+    payload.erase(st_at,st_at+32);
     // An old header requires its actual old payload, without numerical voices.
     // This reset fixture has no optional loop addresses or decoder history.
     const std::array<std::uint8_t,8> audio_tag{'S','P','U','2','P','C','M','1'};

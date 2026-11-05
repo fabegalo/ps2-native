@@ -106,6 +106,10 @@ int main(int argc,char** argv)try {
     require(changed==1 && current_payload[flag_offset]==0 && flag_payload[flag_offset]==1 && current_payload[flag_offset+1]==0,
         "only the explicit scalar-experiment boolean changed");
     std::vector<std::uint8_t> legacy_payload(current_payload.begin(),current_payload.end());
+    const std::array<std::uint8_t,8> st_tag{'G','S','S','T','U','N','K','1'};
+    const auto st_at=std::search(legacy_payload.begin(),legacy_payload.end(),st_tag.begin(),st_tag.end());
+    require(st_at!=legacy_payload.end(),"current checkpoint retains tagged per-vertex ST uncertainty");
+    legacy_payload.erase(st_at,st_at+32);
     // Omit the tagged numerical SPU2 extension; these stopped voices have
     // no optional loop addresses. Locate the tag, never a host struct offset.
     const std::array<std::uint8_t,8> audio_tag{'S','P','U','2','P','C','M','1'};
@@ -147,6 +151,33 @@ int main(int argc,char** argv)try {
     const auto refined=checkpoint_state_sha256(state,memory);
     rejects([&]{refine_checkpoint_texture_precision(state,memory,1);},"additive");
     require(refined!=strict && checkpoint_state_sha256(state,memory)==refined,"explicit refinement adds hypotheses without removing prior modes or touching rejected state");
+    {
+    options.max_instructions=1;const auto st_boundary=run_ee_boot(state,memory,nullptr,options);
+    require(st_boundary.outcome==BootOutcome::BudgetExhausted,"ST checkpoint fixture reaches a fresh successful CPU boundary");
+    auto& gs=const_cast<GsRegisters&>(memory.gs());
+    gs.general_write(0,0x16);gs.general_write(1,0x4000000080808080ull);
+    gs.general_write(0x18,0);gs.general_write(0x1A,1);gs.general_write(0x4C,1u<<16);
+    gs.general_write(0x40,(7ull<<16)|(7ull<<48));gs.general_write(0x47,3u<<16);
+    gs.general_write(0x4E,1ull<<32);gs.general_write(0x22,0);gs.general_write(0x4A,0);
+    gs.general_write(6,32ull|(1ull<<14)|(3ull<<26)|(3ull<<30)|(1ull<<34)|(1ull<<35));
+    gs.general_write(8,0);gs.general_write(0x14,0);
+    gs.general_write_observed(2,{0,0x100});gs.general_write(5,0);
+    gs.general_write(2,0x3EC000003EC00000ull);
+    const auto st_file=directory/"st-vertex.ps2ncp";save_checkpoint(st_file,state,memory,st_boundary,context);
+    const auto st_hash=checkpoint_state_sha256(state,memory);
+    (void)load_checkpoint(st_file,resumed,restored,context);
+    require(checkpoint_state_sha256(resumed,restored)==st_hash,"checkpoint retains old ST uncertainty after a known latch overwrite");
+    rejects([&]{const_cast<GsRegisters&>(restored.gs()).general_write(5,16u|(16ull<<16));},"unknown coordinate bits");
+    const auto st_info=inspect_checkpoint(st_file);const auto st_bytes=read_file(st_file);
+    std::vector<std::uint8_t> pre_st(st_bytes.end()-st_info.payload_bytes,st_bytes.end());
+    const auto extension=std::search(pre_st.begin(),pre_st.end(),st_tag.begin(),st_tag.end());
+    require(extension!=pre_st.end(),"synthetic ST checkpoint has a tagged extension");pre_st.erase(extension,extension+32);
+    const auto pre_st_file=directory/"legacy-st-vertex.ps2ncp";
+    write_file_atomically(pre_st_file,legacy_envelope(st_info,pre_st,"4d32f9c6e62746ff39398d75d0efb1ae80a7a653a7abb8fb4f4c3a6933ede047"));
+    rejects([&]{(void)load_checkpoint(pre_st_file,resumed,restored,context);},"schema");
+    (void)load_checkpoint(pre_st_file,resumed,restored,reviewed);
+    rejects([&]{const_cast<GsRegisters&>(restored.gs()).general_write(5,16u|(16ull<<16));},"unknown coordinate bits");
+    }
     std::cout<<"Complete checkpoint, immutable identities, transactional refusals and continuous/resumed state equivalence passed\n";return 0;
 #endif
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

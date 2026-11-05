@@ -3,6 +3,7 @@
 #include "ps2native/profile.hpp"
 #include <algorithm>
 #include <cstdlib>
+#include <numeric>
 #include <string>
 
 namespace ps2native {
@@ -15,6 +16,26 @@ unsigned texture_coordinate(int p,unsigned bits,unsigned mode,unsigned low,unsig
         return static_cast<unsigned>(std::clamp(p,static_cast<int>(low),static_cast<int>(high)));
     }
     return (static_cast<unsigned>(p)&low)|high;
+}
+int exact_stq_coordinate(std::uint32_t raw,std::uint32_t q,unsigned size_bits) {
+    const auto qe=(q>>23)&255u,se=(raw>>23)&255u;
+    if(!qe || qe==255u || se==255u || (!se && (raw&0x7FFFFFu)))
+        throw DeviceRefusal("GS STQ exceptional input precision is not established");
+    if(!(raw&0x7FFFFFFFu))return 0;
+    std::uint64_t numerator=(raw&0x7FFFFFu)|0x800000u,denominator=(q&0x7FFFFFu)|0x800000u;
+    const auto divisor=std::gcd(numerator,denominator);numerator/=divisor;denominator/=divisor;
+    const auto shift=static_cast<int>(se)-static_cast<int>(qe)+static_cast<int>(size_bits)+4;
+    auto& shifted=shift>=0?numerator:denominator;
+    const auto distance=static_cast<unsigned>(shift>=0?shift:-shift);
+    if(distance>=64u || shifted>(UINT64_MAX>>distance))throw DeviceRefusal("GS STQ exact conversion exceeds integer range");
+    shifted<<=distance;
+    if(numerator%denominator)throw DeviceRefusal("GS fractional STQ to 10.4 conversion precision is not established");
+    const auto magnitude=numerator/denominator;
+    // The manual's -2047..2047 saturation endpoints do not establish the
+    // fractional boundary behavior. Do not guess outside the proven range.
+    if(magnitude>2047u*16u)throw DeviceRefusal("GS STQ saturation boundary precision is not established");
+    const auto value=static_cast<int>(magnitude);
+    return ((raw^q)&0x80000000u)?-value:value;
 }
 }
 std::uint64_t GsRegisters::required(std::uint8_t index) const {
@@ -232,15 +253,15 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     const bool textured=(mode&16u)!=0u,blended=(mode&64u)!=0u;
     const bool antialiased=triangle && (mode&128u);
     const bool blending=blended || antialiased;
-    if(textured && !triangle && !line && (type!=6u || !(mode&256u)))
-        throw DeviceRefusal("GS texture drawing supports UV sprites only");
+    if(textured && !triangle && !line && type!=6u)
+        throw DeviceRefusal("GS texture drawing supports sprites and triangles only");
     const auto context = static_cast<std::uint8_t>((mode >> 9) & 1u);
     const auto offset = required(static_cast<std::uint8_t>(0x18u + context));
-    const auto uv=textured && !triangle && !line ? required(3) : general_[3].value_or(0);
+    const auto uv=textured && !triangle && !line && (mode&256u) ? required(3) : general_[3].value_or(0);
     const Vertex v{static_cast<int>(value & 0xFFFFu) - static_cast<int>(offset & 0xFFFFu),
                    static_cast<int>((value >> 16) & 0xFFFFu) - static_cast<int>((offset >> 32) & 0xFFFFu),
                    static_cast<int>(uv&0x3FFFu),static_cast<int>((uv>>16)&0x3FFFu),
-                   static_cast<std::uint32_t>(value>>32u)&((index&7u)==4u ? 0xFFFFFFu : 0xFFFFFFFFu),general_[1],general_[2],general_[3],general_unknown_[1]};
+                   static_cast<std::uint32_t>(value>>32u)&((index&7u)==4u ? 0xFFFFFFu : 0xFFFFFFFFu),general_[1],general_[2],general_[3],general_unknown_[1],general_unknown_[2]};
     if(line) {
         if(!first_vertex_){first_vertex_=v;return;}
         if(index==0x0Cu || index==0x0Du) {
@@ -283,7 +304,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
             " xy16=("+std::to_string(vertices[0].x)+","+std::to_string(vertices[0].y)+") ("+
             std::to_string(vertices[1].x)+","+std::to_string(vertices[1].y)+") ("+
             std::to_string(v.x)+","+std::to_string(v.y)+") z="+std::to_string(v.z));
-    if(textured && !(mode&256u))throw DeviceRefusal("GS STQ texture drawing precision is not established");
+    if(textured && !(mode&256u) && type!=6u)throw DeviceRefusal("GS STQ triangle texture drawing precision is not established");
     const auto frame = required(static_cast<std::uint8_t>(0x4Cu + context));
     const auto scissor = required(static_cast<std::uint8_t>(0x40u + context));
     const auto test = required(static_cast<std::uint8_t>(0x47u + context));
@@ -334,6 +355,22 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     bottom = std::min(bottom, static_cast<int>((scissor >> 48) & 2047u) + 1);
     const auto tex=textured ? required(static_cast<std::uint8_t>(6u+context)) : 0;
     const auto clamp=textured ? required(static_cast<std::uint8_t>(8u+context)) : 0;
+    int sprite_u0=first_vertex_?first_vertex_->u:0,sprite_v0=first_vertex_?first_vertex_->v:0,sprite_u1=v.u,sprite_v1=v.v;
+    if(textured && type==6u && !(mode&256u)) {
+        if(!first_vertex_->st || !v.st || !v.rgbaq)throw DeviceRefusal("GS STQ sprite consumes unwritten coordinates");
+        if(first_vertex_->st_unknown || v.st_unknown || (v.rgbaq_unknown>>32))
+            throw DeviceRefusal("GS STQ sprite consumes unknown coordinate bits");
+        const auto tw=static_cast<unsigned>((tex>>26)&15u),th=static_cast<unsigned>((tex>>30)&15u);
+        if(tw>10u || th>10u)throw DeviceRefusal("GS texture dimensions are not modeled");
+        // A sprite has flat Q from the second vertex. Exact dyadic ST/Q
+        // values on the 10.4 grid share the existing affine sampling path;
+        // no host floating point or premature fractional rounding is used.
+        const auto q=static_cast<std::uint32_t>(*v.rgbaq>>32);
+        sprite_u0=exact_stq_coordinate(static_cast<std::uint32_t>(*first_vertex_->st),q,tw);
+        sprite_v0=exact_stq_coordinate(static_cast<std::uint32_t>(*first_vertex_->st>>32),q,th);
+        sprite_u1=exact_stq_coordinate(static_cast<std::uint32_t>(*v.st),q,tw);
+        sprite_v1=exact_stq_coordinate(static_cast<std::uint32_t>(*v.st>>32),q,th);
+    }
     bool bilinear=false;
     if(textured) {
         const auto lod=required(static_cast<std::uint8_t>(0x14u+context));
@@ -411,8 +448,8 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         if(tw>10u || th>10u || (tp!=0u && tp!=1u && tp!=19u && tp!=20u))
             throw DeviceRefusal("GS texture format or dimensions are not modeled");
         const auto pw=tp<=1u?64u:128u,ph=tp<=1u?32u:tp==19u?64u:128u;
-        const auto u0=uv_at(left,first_vertex_->x,v.x,first_vertex_->u,v.u),u1=uv_at(right-1,first_vertex_->x,v.x,first_vertex_->u,v.u);
-        const auto v0=uv_at(top,first_vertex_->y,v.y,first_vertex_->v,v.v),v1=uv_at(bottom-1,first_vertex_->y,v.y,first_vertex_->v,v.v);
+        const auto u0=uv_at(left,first_vertex_->x,v.x,sprite_u0,sprite_u1),u1=uv_at(right-1,first_vertex_->x,v.x,sprite_u0,sprite_u1);
+        const auto v0=uv_at(top,first_vertex_->y,v.y,sprite_v0,sprite_v1),v1=uv_at(bottom-1,first_vertex_->y,v.y,sprite_v0,sprite_v1);
         const auto shift=bilinear?8:0,extra=bilinear?1:0;
         std::array<bool,16> columns{};std::array<bool,32> rows{};
         for(int u=floor16(std::min(u0,u1)-shift);u<=floor16(std::max(u0,u1)-shift)+extra;++u)
@@ -546,7 +583,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
                     for(unsigned n=0;n<3u;++n)if(!vertices[n].uv)throw DeviceRefusal("GS triangle consumes unwritten UV coordinates");
                     u=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].u),static_cast<std::uint32_t>(vertices[1].u),static_cast<std::uint32_t>(vertices[2].u)},true));
                     tv=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].v),static_cast<std::uint32_t>(vertices[1].v),static_cast<std::uint32_t>(vertices[2].v)},true));
-                } else {u=uv_at(x,first_vertex_->x,v.x,first_vertex_->u,v.u);tv=uv_at(y,first_vertex_->y,v.y,first_vertex_->v,v.v);}
+                } else {u=uv_at(x,first_vertex_->x,v.x,sprite_u0,sprite_u1);tv=uv_at(y,first_vertex_->y,v.y,sprite_v0,sprite_v1);}
                 const auto sampled=filtered_texture(u,tv);
                 const auto shaded=color;
                 color=0;

@@ -30,6 +30,30 @@ void pixel(GsRegisters& gs,unsigned x,unsigned y,unsigned u,unsigned v) {
 }
 }
 int main() try {
+    for(const bool negative:{false,true}) {
+        GsRegisters st;setup(st);st.general_write(0,0x16);st.general_write(0x14,0);
+        st.general_write(1,0x3F00000080808080ull); // first Q must not control sprite division
+        const auto start=negative?0xBE000000u:0x3E000000u;
+        st.general_write(2,start|(std::uint64_t{start}<<32));st.general_write(5,0);
+        st.general_write(1,0x4000000080808080ull);
+        st.general_write(2,0x3EC000003EC00000ull);st.general_write(5,16u|(16ull<<16));
+        require(st.vram().read(0,64,0,0,0)==(negative?source(7,7):source(0,0)),
+            "STQ sprite divides both vertices by the second Q exactly, preserving signed coordinates and wrap");
+    }
+    {
+        GsRegisters st;setup(st);st.general_write(0,0x16);st.general_write(0x14,0);
+        st.general_write(2,0);st.general_write(5,0);
+        st.general_write(1,0x4040000080808080ull);st.general_write(2,0x3F8000003F800000ull);
+        const auto before=st.vram().pixel_writes();rejects([&]{st.general_write(5,16u|(16ull<<16));},"fractional STQ");
+        require(st.vram().pixel_writes()==before,"STQ division cannot silently round nonrepresentable 10.4 coordinates");
+    }
+    {
+        GsRegisters st;setup(st);st.general_write(0,0x16);st.general_write(0x14,0);
+        st.general_write_observed(2,{0,0x100u});st.general_write(5,0);
+        st.general_write(2,0x3F0000003F000000ull);
+        const auto before=st.vram().pixel_writes();rejects([&]{st.general_write(5,16u|(16ull<<16));},"unknown coordinate bits");
+        require(st.vram().pixel_writes()==before,"a later known ST latch cannot erase uncertainty in an earlier vertex");
+    }
     GsRegisters gs;setup(gs);pixel(gs,0,0,8,8);
     require(gs.vram().read(0,64,0,0,0)==source(0,0),"half-texel coordinates sample their exact texel center without neighbor blending");
     pixel(gs,1,0,16,16);require(gs.vram().read(0,64,0,1,0)==0x80080808u,
