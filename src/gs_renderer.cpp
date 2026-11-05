@@ -133,7 +133,7 @@ void GsRegisters::texture_transfer_write(unsigned address) {
 }
 std::uint32_t GsRegisters::sample_texture(std::uint64_t tex,std::uint64_t clamp,int u,int v) {
     const auto psm=static_cast<unsigned>((tex>>20)&63u),tw=static_cast<unsigned>((tex>>26)&15u),th=static_cast<unsigned>((tex>>30)&15u);
-    if((psm!=0u && psm!=19u && psm!=20u) || tw>10u || th>10u)
+    if((psm!=0u && psm!=1u && psm!=19u && psm!=20u) || tw>10u || th>10u)
         throw DeviceRefusal("GS texture format or dimensions are not modeled");
     if(!texture_flush_generation_)
         throw DeviceRefusal("GS sampling requires an initial TEXFLUSH; reset texture cache validity is not established");
@@ -151,7 +151,7 @@ std::uint32_t GsRegisters::sample_texture(std::uint64_t tex,std::uint64_t clamp,
     const auto base=static_cast<unsigned>(tex&0x3FFFu)*256u,bw=static_cast<unsigned>((tex>>14)&63u)*64u;
     // Conservatively protect the entire source page, including a non-page-
     // aligned TBP. Drawing into it needs a cache model, not live VRAM reads.
-    const auto pw=psm==0u ? 64u : 128u,ph=psm==0u ? 32u : psm==19u ? 64u : 128u;
+    const auto pw=psm<=1u ? 64u : 128u,ph=psm<=1u ? 32u : psm==19u ? 64u : 128u;
     const auto page=(base+((y/ph)*(bw/pw)+x/pw)*8192u)%GsVram::kBytes;
     const auto first=page/8192u,last=((page+8191u)%GsVram::kBytes)/8192u;
     // TEXFLUSH invalidates all pages. A page not fetched since then remains
@@ -162,6 +162,15 @@ std::uint32_t GsRegisters::sample_texture(std::uint64_t tex,std::uint64_t clamp,
     sampled_pages_[first]=true;sampled_pages_[last]=true;
     const auto raw=vram_.read(base,bw,psm,x,y);
     if(psm==0u)return raw;
+    if(psm==1u) {
+        // GS manual 3.4.6: RGB24 shares CT32 addressing but never reads its
+        // unused high byte. TEXA supplies TA0, or zero for black with AEM.
+        // RGB-only TCC discards sampled alpha, so it needs no TEXA value.
+        if(!(tex&(1ull<<34u)))return raw;
+        const auto texa=required(0x3B);
+        const auto alpha=(texa&(1u<<15u)) && !raw ? 0u : static_cast<std::uint32_t>(texa&255u);
+        return raw|(alpha<<24u);
+    }
     const auto csa=static_cast<unsigned>((tex>>56)&31u);
     if(((tex>>51)&15u) || (tex&(1ull<<55)) || csa>15u || (psm==19u && csa))
         throw DeviceRefusal("GS indexed sampling requires a modeled CT32 CLUT bank");

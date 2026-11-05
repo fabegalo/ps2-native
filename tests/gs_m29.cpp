@@ -197,6 +197,57 @@ void configure_draw(GsRegisters& gs, bool raster_state = true) {
     if (raster_state) { gs.general_write(0x22,0); gs.general_write(0x4A,0); }
     gs.general_write(0x46,1); gs.general_write(1,0x80402010);
 }
+void check_texture24() {
+    for(unsigned tfx:{0u,1u})for(bool tcc:{false,true})for(bool aem:{false,true})for(unsigned alpha:{0u,64u,128u,255u}) {
+        GsRegisters gs;gs.reset(0);configure_draw(gs);
+        const auto upload=[&](unsigned x,unsigned y) {
+            gs.general_write(0x50,(512ull<<32u)|(2ull<<48u)|(1ull<<56u));
+            gs.general_write(0x51,(std::uint64_t{x}<<32u)|(std::uint64_t{y}<<48u));
+            gs.general_write(0x52,8u|(1ull<<32u));gs.general_write(0x53,0);
+            // Eight RGB24 texels cross 64-bit and IMAGE quadword boundaries.
+            std::array<std::uint64_t,3> packed{};
+            for(unsigned pixel=1;pixel<8u;++pixel)for(unsigned byte=0;byte<3u;++byte) {
+                const auto at=pixel*3u+byte;
+                packed[at/8u]|=std::uint64_t{(0x123456u>>(byte*8u))&255u}<<((at%8u)*8u);
+            }
+            gs.image_write(packed[0],packed[1]);gs.image_write(packed[2],~0ull);
+        };
+        for(unsigned y:{0u,32u})for(unsigned x:{0u,64u})upload(x,y);
+        rejects([&]{(void)gs.vram().read(0x20000,128,0,1,0);},"unwritten bits");
+        gs.general_write(0x3F,0);
+        const auto tex=512ull|(2ull<<14u)|(1ull<<20u)|(7ull<<26u)|(6ull<<30u)|
+            (std::uint64_t{tcc}<<34u)|(std::uint64_t{tfx}<<35u);
+        gs.general_write(6,tex);gs.general_write(8,0);gs.general_write(0x14,1);
+        gs.general_write(1,0x40808080u);gs.general_write(0,0x116);
+        const auto sprite=[&](unsigned dest,unsigned u,unsigned v) {
+            gs.general_write(3,(u*16u)|(std::uint64_t{v*16u}<<16u));gs.general_write(5,dest*16u);
+            gs.general_write(3,((u+1u)*16u)|(std::uint64_t{(v+1u)*16u}<<16u));gs.general_write(5,(dest+1u)*16u|(16ull<<16u));
+        };
+        if(tcc)gs.general_write(0x3B,alpha|(aem ? 1u<<15u : 0u));
+        // TCC=RGB deliberately leaves TEXA unwritten and keeps vertex alpha.
+        for(unsigned i=0;i<4u;++i) {
+            const auto u=(i&1u) ? 65u : 1u,v=(i&2u) ? 32u : 0u;
+            sprite(i,u,v);
+            const auto expected_alpha=tcc ? (tfx ? alpha : alpha/2u) : 64u;
+            require(gs.vram().read(0,64,0,i,0)==(0x123456u|(expected_alpha<<24u)),
+                "RGB24 samples all four CT32-layout pages, expands TA0 and applies TCC/MODULATE/DECAL without reading the unused high byte");
+        }
+        sprite(4,0,0);
+        const auto black_alpha=tcc ? (aem ? 0u : tfx ? alpha : alpha/2u) : 64u;
+        require(gs.vram().read(0,64,0,4,0)==black_alpha<<24u,"RGB24 AEM clears alpha only for black texels");
+        upload(64,32);
+        rejects([&]{sprite(5,65,32);},"TEXFLUSH");
+    }
+    GsRegisters missing;missing.reset(0);configure_draw(missing);
+    // A concrete RGB24 texel cannot establish its alpha without TEXA.
+    missing.general_write(0x50,(512ull<<32u)|(1ull<<48u)|(1ull<<56u));
+    missing.general_write(0x51,0);missing.general_write(0x52,8u|(1ull<<32u));missing.general_write(0x53,0);
+    missing.image_write(0,0);missing.image_write(0,0);missing.general_write(0x3F,0);
+    missing.general_write(6,512ull|(1ull<<14u)|(1ull<<20u)|(3ull<<26u)|(1ull<<34u));
+    missing.general_write(8,0);missing.general_write(0x14,1);missing.general_write(0,0x116);missing.general_write(3,0);missing.general_write(5,0);
+    missing.general_write(3,16u|(16u<<16u));
+    rejects([&]{missing.general_write(5,16u|(16u<<16u));},"register 59");
+}
 void check_textured_sprites() {
     GsRegisters gs;gs.reset(0);configure_draw(gs);
     const auto upload=[&](unsigned base,unsigned psm,unsigned bw,unsigned width,unsigned height,const std::vector<std::uint64_t>& data) {
@@ -297,6 +348,7 @@ void check_drawing_scanout() {
       a.general_write(0x47,0x50001u);a.general_write(5,0);
       require(a.vram().pixel_writes()==0,"alpha KEEP avoids consuming unwritten destination depth"); }
     check_textured_sprites();
+    check_texture24();
     {
         GsRegisters experiment;experiment.reset(0);
         require(!experiment.general(0x22),"normal reset has no assumed SCANMSK");
