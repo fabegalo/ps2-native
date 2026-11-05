@@ -471,7 +471,7 @@ void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t val
     if (registers_.dma_reads_ram() || registers_.dma_writes_ram()) registers_.sync_iop();
     const auto target = resolve(address, size, true, what);
     if(!fpu_relations_.empty() && (target.region==BusRegion::MainRam || target.region==BusRegion::Scratchpad)) {
-        const auto prefix=target.region==BusRegion::Scratchpad ? 0x80000000u : 0u;
+        const auto prefix=target.region==BusRegion::Scratchpad ? 0x80000000u : uses_data_cache(target) ? 0x40000000u : 0u;
         for(auto at=target.offset&~3u;at<=((target.offset+size-1u)&~3u);at+=4u)fpu_relations_.erase(prefix|at);
     }
     if (unknown && target.region != BusRegion::MainRam && target.region != BusRegion::Scratchpad && target.region!=BusRegion::VuMemory &&
@@ -575,22 +575,23 @@ void Memory::store_bytes_observed(std::uint32_t address,std::size_t bytes,Observ
         write_le(address+static_cast<std::uint32_t>(b),1,word.value>>(b*8u),"partial store",(word.unknown>>(b*8u))&0xFFu);
 }
 FpuAffine Memory::fpu_relation(std::uint32_t address,ObservedWord word) const {
-    if(!word.unknown || data_cache_model_)return {};
+    if(!word.unknown)return {};
     const auto target=resolve(address,4,false,"FPU relation");
     if(target.region!=BusRegion::MainRam && target.region!=BusRegion::Scratchpad)return {};
-    const auto key=static_cast<std::uint32_t>(target.offset)|(target.region==BusRegion::Scratchpad ? 0x80000000u : 0u);
+    const bool cached=uses_data_cache(target);
+    const auto key=static_cast<std::uint32_t>(target.offset)|(target.region==BusRegion::Scratchpad ? 0x80000000u : cached ? 0x40000000u : 0u);
     const auto found=fpu_relations_.find(key);
     if(found==fpu_relations_.end())return {};
     const auto& stored=found->second;
     if(stored.word.value!=word.value || stored.word.unknown!=word.unknown ||
-       stored.dma_generation!=registers_.iop().ee_ram_write_generation())return {};
+       (!cached && stored.dma_generation!=registers_.iop().ee_ram_write_generation()))return {};
     return stored.relation;
 }
 void Memory::remember_fpu_relation(std::uint32_t address,ObservedWord word,FpuAffine relation) {
-    if(!word.unknown || !relation.origin || data_cache_model_)return;
+    if(!word.unknown || !relation.origin)return;
     const auto target=resolve(address,4,true,"FPU relation");
     if(target.region!=BusRegion::MainRam && target.region!=BusRegion::Scratchpad)return;
-    const auto key=static_cast<std::uint32_t>(target.offset)|(target.region==BusRegion::Scratchpad ? 0x80000000u : 0u);
+    const auto key=static_cast<std::uint32_t>(target.offset)|(target.region==BusRegion::Scratchpad ? 0x80000000u : uses_data_cache(target) ? 0x40000000u : 0u);
     fpu_relations_[key]={word,relation,registers_.iop().ee_ram_write_generation()};
 }
 void Memory::store32_observed(std::uint32_t address, ObservedWord word) {

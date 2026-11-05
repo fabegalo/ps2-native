@@ -2,10 +2,19 @@
 # changes require a new schema. Runtime-only fixes require reviewed opt-in.
 file(GLOB checkpoint_headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2native/*.hpp")
 list(SORT checkpoint_headers)
+set(checkpoint_runtime_headers ${checkpoint_headers})
+# This header contains only execution helpers/context, not serialized state.
+# Its behavior still participates in the runtime fingerprint below.
+list(FILTER checkpoint_headers EXCLUDE REGEX "/ee_semantics[.]hpp$")
 set(checkpoint_schema "ps2n-complete-checkpoint-v1-le-fields\n")
 foreach(header IN LISTS checkpoint_headers)
     file(READ "${header}" content)
     string(REPLACE "\r\n" "\n" content "${content}")
+    # Logically-const cache reads may discard provenance certificates. This
+    # host constness qualifier changes neither a field type nor wire bytes;
+    # preserve v1 checkpoints from before cached provenance was implemented.
+    string(REPLACE "mutable std::unordered_map<std::uint32_t,StoredFpuRelation> fpu_relations_;"
+        "std::unordered_map<std::uint32_t,StoredFpuRelation> fpu_relations_;" content "${content}")
     get_filename_component(name "${header}" NAME)
     string(APPEND checkpoint_schema "${name}\n${content}\n")
 endforeach()
@@ -16,6 +25,11 @@ string(SHA256 checkpoint_schema_hash "${checkpoint_schema}")
 file(GLOB checkpoint_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 list(SORT checkpoint_sources)
 set(checkpoint_runtime "${checkpoint_schema_hash}\n${CMAKE_CXX_COMPILER_ID}\n${CMAKE_CXX_COMPILER_VERSION}\n${CMAKE_BUILD_TYPE}\n${CMAKE_CXX_FLAGS}\n")
+foreach(header IN LISTS checkpoint_runtime_headers)
+    file(READ "${header}" content)
+    string(REPLACE "\r\n" "\n" content "${content}")
+    string(APPEND checkpoint_runtime "${content}\n")
+endforeach()
 foreach(source IN LISTS checkpoint_sources)
     file(READ "${source}" content)
     string(REPLACE "\r\n" "\n" content "${content}")

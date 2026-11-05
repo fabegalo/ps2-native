@@ -274,7 +274,7 @@ void DiagnosticRecorder::write(const std::filesystem::path& directory, const Boo
         human<<'\n';
     }
     human << "IOP " << hex(r.iop_pc) << ": " << (r.iop_stop ? *r.iop_stop : "running")
-          << "\nEvents retained " << impl_->size << '/' << impl_->total << "; no checkpoint restoration\n";
+          << "\nEvents retained " << impl_->size << '/' << impl_->total << "; diagnostic bundle is not a complete .ps2ncp checkpoint\n";
     atomic_text(directory / "report.txt", human.str());
     std::ostringstream events;
     const auto start = impl_->total - impl_->size;

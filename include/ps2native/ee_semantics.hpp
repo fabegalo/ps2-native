@@ -627,9 +627,40 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
     } else if constexpr (Op==O::CFalseS || Op==O::CEqualS || Op==O::CLessS || Op==O::CLessEqualS) {
         if(!(s.cp0(Cop0::Status)&kStatusCU1))
             throw std::runtime_error("COP1 comparison with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
-        if constexpr(Op!=O::CFalseS)if(s.unknown_fpr_bits[d_] || s.unknown_fpr_bits[t_])
-            throw std::runtime_error("COP1 comparison consumes unknown FPR bits");
-        const auto result=ee_fpu_compare(s.fpr[d_],s.fpr[t_],w&7u);
+        bool result=ee_fpu_compare(s.fpr[d_],s.fpr[t_],w&7u);
+        if constexpr(Op!=O::CFalseS)if(s.unknown_fpr_bits[d_] || s.unknown_fpr_bits[t_]) {
+            if(d_==t_)result=Op!=O::CLessS; // EE has no NaNs; copies retain identity.
+            else {
+                const auto classes=[](std::uint32_t value,std::uint32_t unknown) {
+                    std::vector<std::array<std::uint32_t,2>> out;
+                    value&=~unknown;
+                    for(unsigned sign=0;sign<2;++sign) {
+                        if(!(unknown&0x80000000u) && sign!=(value>>31u))continue;
+                        const auto low=(value&0x7FFFFFFFu)|(sign<<31u);
+                        out.push_back({low,low|(unknown&0x7FFFFFFFu)});
+                    }
+                    return out;
+                };
+                std::optional<bool> common;
+                for(const auto& a:classes(s.fpr[d_],s.unknown_fpr_bits[d_]))
+                for(const auto& b:classes(s.fpr[t_],s.unknown_fpr_bits[t_])) {
+                    bool all=true,none=true,less=true,greater=true;
+                    for(const auto x:a)for(const auto y:b) {
+                        const auto comparison=ee_fpu_compare(x,y,w&7u);
+                        all&=comparison;none&=!comparison;
+                        less&=ee_fpu_compare(x,y,4);greater&=ee_fpu_compare(y,x,4);
+                    }
+                    // Ordered comparisons are monotone within a sign class,
+                    // including denormals flushed to zero. Equality also
+                    // requires disjoint intervals to certify false; unequal
+                    // endpoints alone cannot exclude an interior equality.
+                    if((!all && !none) || (Op==O::CEqualS && none && !less && !greater) ||
+                       (common && *common!=all))throw std::runtime_error("COP1 comparison consumes unknown FPR bits with an unproven condition");
+                    common=all;
+                }
+                result=*common;
+            }
+        }
         s.fcr31=(s.fcr31&~(1u<<23))|(result ? 1u<<23 : 0u);
     } else if constexpr (Op==O::Bc1f || Op==O::Bc1t || Op==O::Bc1fl || Op==O::Bc1tl) {
         if(!(s.cp0(Cop0::Status)&kStatusCU1))

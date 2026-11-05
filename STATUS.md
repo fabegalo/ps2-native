@@ -18,6 +18,16 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **Retomada na fronteira em menos de um segundo:** checkpoint completo
+  em `0x80002ACC`, 7.759.586.676 instruções totais (7.727.170.000 do
+  jogo). Carrega em 0,826 s e reproduz a recusa gráfica após só 2.060
+  instruções, em 0,0395 s. DIV/CVT/comparações preservam domínios provados;
+  cache mantém certificados sem confundir dados residentes com RAM/DMA.
+  Sete testes focados e BIOS original passaram. Nova fronteira: DMA VIF1
+  em `0x1CE460` / 7.727.172.060 do jogo, com coordenadas XYZ incertas.
+  O 122 testa Start mais cedo pela entrada SIO2, sem alterar o fluxo pelo
+  host. Animação parcial comprovada; menu, navegação e partida pendentes.
+  [Evidência](docs/FIRST-GAME-STATUS.md#continuações-por-checkpoint--113-a-121).
 - **Checkpoint completo funcionando no jogo real:** o ensaio 111 foi
   capturado em 6.032.416.676 e 7.232.416.676 instruções totais, sem
   reiniciar o processo nem alterar estado convidado. O segundo carregou

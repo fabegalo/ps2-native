@@ -266,13 +266,13 @@ public:
         std::sort(values->begin(),values->end());values->erase(std::unique(values->begin(),values->end()),values->end());
         relation.minimum=values->front();relation.maximum=values->back();relation.candidates=std::move(values);
     }
-    static std::vector<std::uint32_t> fpu_candidates(ObservedWord word,const FpuAffine& relation) {
+    static std::vector<std::uint32_t> fpu_candidates(ObservedWord word,const FpuAffine& relation,unsigned limit=64) {
         if(!word.unknown)return {word.value};
         if(relation.candidates)return *relation.candidates;
         if(relation.ranges) {
             std::vector<std::uint32_t> values;
             for(const auto& range:*relation.ranges) {
-                if(std::uint64_t{range[1]}-range[0]+1u>64u-values.size())return {};
+                if(std::uint64_t{range[1]}-range[0]+1u>limit-values.size())return {};
                 for(std::uint64_t value=range[0];value<=range[1];++value)
                     if(!((value^word.value)&~word.unknown))values.push_back(static_cast<std::uint32_t>(value));
             }
@@ -281,9 +281,9 @@ public:
         const auto lo=relation.origin ? relation.minimum : word.value&~word.unknown;
         const auto hi=relation.origin ? relation.maximum : word.value|word.unknown;
         std::vector<std::uint32_t> values;
-        if(hi>=lo && hi-lo<64u) {
+        if(hi>=lo && hi-lo<limit) {
             for(std::uint64_t value=lo;value<=hi;++value)if(!((value^word.value)&~word.unknown))values.push_back(static_cast<std::uint32_t>(value));
-        } else if(std::popcount(word.unknown)<=6) {
+        } else if(std::popcount(word.unknown)<=std::countr_zero(limit)) {
             auto subset=word.unknown;
             for(;;) {
                 const auto value=(word.value&~word.unknown)|subset;
@@ -296,7 +296,7 @@ public:
     }
     static std::optional<VuFloatResult> finite_fpu(MipsOpcode op,ObservedWord a,ObservedWord b,
         const FpuAffine& ar,const FpuAffine& br,bool identical,std::shared_ptr<const std::vector<std::uint32_t>>& candidates) {
-        const auto av=fpu_candidates(a,ar),bv=fpu_candidates(b,br);
+        const auto av=fpu_candidates(a,ar,op==MipsOpcode::DivS ? 512u : 64u),bv=fpu_candidates(b,br,op==MipsOpcode::DivS ? 512u : 64u);
         if(av.empty() || bv.empty() || av.size()*(identical ? 1u : bv.size())>4096u)return {};
         std::vector<std::uint32_t> values;std::optional<std::uint32_t> common_flags;
         const auto append=[&](std::uint32_t value,std::uint32_t flags) {
@@ -312,7 +312,10 @@ public:
         };
         for(const auto x:av)for(unsigned i=0;i<(identical ? 1u : bv.size());++i) {
             const auto y=identical ? (op==MipsOpcode::SubS ? x^0x80000000u : x) : bv[i];
-            if(op!=MipsOpcode::MulS) {
+            if(op==MipsOpcode::DivS) {
+                std::uint32_t flags=0;const auto value=ee_fpu_divide(x,y,flags);
+                if(!append(value,flags))return {};
+            } else if(op!=MipsOpcode::MulS) {
                 std::uint32_t flags=0;const auto value=ee_fpu_add(x,y,flags);
                 if(!append(value,flags))return {};
             } else {
@@ -353,7 +356,23 @@ public:
             for(const auto& range:classes)if(range)ranges.push_back(*range);
             return ranges;
         }
-        if(word.unknown&0xFF800000u)return {};
+        if(word.unknown&0xFF800000u) {
+            // Opaque raw transfers can lose affine provenance while retaining
+            // useful known bits. Partition the at most 512 sign/exponent
+            // classes; each fraction interval conservatively includes every
+            // encoding admitted by that class. Downstream arithmetic must
+            // still prove a common exception class across all intervals.
+            std::vector<FloatBounds> ranges;
+            const auto high_unknown=word.unknown&0xFF800000u;
+            auto subset=high_unknown;
+            for(;;) {
+                const auto low=(word.value&~word.unknown)|subset;
+                ranges.push_back({low,low|(word.unknown&0x7FFFFFu)});
+                if(!subset)break;
+                subset=(subset-1u)&high_unknown;
+            }
+            return ranges;
+        }
         return {{relation.origin ? relation.minimum : word.value,relation.origin ? relation.maximum : word.value|word.unknown}};
     }
     static std::optional<VuFloatResult> range_fpu(MipsOpcode op,ObservedWord a,ObservedWord b,
@@ -371,7 +390,20 @@ public:
             return true;
         };
         const auto ac=fpu_candidates(a,ar),bc=fpu_candidates(b,br);
-        if(op!=MipsOpcode::MulS && !ac.empty() && !bc.empty() && ac.size()*bc.size()<=16384u) {
+        if(op==MipsOpcode::DivS) {
+            // A normalized power-of-two divisor leaves every significand bit
+            // unchanged in the 25-digit SRT circuit. All 2^23 significands
+            // were checked against that circuit; exponent adjustment, signed
+            // zero and clamps remain in the same scalar implementation.
+            if(b.unknown || (b.value&0x7FFFFFu) || !(b.value&0x7F800000u))return {};
+            const auto av=fpu_ranges(a,ar);if(av.empty())return {};
+            for(const auto& x:av) {
+                if(x[0]>x[1] || ((x[0]^x[1])&0xFF800000u))return {};
+                std::uint32_t first_flags=0,last_flags=0;
+                const auto first=ee_fpu_divide(x[0],b.value,first_flags),last=ee_fpu_divide(x[1],b.value,last_flags);
+                if(first_flags!=last_flags || !append(std::min(first,last),std::max(first,last),first_flags))return {};
+            }
+        } else if(op!=MipsOpcode::MulS && !ac.empty() && !bc.empty() && ac.size()*bc.size()<=16384u) {
             // Folding exact scalar sums directly into intervals bounds live
             // storage even when thousands of distinct outputs are possible.
             for(const auto x:ac)for(const auto y:bc) {
@@ -441,7 +473,9 @@ public:
         std::shared_ptr<const std::vector<std::uint32_t>> candidates;
         std::shared_ptr<const std::vector<FloatBounds>> ranges;
         FpuAffine relation;
-        if(op!=MipsOpcode::MulS && ar.origin && ar.origin==br.origin && ar.exponent==br.exponent && ar.negated!=br.negated) {
+        if(op==MipsOpcode::DivS) {
+            result=finite_fpu(op,a,b,ar,br,fs==ft,candidates);
+        } else if(op!=MipsOpcode::MulS && ar.origin && ar.origin==br.origin && ar.exponent==br.exponent && ar.negated!=br.negated) {
             std::uint32_t flags=0;
             result=VuFloatResult{{ee_fpu_scaled_integer(ar.offset+br.offset,ar.exponent,flags),0},flags};
         } else {
@@ -456,7 +490,7 @@ public:
         }
         if(!result)result=range_fpu(op,a,b,ar,br,ranges);
         if(!result)stop(StopKind::NotModeled,"FPU arithmetic cannot certify value/exception bounds; FS="+hex32(a.value)+", FT="+hex32(b.value));
-        if(op!=MipsOpcode::MulS && result->word.unknown && (a.unknown!=0u)!=(b.unknown!=0u)) {
+        if(op!=MipsOpcode::MulS && op!=MipsOpcode::DivS && result->word.unknown && (a.unknown!=0u)!=(b.unknown!=0u)) {
             const auto source=a.unknown ? a : b,constant=a.unknown ? b : a;
             const auto inherited=a.unknown ? ar : br;
             const auto exponent=(source.value>>23u)&255u;
@@ -480,7 +514,7 @@ public:
         relation.ranges=std::move(ranges);
         s_.fpr[fd]=result->word.value;s_.unknown_fpr_bits[fd]=result->word.unknown;
         s_.fpr_affine[fd]=relation;
-        s_.fcr31=(s_.fcr31&~0xC000u)|result->flags;
+        s_.fcr31=(s_.fcr31&~(op==MipsOpcode::DivS ? 0x30000u : 0xC000u))|result->flags;
     }
     void cop1_transfer(bool store, std::uint32_t word) {
         if ((s_.cp0(Cop0::Status) & kStatusCU1) == 0u)
@@ -662,7 +696,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"FPU conversion with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
             const auto input=state.fpr[ee::rd(word)];
-            std::uint32_t result=0;
+            std::uint32_t result=0,result_unknown=0;FpuAffine result_relation;
             if(instruction.opcode==MipsOpcode::CvtWS) {
                 const auto convert=[](std::uint32_t bits) {
                     const int exponent=static_cast<int>((bits>>23u)&255u)-127;
@@ -675,19 +709,29 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
                 const auto unknown=state.unknown_fpr_bits[ee::rd(word)];
                 result=convert(input&~unknown);
                 if(unknown) {
-                    // For a fixed sign/exponent, truncation and saturation are
-                    // monotone in the fraction. Equal endpoint results prove
-                    // every admitted encoding has the same integer result.
-                    // Partition uncertain signs/exponents; never pick bits.
-                    const auto high_unknown=unknown&0xFF800000u;
-                    auto subset=high_unknown;
-                    for(;;) {
-                        const auto low=(input&~unknown)|subset;
-                        if(convert(low)!=result || convert(low|(unknown&0x7FFFFFu))!=result)
-                            cpu.stop(StopKind::NotModeled,"FPU conversion consumes unknown FPR bits with different integer results");
-                        if(!subset)break;
-                        subset=(subset-1u)&high_unknown;
+                    const auto relation=cpu.fpu_relation(ee::rd(word));
+                    std::vector<std::uint32_t> values;
+                    const auto append=[&](std::uint32_t value) {
+                        const auto at=std::lower_bound(values.begin(),values.end(),value);
+                        if(at!=values.end() && *at==value)return;
+                        if(values.size()==512)cpu.stop(StopKind::NotModeled,"FPU conversion exceeds the bounded integer domain");
+                        values.insert(at,value);
+                    };
+                    if(relation.candidates)for(const auto value:*relation.candidates)append(convert(value));
+                    else for(const auto& range:cpu.fpu_ranges({input&~unknown,unknown},relation)) {
+                        // Truncation/saturation is monotone for each fixed
+                        // sign/exponent class. Retain every integer between
+                        // the converted endpoints, including both sides of
+                        // zero/normalization boundaries in separate classes.
+                        auto lo=convert(range[0]),hi=convert(range[1]);if(lo>hi)std::swap(lo,hi);
+                        if(std::uint64_t{hi}-lo>=512)cpu.stop(StopKind::NotModeled,"FPU conversion exceeds the bounded integer domain");
+                        for(std::uint64_t value=lo;value<=hi;++value)append(static_cast<std::uint32_t>(value));
                     }
+                    if(values.empty())cpu.stop(StopKind::NotModeled,"FPU conversion has no certified input domain");
+                    std::uint32_t all=~0u,any=0;for(const auto value:values){all&=value;any|=value;}
+                    result=all;result_unknown=all^any;
+                    if(result_unknown)result_relation={memory.allocate_fpu_origin(),0,0,false,result,result_unknown,values.front(),values.back(),
+                        std::make_shared<const std::vector<std::uint32_t>>(std::move(values))};
                 }
             } else {
                 cpu.require_fpr_known(ee::rd(word),"FPU conversion");
@@ -698,7 +742,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
                     result=(input&0x80000000u)|((exponent+127u)<<23u)|(mantissa&0x7FFFFFu);
                 }
             }
-            state.fpr[ee::sa(word)]=result;state.unknown_fpr_bits[ee::sa(word)]=0;state.fpr_affine[ee::sa(word)]={};break;
+            state.fpr[ee::sa(word)]=result;state.unknown_fpr_bits[ee::sa(word)]=result_unknown;state.fpr_affine[ee::sa(word)]=std::move(result_relation);break;
         }
         case MipsOpcode::AddS: case MipsOpcode::SubS:
             cpu.fpu_binary(instruction.opcode,word);break;
@@ -733,7 +777,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         case MipsOpcode::DivS:
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"DIV.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
-            cpu.require_fpr_known(ee::rd(word),"DIV.S");cpu.require_fpr_known(ee::rt(word),"DIV.S");
+            if(state.unknown_fpr_bits[ee::rd(word)] || state.unknown_fpr_bits[ee::rt(word)]){cpu.fpu_binary(MipsOpcode::DivS,word);break;}
             state.fpr[ee::sa(word)]=ee_fpu_divide(state.fpr[ee::rd(word)],state.fpr[ee::rt(word)],state.fcr31);state.unknown_fpr_bits[ee::sa(word)]=0;state.fpr_affine[ee::sa(word)]={};break;
         case MipsOpcode::SqrtS: {
             if(!(state.cp0(Cop0::Status)&kStatusCU1))

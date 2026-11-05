@@ -276,7 +276,7 @@ private:
     // aliases share metadata, ordinary known RAM pays no per-byte allocation.
     mutable std::unordered_map<std::uint32_t, std::uint32_t> unknown_words_;
     struct StoredFpuRelation {ObservedWord word;FpuAffine relation;std::uint64_t dma_generation;};
-    std::unordered_map<std::uint32_t,StoredFpuRelation> fpu_relations_;
+    mutable std::unordered_map<std::uint32_t,StoredFpuRelation> fpu_relations_;
     std::uint64_t fpu_origin_{};
     // Own diagnostic provenance strings reconstructed from a checkpoint.
     // Guest state stores their contents; no host pointer is serialized.

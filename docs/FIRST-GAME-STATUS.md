@@ -91,7 +91,80 @@ o prefixo de 7,2 bilhões foi preservado. Último checkpoint periódico
 Cinco frames reais parciais, sem menu. Três testes focados aprovados:
 contexto EE/conversões, checkpoint completo e CLI periódico.
 
-## Seleção e identidade (execução inicial)
+## Continuações por checkpoint — 113 a 121
+
+Os ensaios seguintes partiram de checkpoints completos; nenhum prefixo
+de firmware ou jogo foi substituído por PC/contagem inventados.
+
+| Ensaio | Instruções do jogo | Fronteira observada |
+|---|---:|---|
+| 113 | 7.358.161.563 | MUL.S `0x1D7D1C`, domínio opaco de sinal/expoente |
+| 114 | 7.412.273.815 | CVT.W.S `0x11CD20`, inteiros possíveis 4095/4096 |
+| 115 | 7.412.274.109 | ADDIU `0x187984` consome domínio perdido no cache; relatório antigo apontava a sucessora `0x187988` |
+| 116 | 7.471.303.396 | DIV.S `0x186E60`, domínio maior que o limite finito inicial |
+| 117 | 7.727.166.728 | C.LT.S `0x1CD584`, magnitude positiva incerta contra zero; relatório apontava `0x1CD588` |
+| 118 | 7.727.166.924 | DIV.S `0x186E60`, intervalo amplo dividido por dois |
+| 119/120 | 7.727.172.060 | DMA VIF1 recusa coordenadas XYZ indeterminadas |
+| 121 | 7.727.170.000 | parada voluntária bem-sucedida, antes da recusa; checkpoint completo salvo |
+
+Correções genéricas: DIV usa o circuito SRT para cada candidato de domínios
+pequenos e conserva os possíveis quocientes e a classe comum de flags.
+Divisor normal potência de dois também aceita intervalos: verificação local
+de todos os 8.388.608 significandos normalizados confirmou preservação exata
+no circuito compartilhado; sinais, expoentes, zeros e clamps continuam no
+mesmo modelo escalar. É validação do circuito existente, não nova medição
+física. Domínios opacos são particionados por sinal/expoente. CVT conserva
+todos os inteiros possíveis em domínio limitado; comparações ordenadas
+só prosseguem quando todos os extremos provam a mesma condição. Igualdade
+falsa exige intervalos disjuntos, não só extremos diferentes.
+
+Certificados de valores agora distinguem cache residente e backing RAM.
+Escritas por alias uncached não trocam a origem da linha stale; manutenção,
+refill e writeback invalidam certificados pertinentes. Não se publicou cache
+sujo automaticamente, não se tornou DMA coerente e não se alterou timing.
+O teste de checkpoint passou a habilitar efetivamente D-cache e comprova
+que o valor sujo está ausente do backing antes de salvar.
+
+O fingerprint de estado deixou de incluir `ee_semantics.hpp`, que contém
+somente execução/contexto host; esse cabeçalho continua no fingerprint de
+runtime. Uma ponte explicitamente revisada aceita apenas o par de schemas
+`9199cae3…e2cc` → `771b6280…3f88`, com opt-in de alteração de runtime.
+Não há mudança dos campos/bytes serializados. O checkpoint real de 7,2
+bilhões foi recarregado pelo leitor novo em 0,831849 s: payload manteve
+`e91844dd…219b`, e a continuação de 1.000 instruções manteve exatamente
+`b650f12d…c9a7`. Mudanças futuras de campos não recebem essa exceção.
+
+Novo checkpoint `out/game-first/superbust-menu121-latest.ps2ncp`:
+PC `0x80002ACC`, 7.759.586.676 instruções totais, 7.759.588.054 ciclos,
+IOP `0x479D0` / 969.948.506. Payload 58.919.095 bytes, SHA-256
+`70824db1fd7da151a40a90cd6e7a807173f43f7a7b925cd05b7bc2e50761021b`.
+Retomada em **0,825777 s**, seguida de 2.060 instruções em **0,0395265 s**
+até reproduzir a mesma recusa. Logs locais `superbust-frontier-checkpoint.log`
+e `superbust-frontier-resume-proof.log`. Isso evita repetir 7,727 bilhões;
+não é comparação de FPS ou aceleração das instruções novas.
+
+Na recusa, VIF1 tem MADR `0xF70C20`, QWC 5, TADR `0x5BCE80`.
+Tag GIF REGLIST conhecida `B400000000008001` em `0xF70C00`, descriptors
+`F5353535310`. O XYZ2 em `0xF70C28` contém valor `FF01860092D6`, máscara
+`00FF0000`; outros vértices têm máscaras `7F`, `1FF` e `3F0000`.
+São coordenadas incertas, não padding descartável. Não foram consumidas
+como coordenadas conhecidas nem transformadas em imagem fictícia.
+
+Sete testes focados passaram: cache, SIF0/DMA, contexto EE, VU float,
+domínios FPU, checkpoint completo e CLI periódico. BIOS original repetida
+com runner atual: mesmos 17.690.079/`0x80007D20`, sem hipótese do encoder.
+A CI inicial do checkpoint detectou uma expectativa antiga de recusa CVT;
+o teste foi atualizado para verificar o resultado/domínio certificado.
+CI da revisão final deve ser conferida nos seis alvos.
+
+Capturas reais de 640x224 mostram uma animação com logotipo no canto,
+sem menu demonstrado. Start foi aplicado no 118/119, mas a recusa ocorreu
+no mesmo campo, sem resposta visual comprovada. O 122 aplica Start mais
+cedo, por SIO2, para testar a possibilidade de avançar pela abertura usando
+o controle. Isso é entrada convidada normal, sem salto de PC, alteração da
+RAM do jogo ou sucesso sintetizado. Up/Down/Cross no menu e partida pendem.
+
+## Seleção e identidade — dados da execução inicial
 
 - `games/` contém Shadow of the Colossus (USA), ISO 9660 de DVD, e Tetris Plus (USA), CD CUE/BIN.
   O segundo tem `BOOT`, executável `PS-X EXE` e serial `SLUS-00338`: é PS1, não um ELF R5900.

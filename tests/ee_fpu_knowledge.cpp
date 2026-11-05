@@ -112,7 +112,13 @@ int main() try {
     step(math(5,8,7,0));require(state.fpr[8]==0x3F800000 && state.unknown_fpr_bits[8]==1,"ABS establishes the sign and preserves opaque magnitude bits");
     step(math(7,9,7,0));step(math(6,10,7,0));
     require(state.unknown_fpr_bits[9]==0x80000001u && state.unknown_fpr_bits[10]==0x80000001u,"NEG and MOV preserve unresolved raw payload bits");
-    for(const auto word : {math(3,11,6,2),math(4,11,0,6),math(0x24,11,6,0),math(0x1C,11,6,2),math(0x18,0,6,2)}) {
+    step(math(3,11,6,2));
+    require(state.fpr_affine[11].candidates && state.unknown_fpr_bits[11],
+        "DIV.S retains a certified finite quotient domain from an uncertain raw operand");
+    const auto conversion_flags=state.fcr31;step(math(0x24,11,6,0));
+    require(state.fpr[11]==1 && !state.unknown_fpr_bits[11] && state.fcr31==conversion_flags,
+        "CVT.W.S eliminates fraction uncertainty only when every allowed value truncates to the same integer");
+    for(const auto word : {math(4,11,0,6),math(0x1C,11,6,2),math(0x18,0,6,2)}) {
         state.fpr[11]=0x12345678;state.unknown_fpr_bits[11]=0;state.fcr31=0x0183C079;
         rejects([&]{step(word);},"unknown FPR bits");
         require(state.fpr[11]==0x12345678 && !state.unknown_fpr_bits[11] && state.fcr31==0x0183C079,
@@ -232,5 +238,18 @@ int main() try {
         std::make_shared<const std::vector<FloatBounds>>(std::initializer_list<FloatBounds>{{0x3F800000u,0x3F8001FFu},{0xBF800100u,0xBF800101u}})};
     step(math(5,4,4,0));require(state.fpr_affine[4].maximum==0x3F8001FFu && !state.fpr_affine[4].negated,
         "ABS keeps the full outer range when sign folding produces nested intervals, and replaces the signed affine origin");
+    state.fpr[12]=0xBF3850F0u;state.unknown_fpr_bits[12]=7;state.fpr_affine[12]={};
+    state.fpr[13]=0x30000000u;state.unknown_fpr_bits[13]=0x87FFFF80u;state.fpr_affine[13]={};state.fcr31=0x0183C079u;
+    step(math(2,3,12,13));
+    require(state.fpr_affine[3].ranges && state.fcr31==0x01830079u,
+        "opaque sign/exponent uncertainty is partitioned into bounded normal product classes with common flags");
+    for(const auto source:{0x30000000u,0x307FFF80u,0x37800000u,0xB7800000u,0xB7FFFF80u}) {
+        for(const auto fraction:{0u,7u}) {
+            std::uint32_t flags=0;const auto value=ee_fpu_multiply(0xBF3850F0u|fraction,source,flags);
+            if(!value)continue;
+            bool contained=false;for(const auto& range:*state.fpr_affine[3].ranges)contained|=*value>=range[0] && *value<=range[1];
+            require(contained && !flags,"each concrete certified signed/exponent product remains inside the complete output union");
+        }
+    }
     std::cout<<"EE floating bounds, dominated addition, raw register/RAM transport, sign operations, consumer refusals and comparison parity passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

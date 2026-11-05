@@ -12,6 +12,7 @@ void Memory::reset_data_cache() {
     cache_config_=0;
     cache_clock_=nullptr;
     data_cache_={};
+    std::erase_if(fpu_relations_,[](const auto& entry){return (entry.first&0x40000000u)!=0;});
     for(auto& set:data_cache_) for(auto& line:set) line.unknown.fill(0xFFu);
 }
 void Memory::diagnostic_data_cache(bool translate_uncached_hits) {
@@ -36,6 +37,9 @@ void Memory::writeback_data_cache(DataCacheLine& line,unsigned index) const {
     if(physical>=kMainRamBytes) throw DeviceRefusal("D-cache writeback outside main RAM is not modeled");
     // Complete older DMA accesses before exposing this CPU writeback.
     if(registers_.dma_reads_ram() || registers_.dma_writes_ram()) registers_.sync_iop();
+    // A writeback publishes new RAM provenance even if its bit hull matches
+    // older RAM. Cache certificates remain attached to the resident line.
+    for(unsigned offset=0;offset<64;offset+=4)fpu_relations_.erase(physical+offset);
     std::copy(line.bytes.begin(),line.bytes.end(),ram_.begin()+physical);
     for(unsigned i=0;i<64;i+=8) {
         std::uint64_t unknown=0;
@@ -63,6 +67,9 @@ Memory::DataCacheLine& Memory::data_cache_line(std::uint32_t address,const Targe
                    : ((set[0].tag^set[1].tag)>>4u)&1u;
     auto& line=set[way];
     writeback_data_cache(line,index);
+    // Certificates are host metadata, not cache payload. A refill must not
+    // resurrect an older origin merely because bytes/unknown bits coincide.
+    if(!fpu_relations_.empty())std::erase_if(fpu_relations_,[index](const auto& entry){return (entry.first&0x40000000u) && ((entry.first>>6u)&63u)==index;});
     const auto offset=target.offset&~63u;
     const auto& storage=target.region==BusRegion::BiosRom ? rom_
                         : target.region==BusRegion::Rom1 ? rom1_ : ram_;
@@ -82,6 +89,8 @@ ObservedWord Memory::data_cache_operation(unsigned op,std::uint32_t address,Obse
     const auto index=(address>>6u)&63u;
     auto& set=data_cache_[index];
     auto* line=&set[address&1u];
+    if(op==0x12 || op==0x13 || op==0x14 || op==0x16 || op==0x18 || op==0x1A)
+        std::erase_if(fpu_relations_,[index](const auto& entry){return (entry.first&0x40000000u) && ((entry.first>>6u)&63u)==index;});
     if(op==0x18 || op==0x1A || op==0x1C) {
         const auto target=resolve(address&~3u,4,false,"CACHE");
         const bool uncached_hypothesis=data_cache_uncached_hits_ &&

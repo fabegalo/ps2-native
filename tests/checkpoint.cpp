@@ -22,7 +22,8 @@ void finish_transfer(Memory& memory) {
 int main(int argc,char** argv)try {
     if(argc!=2 && argc!=4)return 2;const auto directory=std::filesystem::path(argv[1]);ps2native::create_directories(directory);
     auto image=program();Memory memory;EEState state;prepare_direct_elf(image,nullptr,state,memory);
-    state.set_cp0(Cop0::Config,3);memory.set_cache_config(3);memory.diagnostic_data_cache(true);memory.write32(0x80000300u,0x12345678u);
+    memory.diagnostic_data_cache(true);state.set_cp0(Cop0::Config,0x10003);memory.set_cache_config(0x10003);memory.write32(0x80000300u,0x12345678u);
+    require(memory.diagnostic_ram(0x300,4).value==0,"checkpoint fixture has a dirty cached word absent from backing RAM");
     memory.store32_observed(0x80000310u,{0xA0000000u,15});
     state.set_reg64_candidates(5,{0x1122u,0x1133u});
     std::vector<std::uint8_t> iop(0x104);

@@ -269,7 +269,13 @@ CheckpointInfo inspect_checkpoint(const std::filesystem::path& path){return chec
 #ifndef PS2N_CHECKPOINT_SAVE_ONLY
 CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,Memory& memory,const CheckpointContext& context) {
     using namespace checkpoint_detail;validate_context(context);CheckpointAccess::validate_boundary(state,memory);auto parsed=parse(path);const auto& info=parsed.info;
-    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA)throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
+    // Audited byte-identical v1 transition: execution-only ee_semantics.hpp
+    // moved from the state fingerprint to the runtime fingerprint. Pin both
+    // ends so a future state-field change cannot silently reuse this bridge.
+    const bool reviewed_v1=context.allow_runtime_change &&
+        info.schema_sha256=="9199cae351d7ea3f43526fa1dd800d9f6810d80f6c0370974f190695aee3e2cc" &&
+        std::string_view(PS2N_CHECKPOINT_SCHEMA)=="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88";
+    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1)throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
     if(info.runtime_sha256!=PS2N_CHECKPOINT_RUNTIME && !context.allow_runtime_change)throw std::runtime_error("checkpoint runtime changed; explicit reviewed allow-runtime-change is required");
     if(info.scenario_sha256!=context.scenario_sha256)throw std::runtime_error("checkpoint scenario identity differs");
     if(info.bindings_sha256!=CheckpointAccess::bindings(memory,context.expected_disc_sha256))throw std::runtime_error("checkpoint firmware/profile/NVM/disc identity differs");

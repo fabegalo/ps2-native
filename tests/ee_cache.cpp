@@ -147,7 +147,24 @@ void gif_dma_visibility() {
     require(m.read32(0xB2001084u)==0x12345678u,"GS LABEL came from flushed DMA source bytes");
 }
 }
+void cached_provenance() {
+    Memory memory;initialize(memory);const ObservedWord word{0x45000000u,0x00FFFFFFu};
+    memory.store32_observed(0x80000300u,word);
+    const auto origin=memory.allocate_fpu_origin();
+    const FpuAffine relation{origin,0,0,false,word.value,word.unknown,0x457FFFFFu,0x45800000u,
+        std::make_shared<const std::vector<std::uint32_t>>(std::initializer_list<std::uint32_t>{0x457FFFFFu,0x45800000u})};
+    memory.remember_fpu_relation(0x80000300u,word,relation);
+    require(memory.fpu_relation(0x80000300u,memory.load32_observed(0x80000300u)).origin==origin,
+        "CPU cache reads retain the certificate of the actual dirty cached word");
+    memory.store32_observed(0xA0000300u,word);
+    require(memory.fpu_relation(0x80000300u,memory.load32_observed(0x80000300u)).origin==origin,
+        "an uncached write does not replace the stale resident cache word or its origin");
+    (void)op(memory,0x1A,0x80000300u);
+    const auto refilled=memory.load32_observed(0x80000300u);
+    require(refilled.value==word.value && refilled.unknown==word.unknown && !memory.fpu_relation(0x80000300u,refilled).origin,
+        "invalidate/refill cannot resurrect an older cached certificate from matching bytes and masks");
+}
 int main() try {
-    visibility_and_tags();replacement_and_knowledge();mapping_and_locks();interpreter_and_shared_memory();gif_dma_visibility();
+    visibility_and_tags();replacement_and_knowledge();mapping_and_locks();interpreter_and_shared_memory();gif_dma_visibility();cached_provenance();
     std::cout<<"EE D-cache: visibility, tags, LRF, knowledge, mapping, locks and shared CPU semantics passed\n";
 } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}

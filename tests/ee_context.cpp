@@ -708,7 +708,36 @@ void conversions_and_partial_loads() {
     memory.write32(s.pc,0x460008A4u);interpret_instruction(ctx);
     require(s.fpr[2]==0,"uncertain sub-unit magnitude and sign still truncate to a proven zero");
     s.pc=0x80001000;s.fpr[1]=0x3F000000u;s.unknown_fpr_bits[1]=0x00800000u;
-    rejects([&]{interpret_instruction(ctx);},"different integer results");s.unknown_fpr_bits[1]=0;
+    interpret_instruction(ctx);
+    require(s.fpr[2]==0 && s.unknown_fpr_bits[2]==1 && *s.fpr_affine[2].candidates==std::vector<std::uint32_t>{0,1},
+        "CVT.W.S retains both possible integers instead of selecting one across an uncertain exponent");
+    s.pc=0x80001000;s.fpr[1]=0x45000000u;s.unknown_fpr_bits[1]=0x00FFFFFFu;
+    s.fpr_affine[1]={memory.allocate_fpu_origin(),0,0,false,s.fpr[1],s.unknown_fpr_bits[1],0x457FFCC2u,0x4580019Fu,{},
+        std::make_shared<const std::vector<FloatBounds>>(std::initializer_list<FloatBounds>{{0x457FFCC2u,0x457FFFFFu},{0x45800000u,0x4580019Fu}})};
+    interpret_instruction(ctx);
+    require(s.fpr[2]==0 && s.unknown_fpr_bits[2]==0x1FFFu && *s.fpr_affine[2].candidates==std::vector<std::uint32_t>{4095,4096},
+        "CVT.W.S uses certified numeric ranges instead of widening to every value in their raw bit hull");
+    s.pc=0x80001000;s.fpr[1]=0;s.unknown_fpr_bits[1]=~0u;s.fpr_affine[1]={};
+    rejects([&]{interpret_instruction(ctx);},"bounded integer domain");s.unknown_fpr_bits[1]=0;
+    s.pc=0x80001000;s.fpr[1]=0x28080404u;s.unknown_fpr_bits[1]=0x03E7F9FBu;s.fpr[2]=0;s.unknown_fpr_bits[2]=0;
+    memory.write32(s.pc,0x46020834u);interpret_instruction(ctx);
+    require(!(s.fcr31&(1u<<23)),"C.LT.S proves a positive uncertain magnitude cannot be less than zero");
+    s.pc=0x80001000;ee::exec<MipsOpcode::CLessS>(s,memory,s.pc,0x46020834u);
+    require(!(s.fcr31&(1u<<23)),"shared AOT comparison uses the same certified condition");
+    s.pc=0x80001000;s.fpr[1]=0x3F800000u;s.unknown_fpr_bits[1]=0x007FFFFFu;s.fpr[2]=0x3FC00000u;
+    memory.write32(s.pc,0x46020832u);rejects([&]{interpret_instruction(ctx);},"unknown FPR bits");s.unknown_fpr_bits[1]=0;
+    s.pc=0x80001000;s.fpr[1]=0x448619CCu;s.unknown_fpr_bits[1]=3;s.fpr[2]=0x40000000u;s.unknown_fpr_bits[2]=0;
+    s.fcr31=0x0183C079;memory.write32(s.pc,0x460208C3u);interpret_instruction(ctx);
+    require(s.fpr[3]==0x440619CCu && s.unknown_fpr_bits[3]==3 && s.fcr31==0x0180C079 && s.fpr_affine[3].candidates->size()==4,
+        "DIV.S preserves every uncertain quotient and agrees on I/D causes without clearing O/U history");
+    s.pc=0x80001000;memory.write32(s.pc,0x460108C3u);interpret_instruction(ctx);
+    require(s.fpr[3]==0x3F800000u && s.unknown_fpr_bits[3]==0,"DIV.S preserves correlated identical input domains");
+    s.pc=0x80001000;s.fpr[1]=0x3F800000u;s.unknown_fpr_bits[1]=0;s.fpr[2]=0;s.unknown_fpr_bits[2]=0x40000000u;
+    memory.write32(s.pc,0x460208C3u);rejects([&]{interpret_instruction(ctx);},"cannot certify");s.unknown_fpr_bits[2]=0;
+    s.pc=0x80001000;s.fpr[1]=0x44400000u;s.unknown_fpr_bits[1]=0x003FFFFFu;s.fpr_affine[1]={};s.fpr[2]=0x40000000u;s.fcr31=0x0183C079;
+    memory.write32(s.pc,0x460208C3u);interpret_instruction(ctx);
+    require(s.fpr[3]==0x43C00000u && s.unknown_fpr_bits[3]==0x003FFFFFu && s.fpr_affine[3].ranges && s.fcr31==0x0180C079,
+        "power-of-two DIV.S preserves a large certified significand interval with common I/D causes");
     memory.write64(0x80002000,0x8776655443322110ull);
     s.set_reg32(8,0x80002000);
     constexpr std::uint64_t old=0xFFEEDDCCBBAA9988ull;
