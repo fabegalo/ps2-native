@@ -89,6 +89,17 @@ void floating_trace(Memory& memory) {
 }
 void scalar_carry_experiment() {
     std::uint32_t flags=0;
+    std::uint32_t seed=0x91A2B3C4u;
+    for(unsigned coarse=0;coarse<32;++coarse)for(unsigned sample=0;sample<512;++sample) {
+        seed=seed*1664525u+1013904223u;
+        const auto a=((sample&1u)<<31u)|((sample%4u==0 ? 1u : sample%4u==1 ? 127u : sample%4u==2 ? 254u : 255u)<<23u)|(coarse<<18u);
+        const auto b=(seed&0x807FFFFFu)|(((seed>>24u)%255u+1u)<<23u);
+        std::uint32_t strict_flags=0x0183C079u,refined_flags=strict_flags;
+        const auto strict=ee_fpu_multiply(a,b,strict_flags);
+        const auto refined=ee_fpu_multiply(a,b,refined_flags,CoarseEarlyDigits);
+        if(strict)require(refined==strict && refined_flags==strict_flags,
+            "the scalar experiment preserves certified coarse results and flags, including exponent edges");
+    }
     require(ee_fpu_multiply(0x3FC00000u,0x3F800002u,flags)==0x3FC00002u && !flags &&
         ee_fpu_multiply(0xBFC00000u,0x3F800002u,flags)==0xBFC00002u,
         "the established lowest-negative-digit carry class transfers to coarse significands with identical low input columns");
@@ -110,6 +121,20 @@ void scalar_carry_experiment() {
     };
     multiply(0x40000000u,0x3FC90F80u);require(state.unknown_fpr_bits[3],"ordinary scalar multiplication keeps the unmeasured early carry unresolved");
     rejects([&]{memory.diagnostic_ee_early_digit_carry();},"precede scalar FPU");
+    memory.set_clock(&state.retired_instructions,&state.stall_cycles);
+    const auto uncertain_state=checkpoint_state_sha256(state,memory);
+    rejects([&]{refine_checkpoint_scalar_carry(state,memory);},"certified numeric history");
+    require(checkpoint_state_sha256(state,memory)==uncertain_state,"failed refinement does not mutate the checkpoint");
+    state.unknown_fpr_bits.fill(0);state.fpr_affine={};
+    rejects([&]{refine_checkpoint_scalar_carry(state,memory);},"certified numeric history");
+    memory=Memory{};memory.reset_for_boot(rom);state=EEState{};state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
+    memory.set_clock(&state.retired_instructions,&state.stall_cycles);
+    multiply(0x40000000u,0x3F800000u);
+    rejects([&]{memory.diagnostic_ee_early_digit_carry();},"precede scalar FPU");
+    refine_checkpoint_scalar_carry(state,memory);
+    multiply(0x40000000u,0x3FC90F80u);
+    require(state.fpr[3]==0x40490F7Fu && !state.unknown_fpr_bits[3],
+        "certified known arithmetic permits explicit refinement before the first uncertain result");
     memory.reset_for_boot(rom);memory.diagnostic_ee_early_digit_carry();
     state=EEState{};state.pc=0x80001000;state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
     memory.set_clock(&state.retired_instructions,&state.stall_cycles);

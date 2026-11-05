@@ -18,6 +18,18 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **Diagnóstico sem repetir o prefixo:** o 125 retomou de 6,325 bilhões,
+  aplicou Cross pelo SIO2 por 35 campos e voltou à mesma recusa DMA em
+  7.727.172.060 do jogo. Frames comparáveis mantiveram hashes idênticos.
+  Busca binária isolou a primeira escrita incerta em `0x1CD120`,
+  7.727.167.542 do jogo; checkpoint salvo uma instrução antes. Há também
+  prefixo completo em 7,125 bilhões, com zero origens numéricas incertas.
+  Refinamento escalar opcional aceita apenas histórico certificado,
+  preserva os resultados anteriores e altera somente sua flag experimental;
+  não é política automática de carregamento. Testes de recusa, persistência
+  do histórico e equivalência passaram; 126 em execução com hipótese de
+  carry escalar explícita e cenário separado. Menu e gameplay pendentes.
+  CI dos commits `78973bb` e `052ae60` aprovada nos seis alvos aplicáveis.
 - **Checkpoints preservados após a atualização de FPU `e0cfc2f`:** migração
   explícita dos esquemas anteriores, sem reinterpretar layout C++ nem
   repetir o boot. O leitor reserializa todos os campos legados e exige

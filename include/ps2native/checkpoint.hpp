@@ -32,4 +32,9 @@ void save_checkpoint(const std::filesystem::path& path, const EEState& state,
     EEState& state, Memory& memory, const CheckpointContext& context);
 [[nodiscard]] CheckpointInfo inspect_checkpoint(const std::filesystem::path& path);
 [[nodiscard]] std::string checkpoint_state_sha256(const EEState& state,const Memory& memory);
+// Explicit external-reference scalar carry experiment, never an automatic load
+// policy. Permitted only at a bound boundary with no uncertain numeric history:
+// the experiment selects within strict product bounds, preserving that prefix.
+// Record a new scenario identity before saving the experimental continuation.
+void refine_checkpoint_scalar_carry(const EEState& state,Memory& memory);
 } // namespace ps2native

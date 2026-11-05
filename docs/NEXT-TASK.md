@@ -9,14 +9,27 @@ verificado em `0x80002ACC`, 7.759.586.676 instruções totais,
 verificada em 1,091 s e apenas 2.060 instruções/0,0384 s até o bloqueio.
 Não repetir desde o boot para diagnosticar essa recusa.
 
+**126 em execução**, com hipótese genérica de carry escalar explícita,
+somente após provar que o prefixo completo de 7,125 bilhões tem zero
+origens numéricas incertas. Cenário separado `499f9eaf33cc3468a1fa1e189bde88cbfd152fb8405511be2c363fe93ce5b493`.
+Log `superbust-menu-126.log`; entrada `superbust-pad126.txt` solta (`FFFF`).
+Prazo de 15 minutos supervisionado e checkpoints completos a cada
+100 milhões. Não repetir os 7,125 bilhões iniciais. Fontes fixadas
+contra alterações simultâneas; núcleo/AOT/harness compatíveis.
+
+O 125 voltou à mesma recusa, Cross por 35 campos sem mudança visual.
+A escrita inicial foi isolada em `SW 0x1CD120` / 7.727.167.542 do jogo;
+`superbust-before-unknown-xy.ps2ncp` para uma instrução antes, e
+`superbust-coordinate-prefix7727.ps2ncp` para 172.060 antes do DMA.
+O domínio conserva 32 coordenadas Y distintas; não escolher bits zero.
+Se necessário, esses estados reproduzem o caso sem a execução longa.
+
 Checkpoints anteriores às novas flags escalares têm migração explícita,
 com opt-in de runtime e SHA-256 dos campos antigos revalidado. Experimento
 escalar desativado; ativação tardia recusada. Sete testes focados passaram.
-O 123 executa a partir de `superbust-live-6000.ps2ncp` para aplicar a nova
-prova estrita de MUL antes dos cálculos gráficos, sem repetir os seis
-bilhões iniciais. Log `superbust-menu-123.log`; entrada `superbust-pad123.txt`
-solta (`FFFF`), checkpoints periódicos e prazo de 15 minutos supervisionado.
-Núcleo, AOT e harness foram recompilados com a mesma revisão/cabeçalhos.
+O 123 executou de seis bilhões até 6,325 bilhões e salvou seu estado;
+125 retomou desse checkpoint e testou a prova estrita antes dos cálculos
+gráficos. CI `78973bb` e `052ae60` aprovada nos seis alvos aplicáveis.
 
 Recusa atual: DMA gráfico VIF1 lê XYZ2 incerto em payload REGLIST;
 EE reportado `0x1CE460`, 7.727.172.060 do jogo, IOP ativo `0xB46C`

@@ -59,6 +59,18 @@ struct CheckpointAccess {
     template<class A,class T> static void fields(A& a,T& value){checkpoint_detail::aggregate(a,value);}
     static std::string bindings(const Memory& memory,std::string_view expected_disc);
     static void validate_boundary(const EEState& state,const Memory& memory);
+    static void refine_scalar(const EEState& state,Memory& memory) {
+        if(memory.cache_clock_!=&state.retired_instructions || memory.fpu_origin_ || !memory.fpu_relations_.empty() ||
+           std::any_of(state.unknown_fpr_bits.begin(),state.unknown_fpr_bits.end(),[](auto bits){return bits!=0;}))
+            throw DeviceRefusal("scalar checkpoint refinement requires bound, fully certified numeric history");
+        // Every uncertain scalar result allocates or inherits a monotonic
+        // origin. Zero origins prove that all earlier results were certified.
+        // The optional coarse carry subtracts 2^15 within the strict low-mass
+        // bounds; it agrees with every formerly certified result and flag.
+        // Keep the arithmetic-started guard: this is a reviewed refinement,
+        // not permission to reconfigure arbitrary partially evaluated state.
+        memory.diagnostic_ee_early_digit_carry_=true;
+    }
     template<class T> static void prepare_read(T&){}
     template<class T> static void prepare_read(DiagnosticHistory<T>& history){history.sink_=nullptr;}
     template<class T> static void validate(const T&){}
@@ -252,6 +264,9 @@ std::string checkpoint_state_sha256(const EEState& state,const Memory& memory) {
     checkpoint_detail::Writer a;auto clock=CheckpointAccess::clock(memory),stalls=CheckpointAccess::stalls(memory);
     a(clock,stalls,const_cast<EEState&>(state),const_cast<Memory&>(memory));return sha256_hex(a.output);
 }
+void refine_checkpoint_scalar_carry(const EEState& state,Memory& memory) {
+    CheckpointAccess::validate_boundary(state,memory);CheckpointAccess::refine_scalar(state,memory);
+}
 void save_checkpoint(const std::filesystem::path& path,const EEState& state,const Memory& memory,
                      const BootReport& boundary,const CheckpointContext& context) {
     using namespace checkpoint_detail;validate_context(context);CheckpointAccess::validate_boundary(state,memory);
@@ -282,14 +297,16 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
     // both destination fingerprints stay pinned against future field changes.
     const bool reviewed_scalar_transition=context.allow_runtime_change &&
         (std::string_view(PS2N_CHECKPOINT_SCHEMA)=="72d8f630ea9a0befdba0e33bbc9d80394b6a2c29db31cf0a402bd6299876a61e" ||
-         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="4e87d58b722e40020caec94e9928c087e3f9d86c7e33f5116a76628648e4dc4f");
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="4e87d58b722e40020caec94e9928c087e3f9d86c7e33f5116a76628648e4dc4f" ||
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="830377c10823d2223579db00dc995da1a05a0fcc433a85be4014e50ea96ac772");
     const bool legacy_scalar_flags=reviewed_scalar_transition &&
         (info.schema_sha256=="9199cae351d7ea3f43526fa1dd800d9f6810d80f6c0370974f190695aee3e2cc" ||
          info.schema_sha256=="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88");
     const bool same_scalar_fields=reviewed_scalar_transition &&
         (info.schema_sha256=="4553168c0bd7fd198259cc9a8f5ccc7572a3b789e7dca3495ac548162a6768da" ||
          info.schema_sha256=="72d8f630ea9a0befdba0e33bbc9d80394b6a2c29db31cf0a402bd6299876a61e" ||
-         info.schema_sha256=="cd1aa8bf7755b3926af94afc8385147b755b5de6b335faa25049d9f719960ecd");
+         info.schema_sha256=="cd1aa8bf7755b3926af94afc8385147b755b5de6b335faa25049d9f719960ecd" ||
+         info.schema_sha256=="4e87d58b722e40020caec94e9928c087e3f9d86c7e33f5116a76628648e4dc4f");
     if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields)
         throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
     if(info.runtime_sha256!=PS2N_CHECKPOINT_RUNTIME && !context.allow_runtime_change)throw std::runtime_error("checkpoint runtime changed; explicit reviewed allow-runtime-change is required");

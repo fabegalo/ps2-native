@@ -84,7 +84,7 @@ int main(int argc,char** argv)try {
     // the two newly introduced booleans are omitted from an old envelope.
     const auto current_file=directory/"migration-current.ps2ncp",flag_file=directory/"migration-flag.ps2ncp";
     save_checkpoint(current_file,state,memory,continuous,context);const auto current_info=inspect_checkpoint(current_file);
-    memory.diagnostic_ee_early_digit_carry();
+    refine_checkpoint_scalar_carry(state,memory);
     auto flag_context=context;auto flag_identity=image.bytes;flag_identity.push_back(1);flag_context.scenario_sha256=sha256_hex(flag_identity);
     save_checkpoint(flag_file,state,memory,continuous,flag_context);
     const auto current_bytes=read_file(current_file),flag_bytes=read_file(flag_file);

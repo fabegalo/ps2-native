@@ -4,6 +4,64 @@ Execução local em 03/11/2026. **A meta de jogabilidade não foi atingida.** O 
 inicialização normal, primeiro frame, menu, controles e gameplay não foram demonstrados.
 Código original BSD-3-Clause; nenhum código de emulador, firmware, IRX ou jogo foi incorporado.
 
+## Fronteira localizada e refinamento experimental — 125/126
+
+O 125 executou a nova prova estrita de multiplicação desde o prefixo
+de seis bilhões, com parada/retomada em 6,325 bilhões para fixar fontes,
+núcleo, AOT e harness contra alterações simultâneas da `main`. Fonte
+fixada `2810c76`, runtime
+`bb3af1d4b8d0783702bffd8519a38ef8eba75699d64f8d42c37f1ab6f7516ba4`;
+retomada em 0,843 s. Os sete testes focados e a regressão com BIOS
+original passaram: mesma recusa do encoder `0x7E`, `0x80007D20` /
+17.690.079, sem hipótese de encoder nesse controle original.
+
+Cross pelo SIO2, pressionado em 7.479.092.337 ciclos/campo 295 e solto
+em 7.651.266.087/campo 330: 35 campos. Comparação por ciclo dos frames
+com o 122 não mostrou mudança visual. O 125 terminou na mesma recusa
+DMA VIF1, `0x1CE460`, 7.727.172.060 do jogo, 7.759.588.736 totais,
+7.759.590.114 ciclos EE, IOP `0xB46C` / 969.948.764; 635,076 s desde
+6,325 bilhões. Último frame real `superbust-menu125-vblank-293.bmp`,
+hash RGBA `795b25e7a3d14b09885350a6bfb1f6bbb649356f7956b4db9c28f16fa8198bf9`.
+Continua sendo um indicador circular, sem menu comprovado.
+
+Busca binária com restaurações curtas localizou a primeira escrita
+incerta: `SW` em `0x1CD120`, 7.727.167.542 do jogo. O registrador de
+origem conserva 32 coordenadas Y consecutivas (`0x867C..0x869B`);
+não há um valor único a publicar ao DMA. Checkpoint completo
+`superbust-before-unknown-xy.ps2ncp` em 7.727.167.541, PC `0x1CD120`,
+uma instrução antes. `superbust-coordinate-prefix7727.ps2ncp` preserva
+7.727.000.000, apenas 172.060 instruções antes da recusa final.
+Logs `coordinate-first-write-proof.log` e `coordinate-bisect-*.log`.
+
+Foi preservado também `superbust-before-3d-7125.ps2ncp`, 7.125.000.000
+do jogo / 7.157.416.676 totais, PC `0x81FC8`, payload SHA-256
+`c739441f2699dfa1df2aa45cdfc54f1f253c4eecfc0b9e61c55eccddf7e95c8b`.
+Esse prefixo tem zero origens numéricas incertas. A API explícita
+`refine_checkpoint_scalar_carry` admite o experimento genérico já
+existente somente com relógio/estado vinculados, FPRs conhecidos,
+nenhuma relação armazenada e contador monotônico de origens zero.
+O contador não é limpo por reset ou sobrescrita: estados já incertos
+continuam recusados. A API normal de configuração mantém sua guarda.
+
+A hipótese seleciona uma perda de carry dentro dos limites do produto
+estrito, portanto concorda com todos os resultados/flags anteriormente
+certificados. O teste compara 16.384 pares cobrindo todas as mantissas
+grossas e extremos de expoente; asserções de estado completo verificam
+que o refinamento muda somente uma flag host. O modelo físico desse
+carry permanece **não verificado**, com evidência de referência externa;
+o carregamento não o habilita automaticamente. Todos os sete testes
+focados passaram após corrigir a instância reutilizada no teste da guarda.
+
+126 em execução desde esse prefixo, sem repetir 7,125 bilhões de
+instruções. Núcleo/AOT/harness com fontes fixadas em `6c94fd8` mais
+o refinamento; esquema
+`830377c10823d2223579db00dc995da1a05a0fcc433a85be4014e50ea96ac772`,
+runtime `d62d319d99c680fd8995165517d12ea352a62db57193f85956422a3cc725d088`.
+Carregamento em 0,976 s. Cenário experimental separado
+`499f9eaf33cc3468a1fa1e189bde88cbfd152fb8405511be2c363fe93ce5b493`,
+log `superbust-menu-126.log`, entrada `superbust-pad126.txt` solta (`FFFF`).
+Ainda faltam menu, resposta visual de Start/Cross/Up/Down e partida.
+
 ## Compatibilidade dos checkpoints após a atualização de FPU
 
 A `main` recebeu `e0cfc2f`, que acrescentou duas flags de configuração
