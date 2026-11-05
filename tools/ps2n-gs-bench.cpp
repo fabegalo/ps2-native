@@ -136,7 +136,7 @@ int main(int argc,char** argv)try {
         <<"result_upload_bytes,"<<after.result_upload_bytes-before.result_upload_bytes<<",result_readback_bytes,"
         <<after.result_readback_bytes-before.result_readback_bytes<<",backend_storage_bytes,"<<after.storage_bytes<<'\n'
         <<"logical_VRAM_bytes,"<<GsVram::kBytes<<",known_mask_bytes,"<<GsVram::kBytes
-        <<",max_command_bytes,"<<primitives*sizeof(GsGpuCommand)<<'\n'
+        <<",max_command_bytes,"<<std::min(primitives,256u)*sizeof(GsGpuCommand)<<'\n'
         <<"CPU_fallback_primitives,"<<gpu.gs.vram().cpu_fallbacks()<<"\n";
     if(after.primitives==before.primitives)throw std::runtime_error("benchmark did not execute GPU rasterization");
     return 0;

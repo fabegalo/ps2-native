@@ -77,6 +77,7 @@ private:
     void detach_gpu() noexcept;
     void synchronize_page(unsigned page) const;
     void cache_page_knowledge(unsigned page) const;
+    void execute_pending(const std::array<bool,kPages>* read_pages=nullptr) const;
     // HOST_INPUT_END
     void write_word(unsigned at, std::uint32_t value, std::uint32_t mask,
                     std::uint32_t unknown, bool conditional);

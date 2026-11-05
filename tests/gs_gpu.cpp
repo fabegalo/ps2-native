@@ -103,6 +103,74 @@ void enqueue_pair(GsVram& cpu,GsVram& gpu,const GsGpuCommand& command) {
             command.color,command.frame_mask,0,command.conditional!=0u);
     gpu.enqueue_gpu(command);
 }
+void check_fused_readback(std::shared_ptr<GsGpu> backend) {
+    GsVram cpu,gpu;gpu.set_gpu_backend(backend);
+    auto first=rectangle(0x80402010u);first.right=first.bottom=8;
+    auto second=first;second.base=2u*GsVram::kPageBytes;second.color=0x80806040u;
+    const auto before=backend->stats();
+    enqueue_pair(cpu,gpu,first);enqueue_pair(cpu,gpu,second);
+    require(backend->stats().submissions==before.submissions,"both original rectangles remain queued before the CPU read");
+    require(gpu.read(first.base,64,0,0,0)==cpu.read(first.base,64,0,0,0),
+        "CPU read observes its queued GPU rectangle");
+    const auto first_read=backend->stats();
+    require(first_read.submissions==before.submissions+1u && first_read.batches==before.batches+1u &&
+        first_read.readback_bytes==before.readback_bytes+2u*GsVram::kPageBytes,
+        "one submission executes both rectangles and reads only the requested page values and masks");
+    require(first_read.upload_bytes==before.upload_bytes+4u*GsVram::kPageBytes,
+        "fused submission uploads exactly the two initially unknown destination pages");
+    require(gpu.read(second.base,64,0,0,0)==cpu.read(second.base,64,0,0,0),
+        "the second rectangle remains resident until its own CPU read");
+    const auto second_read=backend->stats();
+    require(second_read.submissions>=first_read.submissions && second_read.submissions<=first_read.submissions+1u &&
+        second_read.readback_syncs==first_read.readback_syncs+1u && second_read.batches==first_read.batches &&
+        second_read.upload_bytes==first_read.upload_bytes &&
+        second_read.readback_bytes==first_read.readback_bytes+2u*GsVram::kPageBytes,
+        "the second page downloads without replaying commands or uploading resident data");
+    same_vram(cpu,gpu,"fused pending execution and selective page readback");
+    require(backend->stats().submissions==second_read.submissions,
+        "full inspection after both selective reads requires no additional synchronization");
+}
+void check_detach_coherence(std::shared_ptr<GsGpu> backend) {
+    GsVram cpu,gpu;gpu.set_gpu_backend(backend);
+    auto page=rectangle(0x80402010u);page.right=64;page.bottom=32;
+    enqueue_pair(cpu,gpu,page);
+    require(gpu.page_known(0,0xFFFFFFFFu),"GPU full-page draw establishes the page proof before detaching");
+    gpu.set_gpu_backend({});
+    for(auto* v:{&cpu,&gpu}) {
+        require(v->page_known(0,0xFFFFFFFFu),"detached CPU page starts fully known");
+        v->write(0,64,0,0,0,0x80402010u,0,0x80000000u);
+        require(!v->page_known(0,0xFFFFFFFFu),"public CPU page proof observes a newly unknown bit");
+        v->write(0,64,0,0,0,0x80402010u);
+        require(v->page_known(0,0xFFFFFFFFu),"public CPU page proof observes restored knowledge");
+        v->write(0,64,0,0,0,0x80402010u,0,0x80000000u);
+    }
+    gpu.set_gpu_backend(backend);
+    require(!gpu.page_known(0,0xFFFFFFFFu),"reattachment cannot reuse a proof cached before CPU writes");
+    enqueue_pair(cpu,gpu,rectangle(0x00001234u,0xFFFF0000u));
+    same_vram(cpu,gpu,"detach, CPU knowledge changes and reattached masked GPU write");
+}
+void check_fused_scanout(std::shared_ptr<GsGpu> backend) {
+    Stream cpu,accelerated(backend);cpu.setup();accelerated.setup();
+    for(auto* s:{&cpu,&accelerated}) {
+        s->gs.write(kGsSyncv,8,2u|(2ull<<42u),0,{});
+        s->sprite(0,0,width,height,0x80402010u);
+    }
+    const auto before=backend->stats();
+    const auto expected=cpu.gs.scanout(1234),actual=accelerated.gs.scanout(1234);
+    const auto after=backend->stats();
+    require(after.batches==before.batches+1u && after.submissions==before.submissions+1u &&
+        after.waits<=before.waits+1u && after.readback_syncs==before.readback_syncs+1u &&
+        after.readback_bytes==before.readback_bytes+2u*GsVram::kPageBytes,
+        "pending scanout downloads its pages with one submission and at most one fence wait");
+    require(expected.rgba==actual.rgba && expected.width==actual.width && expected.height==actual.height &&
+        expected.stride==actual.stride && expected.ee_cycle==actual.ee_cycle && expected.revision==actual.revision &&
+        expected.timing && actual.timing && expected.timing->epoch==actual.timing->epoch &&
+        expected.timing->half_line_cycles==actual.timing->half_line_cycles &&
+        expected.timing->field_half_lines==actual.timing->field_half_lines &&
+        expected.timing->blank_half_lines==actual.timing->blank_half_lines,
+        "fused scanout preserves RGBA, geometry, guest cycle, revision and original field timing");
+    same(cpu,accelerated,"fused pending scanout full VRAM and knowledge");
+}
 void check_partial_coherence(std::shared_ptr<GsGpu> backend) {
     GsVram cpu,gpu;gpu.set_gpu_backend(backend);
     for(auto* v:{&cpu,&gpu})v->write(0,64,0,0,0,0xA5123456u);
@@ -489,7 +557,8 @@ int main(int argc,char** argv)try {
         return selection=="vulkan" && required && std::string_view{required}=="1"?1:77;
     }
     std::cout<<"GPU selected: "<<gpu->device_name()<<'\n'<<std::flush;
-    check_device_batch(api);check_partial_coherence(gpu);check_resident_batches(gpu);
+    check_device_batch(api);check_fused_readback(gpu);check_detach_coherence(gpu);check_fused_scanout(gpu);
+    check_partial_coherence(gpu);check_resident_batches(gpu);
     check_completion_order(gpu);check_pending_knowledge(gpu);
     check_raster(gpu);check_pipeline(gpu);check_fallback_and_transfers(gpu);
     check_guest(gpu,argc>1?std::filesystem::path{argv[1]}:std::filesystem::path{});

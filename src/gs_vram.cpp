@@ -38,7 +38,7 @@ GsVram& GsVram::operator=(const GsVram& source) {
     return *this;
 }
 void GsVram::set_gpu_backend(std::shared_ptr<GsGpu> backend) {
-    synchronize();detach_gpu();gpu_=std::move(backend);locations_={};
+    synchronize();detach_gpu();gpu_=std::move(backend);locations_={};knowledge_cached_={};
 }
 void GsVram::release_gpu() const {
     synchronize();locations_.fill(Location::Cpu);
@@ -58,6 +58,7 @@ void GsVram::cache_page_knowledge(unsigned page) const {
 }
 bool GsVram::page_known(unsigned page,std::uint32_t mask) const {
     if(page>=kPages)throw DeviceRefusal("GS GPU page proof out of range");
+    if(!gpu_)knowledge_cached_[page]=false;
     cache_page_knowledge(page);
     if((page_knowledge_[page]&mask)==mask)return true;
     synchronize_page(page);cache_page_knowledge(page);
@@ -87,6 +88,9 @@ void GsVram::enqueue_gpu(const GsGpuCommand& command) {
     pending_gpu_.push_back(command);++gpu_primitives_;
 }
 void GsVram::submit_gpu() const {
+    execute_pending();
+}
+void GsVram::execute_pending(const std::array<bool,kPages>* read_pages) const {
     if(pending_gpu_.empty())return;
     acquire_gpu();
     std::vector<GsGpuRange> uploads;
@@ -94,13 +98,26 @@ void GsVram::submit_gpu() const {
         if(!uploads.empty() && uploads.back().first_word+uploads.back().word_count==page*2048u)uploads.back().word_count+=2048u;
         else uploads.push_back({page*2048u,2048u});
     }
-    const auto result=gpu_->execute(words_,known_,pending_gpu_,uploads,{});
+    std::vector<GsGpuRange> reads;
+    if(read_pages)for(unsigned page=0;page<kPages;++page)
+        if((*read_pages)[page] && (pending_pages_[page] || locations_[page]==Location::Gpu)) {
+            if(!reads.empty() && reads.back().first_word+reads.back().word_count==page*2048u)reads.back().word_count+=2048u;
+            else reads.push_back({page*2048u,2048u});
+        }
+    const auto result=gpu_->execute(words_,known_,pending_gpu_,uploads,reads);
     revision_+=result.revisions;pixel_writes_+=result.pixel_writes;
     for(unsigned page=0;page<kPages;++page)if(pending_pages_[page])locations_[page]=Location::Gpu;
+    if(read_pages)for(unsigned page=0;page<kPages;++page)
+        if((*read_pages)[page] && locations_[page]==Location::Gpu) {
+            locations_[page]=Location::Equal;knowledge_cached_[page]=false;
+        }
     pending_gpu_.clear();pending_pages_={};
 }
 void GsVram::synchronize_page(unsigned page) const {
-    submit_gpu();
+    if(!gpu_)return;
+    if(!pending_gpu_.empty()) {
+        std::array<bool,kPages> pages{};pages[page]=true;execute_pending(&pages);return;
+    }
     if(locations_[page]!=Location::Gpu)return;
     const GsGpuRange range{page*2048u,2048u};
     (void)gpu_->execute(words_,known_,{}, {},std::span{&range,1u});
@@ -110,7 +127,7 @@ void GsVram::synchronize() const {
     std::array<bool,kPages> all{};all.fill(true);synchronize_pages(all);
 }
 void GsVram::synchronize_pages(const std::array<bool,kPages>& pages) const {
-    submit_gpu();
+    if(!pending_gpu_.empty()){execute_pending(&pages);return;}
     std::vector<GsGpuRange> reads;
     for(unsigned page=0;page<kPages;++page)if(pages[page] && locations_[page]==Location::Gpu) {
         if(!reads.empty() && reads.back().first_word+reads.back().word_count==page*2048u)reads.back().word_count+=2048u;
@@ -198,7 +215,7 @@ void GsVram::write_word(unsigned at, std::uint32_t value, std::uint32_t mask,
     // Join draw/skip branches. Only bits proved equal in both remain known.
     if (conditional) knowledge &= known_[at] & ~(words_[at] ^ next);
     words_[at] = next; known_[at] = knowledge; ++revision_;
-    locations_[at/2048u]=Location::Cpu;knowledge_cached_[at/2048u]=false;
+    if(gpu_){locations_[at/2048u]=Location::Cpu;knowledge_cached_[at/2048u]=false;}
 }
 std::uint32_t GsVram::depth_address(std::uint32_t base, unsigned width, unsigned psm,
                                   unsigned x, unsigned y) {

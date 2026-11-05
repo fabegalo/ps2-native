@@ -778,7 +778,7 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     if (dw % magh || dh % vertical_divisor) throw DeviceRefusal("GS scanout: fractional display magnification is not modeled");
     Framebuffer f;
     f.width = dw / magh; f.height = dh / vertical_divisor; f.stride = f.width * 4u;
-    f.ee_cycle = cycle; f.revision = vram_.revision();
+    f.ee_cycle = cycle;
     const auto clock = vertical_clock();
     if (clock.state == VerticalClock::State::Running)
         f.timing = FrameTiming{clock.epoch, clock.half_line, clock.field, clock.blank};
@@ -797,6 +797,7 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
                 pages[GsVram::address(base,bw,psm,x*64u,y*32u)/GsVram::kPageBytes]=true;
         vram_.synchronize_pages(pages);
     }
+    f.revision=vram_.revision();
     f.rgba.reserve(static_cast<std::size_t>(f.stride) * f.height);
     for (unsigned y = 0; y < f.height; ++y)
         for (unsigned x = 0; x < f.width; ++x) {
