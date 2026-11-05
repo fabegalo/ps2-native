@@ -129,6 +129,15 @@ if(BUILD_TESTING)
     target_link_libraries(ps2n-aot-smoke PRIVATE ps2n_core)
     add_test(NAME native-aot-smoke COMMAND ps2n-aot-smoke "${FIXTURE_ELF}")
 
+    add_executable(ps2n-aot-partitions tests/aot_partitions.cpp)
+    target_link_libraries(ps2n-aot-partitions PRIVATE ps2n_core)
+    add_dependencies(ps2n-aot-partitions ps2n-fixture)
+    add_test(NAME native-aot-partitions COMMAND ps2n-aot-partitions "${FIXTURE_ELF}"
+        "${CMAKE_CURRENT_BINARY_DIR}/aot-partitions" "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_COMMAND}"
+        $<TARGET_FILE:ps2n_core> "${CMAKE_CXX_COMPILER}" "${PS2N_NINJA_EXECUTABLE}"
+        "$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,Release>")
+    set_tests_properties(native-aot-partitions PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+
     add_executable(ps2n-aot-ops-smoke tests/aot_ops_smoke.cpp "${OPS_AOT}")
     target_link_libraries(ps2n-aot-ops-smoke PRIVATE ps2n_core)
     add_test(NAME native-aot-ops COMMAND ps2n-aot-ops-smoke "${OPS_ELF}")

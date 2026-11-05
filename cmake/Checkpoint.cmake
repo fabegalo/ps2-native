@@ -13,6 +13,8 @@ list(FILTER checkpoint_headers EXCLUDE REGEX "/mips[.]hpp$")
 list(FILTER checkpoint_headers EXCLUDE REGEX "/vu_fixed[.]hpp$")
 # Boot options/reports and host profiling counters are never serialized.
 list(FILTER checkpoint_headers EXCLUDE REGEX "/(boot|profile)[.]hpp$")
+# Offline code-generation artifacts contain no serialized machine state.
+list(FILTER checkpoint_headers EXCLUDE REGEX "/aot_sources[.]hpp$")
 set(checkpoint_schema "ps2n-complete-checkpoint-v1-le-fields\n")
 foreach(header IN LISTS checkpoint_headers)
     file(READ "${header}" content)

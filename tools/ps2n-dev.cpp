@@ -3,6 +3,7 @@
 #include "ps2native/bios.hpp"
 #include "ps2native/disc.hpp"
 #include "ps2native/analysis.hpp"
+#include "ps2native/aot_sources.hpp"
 #include <algorithm>
 #include <chrono>
 #include <iostream>
@@ -181,28 +182,28 @@ int run(Profile p, const fs::path& replay) {
         }
         save_text(directory / "analysis-reference.txt",path_utf8(analysis));
         save_text(directory / "analysis-reused.txt",analysis_reused ? "true" : "false");
-        const auto source_path=[&](const std::string& hash){return cache / "sources" / hash / "module.cpp";};
+        // Stable per-profile location lets Ninja retain unchanged partition
+        // objects across input/tool revisions. Every unit is verified by hash;
+        // the profile owner still isolates firmware revisions and regions.
+        const auto source_path=cache / "sources" / "partitioned" / "module.cpp";
         if(engine=="aot" && file_exists(proof)) {
             const auto hash=read_text(proof);
             if(hash.size()==64 && hash.find_first_not_of("0123456789abcdef")==std::string::npos) {
-                const auto path=source_path(hash);
-                if(file_exists(path) && sha256_file(path)==hash){translation=path;reused=content_reused=true;}
+                try {
+                    if(aot_sources_sha256(source_path)==hash){translation=source_path;reused=content_reused=true;}
+                } catch(const std::exception&) { /* Regenerate a missing/corrupt source set. */ }
             }
         }
         if(!reused && engine=="aot") {
-            const auto candidate=aot_cache / "candidate.cpp";
-            std::vector<fs::path> args{input,candidate,kind=="bios" ? "--bios" : "--hybrid"};
+            translation=source_path;
+            std::string previous;
+            try {previous=aot_sources_sha256(translation);} catch(const std::exception&) {}
+            std::vector<fs::path> args{input,translation,kind=="bios" ? "--bios" : "--hybrid","--split"};
             if(kind=="disc")args.emplace_back("--disc");
             for(const auto& arg:aot_args)args.push_back(cli::utf8_path(arg));
             stage("generate-aot",aot,args);
-            const auto hash=sha256_file(candidate);translation=source_path(hash);
-            content_reused=file_exists(translation) && sha256_file(translation)==hash;
-            if(content_reused) (void)remove_file(candidate);
-            else {
-                ps2native::create_directories(translation.parent_path());
-                if(file_exists(translation) && !remove_file(translation))throw std::runtime_error("cannot replace corrupted AOT cache artifact");
-                fs::rename(native_io_path(candidate),native_io_path(translation));
-            }
+            const auto hash=aot_sources_sha256(translation);
+            content_reused=previous==hash;
             save_text(proof,hash);
         }
         if(engine=="aot") {

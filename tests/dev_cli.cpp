@@ -3,7 +3,9 @@
 #include "iso_image.hpp"
 #include "../tools/dev_profile.hpp"
 #include "../tools/dev_process.hpp"
+#include "ps2native/aot_sources.hpp"
 #include <iostream>
+#include <sstream>
 
 namespace {
 using namespace ps2native;
@@ -120,6 +122,14 @@ template<class C> int test_main(int argc,C** argv) {
     require(file_exists(translation),"active profile AOT cache exists");const auto original=sha256_file(translation);
     save_text(translation,"// corrupted synthetic cache\n");
     invoke("cache-repair",{"replay",file},1);require(sha256_file(translation)==original,"cache hash catches corruption");
+    const auto source_set=aot_sources_sha256(translation);
+    auto source_manifest=translation;source_manifest+=".sources";
+    std::istringstream unit_list(read_text(source_manifest));std::string format,root_hash,unit_name,unit_hash;
+    require(bool(unit_list>>format>>root_hash>>unit_name>>unit_hash),"managed AOT has a partition manifest");
+    const auto unit=translation.parent_path()/unit_name;
+    save_text(unit,"// corrupted synthetic partition\n");
+    invoke("partition-cache-repair",{"replay",file},1);
+    require(aot_sources_sha256(translation)==source_set,"warm cache verifies and repairs every partition");
     // Re-running a changed generator (or rebuilding its missing key) can emit
     // identical C++. Content addressing must retain its original path/mtime.
     const auto source_stamp=file_write_time(translation);

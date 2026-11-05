@@ -1,4 +1,5 @@
 #include "ps2native/core.hpp"
+#include "ps2native/aot_sources.hpp"
 #include "ps2native/disc.hpp"
 
 #include <filesystem>
@@ -12,12 +13,14 @@
 template <typename Character>
 int aot_main(int argc, Character** argv) {
     if (argc < 3) {
-        std::cerr << "Usage: ps2n-aot <owned-mips-elf|disc.iso> <output.cpp> [--disc] [--hybrid] [--entry=0xADDRESS ...] [--table=0xADDRESS:COUNT ...]\n"
+        std::cerr << "Usage: ps2n-aot <owned-mips-elf|disc.iso> <output.cpp> [--split] [--disc] [--hybrid] [--entry=0xADDRESS ...] [--table=0xADDRESS:COUNT ...]\n"
                      "       ps2n-aot <your-rom0.bin> <output.cpp> --bios [--expect-sha256=HEX] [--entry=0xADDRESS ...]\n";
         return 2;
     }
     try {
         ps2native::AotOptions options;
+        bool split_output = false;
+        std::uint32_t partition_bytes=65536;
         bool bios_input = false;
         bool disc_input = false;
         std::optional<std::string> expected_sha256;
@@ -46,6 +49,11 @@ int aot_main(int argc, Character** argv) {
                     parse_u32(argument.substr(0, colon), "--table address"),
                     parse_u32(argument.substr(colon + 1), "--table entry count")
                 });
+            } else if (flag == "--split") {
+                split_output = true;
+            } else if (flag.starts_with("--split=")) {
+                split_output = true;
+                partition_bytes=parse_u32(flag.substr(8),"--split address bucket size");
             } else if (flag == "--hybrid") {
                 options.interpreter_boundaries = true;
             } else if (flag == "--bios") {
@@ -55,7 +63,7 @@ int aot_main(int argc, Character** argv) {
             } else if (flag.starts_with("--expect-sha256=")) {
                 expected_sha256 = flag.substr(16);
             } else {
-                throw std::runtime_error("Unrecognized argument; expected --entry, --table, --hybrid, --disc, --bios or --expect-sha256");
+                throw std::runtime_error("Unrecognized argument; expected --entry, --table, --split, --hybrid, --disc, --bios or --expect-sha256");
             }
         }
         if (bios_input && disc_input) throw std::runtime_error("--bios and --disc are mutually exclusive");
@@ -64,6 +72,26 @@ int aot_main(int argc, Character** argv) {
             throw std::runtime_error("AOT output must not overwrite its input");
         const auto input = disc_input ? ps2native::DiscImage(std::filesystem::path(argv[1])).boot_elf().bytes
                                      : ps2native::read_file(std::filesystem::path(argv[1]));
+        const auto output=std::filesystem::path(argv[2]);
+        auto manifest=output;manifest+=".sources";
+        if (split_output && ps2native::file_exists(manifest) &&
+            ps2native::files_equivalent(manifest,std::filesystem::path(argv[1])))
+            throw std::runtime_error("AOT manifest must not overwrite its input");
+        if (!split_output && ps2native::file_exists(manifest))
+            throw std::runtime_error("Existing partitioned AOT output requires --split");
+        const auto generate=[&](const ps2native::ElfImage& image) {
+            if (split_output) {
+                const auto sources=ps2native::generate_aot_sources(image,options,
+                    ps2native::path_utf8(output.filename()),partition_bytes);
+                for (const auto& unit:sources.partitions) {
+                    const auto path=output.parent_path()/unit.name;
+                    if (ps2native::file_exists(path) && ps2native::files_equivalent(path,std::filesystem::path(argv[1])))
+                        throw std::runtime_error("AOT partition must not overwrite its input");
+                }
+                return ps2native::write_aot_sources(output,sources);
+            }
+            return ps2native::write_text_if_changed(output,ps2native::generate_aot_cpp(image,options));
+        };
         if (bios_input) {
             // Hybrid translation of user-supplied boot firmware: reachable ROM code
             // only, interpreter boundaries listed; nothing is embedded but code.
@@ -72,8 +100,7 @@ int aot_main(int argc, Character** argv) {
             options.interpreter_boundaries = true;
             options.source_kind = "bios-rom0";
             options.source_sha256 = bios.sha256;
-            const auto generated = ps2native::generate_aot_cpp(ps2native::bios_code_image(bios), options);
-            const bool updated = ps2native::write_text_if_changed(std::filesystem::path(argv[2]), generated);
+            const bool updated = generate(ps2native::bios_code_image(bios));
             std::cout << (updated ? "AOT source generated" : "AOT unchanged; reused")
                       << "; ROM0 " << bios.version.romver << " sha256 " << bios.sha256
                       << "; reset vector 0x" << std::hex << ps2native::kEeResetVector << std::dec << '\n';
@@ -81,9 +108,7 @@ int aot_main(int argc, Character** argv) {
         }
         if (expected_sha256) throw std::runtime_error("--expect-sha256 applies to --bios inputs");
         const auto elf = ps2native::parse_ee_elf(input);
-        const auto generated = ps2native::generate_aot_cpp(elf, options);
-        const bool updated = ps2native::write_text_if_changed(
-            std::filesystem::path(argv[2]), generated);
+        const bool updated = generate(elf);
         std::cout << (updated ? "AOT source generated" : "AOT unchanged; reused")
                   << "; ELF entry: 0x" << std::hex << elf.entry
                   << "; ELF functions: " << std::dec << elf.function_entries.size()
