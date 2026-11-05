@@ -50,6 +50,20 @@ int main() try {
     }
     gs.general_write(0x14,0x20);rejects([&]{pixel(gs,7,0,16,16);},"dynamic LOD");
     gs.general_write(0x14,0x21);rejects([&]{pixel(gs,7,0,16,16);},"zero-LOD boundary");
+    for(const auto q:{0x3F000000u,0xBF000000u,0x3EFFFFFFu,0x40000000u,0xC0000000u,0x40000001u}) {
+        GsRegisters dynamic;setup(dynamic);dynamic.general_write(0x14,0x20);
+        dynamic.general_write(1,(std::uint64_t{q}<<32)|0x80808080u);pixel(dynamic,0,0,16,16);
+        require(dynamic.vram().read(0,64,0,0,0)==((q&0x7FFFFFFFu)<0x3F800000u ? source(1,1) : 0x80080808u),
+            "UV dynamic LOD uses absolute Q exponent bounds to prove minification/magnification without approximate host logarithms");
+    }
+    for(const bool experiment:{false,true}) {
+        GsRegisters zero;setup(zero,true,false,true,experiment?32u:0u);zero.general_write(0x14,0x20);
+        zero.general_write(1,0x80808080u);
+        if(experiment) {
+            pixel(zero,0,0,16,16);require(zero.vram().read(0,64,0,0,0)==source(1,1),
+                "explicit zero-Q experiment selects positive saturated LOD without replacing source color or UV");
+        } else rejects([&]{pixel(zero,0,0,16,16);},"exceptional Q");
+    }
     gs.general_write(0x14,0x80);rejects([&]{pixel(gs,7,0,16,16);},"mipmap");
     gs.general_write(0x14,0x60);const auto before=gs.vram().pixel_writes();
     rejects([&]{pixel(gs,7,0,9,9);},"fractional bilinear truncation");
@@ -88,6 +102,14 @@ int main() try {
     cache.general_write(0x3F,0);pixel(cache,4,0,8,8);
     require(cache.vram().read(0,64,0,4,0)==0x80442210u,"guest TEXFLUSH exposes the real rendered texture bytes");
     GsRegisters uninitialized;setup(uninitialized,false);
+    GsRegisters bounded;setup(bounded);upload(bounded,0x3FE0u,0x80402010u);
+    bounded.general_write(6,0x3FE0ull|(1ull<<14u)|(10ull<<26u)|(10ull<<30u)|(1ull<<34u)|(1ull<<35u));
+    pixel(bounded,0,0,8,8);
+    require(bounded.vram().read(0,64,0,0,0)==0x80402010u,
+        "actual sprite UV pages prove disjoint drawing even when unused nominal texture dimensions wrap across the framebuffer");
+    bounded.general_write(0x4C,511u|(1u<<16u));const auto bounded_before=bounded.vram().pixel_writes();
+    rejects([&]{pixel(bounded,0,0,8,8);},"cache feedback");
+    require(bounded.vram().pixel_writes()==bounded_before,"actual source-page feedback remains refused before its first write");
     rejects([&]{pixel(uninitialized,0,0,8,8);},"initial TEXFLUSH");
     GsRegisters diagnostic;setup(diagnostic,false,true);pixel(diagnostic,0,0,8,8);
     require(diagnostic.vram().read(0,64,0,0,0)==source(0,0) && !diagnostic.general(0x3F),
@@ -117,6 +139,6 @@ int main() try {
     GsRegisters triangle_only;setup(triangle_only,true,false,true,4);
     rejects([&]{fractional(triangle_only);},"fractional UV DDA");
     triangle_only.general_write(0x14,0x60);rejects([&]{pixel(triangle_only,0,0,9,9);},"bilinear truncation");
-    GsRegisters invalid;invalid.reset(0);rejects([&]{invalid.diagnostic_texture_precision(16);},"valid modes");
+    GsRegisters invalid;invalid.reset(0);rejects([&]{invalid.diagnostic_texture_precision(64);},"valid modes");
     std::cout<<"Exact level-zero bilinear/nearest, subtexel centers, independent edge wrapping, fixed LOD and explicit rounding boundaries passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

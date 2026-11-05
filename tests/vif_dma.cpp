@@ -36,6 +36,32 @@ void empty_and_timing() {
     f.advance(102);require(!(f.dma.ee_dma_read(0x10009000u)&0x100u),"re-enabled bus fetch completes");
 }
 void tags_and_payload() {
+    for(unsigned channel=0;channel<2;++channel) {
+        Fixture nested;const auto base=channel?0x10009000u:0x10008000u;
+        nested.tag(0x100,0x50000001u,0x200);nested.word(0x110,0x07000011u);
+        nested.tag(0x120,0x70000000u,0);
+        nested.tag(0x200,0x50000001u,0x300);nested.word(0x210,0x07000022u);
+        nested.tag(0x220,0x60000001u,0);nested.word(0x230,0x07000044u);
+        nested.tag(0x300,0x60000001u,0);nested.word(0x310,0x07000033u);
+        nested.start(channel,0x105);nested.advance(2);
+        require(nested.dma.ee_dma_read(base+0x40)==0x120 && (nested.dma.ee_dma_read(base)&0x30u)==0x10u &&
+            nested.dma.ee_dma_read(base+0x30)==0x200,"CALL pushes the end of its real inline payload and selects its target");
+        nested.advance(6);require(nested.dma.ee_dma_read(base+0x50)==0x220 && (nested.dma.ee_dma_read(base)&0x30u)==0x20u,
+            "nested CALL uses the second hardware ASR without overwriting the first");
+        nested.advance(10);require(nested.dma.ee_dma_read(base+0x30)==0x220 && (nested.dma.ee_dma_read(base)&0x30u)==0x10u,
+            "RET pops ASR1 while retaining its own inline payload address");
+        nested.advance(14);require(nested.dma.ee_dma_read(base+0x30)==0x120 && !(nested.dma.ee_dma_read(base)&0x30u),
+            "outer RET pops ASR0");
+        nested.advance(16);require((channel?nested.v1:nested.v0).read_register(0x30)==0x44 && !(nested.dma.ee_dma_read(0x1000E010u)&(1u<<channel)),
+            "all four real inline payloads pass through VIF before the final END interrupt");
+        nested.advance(18);require(nested.dma.ee_dma_read(0x1000E010u)&(1u<<channel),"nested chain completes only after fetching END");
+        Fixture overflow;overflow.tag(0x100,0x50000000u,0x100);overflow.start(channel,0x105);overflow.advance(4);
+        rejects([&]{overflow.advance(6);},"stack overflow");
+        require(!(overflow.dma.ee_dma_read(0x1000E010u)&(1u<<channel)),"CALL overflow cannot fabricate completion");
+        Fixture empty;empty.tag(0x100,0x60000001u,0);empty.word(0x110,0x07000055u);empty.start(channel,0x105);empty.advance(4);
+        require((channel?empty.v1:empty.v0).read_register(0x30)==0x55 && (empty.dma.ee_dma_read(0x1000E010u)&(1u<<channel)),
+            "RET with an empty address stack ends after its real payload");
+    }
     Fixture f;
     f.tag(0x100,0x10000001u,0,0,0x30000000u); // CNT; TTE begins STROW
     for(unsigned i=0;i<4;++i) f.word(0x110+i*4,0x12340000u+i);

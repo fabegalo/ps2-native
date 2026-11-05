@@ -19,6 +19,58 @@ void vertex(GsRegisters& gs,unsigned x,unsigned y,unsigned z=0,bool draw=true) {
 }
 }
 int main() try {
+    for(const unsigned type:{3u,4u,5u})for(const bool reverse:{false,true})for(const bool abe:{false,true})for(const unsigned a:{0u,64u,128u}) {
+        GsRegisters gs;setup(gs,6,16);
+        gs.general_write(1,0x80000000u);
+        gs.general_write(0x4E,1); // known depth 7, distinct from source depth 9
+        vertex(gs,0,0,7);vertex(gs,8,8,7);
+        gs.general_write(0,type|128u|(abe?64u:0u));gs.general_write(1,(std::uint64_t{a}<<24)|0x402010u);
+        gs.general_write(0x42,0x44);gs.general_write(0x46,1);gs.general_write(0x49,0);
+        const auto kick=[&](unsigned x,unsigned y){gs.general_write(5,x|(std::uint64_t{y}<<16)|(9ull<<32));};
+        kick(40,40);kick(reverse?40u:104u,reverse?104u:40u);kick(reverse?104u:40u,reverse?40u:104u);
+        const auto ca=abe && a!=128u ? a : 64u;
+        require(gs.vram().read(0,64,0,2,3)==((ca<<24)|(64u*ca/128u<<16)|(32u*ca/128u<<8)|(16u*ca/128u)),
+            "AA1 outer half-pixel edge uses coverage except ABE with non-128 alpha, in both windings and all triangle assemblies");
+        const auto ia=abe && a!=128u ? a : 128u;
+        require(gs.vram().read(0,64,0,3,3)==((ia<<24)|(64u*ia/128u<<16)|(32u*ia/128u<<8)|(16u*ia/128u)),
+            "AA1 interior selects full coverage without scaling the original alpha");
+        require(gs.vram().read_depth(8192,64,0,3,3)==9u && gs.vram().read_depth(8192,64,0,2,3)==7u,
+            "AA1 writes original interior Z but retains edge Z even when ABE keeps a non-128 source alpha");
+        require(gs.vram().read(0,64,0,1,3)==0x80000000u && gs.vram().read(0,64,0,5,5)==0x80000000u,
+            "AA1 excludes pixels beyond the one-pixel widened perimeter");
+    }
+    for(const unsigned fail:{0u,1u,2u,3u}) {
+        GsRegisters gs;setup(gs,3u|128u,16);gs.general_write(1,0x80402010u);
+        gs.general_write(0x42,0x44);gs.general_write(0x46,1);gs.general_write(0x49,0);
+        gs.general_write(0x47,(3u<<16)|1u|(4u<<1)|(128u<<4)|(fail<<12));
+        const auto kick=[&](unsigned x,unsigned y){gs.general_write(5,x|(std::uint64_t{y}<<16));};
+        kick(40,40);kick(104,40);kick(40,104);
+        const auto result=gs.vram().read(0,64,0,2,3);
+        require(result==(fail==1u ? 0x40201008u : fail==3u ? 0x80201008u : 0x80000000u),
+            "AA1 coverage alpha reaches alpha test and KEEP/FB_ONLY/ZB_ONLY/RGB_ONLY before blending and writes");
+    }
+    {
+        GsRegisters gs;setup(gs,3u|128u);vertex(gs,0,0);vertex(gs,4,0);
+        const auto before=gs.vram().pixel_writes();rejects([&]{vertex(gs,0,4);},"antialiasing");
+        require(before==gs.vram().pixel_writes(),"normal GS profile retains AA1 refusal without experimental coverage opt-in");
+    }
+    for(const bool steep:{false,true}) {
+        GsRegisters gs;setup(gs,6,16);gs.general_write(0x4E,1);gs.general_write(1,0x80000000u);
+        vertex(gs,0,0,12);vertex(gs,8,8,12);
+        gs.general_write(0,3u|128u);gs.general_write(1,0x80402010u);
+        gs.general_write(0x42,0x44);gs.general_write(0x46,1);gs.general_write(0x49,0);
+        const auto draw=[&] {
+            vertex(gs,1,1,10);vertex(gs,steep?3u:5u,steep?5u:3u,16);vertex(gs,steep?5u:1u,steep?1u:5u,14);
+        };
+        gs.general_write(0x47,5u<<16);draw(); // GEQUAL on extrapolated x+y+8
+        require(gs.vram().read(0,64,0,steep?1u:2u,steep?2u:1u)==0x80000000u,
+            "AA1 depth-tests extrapolated edge Z before color write, for shallow and steep edges");
+        gs.general_write(0,3u|128u);gs.general_write(0x47,3u<<16);draw();
+        require(gs.vram().read(0,64,0,steep?1u:2u,steep?2u:1u)==0x40201008u,
+            "AA1 uses the edge's minor axis for half coverage, for shallow and steep edges");
+        require(gs.vram().read_depth(8192,64,0,steep?1u:2u,steep?2u:1u)==12u,
+            "AA1 edge extrapolation never overwrites known destination Z");
+    }
     {
         // Vertex/ADC processing is independent of line rasterization. BIOS
         // command streams may prepare or suppress a whole strip without a

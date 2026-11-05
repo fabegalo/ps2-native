@@ -90,5 +90,15 @@ int main() try {
     require(dma.ee_dma_read(0x1000A000u)&0x100u,"empty END is not immediate completion");
     dma.advance_gif_dma(2,gif,gs);require(gif.packets().empty() && (dma.ee_dma_read(0x1000E010u)&4u),
         "empty END fetch completes without sending tag garbage to GIF");
+    qword(ram,0x600,(0x800ull<<32)|0x50000006u,0);
+    std::copy(ram.begin()+0x100,ram.begin()+0x160,ram.begin()+0x610);
+    qword(ram,0x670,0x70000000u,0);qword(ram,0x800,0x60000001u,0);
+    qword(ram,0x810,0x5566778811223344ull,0xDDEEFF0099AABBCCull);
+    chain(0x600);dma.advance_gif_dma(18,gif,gs);
+    for(unsigned p=0;p<4;++p)require(gs.vram().read(0,64,0,p%2,p/2)==expected[p],"CALL and RET deliver one actual GIF packet across inline payloads");
+    require(dma.ee_dma_read(0x1000A040u)==0x670 && dma.ee_dma_read(0x1000A030u)==0x670 &&
+        (dma.ee_dma_read(0x1000A000u)&0x130u)==0x100u && !(dma.ee_dma_read(0x1000E010u)&4u),
+        "GIF return stack pops without early completion");
+    dma.advance_gif_dma(20,gif,gs);require(dma.ee_dma_read(0x1000E010u)&4u,"GIF END raises IRQ after returned payload");
     std::cout<<"Normal GIF DMA preserves source pixels, timing boundary, suspension and unknown data\n";
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

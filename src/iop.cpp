@@ -601,23 +601,36 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
             if(!*qwc && !transfer.end) {
                 const auto tag=read(*tadr,(*chcr&0x40u) ? 4u : 2u);
                 const auto id=(tag[0]>>28u)&7u, count=tag[0]&0xFFFFu;
-                if((tag[0]&0x0C000000u) || (id>=4u && id<=6u))
-                    throw DeviceRefusal("EE graphics source chain supports REFE/CNT/NEXT/REF/END without PCE changes");
+                if((tag[0]&0x0C000000u) || id==4u)
+                    throw DeviceRefusal("EE graphics source chain REFS stall or PCE changes are not modeled");
                 const auto source=(id==0u || id==3u) ? tag[1] : *tadr+16u;
                 if(!graphics_source_fits(source,std::uint64_t{count}*16u,ee_ram_,ee_scratchpad_))
                     throw DeviceRefusal("EE graphics DMA tag payload outside aligned main RAM or modeled scratchpad range");
                 auto next=*tadr;
+                auto stack=(*chcr>>4u)&3u;
+                if(stack==3u)throw DeviceRefusal("EE graphics DMA reserved address stack pointer");
                 if(id==0u || id==3u) next+=16u;
                 else if(id==1u) next=source;
-                else if(id==2u) {
+                else if(id==2u || id==5u) {
                     next=tag[1];
                     if(!graphics_source_fits(next,16u,ee_ram_,ee_scratchpad_))
-                        throw DeviceRefusal("EE graphics NEXT target outside aligned main RAM or modeled scratchpad range");
+                        throw DeviceRefusal("EE graphics NEXT/CALL target outside aligned main RAM or modeled scratchpad range");
+                    if(id==5u && stack==2u)throw DeviceRefusal("EE graphics DMA CALL address stack overflow");
+                } else if(id==6u && stack) {
+                    if(!regs[3u+stack])throw DeviceRefusal("EE graphics DMA RET consumes an uninitialized address stack register");
+                    next=*regs[3u+stack];
+                    if(!graphics_source_fits(next,16u,ee_ram_,ee_scratchpad_))
+                        throw DeviceRefusal("EE graphics DMA RET target outside aligned main RAM or modeled scratchpad range");
                 }
                 if(*chcr&0x40u) vif->write_dma_tag(std::uint64_t{tag[2]}|(std::uint64_t{tag[3]}<<32),gif,gs,vu,transfer.cycle+kEeCyclesPerBusCycle);
-                transfer.end=id==0u || id==7u || ((tag[0]&0x80000000u) && (*chcr&0x80u));
+                // EE source-chain stack is two existing MMIO registers, not
+                // a host recursion stack. CALL saves the end of its inline
+                // payload; RET pops before its own payload is transferred.
+                transfer.end=id==0u || id==7u || (id==6u && !stack) || ((tag[0]&0x80000000u) && (*chcr&0x80u));
+                if(id==5u){regs[4u+stack]=source+count*16u;++stack;}
+                else if(id==6u && stack)--stack;
                 transfer.inline_data=id==1u;
-                *chcr=(*chcr&0xFFFFu)|(tag[0]&0xFFFF0000u);
+                *chcr=(*chcr&0xFFCFu)|(stack<<4u)|(tag[0]&0xFFFF0000u);
                 madr=source;qwc=count;tadr=next;
             } else if(*qwc) {
                 const auto data=read(*madr,4);
