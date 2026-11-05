@@ -17,6 +17,29 @@
 | Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
+## Memória e eventos AOT medidos — 05/11/2026
+
+- `6f3f968` especializa fetch com tradução, conhecimento e guardas de
+  bytes preservados; `ac7e405` evita trabalho de VU/VIF/DMA antes de
+  eventos possíveis, conservando Q pendente, timestamps e recusas.
+  Técnicas selecionadas após comparação com PS2Recomp, sem código GPL.
+- Cinco rodadas alternadas: fetch isolado **+3,93%**, eventos **+16,53%**
+  na janela longa; combinação **+17,62%**, de 2,859 para **3,363 milhões
+  de instruções/s**. Campo real mediano: 1,714135 → **1,455465 s**.
+  Janela curta: 2,744 → 3,186 milhões/s (**+16,10%**). Controle atual
+  reensaiado; cobertura AOT inalterada. Não demonstra tempo real.
+- Estado completo, sete/seis campos RGBA e PCM idênticos ao baseline e
+  à interpretação em duas janelas, inclusive após salvar/carregar em
+  10 + 20 milhões. 20 testes focados passaram. Executável: +512 bytes,
+  11,2266 MiB; recompilação AOT integral 99,205 s, sem ganho de build
+  demonstrado. Nenhuma mudança no gerador, aritmética ou firmware.
+- CI do código `ac7e405`: [núcleo](https://github.com/fabegalo/ps2-native/actions/runs/42105484315)
+  e [launcher](https://github.com/fabegalo/ps2-native/actions/runs/42105484103)
+  aprovados nos seis alvos Windows/Linux/macOS, x64 e ARM64.
+  Nenhum ensaio comercial permanece ativo.
+- Comparação, amostras sem ganho adicional e limites em
+  [AOT-STRUCTURAL-PERFORMANCE](docs/AOT-STRUCTURAL-PERFORMANCE.md).
+
 ## Otimização AOT medida — 05/11/2026
 
 - `4b113b0` corrige a expectativa antiga de STQ em `native-m29-drawing`;

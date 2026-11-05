@@ -3,6 +3,11 @@
 Código: `4b113b0`, `4651b36` e `d0fdc39`. Arquitetura AOT preservada;
 nenhuma alteração no launcher ou no trabalho paralelo de compatibilidade.
 
+Continuação estrutural em `6f3f968`/`ac7e405`: memória e eventos,
+comparação com PS2Recomp e novas medições em
+[AOT-STRUCTURAL-PERFORMANCE](AOT-STRUCTURAL-PERFORMANCE.md).
+Os números abaixo são o baseline histórico dessa continuação.
+
 ## Mudanças comprovadas
 
 - Corrigido `native-m29-drawing`: o primeiro vértice STQ é enfileirado sem

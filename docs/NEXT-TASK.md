@@ -202,10 +202,18 @@ não aplicar adaptador de outra revisão. Evidência no relatório do jogo.
 
 ## AOT — continuação independente da compatibilidade
 
-O pacote de desempenho está medido em [AOT-PERFORMANCE-STATUS](AOT-PERFORMANCE-STATUS.md).
-Preservar o trabalho ativo do jogo e os checkpoints originais. Restam
-descoberta automática das raízes ainda explícitas e redução comprovada dos
-custos de memória/sincronização, além de conter o crescimento do build/código.
+Os dois primeiros incrementos estruturais estão medidos em
+[AOT-STRUCTURAL-PERFORMANCE](AOT-STRUCTURAL-PERFORMANCE.md): fetch
+especializado e eventos VU/VIF/DMA, +17,62% de throughput na janela longa
+pareada. O pacote anterior continua em
+[AOT-PERFORMANCE-STATUS](AOT-PERFORMANCE-STATUS.md).
+Preservar o trabalho ativo do jogo e os checkpoints originais. Antes de
+outra otimização, recolher o perfil após essas mudanças; o perfil anterior
+não autoriza atribuir custos iguais ao novo caminho. Priorizar apenas
+candidatas com ganho isolado, estado completo/RGBA/PCM equivalentes e
+custo de código/build registrado. Particionamento estável das TUs e
+descoberta automática das raízes explícitas continuam pendentes; não
+alegar ganho de compilação nesta entrega.
 Invalidação por páginas exige primeiro cobrir e testar todas as escritas,
 DMA, cache/writeback e restauração. Não retirar polling, verificações ou
 efeitos para aproximar tempo real; repetir a janela comercial pareada.
