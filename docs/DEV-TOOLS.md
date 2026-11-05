@@ -66,9 +66,21 @@ Orçamento, tamanho do anel e streaming não invalidam análise/AOT. As
 revisões do analisador e do gerador possuem chaves independentes; mudar
 somente o relatório de análise não regenera a tradução. O dono original
 do build preserva o isolamento do perfil também no replay de snapshots.
-O C++ gerado possui endereço por hash do próprio conteúdo: mesmo quando
-uma nova versão do gerador exige repetir a geração, resultado idêntico
-mantém caminho e timestamp e não é recompilado nem duplicado no cache.
+O AOT gerenciado usa partições estáveis por faixas de 64 KiB de endereços
+convidados. Cada unidade C++ tem nome pelo SHA-256 do próprio conteúdo;
+o dispatcher tem caminho estável dentro do perfil. Mesmo quando uma nova
+versão do gerador exige repetir a geração, unidades idênticas mantêm
+caminho, timestamp e objeto compilado. O manifesto confere o dispatcher
+e **todas** as unidades antes do reuso; corrupção exige regeneração.
+
+Para builds manuais, `ps2n-aot meu.elf modulo.cpp --hybrid --split` emite
+`modulo.cpp`, unidades `ps2n_aot_<sha256>.cpp` e `modulo.cpp.sources`.
+`--split=BYTES` seleciona outra faixa, potência de dois e ao menos quatro
+bytes. Continue passando `modulo.cpp` a `PS2N_ELF_AOT_SOURCE` ou
+`PS2N_BIOS_AOT_SOURCE`; a integração CMake valida e compila as unidades
+listadas, em paralelo, sem glob de arquivos antigos. O manifesto é dado,
+não código CMake. A CLI sem `--split` conserva a saída única anterior.
+Não mover apenas o dispatcher: o conjunto e seu manifesto são necessários.
 
 Cada rodada guarda `profile.ps2n`, `identities.txt`, `manifest.json`,
 commit Git, estado/diff local, hash do runtime, configuração CMake e

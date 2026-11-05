@@ -172,15 +172,117 @@ inalterado. Todos os ensaios locais foram encerrados.
 O cenário conserva as hipóteses experimentais anteriores. Isto mede trechos
 do diagnóstico comercial, não boot original concluído, jogo inteiro, nova
 compatibilidade ou tempo real. Não altera a BIOS original nem a fronteira
-AA1 do trabalho de compatibilidade. O particionamento C++ e outras mudanças
-de codegen não fazem parte destas duas otimizações. O crescimento do AOT
-anterior permanece um custo que exige medição própria.
+AA1 do trabalho de compatibilidade. Essas duas primeiras otimizações não
+alteraram o codegen; a continuação abaixo mede o particionamento.
 
-Depois de fechar os benchmarks e a equivalência, apareceram alterações
-concorrentes não comitadas em `aot.hpp`, `aot.cpp`, CLI e integração CMake
-da saída AOT. Não foram incluídas nem sobrescritas. O build diagnóstico
-complementar posterior passou a ter esquema de checkpoint diferente e
-recusou a carga antes de publicar estado. Não se forçou a identidade nem
-se usaram esses resultados como perfil posterior. Esse perfil fica pendente
-até isolar ou integrar a revisão concorrente. Os executáveis congelados,
-as 40 medições e as 12 execuções de equivalência precedem essa alteração.
+O perfil instrumentado posterior dos componentes não foi obtido: um build
+intermediário recusou o esquema de checkpoint, antes de publicar estado.
+Não se forçou a identidade nem se usou essa execução como perfil válido.
+A API offline final fica em `aot_sources.hpp`, excluída do esquema de fio;
+nenhum campo serializado foi alterado. A continuação revalidou os estados
+completos anteriores, sem dispensar identidade, migração ou opt-in de runtime.
+
+## Particionamento AOT — `3c3a5b5`
+
+Referência adicional obrigatória: ReXGlue SDK
+`c94f5ebdcb3c9d1a460ca48e04f9758448f8d518`, BSD-3-Clause, consultado
+somente para organização. Seu [emissor](https://github.com/rexglue/rexglue-sdk/blob/c94f5ebdcb3c9d1a460ca48e04f9758448f8d518/src/codegen/codegen_writer.cpp)
+separa corpos, declarações necessárias e mapeamento, com
+[partições estáveis](https://github.com/rexglue/rexglue-sdk/blob/c94f5ebdcb3c9d1a460ca48e04f9758448f8d518/src/codegen/output_partition.cpp)
+e fingerprints de entrada. Usa [labels/chamadas diretas](https://github.com/rexglue/rexglue-sdk/blob/c94f5ebdcb3c9d1a460ca48e04f9758448f8d518/src/codegen/builders/control_flow.cpp),
+contexto e base de memória explícitos, helpers de memória por largura e
+seleção de MMIO, além de SIMDe no emissor vetorial e PCH no build.
+PS2Recomp também possui corpos por função, registradores constantes,
+acessos escalares especializados e eventos/deadlines no scheduler.
+Seus serviços de kernel e modelos de memória não autorizam dispensar
+TLB/cache, interrupções ou domínios numéricos neste runtime de sistema.
+Não foi copiado, adaptado ou vinculado código de qualquer referência;
+não se introduziu LTO obrigatório, SIMD obrigatório ou fast-math.
+
+Implementação própria: cada bloco mantém **um** corpo, agrupado pelo endereço
+inicial em faixas estáveis de 64 KiB, sem rebalancear funções preexistentes.
+O nome da unidade é seu SHA-256; a tabela de PCs e a proveniência ficam
+no dispatcher. Declarações cruzadas permitem os delay slots já encadeados.
+O manifesto de dados confere todos os hashes, não executa CMake nem inclui
+arquivos por glob. A CLI oferece `--split`; `ps2n-dev` usa esse caminho e
+preserva os objetos de unidades idênticas, no cache exclusivo do perfil.
+Corpos de instruções, guardas por instrução, fallback e hardware são os mesmos.
+
+Na exploração, retirar a guarda inline reduziu a imagem local, mas não
+demonstrou ganho de execução e foi descartado. Partições de 16 KiB ficaram
+atrás das de 64 KiB nos três controles diretos com afinidade igual.
+A primeira série sem afinidade teve dispersão alta; seus 30 resultados
+foram preservados, mas não são o denominador dos ganhos abaixo.
+
+Cinco rodadas finais alternadas por variante/janela, mesmo checkpoint,
+entradas, compilador e flags anteriores, sem compilação concorrente.
+Todas as variantes tiveram afinidade no processador lógico 14 e prioridade
+AboveNormal, aplicadas antes da janela; nenhuma lógica convidada depende
+disso. Medianas das cinco execuções, sem selecionar a melhor amostra:
+
+| Variante | 1 milhão: s / milhões instr./s | 30 milhões: s / milhões instr./s | Campo real mediano |
+|---|---|---|---|
+| Referência anterior ao fetch/eventos | 0,355739 / 2,811 | 10,372600 / 2,892 | 1,696340 s |
+| Fetch/eventos, TU única | 0,315632 / 3,168 | 9,167730 / 3,272 | 1,498635 s |
+| Fetch/eventos + partições de 64 KiB | **0,298588 / 3,349** | **8,699110 / 3,449** | **1,422985 s** |
+
+Ganho de throughput total: **19,14% / 19,24%**; incremento do particionamento
+sobre a TU única: **5,71% / 5,39%**. A janela longa final variou de
+8,695 a 8,723 s; as amostras exatas estão no JSON local. Não comparar esses
+tempos diretamente com a série anterior, que não fixou afinidade.
+Cobertura preservada: 990.868/1 milhão e 25.793.960/30 milhões AOT
+(99,0868% / 85,979867%). Permanecem 9.132/4.206.040 instruções no
+interpretador explícito: mesma cobertura estática e fronteiras de sistema,
+FPU ou código não traduzido; nenhuma causa foi ocultada pelo particionamento.
+
+As 30 execuções finais mantiveram estado completo, RGBA e ciclos dos campos.
+Oito validações adicionais, em duas janelas, compararam TU única, partições,
+interpretação pura e retomada de 10 + 20 milhões. Estado, RGBA, PCM e seus
+ciclos coincidiram entre si e com a referência congelada anterior: 9.764
+amostras na janela padrão e 9.766 com síntese ativa. O hash de estado inclui
+CPU, RAM/cache/proveniência, EE/IOP/VU/GS/SPU2, ciclos e interrupções.
+Os testes sintéticos também conferem escrita executável, interrupção em
+delay slot, orçamento, retomada interior e reutilização real de objetos Ninja.
+
+Executáveis comparados: TU única 11.772.928 bytes; partições 11.772.416
+bytes, ambos **11,23 MiB**. O particionamento contém o custo de recompilação,
+mas não reverte o crescimento histórico de 4,60 para 11,23 MiB.
+Três pares de builds completos controlados (processadores lógicos 8/10/12/14,
+prioridade igual, mesmas otimizações e três entradas lógicas: módulo,
+idle e auxiliar, mais link): medianas de **124,015 → 131,721 s**;
+**não houve ganho completo** (+6,21% de custo). Não usar os
+89,09 s históricos como denominador de um build com outra afinidade.
+Uma unidade de tamanho mediano superior, 930.662 bytes de C++ entre oito
+partições, foi recompilada em **26,867 s**, incluindo reconfiguração e link.
+O controle incremental monolítico invalidou somente o objeto do módulo,
+reutilizando idle/auxiliar: **125,877 s**, com fonte original intacta.
+A redução incremental foi **78,66%**. O ensaio particionado alterou somente
+um comentário da unidade gerada, recalculou seu hash e restaurou o manifesto;
+o teste sintético separado altera uma instrução de efeitos equivalentes.
+Quinze builds sem alterações: mediana de **3,378 s**, incluindo inicialização
+do ambiente MSVC. Cabeçalhos semânticos alterados continuam exigindo rebuild
+das unidades dependentes. Não se afirma que particionar reduz sempre o build
+completo ou desfaz o custo histórico da especialização.
+
+A seção `.text` das duas variantes recompiladas integralmente coincidiu
+com a dos executáveis usados na medição, por SHA-256. A recompilação de
+uma unidade e o retorno ao objeto original também mantiveram `.text` idêntico.
+Quatro testes locais pertinentes passaram: AOT smoke/ops, particionamento
+nativo e pipeline gerenciado com corrupção/reparo de unidades. A sandbox
+recusou a junção do último teste; a repetição com filesystem nativo passou.
+CI final: [núcleo `3bf35c9`](https://github.com/fabegalo/ps2-native/actions/runs/42112647260)
+e [launcher `3c3a5b5`](https://github.com/fabegalo/ps2-native/actions/runs/42110207761)
+aprovados nos seis alvos Windows/Linux/macOS, x64 e ARM64. `3bf35c9`
+move o teste Ninja para o passo com ambiente MSVC inicializado, corrigindo
+a ausência de `kernel32.lib` no primeiro ensaio Windows; não altera runtime.
+
+Evidência local: `out/aot-partition-affinity-final-results.json`,
+`out/aot-partition-summary.json`, `out/aot-partition-validation.json`,
+`out/aot-partition-provenance.json`, `out/aot-partition-controlled-builds*.json`,
+`out/aot-partition-incremental.json`, `out/aot-partition-monolithic-incremental.json`
+e logs dos mesmos prefixos. Os builds de medição ficaram congelados por
+identidade de fontes/cabeçalhos/runtime para não reutilizar silenciosamente
+uma referência após alterações. Conteúdo
+comercial, estados, imagens, PCM e código traduzido permanecem ignorados.
+Permanecem os custos da tradução/cache de dados e do fallback explícito;
+não há perfil posterior válido que quantifique sua participação atual.

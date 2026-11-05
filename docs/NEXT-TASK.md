@@ -202,6 +202,16 @@ não aplicar adaptador de outra revisão. Evidência no relatório do jogo.
 
 ## AOT — continuação independente da compatibilidade
 
+`3c3a5b5` integra partições estáveis de 64 KiB com reuso por hash no
+gerador/CMake/`ps2n-dev`. Cinco rodadas controladas: +19,24% de throughput
+em 30 milhões sobre a referência anterior ao fetch/eventos; +5,39% sobre
+a TU única já otimizada. Estado completo, RGBA/PCM e ciclos idênticos,
+inclusive retomada de 10 + 20 milhões. Evidência e custos de build no
+relatório estrutural abaixo. Próximo gargalo a medir: tradução/cache de
+dados e as fronteiras explícitas do interpretador, que ainda executa
+14,020133% dessa janela. Não deduzir os custos posteriores dos tempos
+instrumentados anteriores à otimização.
+
 Os dois primeiros incrementos estruturais estão medidos em
 [AOT-STRUCTURAL-PERFORMANCE](AOT-STRUCTURAL-PERFORMANCE.md): fetch
 especializado e eventos VU/VIF/DMA, +17,62% de throughput na janela longa
@@ -211,9 +221,8 @@ Preservar o trabalho ativo do jogo e os checkpoints originais. Antes de
 outra otimização, recolher o perfil após essas mudanças; o perfil anterior
 não autoriza atribuir custos iguais ao novo caminho. Priorizar apenas
 candidatas com ganho isolado, estado completo/RGBA/PCM equivalentes e
-custo de código/build registrado. Particionamento estável das TUs e
-descoberta automática das raízes explícitas continuam pendentes; não
-alegar ganho de compilação nesta entrega.
+custo de código/build registrado. A descoberta automática das raízes
+explícitas continua pendente; o particionamento já foi integrado.
 Invalidação por páginas exige primeiro cobrir e testar todas as escritas,
 DMA, cache/writeback e restauração. Não retirar polling, verificações ou
 efeitos para aproximar tempo real; repetir a janela comercial pareada.

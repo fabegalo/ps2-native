@@ -17,6 +17,30 @@
 | Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
+## Particionamento estável AOT — 05/11/2026
+
+- `3c3a5b5` integra unidades nativas por faixas estáveis de 64 KiB,
+  nomes por SHA-256 e manifesto verificado pelo CMake/`ps2n-dev`.
+  Corpos, guardas, semântica e cobertura são preservados; não há código
+  de referência reutilizado nem mudança de gameplay/firmware.
+- Cinco rodadas com afinidade igual: 30 milhões em 10,372600 → 8,699110 s,
+  2,892 → **3,449 milhões de instruções/s** (**+19,24%** sobre a referência
+  anterior ao fetch/eventos, **+5,39%** sobre a TU única já otimizada).
+  Campo real: 1,696340 → **1,422985 s**. Sem alegação de tempo real.
+- Trinta execuções finais e oito validações adicionais preservaram estado
+  completo, RGBA, PCM, ciclos e interrupções, inclusive interpretação pura
+  e checkpoint de 10 + 20 milhões. Cobertura 99,0868%/85,979867%; raízes
+  explícitas e fallback permanecem. Quatro testes locais pertinentes passaram.
+- Executável **11,23 MiB**, 512 bytes menor que a TU única contemporânea.
+  Build completo: 124,015 → 131,721 s, sem ganho (+6,21%). Incremental:
+  125,877 → 26,867 s (**−78,66%**), com `.text` idêntico; no-op 3,378 s.
+  Cabeçalhos alterados continuam exigindo rebuild das unidades dependentes.
+  Método, amostras, referências ReXGlue/PS2Recomp e limites em
+  [AOT-STRUCTURAL-PERFORMANCE](docs/AOT-STRUCTURAL-PERFORMANCE.md).
+- CI do [núcleo `3bf35c9`](https://github.com/fabegalo/ps2-native/actions/runs/42112647260)
+  e do [launcher `3c3a5b5`](https://github.com/fabegalo/ps2-native/actions/runs/42110207761)
+  aprovada nos seis alvos. Nenhum ensaio comercial permanece ativo.
+
 ## Memória e eventos AOT medidos — 05/11/2026
 
 - `6f3f968` especializa fetch com tradução, conhecimento e guardas de
