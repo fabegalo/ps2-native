@@ -488,6 +488,7 @@ int main(int argc,char** argv)try {
         const auto* required=std::getenv("PS2N_REQUIRE_GS_GPU");
         return selection=="vulkan" && required && std::string_view{required}=="1"?1:77;
     }
+    std::cout<<"GPU selected: "<<gpu->device_name()<<'\n'<<std::flush;
     check_device_batch(api);check_partial_coherence(gpu);check_resident_batches(gpu);
     check_completion_order(gpu);check_pending_knowledge(gpu);
     check_raster(gpu);check_pipeline(gpu);check_fallback_and_transfers(gpu);

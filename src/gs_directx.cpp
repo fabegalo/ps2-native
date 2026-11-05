@@ -1,5 +1,6 @@
 // Original BSD-3-Clause D3D12 execution backend for the shared GS device.
 #include "ps2native/gs_gpu.hpp"
+#include "ps2native/gs_vram.hpp"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -8,12 +9,15 @@
 #include <wrl/client.h>
 #include "gs_flat_dxil.hpp"
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 namespace ps2native {
 namespace {
@@ -69,6 +73,9 @@ class DirectXGs final : public GsGpu {
     std::mutex mutex_;
     GsGpuStats stats_{};
     std::string name_;
+    bool diagnostics_{},dred_configured_{},driver_known_{};
+    UINT vendor_id_{},device_id_{};
+    LARGE_INTEGER driver_version_{};
 
     ComPtr<ID3D12Resource> buffer(UINT64 bytes,D3D12_HEAP_TYPE heap,D3D12_RESOURCE_STATES state,bool uav=false) {
         D3D12_HEAP_PROPERTIES properties{};properties.Type=heap;
@@ -87,6 +94,93 @@ class DirectXGs final : public GsGpu {
         barrier.Transition.StateAfter=after;barrier.Transition.Subresource=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
         commands_->ResourceBarrier(1,&barrier);
     }
+    void append_dred(std::ostream& message) const {
+        message<<"; vendor=0x"<<std::hex<<vendor_id_<<"; device=0x"<<device_id_;
+        if(driver_known_)message<<"; driver=0x"<<static_cast<UINT64>(driver_version_.QuadPart);
+        message<<"; DRED configured="<<(dred_configured_?"yes":"no");
+        ComPtr<ID3D12DeviceRemovedExtendedData> dred;
+        const auto queried=device_.As(&dred);
+        if(FAILED(queried)){message<<"; DRED interface HRESULT=0x"<<static_cast<unsigned long>(queried);return;}
+        D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT breadcrumbs{};
+        const auto breadcrumbs_status=dred->GetAutoBreadcrumbsOutput(&breadcrumbs);
+        message<<"; DRED breadcrumbs HRESULT=0x"<<static_cast<unsigned long>(breadcrumbs_status);
+        if(SUCCEEDED(breadcrumbs_status)) {
+            const auto* node=breadcrumbs.pHeadAutoBreadcrumbNode;
+            unsigned index=0;
+            for(;node && index<4u;node=node->pNext,++index) {
+                message<<"; breadcrumb["<<std::dec<<index<<"] count="<<node->BreadcrumbCount;
+                if(!node->pLastBreadcrumbValue){message<<" last=unavailable";continue;}
+                const auto last=*node->pLastBreadcrumbValue;
+                message<<" last="<<last;
+                if(last>node->BreadcrumbCount){message<<" (invalid counter)";continue;}
+                // DRED retains a 65536-operation history ring. Check both
+                // counter bounds and pointer availability before indexing.
+                if(last && node->BreadcrumbCount-last<65536u && node->pCommandHistory)
+                    message<<" last_completed_op="<<static_cast<unsigned>(node->pCommandHistory[(last-1u)%65536u]);
+                if(last<node->BreadcrumbCount && node->BreadcrumbCount-last<=65536u && node->pCommandHistory)
+                    message<<" next_op="<<static_cast<unsigned>(node->pCommandHistory[last%65536u]);
+            }
+            if(node)message<<"; additional breadcrumb nodes omitted";
+        }
+        D3D12_DRED_PAGE_FAULT_OUTPUT fault{};
+        const auto fault_status=dred->GetPageFaultAllocationOutput(&fault);
+        message<<"; DRED page fault HRESULT=0x"<<std::hex<<static_cast<unsigned long>(fault_status);
+        if(SUCCEEDED(fault_status))message<<" GPU_VA=0x"<<fault.PageFaultVA;
+    }
+    [[noreturn]] void fail_batch(const char* cause) {
+        // Preserve the driver's status before cleanup can replace it. Adapter
+        // identity is diagnostic evidence, never a per-driver skip rule.
+        const auto removed=device_ ? device_->GetDeviceRemovedReason() : S_OK;
+        std::ostringstream optional_details;
+        if(diagnostics_) {
+            // Diagnostics are bounded and best-effort. Read them before a
+            // deliberate RemoveDevice changes the original fault evidence.
+            try{append_dred(optional_details);}catch(...){}
+        }
+        const auto terminated=in_flight_;
+        if(in_flight_){lifecycle_->RemoveDevice();in_flight_=false;}
+        std::ostringstream message;
+        message<<cause<<"; adapter=\""<<name_<<"\"; GetDeviceRemovedReason=0x"
+            <<std::hex<<static_cast<unsigned long>(removed);
+        if(diagnostics_)message<<optional_details.str();
+        if(terminated)message<<"; incomplete device execution terminated before resource release";
+        failure_=std::make_exception_ptr(std::runtime_error(message.str()));
+        std::rethrow_exception(failure_);
+    }
+    void preflight() {
+        // Verify real integer execution before advertising availability. This
+        // isolated host scratch storage contains no guest GS state or cycles.
+        std::vector<std::uint32_t> words(kVramBytes/4u),known(words.size());
+        GsGpuCommand sprite{};
+        sprite.right=8;sprite.bottom=8;sprite.bw=64;
+        sprite.color=0x80402010u;sprite.fba_known=1;
+        auto triangle=sprite;triangle.triangle=1;triangle.x1=128;triangle.y2=128;
+        triangle.color=0x80804020u;
+        const std::array primitives{sprite,triangle};
+        GsGpuResult result;
+        try {
+            // The owner is still null. The common standalone overload proves
+            // the full upload/materialization contract without binding a GS.
+            result=GsGpu::execute(words,known,primitives);
+        } catch(const std::exception& error) {
+            throw std::runtime_error(std::string{"GS Direct3D 12 initialization preflight failed: "}+error.what());
+        }
+        if(result.revisions!=100u || result.pixel_writes!=100u)
+            fail_batch("GS Direct3D 12 initialization preflight counters differ from the GS proof");
+        std::vector<std::uint32_t> expected(words.size()),expected_known(words.size());
+        for(unsigned y=0;y<8u;++y)for(unsigned x=0;x<8u;++x) {
+            const auto at=GsVram::address(0,64,0,x,y)/4u;
+            expected[at]=x+y<8u ? triangle.color : sprite.color;
+            expected_known[at]=0xFFFFFFFFu;
+        }
+        if(words!=expected || known!=expected_known)
+            fail_batch("GS Direct3D 12 initialization preflight pixels or known-bit masks differ from the GS proof");
+        // Guest counters begin after the proof. Retain allocation/capability
+        // diagnostics; residency and all synchronization policies are intact.
+        const auto timestamps=stats_.gpu_timestamps;
+        const auto storage=stats_.storage_bytes;
+        stats_={};stats_.gpu_timestamps=timestamps;stats_.storage_bytes=storage;
+    }
 public:
     DirectXGs() {
         create_device_=reinterpret_cast<decltype(create_device_)>(GetProcAddress(d3d12_.handle,"D3D12CreateDevice"));
@@ -94,6 +188,19 @@ public:
         create_factory_=reinterpret_cast<CreateFactory>(GetProcAddress(dxgi_.handle,"CreateDXGIFactory1"));
         if(!create_device_ || !serialize_root_ || !create_factory_)
             throw std::runtime_error("GS Direct3D 12 system entry points are unavailable");
+        if(const auto* setting=std::getenv("PS2N_GS_GPU_DIAGNOSTICS"))diagnostics_=std::strcmp(setting,"1")==0;
+        if(diagnostics_) {
+            // DRED settings must precede device creation. Neither DRED nor
+            // the debug layer is required for normal execution/availability.
+            const auto get_debug=reinterpret_cast<decltype(&D3D12GetDebugInterface)>(
+                GetProcAddress(d3d12_.handle,"D3D12GetDebugInterface"));
+            ComPtr<ID3D12DeviceRemovedExtendedDataSettings> settings;
+            if(get_debug && SUCCEEDED(get_debug(IID_PPV_ARGS(&settings)))) {
+                settings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+                settings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+                dred_configured_=true;
+            }
+        }
         checked(create_factory_(IID_PPV_ARGS(&factory_)),"DXGI discovery");
         for(UINT index=0;;++index) {
             ComPtr<IDXGIAdapter1> adapter;
@@ -109,6 +216,10 @@ public:
             D3D12_FEATURE_DATA_SHADER_MODEL shader_model{D3D_SHADER_MODEL_6_0};
             if(FAILED(candidate->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL,&shader_model,sizeof(shader_model))) || shader_model.HighestShaderModel<D3D_SHADER_MODEL_6_0)continue;
             device_=std::move(candidate);
+            if(diagnostics_) {
+                vendor_id_=desc.VendorId;device_id_=desc.DeviceId;
+                driver_known_=SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice),&driver_version_));
+            }
             const auto bytes=WideCharToMultiByte(CP_UTF8,0,desc.Description,-1,nullptr,0,nullptr,nullptr);
             if(bytes<=1)throw std::runtime_error("GS Direct3D 12 adapter identity is unavailable");
             std::string adapter_name(static_cast<std::size_t>(bytes),0);
@@ -150,6 +261,7 @@ public:
             query_readback_=buffer(16,D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
             stats_.gpu_timestamps=true;
         }
+        preflight();
     }
     GsGpuResult execute(std::span<std::uint32_t> words,std::span<std::uint32_t> known,
                         std::span<const GsGpuCommand> primitives,std::span<const GsGpuRange> uploads,
@@ -285,11 +397,8 @@ public:
             }
             if(!primitives.empty()){++stats_.batches;stats_.primitives+=primitives.size();}
             return {result[1],result[2]};
-        } catch(...) {
-            failure_=std::current_exception();
-            if(in_flight_){lifecycle_->RemoveDevice();in_flight_=false;}
-            throw;
-        }
+        } catch(const std::exception& error) {fail_batch(error.what());}
+        catch(...) {fail_batch("GS Direct3D 12 encountered an unknown host execution error");}
     }
     const GsGpuStats& stats() const noexcept override{return stats_;}
     const std::string& device_name() const noexcept override{return name_;}

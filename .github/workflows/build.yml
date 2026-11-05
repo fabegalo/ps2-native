@@ -69,6 +69,7 @@ jobs:
       - name: Test AOT end-to-end
         env:
           PS2N_REQUIRE_GS_GPU: ${{ runner.os == 'Linux' && '1' || '0' }}
+          PS2N_GS_GPU_DIAGNOSTICS: ${{ runner.os == 'Windows' && '1' || '0' }}
         run: ctest --test-dir out/build -C Release -E "^(io-long-paths|aot-long-path-build|native-aot-partitions)$" --output-on-failure
 
       - name: Test Ninja AOT compilation at long paths (Unix)
