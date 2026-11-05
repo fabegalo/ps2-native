@@ -27,6 +27,11 @@ int main() try {
             "first start copies old TOPS to TOP, reverses DBF and wraps BASE+OFFSET");
         vif.write_fifo(0x10000000,0,gif,gs,&vu,100);
         require((vif.observe_status().value&7u)==6u && vu.micro_running(unit),"FLUSHE retains its real command in the decoder and reports an E-bit wait");
+        for(std::uint64_t cycle=100;cycle<107;++cycle) {
+            advance_vpus(cycle,&vif,nullptr,&vu,gif,gs);
+            advance_vpus(cycle,&vif,nullptr,&vu,gif,gs);
+            require(vu.micro_running(unit) && vif.processing(),"repeated early polls cannot complete FLUSHE before the VU pipeline drains");
+        }
         advance_vpus(107,&vif,nullptr,&vu,gif,gs);
         require(!vu.micro_running(unit) && !vif.processing(),"FLUSHE completes only after the true E delay and pipeline drain");
         const auto vi=unit ? vu.observe_data(0x4210) : vu.observe(1);

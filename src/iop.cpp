@@ -562,7 +562,15 @@ void Iop::advance_gif_dma(std::uint64_t ee_cycle,Gif& gif,GsRegisters& gs) {
 }
 void Iop::advance_graphics(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu) {
     profiling::Scope profile(profiling::Phase::Devices);
-    for(unsigned channel=0;channel<3;++channel)advance_graphics_dma(channel,ee_cycle,&vif0,&vif1,gif,gs,&vu);
+    for(unsigned channel=0;channel<3;++channel) {
+        auto& transfer=graphics_dma_[channel];
+        // Inactive channels have no bus event. Preserve their timestamp and
+        // refusal ordering without entering the large transfer parser.
+        if(transfer.stop)throw DeviceRefusal(*transfer.stop);
+        if(!(ee_dma_setup_[channel][0].value_or(0u)&0x100u) || ee_dma_suspended_ || !(ee_dctrl_&1u))
+            transfer.cycle=ee_cycle;
+        else advance_graphics_dma(channel,ee_cycle,&vif0,&vif1,gif,gs,&vu);
+    }
     advance_vpus(ee_cycle,&vif0,&vif1,&vu,gif,gs);
 }
 void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0,Vif* vif1,Gif& gif,GsRegisters& gs,VuControl* vu) {

@@ -106,8 +106,15 @@ void Vif::write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs,VuControl* v
 }
 void advance_vpus(std::uint64_t cycle,Vif* vif0,Vif* vif1,VuControl* vu,Gif& gif,GsRegisters& gs) {
     const auto drain=[&](std::uint64_t at) {
-        if(vif0)vif0->drain(at,vu,gif,gs);
-        if(vif1)vif1->drain(at,vu,gif,gs);
+        // A partial payload with no input cannot advance. Still drain a
+        // previously waiting decoder so its status flags retain their exact
+        // existing transition when the VU/PATH1 dependency completes.
+        const auto ready=[](const Vif* vif) {
+            return vif && (vif->waiting_ || vif->gif_waiting_ ||
+                           !vif->fifo_.empty() || vif->input_index_<vif->input_count_);
+        };
+        if(ready(vif0))vif0->drain(at,vu,gif,gs);
+        if(ready(vif1))vif1->drain(at,vu,gif,gs);
     };
     if(vu) {
         while((vif0 && vif0->waiting_) || (vif1 && vif1->waiting_)) {
