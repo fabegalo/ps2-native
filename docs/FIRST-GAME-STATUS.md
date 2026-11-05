@@ -4,6 +4,49 @@ Execução local em 03/11/2026. **A meta de jogabilidade não foi atingida.** O 
 inicialização normal, primeiro frame, menu, controles e gameplay não foram demonstrados.
 Código original BSD-3-Clause; nenhum código de emulador, firmware, IRX ou jogo foi incorporado.
 
+## Encerramento solicitado — estado final preservado
+
+Execução encerrada a pedido do mantenedor, sem novo ensaio longo.
+O 126 terminou na mesma recusa DMA em 292,052 s desde 7,125 bilhões;
+o experimento escalar não trouxe avanço. O 127 testou a identidade
+numérica corrigida com política escalar estrita: retomada de 7,725 bilhões
+em 0,974 s, mesma recusa após 1,234 s de execução. A correção genérica
+preserva o fato de que duas cópias do mesmo valor representam o mesmo
+operando; domínios independentes com hulls iguais continuam independentes.
+O caso `(+1|-1)` copiado e multiplicado reproduziu a falha antes da
+correção e passou depois, junto da divisão de cópias não nulas.
+
+Os ajustes finais também preservam certificados da via de cache não
+afetada, mantêm origens durante writeback/refill e recusam ressuscitar
+uma origem após escrita independente com os mesmos bytes. Dados e
+visibilidade do hardware continuam sujeitos às mesmas operações reais.
+Quatro testes focados passaram: cache EE, SIF0 DMA, conhecimento FPU e
+checkpoint completo. Não houve avanço de instruções na fronteira real;
+nenhum ganho isolado de desempenho é declarado.
+
+Checkpoint final completo `out/game-first/superbust-final-safe.ps2ncp`:
+PC `0x80002ACC`, 7.759.586.676 instruções totais, 7.727.170.000 do jogo,
+7.759.588.054 ciclos EE. Payload SHA-256
+`f2ec4be4e971662f4e6ff514606992ffcc306c01e073ddd69afe047ff925cb97`,
+60.162.874 bytes; runtime
+`e19665218846a961f26985a7080cf8678c7a9f765369acdb1747f455975ecf8b`.
+Fonte fixada em `cad88c0` mais os ajustes de identidade/cache, registrada
+em `superbust-final-build-provenance.json`; preservar esse build compatível
+para restaurar. Mudanças posteriores da `main` exigem revisar o esquema,
+não reinterpretar o estado com ABI nova.
+
+Verificação limitada final em `superbust-final-frontier.log`: carrega em
+0,859 s e reproduz a recusa após 2.060 instruções, `0x1CE460`,
+7.759.588.736 totais / 7.727.172.060 do jogo. O checkpoint seguro
+continua anterior à instrução recusada. Imagem real preservada em
+`superbust-menu127-vblank-293.bmp/.png`, ainda o indicador circular;
+menu, navegação e gameplay não demonstrados. Start e Cross foram
+aplicados pelo SIO2 durante a animação, sem resposta visual comprovada;
+Up/Down no menu e partida continuam pendentes.
+
+CI de `cad88c0`: núcleo e launcher aprovados nos seis alvos. A CI dos
+últimos ajustes foi solicitada; sua conclusão permanece pendente ao parar.
+
 ## Fronteira localizada e refinamento experimental — 125/126
 
 O 125 executou a nova prova estrita de multiplicação desde o prefixo
@@ -52,7 +95,7 @@ carry permanece **não verificado**, com evidência de referência externa;
 o carregamento não o habilita automaticamente. Todos os sete testes
 focados passaram após corrigir a instância reutilizada no teste da guarda.
 
-126 em execução desde esse prefixo, sem repetir 7,125 bilhões de
+126 concluído desde esse prefixo, sem repetir 7,125 bilhões de
 instruções. Núcleo/AOT/harness com fontes fixadas em `6c94fd8` mais
 o refinamento; esquema
 `830377c10823d2223579db00dc995da1a05a0fcc433a85be4014e50ea96ac772`,
@@ -60,7 +103,7 @@ runtime `d62d319d99c680fd8995165517d12ea352a62db57193f85956422a3cc725d088`.
 Carregamento em 0,976 s. Cenário experimental separado
 `499f9eaf33cc3468a1fa1e189bde88cbfd152fb8405511be2c363fe93ce5b493`,
 log `superbust-menu-126.log`, entrada `superbust-pad126.txt` solta (`FFFF`).
-Ainda faltam menu, resposta visual de Start/Cross/Up/Down e partida.
+Terminou na mesma recusa; ainda faltam menu, resposta visual de Start/Cross/Up/Down e partida.
 
 ## Compatibilidade dos checkpoints após a atualização de FPU
 

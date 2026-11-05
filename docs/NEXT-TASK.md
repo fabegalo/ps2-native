@@ -2,20 +2,29 @@
 
 ## Fronteira atual e retomada rápida
 
-Usar `out/game-first/superbust-menu121-latest.ps2ncp`: checkpoint completo
+**Parado a pedido do mantenedor.** Não iniciar outro ensaio sem novo pedido.
+Últimos ajustes concluídos: identidade numérica entre cópias e transporte
+de proveniência por cache/writeback/refill. Quatro testes focados passaram;
+sem avanço na fronteira real. CI final pendente; `cad88c0` passou no núcleo
+e launcher nos seis alvos. Nenhum ensaio ou observador deve ficar ativo.
+
+Usar `out/game-first/superbust-final-safe.ps2ncp`: checkpoint completo
 verificado em `0x80002ACC`, 7.759.586.676 instruções totais,
 7.759.588.054 ciclos EE, 7.727.170.000 instruções do jogo. Carrega em
-0,826 s no runtime anterior; após a atualização FPU `e0cfc2f`, migração
-verificada em 1,091 s e apenas 2.060 instruções/0,0384 s até o bloqueio.
+0,859 s na última verificação, apenas 2.060 instruções até o bloqueio.
+Preservar o build compatível em `out/replay-build`, fontes fixadas em
+`out/replay-source-78973bb` (`cad88c0` mais ajustes finais), com hashes em
+`superbust-final-build-provenance.json`. A `main` continua recebendo outras
+mudanças; revisar esquema e recompilar tudo junto antes de trocar runtime.
 Não repetir desde o boot para diagnosticar essa recusa.
 
-**126 em execução**, com hipótese genérica de carry escalar explícita,
+**126 concluído**, com hipótese genérica de carry escalar explícita,
 somente após provar que o prefixo completo de 7,125 bilhões tem zero
 origens numéricas incertas. Cenário separado `499f9eaf33cc3468a1fa1e189bde88cbfd152fb8405511be2c363fe93ce5b493`.
 Log `superbust-menu-126.log`; entrada `superbust-pad126.txt` solta (`FFFF`).
-Prazo de 15 minutos supervisionado e checkpoints completos a cada
-100 milhões. Não repetir os 7,125 bilhões iniciais. Fontes fixadas
-contra alterações simultâneas; núcleo/AOT/harness compatíveis.
+Terminou na mesma recusa em 292,052 s; não demonstrou ganho. O 127,
+estrito e com identidade corrigida, também reproduziu a recusa. A última
+verificação limitada salvou o checkpoint final acima e encerrou.
 
 O 125 voltou à mesma recusa, Cross por 35 campos sem mudança visual.
 A escrita inicial foi isolada em `SW 0x1CD120` / 7.727.167.542 do jogo;

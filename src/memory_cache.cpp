@@ -5,6 +5,19 @@ namespace ps2native {
 namespace {
 constexpr std::uint32_t valid=0x20u, dirty=0x40u, locked=8u, lrf=0x10u;
 constexpr std::uint32_t tag_fields=0xFFFFF078u;
+void discard_cached_relation(auto& relations,const auto& line,unsigned index) {
+    if(!(line.tag&valid) || !line.pfn_known)return;
+    const auto physical=(line.tag&0xFFFFF000u)|(index<<6u);
+    for(unsigned offset=0;offset<64;offset+=4)relations.erase(0x40000000u|(physical+offset));
+}
+ObservedWord cached_word(const auto& line,unsigned offset) {
+    ObservedWord word{};
+    for(unsigned i=0;i<4;++i) {
+        word.value|=std::uint32_t{line.bytes[offset+i]}<<(8u*i);
+        word.unknown|=std::uint32_t{line.unknown[offset+i]}<<(8u*i);
+    }
+    return word;
+}
 }
 void Memory::reset_data_cache() {
     data_cache_model_=false;
@@ -46,6 +59,16 @@ void Memory::writeback_data_cache(DataCacheLine& line,unsigned index) const {
         for(unsigned j=0;j<8;++j) unknown|=std::uint64_t{line.unknown[i+j]}<<(8u*j);
         set_storage_unknown({physical+i,BusRegion::MainRam,physical+i},8,unknown);
     }
+    // Publish the certificate of the exact dirty word with its data. An
+    // unrelated old RAM origin must never survive a matching-byte writeback.
+    for(unsigned offset=0;offset<64;offset+=4) {
+        const auto found=fpu_relations_.find(0x40000000u|(physical+offset));
+        const auto word=cached_word(line,offset);
+        if(found!=fpu_relations_.end() && found->second.word.value==word.value && found->second.word.unknown==word.unknown) {
+            auto stored=found->second;stored.dma_generation=registers_.iop().ee_ram_write_generation();
+            fpu_relations_[physical+offset]=std::move(stored);
+        }
+    }
     line.tag&=~dirty;
 }
 Memory::DataCacheLine& Memory::data_cache_line(std::uint32_t address,const Target& target) const {
@@ -69,7 +92,7 @@ Memory::DataCacheLine& Memory::data_cache_line(std::uint32_t address,const Targe
     writeback_data_cache(line,index);
     // Certificates are host metadata, not cache payload. A refill must not
     // resurrect an older origin merely because bytes/unknown bits coincide.
-    if(!fpu_relations_.empty())std::erase_if(fpu_relations_,[index](const auto& entry){return (entry.first&0x40000000u) && ((entry.first>>6u)&63u)==index;});
+    discard_cached_relation(fpu_relations_,line,index);
     const auto offset=target.offset&~63u;
     const auto& storage=target.region==BusRegion::BiosRom ? rom_
                         : target.region==BusRegion::Rom1 ? rom1_ : ram_;
@@ -80,6 +103,16 @@ Memory::DataCacheLine& Memory::data_cache_line(std::uint32_t address,const Targe
         const auto unknown=storage_unknown(source,8);
         for(unsigned j=0;j<8;++j) line.unknown[i+j]=static_cast<std::uint8_t>(unknown>>(8u*j));
     }
+    if(target.region==BusRegion::MainRam)for(unsigned i=0;i<64;i+=4) {
+        const auto key=0x40000000u|static_cast<std::uint32_t>(offset+i);
+        fpu_relations_.erase(key);
+        const auto found=fpu_relations_.find(static_cast<std::uint32_t>(offset+i));
+        const auto word=cached_word(line,i);
+        if(found!=fpu_relations_.end() && found->second.dma_generation==registers_.iop().ee_ram_write_generation() &&
+           found->second.word.value==word.value && found->second.word.unknown==word.unknown) {
+            const auto stored=found->second;fpu_relations_[key]=stored;
+        }
+    }
     line.tag=(target.physical&0xFFFFF000u)|valid|((line.tag^lrf)&lrf);
     line.pfn_known=true;
     return line;
@@ -89,8 +122,6 @@ ObservedWord Memory::data_cache_operation(unsigned op,std::uint32_t address,Obse
     const auto index=(address>>6u)&63u;
     auto& set=data_cache_[index];
     auto* line=&set[address&1u];
-    if(op==0x12 || op==0x13 || op==0x14 || op==0x16 || op==0x18 || op==0x1A)
-        std::erase_if(fpu_relations_,[index](const auto& entry){return (entry.first&0x40000000u) && ((entry.first>>6u)&63u)==index;});
     if(op==0x18 || op==0x1A || op==0x1C) {
         const auto target=resolve(address&~3u,4,false,"CACHE");
         const bool uncached_hypothesis=data_cache_uncached_hits_ &&
@@ -122,12 +153,15 @@ ObservedWord Memory::data_cache_operation(unsigned op,std::uint32_t address,Obse
             if(tag.unknown&tag_fields) throw DeviceRefusal("D-cache tag store consumes unknown tag fields");
             if((tag.value&locked) && ((line->tag|set[(address&1u)^1u].tag)&locked))
                 throw DeviceRefusal("D-cache relock or locking both ways is undefined");
+            discard_cached_relation(fpu_relations_,*line,index);
             line->tag=tag.value&tag_fields;
             if(!(line->tag&valid)) line->tag&=~dirty;
             line->pfn_known=true;
             break;
         case 0x13: {
             const auto offset=address&60u;
+            if((line->tag&valid) && line->pfn_known)
+                fpu_relations_.erase(0x40000000u|(line->tag&0xFFFFF000u)|(index<<6u)|offset);
             for(unsigned i=0;i<4;++i) {
                 line->bytes[offset+i]=static_cast<std::uint8_t>((tag.value&~tag.unknown)>>(8u*i));
                 line->unknown[offset+i]=static_cast<std::uint8_t>(tag.unknown>>(8u*i));
@@ -138,6 +172,7 @@ ObservedWord Memory::data_cache_operation(unsigned op,std::uint32_t address,Obse
             writeback_data_cache(*line,index);
             [[fallthrough]];
         case 0x16: case 0x1A:
+            discard_cached_relation(fpu_relations_,*line,index);
             line->tag&=~(valid|dirty|locked);
             break;
         case 0x1C: writeback_data_cache(*line,index);break;

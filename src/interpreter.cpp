@@ -462,6 +462,10 @@ public:
         const ObservedWord a{s_.fpr[fs]&~s_.unknown_fpr_bits[fs],s_.unknown_fpr_bits[fs]};
         ObservedWord b{s_.fpr[ft]&~s_.unknown_fpr_bits[ft],s_.unknown_fpr_bits[ft]};
         auto ar=fpu_relation(fs),br=fpu_relation(ft);
+        // MOV.S and certified affine copies preserve the same concrete input,
+        // even when it lives in two registers. Equal hulls alone prove nothing.
+        const bool identical_inputs=fs==ft || (ar.origin && ar.origin==br.origin && ar.exponent==br.exponent &&
+            ar.offset==br.offset && ar.negated==br.negated && a.value==b.value && a.unknown==b.unknown);
         if(op==MipsOpcode::SubS) {
             b.value=(b.value^0x80000000u)&~b.unknown;
             br.negated=!br.negated;br.offset=-br.offset;
@@ -475,7 +479,7 @@ public:
         std::shared_ptr<const std::vector<FloatBounds>> ranges;
         FpuAffine relation;
         if(op==MipsOpcode::DivS) {
-            result=finite_fpu(op,a,b,ar,br,fs==ft,candidates,diagnostic);
+            result=finite_fpu(op,a,b,ar,br,identical_inputs,candidates,diagnostic);
         } else if(op!=MipsOpcode::MulS && ar.origin && ar.origin==br.origin && ar.exponent==br.exponent && ar.negated!=br.negated) {
             std::uint32_t flags=0;
             result=VuFloatResult{{ee_fpu_scaled_integer(ar.offset+br.offset,ar.exponent,flags),0},flags};
@@ -486,7 +490,7 @@ public:
         }
         if(!result || (result->word.unknown && (ar.candidates || br.candidates ||
            (result->bounded && result->bounds[1]-result->bounds[0]>64u)))) {
-            const auto finite=finite_fpu(op,a,b,ar,br,fs==ft,candidates,diagnostic);
+            const auto finite=finite_fpu(op,a,b,ar,br,identical_inputs,candidates,diagnostic);
             if(finite)result=finite;
         }
         if(!result)result=range_fpu(op,a,b,ar,br,ranges,diagnostic);

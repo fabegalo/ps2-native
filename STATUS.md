@@ -18,6 +18,16 @@
 
 ## Continuação experimental do jogo — 04/11/2026
 
+- **Execução encerrada a pedido do mantenedor.** Últimos ajustes preservam
+  identidade entre cópias numéricas e proveniência por via de cache,
+  writeback e refill. Quatro testes focados passaram. Checkpoint final
+  `superbust-final-safe.ps2ncp`: `0x80002ACC`, 7.759.586.676 instruções
+  totais / 7.727.170.000 do jogo, 7.759.588.054 ciclos EE. Restauração
+  em 0,859 s; apenas 2.060 instruções até a mesma recusa `0x1CE460` /
+  7.727.172.060 do jogo. Não houve avanço na fronteira. O experimento
+  escalar do 126 também terminou na mesma recusa; menu e partida pendentes.
+  CI `cad88c0`: núcleo e launcher aprovados nos seis alvos; CI dos últimos
+  ajustes ainda pendente. Nenhum ensaio deve permanecer em execução.
 - **Diagnóstico sem repetir o prefixo:** o 125 retomou de 6,325 bilhões,
   aplicou Cross pelo SIO2 por 35 campos e voltou à mesma recusa DMA em
   7.727.172.060 do jogo. Frames comparáveis mantiveram hashes idênticos.
@@ -27,8 +37,8 @@
   Refinamento escalar opcional aceita apenas histórico certificado,
   preserva os resultados anteriores e altera somente sua flag experimental;
   não é política automática de carregamento. Testes de recusa, persistência
-  do histórico e equivalência passaram; 126 em execução com hipótese de
-  carry escalar explícita e cenário separado. Menu e gameplay pendentes.
+  do histórico e equivalência passaram; 126 concluído com hipótese de
+  carry escalar explícita e cenário separado, sem avanço. Menu e gameplay pendentes.
   CI dos commits `78973bb` e `052ae60` aprovada nos seis alvos aplicáveis.
 - **Checkpoints preservados após a atualização de FPU `e0cfc2f`:** migração
   explícita dos esquemas anteriores, sem reinterpretar layout C++ nem

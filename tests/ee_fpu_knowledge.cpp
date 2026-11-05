@@ -158,12 +158,39 @@ void scalar_carry_experiment() {
     memory.reset_for_boot(rom);multiply(0x40000000u,0x3FC90F80u);
     require(state.unknown_fpr_bits[3],"cold reset restores strict scalar arithmetic");
 }
+void copied_numeric_identity() {
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    EEState state;state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
+    const auto step=[&](std::uint32_t word) {
+        state.pc=0x80001000;memory.write32(state.pc,word);std::uint64_t count=0;
+        ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};interpret_instruction(context);
+    };
+    const auto source=[&](std::uint32_t value,std::uint32_t unknown,std::vector<std::uint32_t> values) {
+        state.fpr[1]=value;state.unknown_fpr_bits[1]=unknown;
+        state.fpr_affine[1]={memory.allocate_fpu_origin(),0,0,false,value,unknown,values.front(),values.back(),
+            std::make_shared<const std::vector<std::uint32_t>>(std::move(values))};
+        step(math(6,2,1,0)); // MOV.S preserves the same numeric origin.
+    };
+    source(0x3F800000u,0x80000000u,{0x3F800000u,0xBF800000u});
+    step(math(2,3,1,2));
+    require(state.fpr[3]==0x3F800000u && !state.unknown_fpr_bits[3],
+        "multiplying copied signed unit values squares the same input, never independent signs");
+    state.fpr_affine[2].origin=memory.allocate_fpu_origin();step(math(2,3,1,2));
+    require(state.unknown_fpr_bits[3]==0x80000000u,"equal bit hulls with independent origins retain both product signs");
+    source(0,0x7F800000u,{0x3F800000u,0x40000000u});
+    step(math(3,3,1,2));
+    require(state.fpr[3]==0x3F800000u && !state.unknown_fpr_bits[3],
+        "division by an unchanged numeric copy evaluates only concrete x/x pairs");
+    state.fpr_affine[2].origin=memory.allocate_fpu_origin();step(math(3,3,1,2));
+    require(state.unknown_fpr_bits[3],"independent equal domains still admit distinct quotients");
+}
 }
 int main() try {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     integer_domains(memory);
     floating_trace(memory);
     scalar_carry_experiment();
+    copied_numeric_identity();
     EEState state;state.set_cp0(Cop0::Status,kStatusCU1);
     std::uint64_t executed=0;ExecutionContext context{state,memory,executed,1000,0xFFFFFFFFu};
     const auto step=[&](std::uint32_t word){state.pc=0x80001000;memory.write32(state.pc,word);interpret_instruction(context);};

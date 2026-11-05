@@ -164,7 +164,30 @@ void cached_provenance() {
     require(refilled.value==word.value && refilled.unknown==word.unknown && !memory.fpu_relation(0x80000300u,refilled).origin,
         "invalidate/refill cannot resurrect an older cached certificate from matching bytes and masks");
 }
+void provenance_visibility_and_ways() {
+    Memory memory;initialize(memory);const ObservedWord word{0x3F800000u,1};
+    const auto remember=[&](std::uint32_t address) {
+        memory.store32_observed(address,word);const auto origin=memory.allocate_fpu_origin();
+        memory.remember_fpu_relation(address,word,{origin,0,127,false,word.value,word.unknown,word.value,word.value|1u,{}});
+        return origin;
+    };
+    const auto certificate=[&](std::uint32_t address){return memory.fpu_relation(address,memory.load32_observed(address)).origin;};
+    const auto first=remember(0x80000300u),second=remember(0x80001300u);
+    op(memory,0x1A,0x80002300u);
+    require(certificate(0x80000300u)==first && certificate(0x80001300u)==second,
+        "a cache hit-operation miss leaves both resident origins intact");
+    op(memory,0x16,0x300u);
+    require(certificate(0x80001300u)==second,"index invalidation preserves the other cache way's origin");
+    op(memory,0x18,0x80001300u);
+    require(certificate(0xA0001300u)==second && certificate(0x80001300u)==second,
+        "writeback publishes the dirty origin to RAM and refill retains that exact identity");
+    op(memory,0x1A,0x80001300u);memory.store32_observed(0xA0001300u,word);
+    require(!certificate(0x80001300u),"an independent matching-byte RAM write cannot resurrect a discarded origin");
+    const auto resident=remember(0x80001300u);
+    (void)remember(0x80002300u);(void)remember(0x80003300u);
+    require(certificate(0x80001300u)==resident,"replacement publishes or preserves both ways without broad certificate invalidation");
+}
 int main() try {
-    visibility_and_tags();replacement_and_knowledge();mapping_and_locks();interpreter_and_shared_memory();gif_dma_visibility();cached_provenance();
+    visibility_and_tags();replacement_and_knowledge();mapping_and_locks();interpreter_and_shared_memory();gif_dma_visibility();cached_provenance();provenance_visibility_and_ways();
     std::cout<<"EE D-cache: visibility, tags, LRF, knowledge, mapping, locks and shared CPU semantics passed\n";
 } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}
