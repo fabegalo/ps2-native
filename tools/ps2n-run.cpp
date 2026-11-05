@@ -81,6 +81,7 @@ template<class C> int run_main(int argc, C** argv) {
                   << std::dec << " retired=" << report.retired << " aot=" << report.aot_instructions
                   << " interpreted=" << report.interpreted_instructions << " switches=" << report.engine_switches
                   << " runtime_ms=" << elapsed << '\n' << report.reason << '\n';
+        checkpoint.print_execution_metrics(report);
         std::cout << "status=0x" << std::hex << state.cp0(ps2native::Cop0::Status)
                   << " cause=0x" << state.cp0(ps2native::Cop0::Cause) << " epc=0x" << state.cp0(ps2native::Cop0::Epc)
                   << " v1=0x" << state.reg32(3) << std::dec

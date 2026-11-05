@@ -184,6 +184,55 @@ void copied_numeric_identity() {
     state.fpr_affine[2].origin=memory.allocate_fpu_origin();step(math(3,3,1,2));
     require(state.unknown_fpr_bits[3],"independent equal domains still admit distinct quotients");
 }
+void vector_memory_bounds() {
+    for(const bool interpreted:{false,true}) {
+        Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+        memory.diagnostic_data_cache();memory.set_cache_config(0x10443u);
+        EEState state;state.set_cp0(Cop0::Status,kStatusCU1|(1u<<30u));
+        state.set_cp0(Cop0::Config,0x10443u);state.set_reg32(1,0x80002000u);
+        const auto step=[&](std::uint32_t word) {
+            state.pc=0xA0001000;memory.write32(state.pc,word);std::uint64_t count=0;
+            ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};
+            if(interpreted || (word>>26u)==0x31u)interpret_instruction(context);
+            else if((word>>26u)==0x3Eu)ee::exec<MipsOpcode::Sqc2>(state,memory,state.pc,word);
+            else if((word>>26u)==0x12u)ee::exec<MipsOpcode::Qmtc2>(state,memory,state.pc,word);
+            else ee::exec<MipsOpcode::Lqc2>(state,memory,state.pc,word);
+        };
+        // A real uncertain VU product has a much tighter numeric interval
+        // than its bit hull. All four lanes must survive both cache aliases.
+        memory.write_vu_vector(1,{{0x3F8000013F800001ull,0},{0x3F8000013F800001ull,0}});
+        memory.write_vu_vector(2,{{0x3F8000033F800003ull,0},{0x3F8000033F800003ull,0}});
+        memory.vu_product(3,1,2,15,4,false,false);
+        const auto source=memory.observe_vu_vector(3);
+        const auto bounds=memory.observe_vu_vector_bounds(3,0);
+        require(bounds && (*bounds)[1]-(*bounds)[0]==1u && source.low.unknown,"fixture derives a narrow VU product");
+        step(0xF8230000u); // SQC2 vf3,0(at)
+        step(0xC4240000u); // LWC1 f4,0(at)
+        require(state.fpr_affine[4].origin && state.fpr_affine[4].minimum==(*bounds)[0] &&
+            state.fpr_affine[4].maximum==(*bounds)[1],"LWC1 receives the proved VU interval from dirty cache");
+        require(memory.diagnostic_ram(0x2000,8).unknown==0,"SQC2 does not expose dirty data to DMA before writeback");
+        memory.data_cache_operation(0x18,0x80002000u,{});
+        state.set_reg32(1,0xA0002000u);step(0xD8240000u); // LQC2 vf4,0(at)
+        for(unsigned lane=0;lane<4;++lane)
+            require(memory.observe_vu_vector_bounds(4,lane)==bounds,"all four lane bounds survive SQC2/writeback/LQC2");
+        const auto copy=memory.observe_vu_vector(4);
+        require(copy.low.value==source.low.value && copy.low.unknown==source.low.unknown &&
+            copy.high.value==source.high.value && copy.high.unknown==source.high.unknown,"bound transport preserves every raw bit and uncertainty mask");
+        memory.store128_observed(0xA0002000u,source);step(0xD8240000u);
+        require(!memory.observe_vu_vector_bounds(4,0),"an independent identical raw overwrite cannot revive a VU certificate");
+        step(0xD8200000u);require(!memory.observe_vu_vector_bounds(0,0),"LQC2 cannot attach bounds to constant VF00");
+        state.set_reg128(2,0,0x123456789ABCDEF0ull);
+        state.set_reg64_candidates(2,{0x3F8000033F800003ull,0x3F8000043F800004ull});
+        step(0x48A22800u); // QMTC2 vf5,v0
+        for(unsigned lane=0;lane<2;++lane)
+            require(memory.observe_vu_vector_bounds(5,lane)==FloatBounds{0x3F800003u,0x3F800004u},
+                "QMTC2 preserves both finite low-64-bit lanes without guessing a concrete candidate");
+        require(memory.observe_vu_vector(5).high.value==0x123456789ABCDEF0ull && !memory.observe_vu_vector_bounds(5,2),
+            "QMTC2 keeps the raw upper GPR half without inventing its provenance");
+        state.set_reg64_observed(2,state.gpr[2].low,state.unknown_gpr_bits[2]);step(0x48A22800u);
+        require(!memory.observe_vu_vector_bounds(5,0),"an opaque identical GPR write invalidates old vector bounds");
+    }
+}
 }
 int main() try {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
@@ -191,6 +240,7 @@ int main() try {
     floating_trace(memory);
     scalar_carry_experiment();
     copied_numeric_identity();
+    vector_memory_bounds();
     EEState state;state.set_cp0(Cop0::Status,kStatusCU1);
     std::uint64_t executed=0;ExecutionContext context{state,memory,executed,1000,0xFFFFFFFFu};
     const auto step=[&](std::uint32_t word){state.pc=0x80001000;memory.write32(state.pc,word);interpret_instruction(context);};

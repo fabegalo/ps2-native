@@ -102,7 +102,8 @@ int main(int argc,char** argv)try {
     const auto exact=checkpoint_state_sha256(state,memory);
     auto reviewed=context;reviewed.allow_runtime_change=true;
     for(const auto* schema:{"72d8f630ea9a0befdba0e33bbc9d80394b6a2c29db31cf0a402bd6299876a61e",
-            "cd1aa8bf7755b3926af94afc8385147b755b5de6b335faa25049d9f719960ecd"}) {
+            "cd1aa8bf7755b3926af94afc8385147b755b5de6b335faa25049d9f719960ecd",
+            "3613da6d23479169c5d84e8eea6a68ed75b7acc10e86c5c324238a5cbccf495f"}) {
         const auto decoder_file=directory/"decoder-transition.ps2ncp";
         write_file_atomically(decoder_file,legacy_envelope(current_info,current_payload,schema));
         rejects([&]{(void)load_checkpoint(decoder_file,resumed,restored,context);},"schema");

@@ -163,6 +163,14 @@ public:
     [[nodiscard]] std::optional<FloatBounds> observe_vector_bounds(unsigned index,unsigned lane) const {
         return vector_bounds_.at(index).at(lane);
     }
+    void restore_vector_bounds(unsigned index,unsigned lane,FloatBounds bounds) {
+        if(index==0)return;
+        const auto word=vectors_.at(index).at(lane);
+        if(bounds[0]>bounds[1] || bounds[0]<(word.value&~word.unknown) || bounds[1]>(word.value|word.unknown) ||
+           ((bounds[0]^word.value)&~word.unknown) || ((bounds[1]^word.value)&~word.unknown))
+            throw DeviceRefusal("VU transfer bounds differ from the loaded word");
+        vector_bounds_.at(index).at(lane)=bounds;
+    }
     void write_vector(unsigned index, ObservedQuadword word) {
         if(index==0) return; // VF00 = (0,0,0,1).
         auto& v=vectors_.at(index);

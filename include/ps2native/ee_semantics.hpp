@@ -249,10 +249,36 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
             if constexpr (Op==O::Lqc2) {
                 const auto low=m.load64_observed(address),high=m.load64_observed(address+8u);
                 m.write_vu_vector(t_,{low,high});
+                for(unsigned lane=0;lane<4u;++lane) {
+                    const auto half=lane<2u ? low : high;
+                    const auto shift=(lane&1u)*32u;
+                    const ObservedWord word{static_cast<std::uint32_t>(half.value>>shift),static_cast<std::uint32_t>(half.unknown>>shift)};
+                    if(!word.unknown)continue;
+                    const auto relation=m.fpu_relation(address+4u*lane,word);
+                    if(relation.origin)m.restore_vu_vector_bounds(t_,lane,{relation.minimum,relation.maximum});
+                }
             } else {
                 const auto value=m.observe_vu_vector(t_);
+                std::array<std::optional<FloatBounds>,4> bounds{};
+                if(value.low.unknown || value.high.unknown)
+                    for(unsigned lane=0;lane<4u;++lane)bounds[lane]=m.observe_vu_vector_bounds(t_,lane);
                 if(value.low.unknown || value.high.unknown)m.store128_observed(address,value);
                 else m.write128(address,value.low.value,value.high.value);
+                // SQC2 transports the same values, not every encoding in the
+                // coarser bit hull. Reuse the cache/RAM provenance sidecar so
+                // LWC1 and later LQC2 see the numeric bounds already proved by VU.
+                for(unsigned lane=0;lane<4u;++lane)if(bounds[lane]) {
+                    const auto half=lane<2u ? value.low : value.high;
+                    const auto shift=(lane&1u)*32u;
+                    const ObservedWord word{static_cast<std::uint32_t>(half.value>>shift),static_cast<std::uint32_t>(half.unknown>>shift)};
+                    if(!word.unknown)continue;
+                    const auto range=*bounds[lane];
+                    FpuAffine relation{m.allocate_fpu_origin(),0,(word.unknown&0xFF800000u) ? 0u : (word.value>>23u)&255u,
+                        false,word.value,word.unknown,range[0],range[1],{}};
+                    if(word.unknown&0xFF800000u)
+                        relation.ranges=std::make_shared<const std::vector<FloatBounds>>(std::initializer_list<FloatBounds>{range});
+                    m.remember_fpu_relation(address+4u*lane,word,std::move(relation));
+                }
             }
         } else if constexpr (Op == O::Cfc2) {
             const auto word=m.observe_vu_control(rd(w));
@@ -267,6 +293,19 @@ inline void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t w) {
         } else if constexpr (Op == O::Qmtc2) {
             const auto value=t_ ? s.gpr[t_] : Register128{};
             m.write_vu_vector(d_,{{value.low,s.unknown_gpr_bits[t_]},{value.high,s.unknown_gpr_high_bits[t_]}});
+            // MFC1/integer operations can carry a finite low-64-bit domain.
+            // Q MTC2 copies those same raw lanes; it does not widen their
+            // numeric range to every combination of the unknown bit mask.
+            if(const auto candidates=s.reg64_candidates(t_))for(unsigned lane=0;lane<2u;++lane) {
+                const auto shift=lane*32u;
+                if(!static_cast<std::uint32_t>(s.unknown_gpr_bits[t_]>>shift))continue;
+                FloatBounds bounds{~0u,0};
+                for(const auto candidate:*candidates) {
+                    const auto word=static_cast<std::uint32_t>(candidate>>shift);
+                    bounds[0]=std::min(bounds[0],word);bounds[1]=std::max(bounds[1],word);
+                }
+                m.restore_vu_vector_bounds(d_,lane,bounds);
+            }
         } else if constexpr (Op == O::Viswr) m.vu_integer_store(t_,d_,(w>>21u)&15u);
         else if constexpr (Op == O::Vsub) m.vu_subtract(a_,d_,t_,(w>>21u)&15u);
         else if constexpr (Op == O::Vadd) m.vu_add(a_,d_,t_,(w>>21u)&15u);

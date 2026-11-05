@@ -133,6 +133,7 @@ public:
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return vu_control_.observe_data(address);}
     void diagnostic_vu_power_two_carry() {vu_control_.diagnostic_power_two_carry();}
     [[nodiscard]] std::optional<FloatBounds> observe_vu_vector_bounds(unsigned index,unsigned lane) const {return vu_control_.observe_vector_bounds(index,lane);}
+    void restore_vu_vector_bounds(unsigned index,unsigned lane,FloatBounds bounds) {vu_control_.restore_vector_bounds(index,lane,bounds);}
     [[nodiscard]] ObservedQuadword observe_vu_vector(unsigned index) const {return vu_control_.observe_vector(index);}
     void write_vu_vector(unsigned index,ObservedQuadword word) {vu_control_.write_vector(index,word);}
     void vu_subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {

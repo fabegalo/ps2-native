@@ -227,6 +227,7 @@ public:
         return registers_.read_vu_memory(physical,bytes);
     }
     [[nodiscard]] std::optional<FloatBounds> observe_vu_vector_bounds(unsigned index,unsigned lane) const {return registers_.observe_vu_vector_bounds(index,lane);}
+    void restore_vu_vector_bounds(unsigned index,unsigned lane,FloatBounds bounds) {registers_.restore_vu_vector_bounds(index,lane,bounds);}
     [[nodiscard]] ObservedQuadword observe_vu_vector(unsigned index) const {return registers_.observe_vu_vector(index);}
     void write_vu_vector(unsigned index,ObservedQuadword word) {registers_.write_vu_vector(index,word);}
     void vu_subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {

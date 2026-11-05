@@ -271,6 +271,7 @@ int boot_main(int argc, Character** argv) {
                   << "; retired " << report.retired << " (aot " << report.aot_instructions
                   << ", interpreter " << report.interpreted_instructions << ", engine switches "
                   << report.engine_switches << ")\n";
+        checkpoint.print_execution_metrics(report);
         if (report.outcome == ps2native::BootOutcome::BlockPoint)
             std::cout << "# block point " << hex32(report.pc) << " [" << report.category << "] " << report.reason << '\n';
         return 0;

@@ -305,7 +305,10 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
         (std::string_view(PS2N_CHECKPOINT_SCHEMA)=="72d8f630ea9a0befdba0e33bbc9d80394b6a2c29db31cf0a402bd6299876a61e" ||
          std::string_view(PS2N_CHECKPOINT_SCHEMA)=="4e87d58b722e40020caec94e9928c087e3f9d86c7e33f5116a76628648e4dc4f" ||
          std::string_view(PS2N_CHECKPOINT_SCHEMA)=="830377c10823d2223579db00dc995da1a05a0fcc433a85be4014e50ea96ac772" ||
-         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="3613da6d23479169c5d84e8eea6a68ed75b7acc10e86c5c324238a5cbccf495f");
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="3613da6d23479169c5d84e8eea6a68ed75b7acc10e86c5c324238a5cbccf495f" ||
+         // SQC2/LQC2 now retain existing numeric metadata. The new methods
+         // add no fields to VU, memory or the checkpoint wire format.
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="06f3fe6fbdb88d6864fb5e3b18139b95e13d22312976051c0cbcd9406931d695");
     const bool legacy_scalar_flags=reviewed_scalar_transition &&
         (info.schema_sha256=="9199cae351d7ea3f43526fa1dd800d9f6810d80f6c0370974f190695aee3e2cc" ||
          info.schema_sha256=="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88");
@@ -315,7 +318,8 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
          info.schema_sha256=="cd1aa8bf7755b3926af94afc8385147b755b5de6b335faa25049d9f719960ecd" ||
          info.schema_sha256=="4e87d58b722e40020caec94e9928c087e3f9d86c7e33f5116a76628648e4dc4f" ||
          info.schema_sha256=="830377c10823d2223579db00dc995da1a05a0fcc433a85be4014e50ea96ac772" ||
-         info.schema_sha256=="3d2c143346ea6328bb9cb49c48abfc09bfe426f4cabb88a2051625384ed54b1f");
+         info.schema_sha256=="3d2c143346ea6328bb9cb49c48abfc09bfe426f4cabb88a2051625384ed54b1f" ||
+         info.schema_sha256=="3613da6d23479169c5d84e8eea6a68ed75b7acc10e86c5c324238a5cbccf495f");
     if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields)
         throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
     if(info.runtime_sha256!=PS2N_CHECKPOINT_RUNTIME && !context.allow_runtime_change)throw std::runtime_error("checkpoint runtime changed; explicit reviewed allow-runtime-change is required");
