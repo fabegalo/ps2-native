@@ -8,6 +8,21 @@ namespace {
 void require(bool condition,const char* message) {if(!condition)throw std::runtime_error(message);}
 bool contains(ObservedWord word,std::uint32_t value) {return (value&~word.unknown)==word.value;}
 void ranges() {
+    const auto residual=vu_float_add({0x3F800000u,0},{0xBF7FFFF0u,3},
+        {},FloatBounds{0xBF7FFFF1u,0xBF7FFFF2u});
+    require(residual && residual->word.value==0x35600000u && residual->word.unknown==0x00100000u &&
+        residual->bounds==FloatBounds{0x35600000u,0x35700000u},
+        "cancellation of two adjacent inputs retains the known zero fraction columns");
+    const auto sparse_root=vu_float_sqrt(residual->word,residual->bounds);
+    require(sparse_root && sparse_root->bounded && !sparse_root->flags,
+        "two sparse SQRT inputs do not become a million-encoding enumeration");
+    for(const auto input:{0x35600000u,0x35700000u}) {
+        const auto root=ee_fpu_sqrt(input);
+        require(root && contains(sparse_root->word,*root) && *root>=sparse_root->bounds[0] &&
+            *root<=sparse_root->bounds[1],"both actual SRT roots remain represented");
+    }
+    require(!vu_float_sqrt({0x35600000u,0x001FFFFFu},residual->bounds),
+        "a genuinely dense wide SQRT domain still refuses instead of choosing sparse bits");
     std::uint32_t flags=0xC000;
     require(!ee_fpu_multiply(0x3F800001,0x3F800003,flags) && flags==0xC000,
             "strict scalar multiply keeps its explicit refusal");

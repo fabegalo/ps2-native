@@ -60,7 +60,38 @@ std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
         if(!first && flags!=common_flags)return std::nullopt;
         first=false;common_flags=flags;low=std::min(low,value);high=std::max(high,value);
     }
-    return hull(low,high,common_flags,allow_exponent);
+    auto result=hull(low,high,common_flags,allow_exponent);
+    if(result && std::popcount(result->word.unknown)>8 &&
+       std::popcount(a.unknown)+std::popcount(b.unknown)<=8) {
+        // Cancellation can turn adjacent inputs into widely separated float
+        // encodings. Their intervening low bits are not thereby unknown.
+        // Evaluate at most 256 concrete pairs in the existing integer adder;
+        // retain common bits as well as the numeric bounds, without selecting
+        // an input or allocating another symbolic representation.
+        std::uint32_t all=~0u,any=0,minimum=~0u,maximum=0;
+        auto ax=a.unknown;
+        for(;;) {
+            const auto av=lower(a)|ax;
+            if(av>=amin && av<=amax) {
+                auto bx=b.unknown;
+                for(;;) {
+                    const auto bv=lower(b)|bx;
+                    if(bv>=bmin && bv<=bmax) {
+                        std::uint32_t flags=0;const auto value=ee_fpu_add(av,bv,flags);
+                        if(flags!=common_flags)return {};
+                        all&=value;any|=value;minimum=std::min(minimum,value);maximum=std::max(maximum,value);
+                    }
+                    if(!bx)break;
+                    bx=(bx-1u)&b.unknown;
+                }
+            }
+            if(!ax)break;
+            ax=(ax-1u)&a.unknown;
+        }
+        if(minimum>maximum)return {};
+        return VuFloatResult{{all,all^any},common_flags,{minimum,maximum},true};
+    }
+    return result;
 }
 std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsigned diagnostic,
     std::optional<FloatBounds> a_bounds,std::optional<FloatBounds> b_bounds,bool allow_exponent) {
@@ -94,9 +125,10 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsi
 }
 std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a,std::optional<FloatBounds> bounds) {
     if(!fraction_only(a))return std::nullopt;
-    if(bounds) {
-        const auto domain=input_bounds(a,bounds);
-        if(!domain || (*domain)[1]-(*domain)[0]>=65536u)return std::nullopt;
+    const auto domain=input_bounds(a,bounds);
+    if(!domain)return {};
+    if(std::popcount(a.unknown)>8) {
+        if(!bounds || (*domain)[1]-(*domain)[0]>=65536u)return std::nullopt;
         std::uint32_t low=~0u,high=0;
         for(auto value=(*domain)[0];; ++value) {
             const auto root=ee_fpu_sqrt(value);
@@ -106,16 +138,18 @@ std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a,std::optional<FloatBou
         }
         return hull(low,high,0);
     }
-    if(std::popcount(a.unknown)>8)return std::nullopt;
     std::uint32_t low=~0u,high=0;
     auto subset=a.unknown;
     for(;;) {
-        const auto root=ee_fpu_sqrt(lower(a)|subset);
-        if(!root)return std::nullopt;
-        low=std::min(low,*root);high=std::max(high,*root);
+        const auto value=lower(a)|subset;
+        if(value>=(*domain)[0] && value<=(*domain)[1]) {
+            const auto root=ee_fpu_sqrt(value);
+            if(!root)return std::nullopt;
+            low=std::min(low,*root);high=std::max(high,*root);
+        }
         if(!subset)break;
         subset=(subset-1u)&a.unknown;
     }
-    return hull(low,high,0);
+    return low<=high ? hull(low,high,0) : std::nullopt;
 }
 }
