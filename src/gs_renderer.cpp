@@ -272,7 +272,9 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     // XYZ3/XYZF3 advance the vertex queue without a drawing kick.
     if (index == 0x0Cu || index == 0x0Du) { first_vertex_.reset(); return; }
     if (mode & (32u | 128u) || (!triangle && (mode&8u)))
-        throw DeviceRefusal("GS shading, fog or antialiasing is not modeled");
+        throw DeviceRefusal("GS shading, fog or antialiasing is not modeled; primitive="+std::to_string(type)+
+            " mode="+std::to_string(mode)+" FGE="+std::to_string((mode>>5u)&1u)+
+            " AA1="+std::to_string((mode>>7u)&1u)+" IIP="+std::to_string((mode>>3u)&1u));
     if(textured && !(mode&256u))throw DeviceRefusal("GS STQ texture drawing precision is not established");
     const auto frame = required(static_cast<std::uint8_t>(0x4Cu + context));
     const auto scissor = required(static_cast<std::uint8_t>(0x40u + context));

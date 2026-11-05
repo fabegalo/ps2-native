@@ -55,11 +55,25 @@ int main(int argc,char** argv)try {
     // The earlier RTC probe had the same field codec and immutable binding,
     // with read-only IOP snapshot methods in its header. Audit that exact
     // transition without publishing any firmware or real checkpoint bytes.
-    auto prior=read_file(file);const auto info=inspect_checkpoint(file);
-    const auto where=std::search(prior.begin(),prior.end(),info.schema_sha256.begin(),info.schema_sha256.end());
-    require(where!=prior.end(),"checkpoint schema is present in its envelope");
+    const auto current=read_file(file);auto info=inspect_checkpoint(file);
+    std::vector<std::uint8_t> payload(current.end()-info.payload_bytes,current.end());
+    // An old header requires its actual old payload, without numerical voices.
+    // This reset fixture has no optional loop addresses or decoder history.
+    const std::array<std::uint8_t,8> audio_tag{'S','P','U','2','P','C','M','1'};
+    const auto audio_at=std::search(payload.begin(),payload.end(),audio_tag.begin(),audio_tag.end());
+    require(audio_at!=payload.end(),"checkpoint contains the tagged numerical SPU2 extension");
+    constexpr auto audio_bytes=8u+48u*(3u+16u+12u+1u+64u+40u)+2u;
+    require(static_cast<std::size_t>(payload.end()-audio_at)>=audio_bytes,"complete reset SPU2 extension");
+    payload.erase(audio_at,audio_at+audio_bytes);
     const std::string old_schema="3d2c143346ea6328bb9cb49c48abfc09bfe426f4cabb88a2051625384ed54b1f";
-    std::copy(old_schema.begin(),old_schema.end(),where);
+    info.schema_sha256=old_schema;info.payload_sha256=sha256_hex(payload);info.payload_bytes=payload.size();
+    std::vector<std::uint8_t> prior{'P','S','2','N','C','P','0','1'};
+    const auto integer=[&](std::uint64_t value,unsigned size){for(unsigned i=0;i<size;++i)prior.push_back(static_cast<std::uint8_t>(value>>(8u*i)));};
+    for(const auto* value:{&info.schema_sha256,&info.runtime_sha256,&info.bindings_sha256,&info.scenario_sha256,&info.host_metadata,&info.payload_sha256}) {
+        integer(value->size(),8);prior.insert(prior.end(),value->begin(),value->end());
+    }
+    integer(info.retired,8);integer(info.cycles,8);integer(info.payload_bytes,8);integer(info.pc,4);
+    prior.insert(prior.end(),payload.begin(),payload.end());
     const auto old_file=file.parent_path()/"rtc-prior-header.ps2ncp";write_file_atomically(old_file,prior);
     rejects([&]{(void)load_checkpoint(old_file,resumed,restored,context);},"schema");
     auto reviewed=context;reviewed.allow_runtime_change=true;(void)load_checkpoint(old_file,resumed,restored,reviewed);
