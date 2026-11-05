@@ -160,6 +160,7 @@ std::size_t Memory::physical_address(std::uint32_t address, std::size_t size) {
 
 void Memory::load(const ElfImage& elf) {
     reset_data_cache();
+    diagnostic_ee_early_digit_carry_=false;fpu_arithmetic_started_=false;
     unknown_words_.clear();fpu_relations_.clear();
     privilege_ = Privilege::Kernel;
     mapping_ = Mapping::ElfProgram;
@@ -181,6 +182,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
         throw std::runtime_error("BIOS ROM0 must be exactly 4 MiB to be mapped at 0x1FC00000");
     mapping_ = Mapping::HardwareReset;
     reset_data_cache();
+    diagnostic_ee_early_digit_carry_=false;fpu_arithmetic_started_=false;
     unknown_words_.clear();fpu_relations_.clear();
     std::fill(ram_.begin(), ram_.end(), std::uint8_t{0});
     rom_.assign(rom0.begin(), rom0.end());

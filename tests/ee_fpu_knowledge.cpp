@@ -4,6 +4,8 @@
 #include "ps2native/interpreter.hpp"
 #include "ps2native/vu_float.hpp"
 #include "ps2native/boot.hpp"
+#include "ps2native/checkpoint.hpp"
+#include <chrono>
 #include <iostream>
 using namespace ps2native;
 using namespace boot_checks;
@@ -85,11 +87,58 @@ void floating_trace(Memory& memory) {
     const auto events=run_ee_boot(state,memory,nullptr,options);
     for(const auto& line:events.trace)require(line.find("  F ")==std::string::npos,"event tracing carries no per-operation FPU records");
 }
+void scalar_carry_experiment() {
+    std::uint32_t flags=0;
+    require(ee_fpu_multiply(0x3FC00000u,0x3F800002u,flags)==0x3FC00002u && !flags &&
+        ee_fpu_multiply(0xBFC00000u,0x3F800002u,flags)==0xBFC00002u,
+        "the established lowest-negative-digit carry class transfers to coarse significands with identical low input columns");
+    require(!ee_fpu_multiply(0x40400000u,0x3FC90F80u,flags) &&
+        !ee_fpu_multiply(0x40400000u,0x3FC90F80u,flags,PowerTwoEarlyDigits),
+        "strict and legacy VU experiments keep the other coarse early digits unresolved");
+    require(ee_fpu_multiply(0x7FC00000u,0x40000002u,flags)==0x7FFFFFFFu && (flags&0x8010u)==0x8010u,
+        "the transferred carry class still saturates overflow with its actual flags");
+    flags=0;require(ee_fpu_multiply(0x00C00000u,0x3F000002u,flags)==0u && flags==0x4008u,
+        "the transferred carry class retains normal-to-underflow handling");
+    flags=0x1234u;rejects([&]{(void)ee_fpu_multiply(0x3F800000u,0x3F800000u,flags,3);},"unknown FPU carry experiment");
+    require(flags==0x1234u,"an invalid diagnostic policy changes no numeric flags");
+    Memory memory;const auto rom=m20::build_firmware().rom;memory.reset_for_boot(rom);
+    EEState state;state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
+    const auto multiply=[&](std::uint32_t a,std::uint32_t b) {
+        state.fpr[1]=a;state.fpr[2]=b;state.unknown_fpr_bits[1]=state.unknown_fpr_bits[2]=0;
+        state.pc=0x80001000;memory.write32(state.pc,math(2,3,1,2));std::uint64_t count=0;
+        ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};interpret_instruction(context);
+    };
+    multiply(0x40000000u,0x3FC90F80u);require(state.unknown_fpr_bits[3],"ordinary scalar multiplication keeps the unmeasured early carry unresolved");
+    rejects([&]{memory.diagnostic_ee_early_digit_carry();},"precede scalar FPU");
+    memory.reset_for_boot(rom);memory.diagnostic_ee_early_digit_carry();
+    state=EEState{};state.pc=0x80001000;state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
+    memory.set_clock(&state.retired_instructions,&state.stall_cycles);
+    BootOptions stop;stop.stop_at=state.pc;const auto boundary=run_ee_boot(state,memory,nullptr,stop);
+    require(boundary.outcome==BootOutcome::StopAddress,"scalar checkpoint did not reach its safe boundary: "+boundary.reason);
+    CheckpointContext checkpoint;checkpoint.scenario_sha256=std::string(64,'c');
+    const auto path=std::filesystem::temp_directory_path()/("ps2n-ee-carry-"+
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+".checkpoint");
+    save_checkpoint(path,state,memory,boundary,checkpoint);memory.reset_for_boot(rom);
+    memory.set_clock(&state.retired_instructions,&state.stall_cycles);
+    (void)load_checkpoint(path,state,memory,checkpoint);std::filesystem::remove(path);
+    multiply(0x40000000u,0x3FC90F80u);
+    require(state.fpr[3]==0x40490F7Fu && !state.unknown_fpr_bits[3],
+        "the explicit scalar experiment applies the previously exhaustively checked external-reference early-digit class");
+    multiply(0x40400000u,0x3FC90F80u);
+    require(state.fpr[3]==0x4096CB9Fu && !state.unknown_fpr_bits[3],
+        "the scalar experiment also transfers the same low-column hypothesis to a coarse three-halves significand");
+    multiply(0x3FC90F80u,0x40000000u);
+    require(state.fpr[3]==0x40490F80u && !state.unknown_fpr_bits[3],"the experimental multiplier preserves operand asymmetry");
+    multiply(0x333BBD2Eu,0x333BBD2Eu);require(state.unknown_fpr_bits[3],"the scalar experiment does not choose arbitrary unresolved products");
+    memory.reset_for_boot(rom);multiply(0x40000000u,0x3FC90F80u);
+    require(state.unknown_fpr_bits[3],"cold reset restores strict scalar arithmetic");
+}
 }
 int main() try {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     integer_domains(memory);
     floating_trace(memory);
+    scalar_carry_experiment();
     EEState state;state.set_cp0(Cop0::Status,kStatusCU1);
     std::uint64_t executed=0;ExecutionContext context{state,memory,executed,1000,0xFFFFFFFFu};
     const auto step=[&](std::uint32_t word){state.pc=0x80001000;memory.write32(state.pc,word);interpret_instruction(context);};

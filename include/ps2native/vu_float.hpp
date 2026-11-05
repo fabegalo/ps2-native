@@ -15,7 +15,7 @@ std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
     std::optional<FloatBounds> a_bounds={},std::optional<FloatBounds> b_bounds={},bool allow_exponent_bounds=false);
 // The opt-in exponent hull is for EE domain analysis only. Default VU
 // callers retain a proven single exponent for their separate MAC flag model.
-std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,bool diagnostic_early_digit_carry=false,
+std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsigned diagnostic_early_digit_carry=0,
     std::optional<FloatBounds> a_bounds={},std::optional<FloatBounds> b_bounds={},bool allow_exponent_bounds=false);
 // Enumerate at most eight opaque fraction bits, or at most 65536 encodings
 // in an independently certified numeric interval. Never assume SRT monotonicity.

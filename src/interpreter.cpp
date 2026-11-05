@@ -295,7 +295,7 @@ public:
         return values;
     }
     static std::optional<VuFloatResult> finite_fpu(MipsOpcode op,ObservedWord a,ObservedWord b,
-        const FpuAffine& ar,const FpuAffine& br,bool identical,std::shared_ptr<const std::vector<std::uint32_t>>& candidates) {
+        const FpuAffine& ar,const FpuAffine& br,bool identical,std::shared_ptr<const std::vector<std::uint32_t>>& candidates,bool diagnostic) {
         const auto av=fpu_candidates(a,ar,op==MipsOpcode::DivS ? 512u : 64u),bv=fpu_candidates(b,br,op==MipsOpcode::DivS ? 512u : 64u);
         if(av.empty() || bv.empty() || av.size()*(identical ? 1u : bv.size())>4096u)return {};
         std::vector<std::uint32_t> values;std::optional<std::uint32_t> common_flags;
@@ -322,7 +322,7 @@ public:
                 // Known input pairs may still have uncertified Booth low bits.
                 // Enumerate every value in their proven result interval; never
                 // replace it with one guessed product or a host float.
-                const auto product=vu_float_product({x,0},{y,0},false,{},{},true);
+                const auto product=vu_float_product({x,0},{y,0},diagnostic ? CoarseEarlyDigits : NoCarryExperiment,{},{},true);
                 if(!product)return {};
                 const auto low=product->bounded ? product->bounds[0] : product->word.value;
                 const auto high=product->bounded ? product->bounds[1] : product->word.value;
@@ -376,7 +376,7 @@ public:
         return {{relation.origin ? relation.minimum : word.value,relation.origin ? relation.maximum : word.value|word.unknown}};
     }
     static std::optional<VuFloatResult> range_fpu(MipsOpcode op,ObservedWord a,ObservedWord b,
-        const FpuAffine& ar,const FpuAffine& br,std::shared_ptr<const std::vector<FloatBounds>>& ranges) {
+        const FpuAffine& ar,const FpuAffine& br,std::shared_ptr<const std::vector<FloatBounds>>& ranges,bool diagnostic) {
         std::array<std::optional<FloatBounds>,512> classes{};std::optional<std::uint32_t> flags;
         const auto append=[&](std::uint32_t lo,std::uint32_t hi,std::uint32_t next_flags) {
             if((flags && *flags!=next_flags) || lo>hi || ((lo^hi)&0x80000000u))return false;
@@ -418,7 +418,7 @@ public:
                 // Each input pair has fixed signs/exponents. Existing integer
                 // bounds prove every result and flag. Overlapping cancellation
                 // needs the separate guard-column proof below.
-                const auto result=op==MipsOpcode::MulS ? vu_float_product(interval_word(x),interval_word(y),false,x,y,true) :
+                const auto result=op==MipsOpcode::MulS ? vu_float_product(interval_word(x),interval_word(y),diagnostic ? CoarseEarlyDigits : NoCarryExperiment,x,y,true) :
                     vu_float_add(interval_word(x),interval_word(y),x,y,true);
                 const auto common=std::max((x[0]>>23u)&255u,(y[0]>>23u)&255u);
                 if(!result && op!=MipsOpcode::MulS && ((x[0]^y[0])&0x80000000u) && common>=25u) {
@@ -457,6 +457,7 @@ public:
     void fpu_binary(MipsOpcode op,std::uint32_t word) {
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
             stop(StopKind::GuestException,"FPU arithmetic with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        const auto diagnostic=m_.begin_fpu_arithmetic();
         const auto fs=ee::rd(word),ft=ee::rt(word),fd=ee::sa(word);
         const ObservedWord a{s_.fpr[fs]&~s_.unknown_fpr_bits[fs],s_.unknown_fpr_bits[fs]};
         ObservedWord b{s_.fpr[ft]&~s_.unknown_fpr_bits[ft],s_.unknown_fpr_bits[ft]};
@@ -474,21 +475,21 @@ public:
         std::shared_ptr<const std::vector<FloatBounds>> ranges;
         FpuAffine relation;
         if(op==MipsOpcode::DivS) {
-            result=finite_fpu(op,a,b,ar,br,fs==ft,candidates);
+            result=finite_fpu(op,a,b,ar,br,fs==ft,candidates,diagnostic);
         } else if(op!=MipsOpcode::MulS && ar.origin && ar.origin==br.origin && ar.exponent==br.exponent && ar.negated!=br.negated) {
             std::uint32_t flags=0;
             result=VuFloatResult{{ee_fpu_scaled_integer(ar.offset+br.offset,ar.exponent,flags),0},flags};
         } else {
             const auto ab=ar.origin ? std::optional<FloatBounds>{{ar.minimum,ar.maximum}} : std::nullopt;
             const auto bb=br.origin ? std::optional<FloatBounds>{{br.minimum,br.maximum}} : std::nullopt;
-            result=op==MipsOpcode::MulS ? vu_float_product(a,b,false,ab,bb) : vu_float_add(a,b,ab,bb);
+            result=op==MipsOpcode::MulS ? vu_float_product(a,b,diagnostic ? CoarseEarlyDigits : NoCarryExperiment,ab,bb) : vu_float_add(a,b,ab,bb);
         }
         if(!result || (result->word.unknown && (ar.candidates || br.candidates ||
            (result->bounded && result->bounds[1]-result->bounds[0]>64u)))) {
-            const auto finite=finite_fpu(op,a,b,ar,br,fs==ft,candidates);
+            const auto finite=finite_fpu(op,a,b,ar,br,fs==ft,candidates,diagnostic);
             if(finite)result=finite;
         }
-        if(!result)result=range_fpu(op,a,b,ar,br,ranges);
+        if(!result)result=range_fpu(op,a,b,ar,br,ranges,diagnostic);
         if(!result)stop(StopKind::NotModeled,"FPU arithmetic cannot certify value/exception bounds; FS="+hex32(a.value)+", FT="+hex32(b.value));
         if(op!=MipsOpcode::MulS && op!=MipsOpcode::DivS && result->word.unknown && (a.unknown!=0u)!=(b.unknown!=0u)) {
             const auto source=a.unknown ? a : b,constant=a.unknown ? b : a;

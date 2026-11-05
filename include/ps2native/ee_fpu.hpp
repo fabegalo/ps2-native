@@ -21,5 +21,6 @@ std::optional<std::uint32_t> ee_fpu_sqrt(std::uint32_t value);
 // Booth cases return nullopt without modifying flags.
 // Optional early-digit carry experiment: reference-model evidence only,
 // never enabled by normal EE/VU execution or firmware/profile selection.
-std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31,bool diagnostic_early_digit_carry=false);
+enum FpuCarryExperiment : unsigned { NoCarryExperiment=0, PowerTwoEarlyDigits=1, CoarseEarlyDigits=2 };
+std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31,unsigned diagnostic_early_digit_carry=NoCarryExperiment);
 }

@@ -150,27 +150,31 @@ std::uint32_t ee_fpu_divide(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31
     if(exponent>255)return sign|0x7FFFFFFFu;
     return sign|(static_cast<std::uint32_t>(exponent)<<23u)|(static_cast<std::uint32_t>(quotient)&0x7FFFFFu);
 }
-std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31,bool diagnostic_early_digit_carry) {
+std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std::uint32_t& fcr31,unsigned diagnostic_early_digit_carry) {
+    if(diagnostic_early_digit_carry>CoarseEarlyDigits)throw std::invalid_argument("unknown FPU carry experiment");
     const auto ea=(a>>23u)&255u,eb=(b>>23u)&255u;
     const auto sign=(a^b)&0x80000000u;
     if(!ea || !eb){fcr31&=~0xC000u;return sign;}
     const auto significand_a=(a&0x7FFFFFu)|0x800000u;
     auto product=static_cast<std::uint64_t>(significand_a)*((b&0x7FFFFFu)|0x800000u);
     const auto negative_digit=0x10000u-(b&0xFFFFu);
-    if(significand_a==0x800000u && ((b&2u)!=0 || (diagnostic_early_digit_carry && (b&0x2A8u)!=0))) {
-        // Power-of-two multiplicand, lowest radix-4 digit negative. The separate
-        // complement/correction loses a low-column carry. The exact product
-        // is on a retained-mantissa boundary and the existing maximum-loss
-        // bound is smaller than one output ULP: any positive loss chops to
-        // the preceding value. All 2^22 multiplier mantissas in this class
-        // were checked against the external hardware-derived model; see
-        // FIRST-GAME-STATUS.md. Do not commute operands or extend this to
-        // other negative Booth digits (counterexamples exist). The optional
-        // experiment extends only the first five radix-4 digits. The lowest
-        // set odd bit of B identifies its first negative digit. All 8,126,464
-        // mantissas with B&0x2AA match the external hardware-derived reference.
-        // That is NOT a physical measurement or a proven carry
-        // tree; normal operation still refuses unresolved products there.
+    const bool coarse=(significand_a&0x3FFFFu)==0;
+    const bool assumed_early=(diagnostic_early_digit_carry==PowerTwoEarlyDigits && significand_a==0x800000u) ||
+                             (diagnostic_early_digit_carry==CoarseEarlyDigits && coarse);
+    if((coarse && (b&2u)) || (assumed_early && (b&0x2A8u))) {
+        // For A divisible by 2^18, every Booth input below column 15 is
+        // identical to A=2^23: positive rows have zero low payload and each
+        // negative row has the same complement/correction bits. Carry loss
+        // therefore depends only on B. The established lowest-negative-digit
+        // class transfers to all these A values without commuting operands.
+        // Loss is positive and <=8*2^15. The exact product is aligned to
+        // 2^18, so subtracting its minimum positive loss gives the SAME packed
+        // result for every possible loss in that range, including exponent
+        // normalization. It does not claim a particular internal loss value.
+        // Earlier negative digits remain an optional external-reference
+        // hypothesis (8,126,464 B values checked for A=2^23 and A=3*2^22),
+        // not a measured hardware tree. VU's old experiment keeps its A=2^23
+        // restriction; the separate scalar experiment selects the coarse class.
         product-=std::uint64_t{1}<<15u;
     } else if(std::has_single_bit(negative_digit) && negative_digit<=0x8000u &&
        ((static_cast<std::uint64_t>(significand_a)*negative_digit)&0x7FFFu)==0) {

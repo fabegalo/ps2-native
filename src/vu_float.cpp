@@ -62,7 +62,7 @@ std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
     }
     return hull(low,high,common_flags,allow_exponent);
 }
-std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,bool diagnostic,
+std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsigned diagnostic,
     std::optional<FloatBounds> a_bounds,std::optional<FloatBounds> b_bounds,bool allow_exponent) {
     if(!a.unknown && !b.unknown) {
         std::uint32_t flags=0;

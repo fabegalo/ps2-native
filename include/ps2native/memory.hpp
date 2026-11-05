@@ -209,6 +209,15 @@ public:
     void vu_integer_store(unsigned source,unsigned base,unsigned mask) {registers_.vu_integer_store(source,base,mask);}
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return registers_.observe_vu_data(address);}
     void diagnostic_vu_power_two_carry() {registers_.diagnostic_vu_power_two_carry();}
+    // External-reference hypothesis only; not a measured scalar EE carry tree.
+    // Configure before any scalar arithmetic attempt. Ordinary boot is strict.
+    void diagnostic_ee_early_digit_carry() {
+        if(fpu_arithmetic_started_)throw DeviceRefusal("EE carry experiment must precede scalar FPU arithmetic");
+        diagnostic_ee_early_digit_carry_=true;
+    }
+    [[nodiscard]] bool begin_fpu_arithmetic() noexcept {
+        fpu_arithmetic_started_=true;return diagnostic_ee_early_digit_carry_;
+    }
     // Host diagnostic snapshot at the current device time, without a CPU bus
     // access or clock advance. Unknown micro/data bits remain explicit.
     [[nodiscard]] ObservedDoubleword diagnostic_vu_memory(std::uint32_t physical,std::size_t bytes) const {
@@ -278,6 +287,7 @@ private:
     struct StoredFpuRelation {ObservedWord word;FpuAffine relation;std::uint64_t dma_generation;};
     mutable std::unordered_map<std::uint32_t,StoredFpuRelation> fpu_relations_;
     std::uint64_t fpu_origin_{};
+    bool diagnostic_ee_early_digit_carry_{},fpu_arithmetic_started_{};
     // Own diagnostic provenance strings reconstructed from a checkpoint.
     // Guest state stores their contents; no host pointer is serialized.
     std::vector<std::shared_ptr<const std::string>> checkpoint_origins_;
