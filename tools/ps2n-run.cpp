@@ -6,6 +6,7 @@
 #include "diagnostic_cli.hpp"
 #include "checkpoint_cli.hpp"
 #include "vu_aot_cli.hpp"
+#include "gs_gpu_cli.hpp"
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -24,12 +25,14 @@ template<class C> int run_main(int argc, C** argv) {
                          "         [--checkpoint-scenario=SHA256] [--checkpoint-allow-runtime-change]\n";
             std::cerr << "         [--profile] (requires -DPS2N_ENABLE_PROFILING=ON; host component timings)\n";
             std::cerr << "         [--vu1-capture=DIR] [--vu1-interpreter] (offline VU1 AOT diagnostics)\n";
+            std::cerr << "         [--gs-backend=cpu|vulkan|directx] (experimental integer compute raster)\n";
             return 2;
         }
         ps2native::BootOptions options;
         ps2native::cli::DiagnosticOptions diagnostic;
         ps2native::cli::CheckpointOptions checkpoint;
         ps2native::cli::VuAotOptions vu1;
+        ps2native::cli::GsGpuOptions graphics;
         std::filesystem::path frame;
         std::filesystem::path iop_image;
         std::optional<std::uint32_t> iop_load, iop_entry;
@@ -45,7 +48,7 @@ template<class C> int run_main(int argc, C** argv) {
                 if (used != value.size() || n > max) throw std::runtime_error("numeric option out of range");
                 return n;
             };
-            if (diagnostic.parse(flag) || checkpoint.parse(flag,argv[i]) || vu1.parse(flag,argv[i])) {}
+            if (diagnostic.parse(flag) || checkpoint.parse(flag,argv[i]) || vu1.parse(flag,argv[i]) || graphics.parse(flag)) {}
             else if (flag.starts_with("--budget=")) options.max_instructions = number(9, ~0ull);
             else if (flag.starts_with("--stop=")) options.stop_at = static_cast<std::uint32_t>(number(7, 0xFFFFFFFFu));
             else if (flag.starts_with("--frame=")) frame = std::filesystem::path(argv[i]).native().substr(8);
@@ -80,8 +83,10 @@ template<class C> int run_main(int argc, C** argv) {
         const auto report = checkpoint.run(state, memory, module, options, protected_inputs,[&](auto& restored) {
             const std::array capture_inputs{std::filesystem::path(argv[1]),iop_image,checkpoint.resume,checkpoint.output};
             vu1.attach(restored,capture_inputs);
+            graphics.attach(restored);
         });
         diagnostic.finish(report, state, memory);
+        graphics.print(memory);
         const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-start).count();
         std::cout << "Direct ELF bare-metal (no BIOS services), sha256 " << ps2native::sha256_hex(elf.bytes)
                   << "\n" << ps2native::boot_outcome_name(report.outcome) << " pc=0x" << std::hex << report.pc

@@ -5,7 +5,35 @@
 
 namespace ps2native {
 GsVram::GsVram() : words_(kBytes / 4u), known_(kBytes / 4u) {}
+GsVram::GsVram(const GsVram& source) {
+    source.synchronize();
+    words_=source.words_;known_=source.known_;
+    revision_=source.revision_;pixel_writes_=source.pixel_writes_;
+}
+GsVram& GsVram::operator=(const GsVram& source) {
+    if(this==&source)return *this;
+    source.synchronize();synchronize();
+    words_=source.words_;known_=source.known_;
+    revision_=source.revision_;pixel_writes_=source.pixel_writes_;
+    gpu_.reset();pending_gpu_.clear();gpu_primitives_=cpu_fallbacks_=0;
+    return *this;
+}
+void GsVram::set_gpu_backend(std::shared_ptr<GsGpu> backend) {
+    synchronize();gpu_=std::move(backend);
+}
+void GsVram::enqueue_gpu(const GsGpuCommand& command) {
+    if(!gpu_)throw DeviceRefusal("GS GPU command without a backend");
+    if(pending_gpu_.size()==256u)synchronize();
+    pending_gpu_.push_back(command);++gpu_primitives_;
+}
+void GsVram::synchronize() const {
+    if(pending_gpu_.empty())return;
+    const auto result=gpu_->execute(words_,known_,pending_gpu_);
+    revision_+=result.revisions;pixel_writes_+=result.pixel_writes;
+    pending_gpu_.clear();
+}
 void GsVram::invalidate() {
+    synchronize();
     std::fill(known_.begin(), known_.end(), 0u); ++revision_; pixel_writes_ = 0u;
 }
 void GsVram::validate_format(unsigned psm) {
@@ -53,6 +81,7 @@ std::uint32_t GsVram::address(std::uint32_t base, unsigned width, unsigned psm, 
     return (base + page * 8192u + block * 256u + word * 4u) & (kBytes - 1u);
 }
 std::uint32_t GsVram::read(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y) const {
+    synchronize();
     const auto addr = address(base, width, psm, x, y);
     const auto at = addr / 4u, shift = (addr & 3u) * 8u + (psm == 20u ? (y & 2u) * 2u : 0u);
     const auto bits = psm == 20u ? 15u : psm == 19u ? 255u : psm==2u || psm==10u ? 0xFFFFu : psm == 1u ? 0xFFFFFFu : 0xFFFFFFFFu;
@@ -72,6 +101,7 @@ void GsVram::write(std::uint32_t base, unsigned width, unsigned psm, unsigned x,
 }
 void GsVram::write_word(unsigned at, std::uint32_t value, std::uint32_t mask,
                         std::uint32_t unknown, bool conditional) {
+    synchronize();
     const auto next = (words_[at] & ~mask) | (value & mask);
     auto knowledge = (known_[at] & ~mask) | (mask & ~unknown);
     // Join draw/skip branches. Only bits proved equal in both remain known.
@@ -93,6 +123,7 @@ std::uint32_t GsVram::depth_address(std::uint32_t base, unsigned width, unsigned
 }
 std::uint32_t GsVram::read_depth(std::uint32_t base, unsigned width, unsigned psm,
                                unsigned x, unsigned y) const {
+    synchronize();
     const auto address = depth_address(base, width, psm, x, y);
     const auto shift = (address & 2u) * 8u;
     const auto mask = psm == 0u ? 0xFFFFFFFFu : psm == 1u ? 0xFFFFFFu : 0xFFFFu;
@@ -108,6 +139,7 @@ void GsVram::write_depth(std::uint32_t base, unsigned width, unsigned psm,
     write_word(address / 4u, value << shift, mask, 0u, conditional);
 }
 std::uint32_t GsVram::word_at(std::uint32_t byte_address) const {
+    synchronize();
     if (byte_address >= kBytes || byte_address % 4u) throw DeviceRefusal("GS VRAM raw address out of range");
     if (known_[byte_address / 4u] != 0xFFFFFFFFu) throw DeviceRefusal("GS VRAM read: word contains unwritten bits");
     return words_[byte_address / 4u];

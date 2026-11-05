@@ -12,6 +12,7 @@ on:
     paths:
       - "launcher/**"
       - "src/**"
+      - "shaders/**"
       - "include/**"
       - "tests/frontend_tests.cpp"
       - "tests/iso_image.hpp"

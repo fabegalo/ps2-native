@@ -133,6 +133,14 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
         if(sha256_file(checkpointPath)!=required(config,"checkpoint_sha256"))throw std::runtime_error("Checkpoint file SHA-256 differs from reviewed manifest");
         CheckpointContext context;context.scenario_sha256=required(config,"scenario_sha256");context.expected_disc_sha256=required(config,"disc_sha256");context.allow_runtime_change=reviewed;
         const auto info=load_checkpoint(checkpointPath,ee,*memory,context);
+        const auto graphics=config.value("gs_backend").toString(QStringLiteral("cpu"));
+        if(graphics!=QStringLiteral("cpu") && graphics!=QStringLiteral("vulkan") && graphics!=QStringLiteral("directx"))
+            throw std::runtime_error("Unknown gs_backend in experimental manifest");
+        if(graphics!=QStringLiteral("cpu")) {
+            std::string reason;auto gpu=create_gs_gpu(reason,graphics==QStringLiteral("vulkan") ? GsGpuApi::Vulkan : GsGpuApi::DirectX);
+            if(!gpu)throw std::runtime_error("Experimental GPU GS unavailable: "+reason);
+            memory->set_gs_gpu_backend(std::move(gpu));
+        }
         const auto liveIdentity=QByteArray("ps2n-live-sio2-poll-queue-v1:")+QByteArray::fromStdString(info.scenario_sha256);
         context.scenario_sha256=sha256_hex(std::span(reinterpret_cast<const std::uint8_t*>(liveIdentity.constData()),static_cast<std::size_t>(liveIdentity.size())));
         // Loading restores the existing diagnostic assumptions, without adding

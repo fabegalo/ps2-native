@@ -127,6 +127,11 @@ public:
     void general_write_observed(std::uint8_t index,ObservedDoubleword word);
     void image_write(std::uint64_t low, std::uint64_t high);
     [[nodiscard]] const GsVram& vram() const noexcept { return vram_; }
+    // HOST_INPUT_BEGIN
+    void set_gpu_backend(std::shared_ptr<GsGpu> backend) { vram_.set_gpu_backend(std::move(backend)); }
+    [[nodiscard]] const std::shared_ptr<GsGpu>& gpu_backend() const noexcept { return vram_.gpu_backend(); }
+    void synchronize_graphics() const { vram_.synchronize(); }
+    // HOST_INPUT_END
     // Snapshot of a single progressive read circuit. No scaling or invented
     // display size/timing; disabled output and unsupported merge modes refuse.
     [[nodiscard]] Framebuffer scanout(std::uint64_t ee_cycle) const;

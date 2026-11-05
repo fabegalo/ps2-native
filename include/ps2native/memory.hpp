@@ -170,6 +170,9 @@ public:
     // EE cycle counter used by the timed EE registers (boot mapping only).
     void set_clock(const std::uint64_t* ee_cycles,const std::uint64_t* stalls=nullptr) noexcept { registers_.set_clock(ee_cycles,stalls); cache_clock_=ee_cycles; }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return registers_.gs(); }
+    // HOST_INPUT_BEGIN
+    void set_gs_gpu_backend(std::shared_ptr<GsGpu> backend) { registers_.set_gs_gpu_backend(std::move(backend)); }
+    // HOST_INPUT_END
     void diagnostic_gs_scanmask_reset(unsigned mask) { registers_.diagnostic_gs_scanmask_reset(mask); }
     void diagnostic_gs_texture_cache_reset_invalid() { registers_.diagnostic_gs_texture_cache_reset_invalid(); }
     void diagnostic_gs_texture_precision(unsigned modes) { registers_.diagnostic_gs_texture_precision(modes); }

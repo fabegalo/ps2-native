@@ -534,6 +534,79 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         if(result<0 || result>UINT32_MAX)throw DeviceRefusal("GS extrapolated triangle attribute is out of range");
         return static_cast<std::uint32_t>(result);
     };
+    // Execution selection follows the common GS setup above. Integer compute
+    // covers flat primitives only; every other effect retains the CPU path.
+    // Prove injective addressing before parallel writes, including the Z plane.
+    if(vram_.gpu_backend() && !textured && !antialiased && !(mode&8u) &&
+       !(general_unknown_[1]&0xFFFFFFFFull) && left<right && top<bottom &&
+       bw && static_cast<unsigned>(right)<=bw &&
+       (!(zwrite || (ztest && zfunc>=2u)) || (zpsm<=1u &&
+        (!triangle || (vertices[0].z==z && vertices[1].z==z)))) &&
+       (!blending || (fragment&0x80000000u) || general_[0x49])) {
+        const auto pages=[&](unsigned start) {
+            std::array<bool,512> touched{};
+            for(unsigned py=static_cast<unsigned>(top)/32u;py<=static_cast<unsigned>(bottom-1)/32u;++py)
+                for(unsigned px=static_cast<unsigned>(left)/64u;px<=static_cast<unsigned>(right-1)/64u;++px) {
+                    const auto page=start/8192u+py*(bw/64u)+px;
+                    if(page>=512u)return std::optional<std::array<bool,512>>{};
+                    touched[page]=true;
+                }
+            return std::optional{touched};
+        };
+        const auto colors=pages(base);
+        const bool use_z=zwrite || (ztest && zfunc>=2u);
+        const auto depths=use_z ? pages(zbase) : std::optional{std::array<bool,512>{}};
+        bool safe=colors.has_value() && depths.has_value();
+        if(safe)for(unsigned page=0;page<512u;++page)
+            if(((*colors)[page] && (*depths)[page]) ||
+               (sampled_pages_[page] && ((*colors)[page] || (*depths)[page])))safe=false;
+        const auto pabe=general_[0x49].value_or(0u)&1u;
+        const bool blend=blending && ((fragment&0x80000000u) || !pabe);
+        unsigned color_read=0;
+        if(blend) {
+            int factor=static_cast<int>(fragment>>24);
+            if(aa==ab)factor=0;
+            else if(ac==2u)factor=static_cast<int>((alpha>>32)&255u);
+            else if(ac==1u) {
+                factor=128;
+                if(psm==0u)color_read|=0xFF000000u;
+            }
+            // When destination alpha varies, all destination RGB is needed
+            // conservatively. Exact cancellation otherwise uses no read.
+            const auto dc=(int(aa==1u)-int(ab==1u))*factor+128*int(ad==1u);
+            if(dc || (aa!=ab && ac==1u && psm==0u))color_read|=0xFFFFFFu;
+        }
+        if(safe && (color_read || (ztest && zfunc>=2u))) {
+            // Unknown reads retain the synchronous CPU refusal and its cause.
+            // A page proof may decline supported pixels; it never invents bits.
+            const auto known=vram_.known_bits();
+            for(unsigned page=0;page<512u && safe;++page) {
+                const auto mask=((*colors)[page] ? color_read : 0u) |
+                    ((*depths)[page] && ztest && zfunc>=2u ? (zpsm==0u ? 0xFFFFFFFFu : 0xFFFFFFu) : 0u);
+                if(mask)for(unsigned word=page*2048u;word<(page+1u)*2048u;++word)
+                    if((known[word]&mask)!=mask){safe=false;break;}
+            }
+        }
+        if(safe) {
+            GsGpuCommand command{};
+            command.left=left;command.top=top;command.right=right;command.bottom=bottom;
+            command.triangle=triangle;command.x0=vertices[0].x;command.y0=vertices[0].y;
+            command.x1=vertices[1].x;command.y1=vertices[1].y;command.x2=v.x;command.y2=v.y;
+            command.color=fragment;command.z=z;command.base=base;command.bw=bw;command.psm=psm;
+            command.zbase=zbase;command.zpsm=zpsm;command.test=static_cast<std::uint32_t>(test);
+            command.frame_mask=static_cast<std::uint32_t>(frame>>32);
+            command.alpha=static_cast<std::uint32_t>(alpha);command.alpha_fix=static_cast<std::uint32_t>((alpha>>32)&255u);
+            command.scanmask=static_cast<std::uint32_t>(scanmask);command.fba=static_cast<std::uint32_t>(fba.value_or(0u)&1u);
+            command.fba_known=fba.has_value();command.conditional=conditional;
+            command.saturate=saturate;command.pabe=static_cast<std::uint32_t>(pabe);command.blending=blending;
+            command.depth_write=zwrite;
+            vram_.enqueue_gpu(command);
+            if(triangle)finish_triangle();else first_vertex_.reset();
+            return;
+        }
+    }
+    // Materialize before any CPU operation, even one that subsequently refuses.
+    vram_.record_cpu_fallback();vram_.synchronize();
     for (int y = top; y < bottom; ++y) {
         if ((scanmask == 2u && !(y & 1)) || (scanmask == 3u && (y & 1))) continue;
         for (int x = left; x < right; ++x) {

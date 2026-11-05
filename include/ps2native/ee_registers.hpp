@@ -76,6 +76,9 @@ public:
     }
     [[nodiscard]] ObservedWord diagnostic_vif_status(bool unit1) const noexcept { return (unit1 ? vif1_ : vif0_).observe_status(); }
     [[nodiscard]] const GsRegisters& gs() const noexcept { return gs_; }
+    // HOST_INPUT_BEGIN
+    void set_gs_gpu_backend(std::shared_ptr<GsGpu> backend) { gs_.set_gpu_backend(std::move(backend)); }
+    // HOST_INPUT_END
     void diagnostic_gs_scanmask_reset(unsigned mask) { gs_.diagnostic_scanmask_reset(mask); }
     void diagnostic_gs_texture_cache_reset_invalid() { gs_.diagnostic_texture_cache_reset_invalid(); }
     void diagnostic_gs_texture_precision(unsigned modes) { gs_.diagnostic_texture_precision(modes); }

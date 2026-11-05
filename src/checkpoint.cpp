@@ -78,6 +78,7 @@ struct CheckpointAccess {
         gs.diagnostic_texture_precision_=modes;
     }
     template<class T> static void prepare_read(T&){}
+    static void prepare_read(GsVram& v){v.pending_gpu_.clear();v.gpu_.reset();v.gpu_primitives_=v.cpu_fallbacks_=0;}
     static void prepare_read(VuControl& v){v.invalidate_vu1_aot();v.vu1_aot_stats_={};v.vu1_capture_={};}
     static void prepare_read(Iop& i){i.pad_poll_source_={};}
     template<class T> static void prepare_read(DiagnosticHistory<T>& history){history.sink_=nullptr;}
@@ -171,7 +172,11 @@ public:
             else for(auto& item:v)value(item);
         } else if constexpr(Map<U>::value)mapping(v);
         else if constexpr(Pair<U>::value){value(v.first);value(v.second);}
-        else {if constexpr(Reading)CheckpointAccess::prepare_read(v);CheckpointAccess::fields(*this,v);if constexpr(Reading)CheckpointAccess::validate(v);}
+        else {
+            if constexpr(Reading)CheckpointAccess::prepare_read(v);
+            else if constexpr(std::is_same_v<U,GsVram>)v.synchronize();
+            CheckpointAccess::fields(*this,v);if constexpr(Reading)CheckpointAccess::validate(v);
+        }
     }
 private:
     void claim(std::uint64_t n,std::uint64_t bytes) {

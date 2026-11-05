@@ -41,6 +41,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install optional Vulkan headers and software GPU (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libvulkan-dev mesa-vulkan-drivers
+
+      - name: Install optional Vulkan headers (macOS)
+        if: runner.os == 'macOS'
+        run: brew install vulkan-headers
+
       - name: Configure (Unix / Ninja)
         if: runner.os != 'Windows'
         run: cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_REQUIRE_NINJA_PATH_TEST=ON -DPS2N_ENABLE_PROFILING=${{ matrix.name == 'Linux x86-64' && 'ON' || 'OFF' }}
@@ -57,6 +67,8 @@ jobs:
         run: ctest --test-dir out/build -C Release -R "^io-long-paths$" --verbose
 
       - name: Test AOT end-to-end
+        env:
+          PS2N_REQUIRE_GS_GPU: ${{ runner.os == 'Linux' && '1' || '0' }}
         run: ctest --test-dir out/build -C Release -E "^(io-long-paths|aot-long-path-build|native-aot-partitions)$" --output-on-failure
 
       - name: Test Ninja AOT compilation at long paths (Unix)

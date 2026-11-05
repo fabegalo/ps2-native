@@ -388,6 +388,7 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
             general_[index]=value;return;
         }
         case 0x3F:
+            vram_.synchronize();
             texture_flush_generation_=transfer_generation_;sampled_pages_={};dirty_texture_pages_={};
             general_[index]=value;return;
         case 0x01: case 0x02: case 0x03: case 0x08: case 0x09: case 0x0A:
@@ -411,6 +412,7 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
             return;
         case 0x7F: return; // NOP
         case 0x60: case 0x62: {
+            vram_.synchronize();
             // A second unacknowledged SIGNAL stalls the real GS. Until GIF
             // backpressure can retain/retry it, stop before changing its ID.
             if (index == 0x60 && (events_ & kCsrSignal))
@@ -424,6 +426,7 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
             return;
         }
         case 0x61:
+            vram_.synchronize();
             // Raster and local copies complete synchronously; an unfinished
             // host upload must finish before FINISH can be reported.
             if (transfer_.active) finish_pending_ = true;

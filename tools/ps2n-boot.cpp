@@ -6,6 +6,7 @@
 #include "diagnostic_cli.hpp"
 #include "checkpoint_cli.hpp"
 #include "vu_aot_cli.hpp"
+#include "gs_gpu_cli.hpp"
 
 #include <filesystem>
 #include <iomanip>
@@ -42,6 +43,7 @@ int boot_main(int argc, Character** argv) {
                      "                 [--resume=FILE --checkpoint-out=FILE --checkpoint-every=N]\n"
                      "                 [--checkpoint-scenario=SHA256] [--checkpoint-allow-runtime-change]\n"
                      "                 [--vu1-capture=DIR] [--vu1-interpreter] (offline VU1 AOT diagnostics)\n"
+                     "                 [--gs-backend=cpu|vulkan|directx] (experimental integer compute raster)\n"
                      "                 [--profile] (requires -DPS2N_ENABLE_PROFILING=ON; host component timings)\n"
                      "                 [--frame-out=FILE.bmp] (GS VRAM snapshot at stop, when supported)\n"
                      "                 [--assume-video-encoder=0xREG:0xVALUE]... (diagnostic experiments only)\n"
@@ -62,6 +64,7 @@ int boot_main(int argc, Character** argv) {
         ps2native::cli::DiagnosticOptions diagnostic;
         ps2native::cli::CheckpointOptions checkpoint;
         ps2native::cli::VuAotOptions vu1;
+        ps2native::cli::GsGpuOptions graphics;
         std::optional<std::filesystem::path> trace_out;
         std::optional<std::filesystem::path> frame_out;
         const ps2native::ConsoleHardware* hardware = nullptr;
@@ -78,7 +81,7 @@ int boot_main(int argc, Character** argv) {
         };
         for (int i = 2; i < argc; ++i) {
             const auto flag = ps2native::path_utf8(std::filesystem::path(argv[i]));
-            if (diagnostic.parse(flag) || checkpoint.parse(flag,argv[i]) || vu1.parse(flag,argv[i])) {
+            if (diagnostic.parse(flag) || checkpoint.parse(flag,argv[i]) || vu1.parse(flag,argv[i]) || graphics.parse(flag)) {
             } else if (flag.starts_with("--expect-sha256=")) {
                 load.expected_sha256 = flag.substr(16);
             } else if (flag.starts_with("--console=")) {
@@ -230,8 +233,10 @@ int boot_main(int argc, Character** argv) {
         const auto report = checkpoint.run(state, memory, module, options, protected_inputs,[&](auto& restored) {
             const std::array capture_inputs{std::filesystem::path(argv[1]),nvm_path.value_or(std::filesystem::path{}),checkpoint.resume,checkpoint.output};
             vu1.attach(restored,capture_inputs);
+            graphics.attach(restored);
         });
         diagnostic.finish(report, state, memory);
+        graphics.print(memory);
         std::cout << "# GS VRAM revision " << memory.gs().vram().revision() << '\n';
         std::cout << "# GS pixel writes " << memory.gs().vram().pixel_writes() << '\n';
         for (const auto& packet : report.gif_packets) std::cout << "# GIF " << packet << '\n';
