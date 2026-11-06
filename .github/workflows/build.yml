@@ -70,7 +70,10 @@ jobs:
         env:
           PS2N_REQUIRE_GS_GPU: ${{ runner.os == 'Linux' && '1' || '0' }}
           PS2N_GS_GPU_DIAGNOSTICS: ${{ runner.os == 'Windows' && '1' || '0' }}
-        run: ctest --test-dir out/build -C Release -E "^(io-long-paths|aot-long-path-build|native-aot-partitions)$" --output-on-failure
+        run: ctest --test-dir out/build -C Release -E "^(io-long-paths|aot-long-path-build|native-aot-partitions|native-gs-directx)$" --output-on-failure
+
+      - name: Test Direct3D 12 availability and rasterization
+        run: ctest --test-dir out/build -C Release -R "^native-gs-directx$" --verbose
 
       - name: Test Ninja AOT compilation at long paths (Unix)
         if: runner.os != 'Windows'
