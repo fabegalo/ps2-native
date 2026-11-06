@@ -25,19 +25,24 @@ foreach(header IN LISTS checkpoint_headers)
     string(REPLACE "\r\n" "\n" content "${content}")
     # Host input callbacks have no wire fields. Keep existing checkpoint schema
     # identity; the full header still participates in the runtime fingerprint.
-    string(FIND "${content}" "    // HOST_INPUT_BEGIN" host_begin)
-    while(NOT host_begin EQUAL -1)
-        string(FIND "${content}" "    // HOST_INPUT_END\n" host_end)
-        if(host_end LESS host_begin)
-            message(FATAL_ERROR "Unbalanced host-only checkpoint header markers")
-        endif()
-        string(LENGTH "    // HOST_INPUT_END\n" host_end_length)
-        math(EXPR host_after "${host_end}+${host_end_length}")
-        string(SUBSTRING "${content}" 0 ${host_begin} host_prefix)
-        string(SUBSTRING "${content}" ${host_after} -1 host_suffix)
-        set(content "${host_prefix}${host_suffix}")
-        string(FIND "${content}" "    // HOST_INPUT_BEGIN" host_begin)
-    endwhile()
+    # Audited execution-only helpers also add no fields. Strip only explicitly
+    # marked additions; the surrounding declarations/fields remain hashed and
+    # every byte still participates in the runtime fingerprint below.
+    foreach(runtime_marker IN ITEMS HOST_INPUT RUNTIME_HELPERS)
+        string(FIND "${content}" "    // ${runtime_marker}_BEGIN" host_begin)
+        while(NOT host_begin EQUAL -1)
+            string(FIND "${content}" "    // ${runtime_marker}_END\n" host_end)
+            if(host_end LESS host_begin)
+                message(FATAL_ERROR "Unbalanced runtime-only checkpoint header markers")
+            endif()
+            string(LENGTH "    // ${runtime_marker}_END\n" host_end_length)
+            math(EXPR host_after "${host_end}+${host_end_length}")
+            string(SUBSTRING "${content}" 0 ${host_begin} host_prefix)
+            string(SUBSTRING "${content}" ${host_after} -1 host_suffix)
+            set(content "${host_prefix}${host_suffix}")
+            string(FIND "${content}" "    // ${runtime_marker}_BEGIN" host_begin)
+        endwhile()
+    endforeach()
     # Logically-const cache reads may discard provenance certificates. This
     # host constness qualifier changes neither a field type nor wire bytes;
     # preserve v1 checkpoints from before cached provenance was implemented.

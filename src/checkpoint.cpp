@@ -78,6 +78,9 @@ struct CheckpointAccess {
         gs.diagnostic_texture_precision_=modes;
     }
     template<class T> static void prepare_read(T&){}
+    // Staging copies the destination, including warm host translation hints.
+    // The archive replaces the TLB, so none of those hints may survive it.
+    static void prepare_read(Memory& memory){memory.reset_tlb_cache();}
     static void prepare_read(GsVram& v){
         v.detach_gpu();v.pending_gpu_.clear();v.gpu_.reset();v.gpu_primitives_=v.cpu_fallbacks_=0;
         v.locations_={};v.pending_pages_={};v.knowledge_cached_={};v.fallback_reasons_={};

@@ -39,6 +39,13 @@ public:
     [[nodiscard]] std::uint32_t direct_remaining() const noexcept { return direct_left_; }
     [[nodiscard]] bool processing() const noexcept {return direct_left_ || mpg_left_ || unpack_left_ || pending_!=Pending::None || !fifo_.empty() || input_index_<input_count_;}
     [[nodiscard]] bool can_accept_dma() const noexcept {return fifo_.size()<(unit_==Unit::Vu1 ? 16u : 8u);}
+    // RUNTIME_HELPERS_BEGIN
+    // Partial payloads without new words cannot advance, but a queued decoder
+    // waiting for VU/PATH1 must still observe its dependency's transition.
+    [[nodiscard]] bool drain_pending() const noexcept {
+        return waiting_ || gif_waiting_ || !fifo_.empty() || input_index_<input_count_;
+    }
+    // RUNTIME_HELPERS_END
 private:
     friend void advance_vpus(std::uint64_t,Vif*,Vif*,VuControl*,Gif&,GsRegisters&);
     void write_words(std::span<const std::uint32_t> words,unsigned first_lane,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle);

@@ -110,8 +110,7 @@ void advance_vpus(std::uint64_t cycle,Vif* vif0,Vif* vif1,VuControl* vu,Gif& gif
         // previously waiting decoder so its status flags retain their exact
         // existing transition when the VU/PATH1 dependency completes.
         const auto ready=[](const Vif* vif) {
-            return vif && (vif->waiting_ || vif->gif_waiting_ ||
-                           !vif->fifo_.empty() || vif->input_index_<vif->input_count_);
+            return vif && vif->drain_pending();
         };
         if(ready(vif0))vif0->drain(at,vu,gif,gs);
         if(ready(vif1))vif1->drain(at,vu,gif,gs);

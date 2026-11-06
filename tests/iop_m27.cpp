@@ -339,6 +339,33 @@ void check_vblank_interrupts() {
     resumed.run_until(boundary + 10u, &changed);
     require(resumed.stopped() && resumed.cycle() == boundary,
             "later GS initialization cannot erase an earlier unknown interrupt decision");
+
+    // Attaching or removing video at a boundary must not run an instruction.
+    // A stale target is also a synchronization request, never permission to
+    // rewind the IOP or retain an attachment that the caller removed.
+    for (const auto rewind : {0u, 1u}) {
+        auto held = video(kSmode1Held, std::nullopt);
+        Iop detached;
+        detached.reset(rom, &kProfile);
+        detached.run_until(enabled, &held);
+        const auto pc = detached.pc();
+        detached.run_until(enabled - rewind);
+        require(detached.cycle() == enabled && detached.pc() == pc && !detached.stopped(),
+                "same or past target detaches video without retiring or rewinding");
+        detached.run_until(enabled + 1u);
+        require_stop(detached, "no GS attached");
+        require(detached.cycle() == enabled && detached.pc() == pc,
+                "detached VBLANK is refused at the next interrupt decision");
+
+        Iop reattached;
+        reattached.reset(rom, &kProfile);
+        reattached.run_until(enabled, &held);
+        reattached.run_until(enabled - rewind);
+        reattached.run_until(enabled - rewind, &held);
+        reattached.run_until(enabled + 1u, &held);
+        require(!reattached.stopped() && reattached.cycle() == enabled + 1u,
+                "same or past target can reattach held video before the next interrupt decision");
+    }
 }
 
 // AND and BEQ on values with unknown bits; SIF_BD6; the DMA IRQ bit.

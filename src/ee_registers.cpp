@@ -106,9 +106,20 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
 // before an EE access are therefore ordered before it, and both EE engines
 // see the same IOP.
 void EeRegisters::sync_iop() {
+    const auto stamp = now();
+    const auto iop_cycle = stamp / kEeCyclesPerIopCycle;
+    const bool iop_due = iop_.synchronization_due(iop_cycle, &gs_);
+    if (!iop_due && !iop_.graphics_sync_needed(stamp, vif0_, vif1_, vu_control_)) {
+        // Keep the checkpoint anchors exact without entering either engine.
+        // These predicates inspect live device state, so same-cycle register
+        // writes, GS generations, and restored state need no cached deadline.
+        iop_.stamp_idle_graphics(stamp);
+        return;
+    }
     profiling::Scope profile(profiling::Phase::Sync);
-    iop_.run_until(now() / kEeCyclesPerIopCycle, &gs_);
-    iop_.advance_graphics(now(),vif0_,vif1_,gif_,gs_,vu_control_);
+    if (iop_due)
+        iop_.run_until(iop_cycle, &gs_);
+    iop_.advance_graphics(stamp,vif0_,vif1_,gif_,gs_,vu_control_);
 }
 
 std::uint64_t EeRegisters::now() const {

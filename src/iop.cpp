@@ -560,7 +560,7 @@ void Iop::advance_vif_dma(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,Gs
 void Iop::advance_gif_dma(std::uint64_t ee_cycle,Gif& gif,GsRegisters& gs) {
     advance_graphics_dma(2,ee_cycle,nullptr,nullptr,gif,gs);
 }
-void Iop::advance_graphics(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu) {
+void Iop::advance_graphics_due(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu) {
     profiling::Scope profile(profiling::Phase::Devices);
     for(unsigned channel=0;channel<3;++channel) {
         auto& transfer=graphics_dma_[channel];
@@ -1009,6 +1009,10 @@ void Iop::pump_cdvd() {
 }
 
 void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
+    // No instruction, DMA beat, timer, or sample can advance before the next
+    // IOP cycle. A changed/detached GS remains an immediate synchronization
+    // event even at the same (or an earlier) target cycle.
+    if (!synchronization_due(cycle, video)) return;
     profiling::Scope profile(profiling::Phase::Iop);
     // EE writes are preceded by a run to the write boundary. Observe the new
     // clock before step() decides whether the next instruction is interrupted.

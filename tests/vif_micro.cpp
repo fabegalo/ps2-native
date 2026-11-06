@@ -13,6 +13,52 @@ void program(VuControl& vu,unsigned unit) {
 }
 }
 int main() try {
+    {
+        Iop dma;VuControl vu;Vif v0(Vif::Unit::Vu0),v1;Gif gif;GsRegisters gs;gs.reset(0);dma.reset({},nullptr);
+        std::vector<std::uint8_t> ram(0x200);ram[0x103]=0x70;dma.attach_ee_ram(ram); // zero-payload END
+        require(!dma.graphics_sync_needed(100,v0,v1,vu),"idle graphics has no hardware event to service");
+        dma.advance_graphics(100,v0,v1,gif,gs,vu);
+        dma.ee_dma_write(0x1000E000,1);dma.ee_dma_write(0x10009020,0);
+        dma.ee_dma_write(0x10009030,0x100);dma.ee_dma_write(0x10009000,0x105);
+        dma.advance_graphics(101,v0,v1,gif,gs,vu);
+        require((dma.ee_dma_read(0x10009000)&0x100u) && !dma.ee_dma_read(0x1000E010),
+            "idle synchronization retains the actual bus anchor rather than accumulating disabled time");
+        dma.advance_graphics(102,v0,v1,gif,gs,vu);
+        require(!(dma.ee_dma_read(0x10009000)&0x100u) && dma.ee_dma_read(0x1000E010)==2,
+            "the first real tag beat completes on its original cycle after idle synchronization");
+        dma.ee_dma_write(0x10009030,0x100);dma.ee_dma_write(0x10009000,0x105);
+        dma.ee_dma_write(0x10008020,0);dma.ee_dma_write(0x10008030,0x100);dma.ee_dma_write(0x10008000,0x105);
+        rejects([&]{dma.advance_graphics(102,v0,v1,gif,gs,vu);},"Concurrent VIF/GIF DMA");
+        dma.set_ee_dma_suspended(true);dma.ee_dma_write(0x10008000,0);dma.set_ee_dma_suspended(false);
+        ram[0x103]=0x40; // unsupported REFS tag, retained as an actual parser failure
+        rejects([&]{dma.advance_graphics(104,v0,v1,gif,gs,vu);},"source chain REFS");
+        dma.ee_dma_write(0x1000E000,0);
+        require(dma.graphics_sync_needed(104,v0,v1,vu),"a stored graphics refusal remains observable while DMAE is disabled");
+        rejects([&]{dma.advance_graphics(104,v0,v1,gif,gs,vu);},"source chain REFS");
+    }
+    for(unsigned unit=0;unit<2u;++unit) {
+        Iop dma;VuControl vu;Vif v0(Vif::Unit::Vu0),v1;Gif gif;GsRegisters gs;gs.reset(0);dma.reset({},nullptr);
+        const auto vector=[&](unsigned index,std::uint32_t x,std::uint32_t y) {
+            const ObservedQuadword word{{x|(std::uint64_t{y}<<32u),0},{0,0}};
+            if(!unit)vu.write_vector(index,word);
+            else {vu.write_vector(31,word);vu.write(2,0x400u+index);vu.vector_store_increment(31,2,15);}
+        };
+        vector(1,0x3F800000,0);vector(2,0,0x40000000);
+        const auto base=unit ? 0x11008000u : 0x11000000u;
+        const auto divide=0x800003BCu|(1u<<11u)|(2u<<16u)|(1u<<23u);
+        vu.write_memory(base,8,{divide|(0x400002FFull<<32u),0});
+        vu.write_memory(base+8u,8,{0x000002FF8000033Cull,0});
+        vu.start_micro(unit,0,0);dma.advance_graphics(6,v0,v1,gif,gs,vu);
+        require(!vu.micro_running(unit) && !dma.graphics_sync_needed(7,v0,v1,vu) &&
+            dma.graphics_sync_needed(8,v0,v1,vu),"Q's exact completion remains scheduled after E ends either microprogram");
+        dma.advance_graphics(7,v0,v1,gif,gs,vu);
+        require((unit ? vu.observe_data(0x4360) : vu.observe(22)).unknown==~0u,
+            "early graphics polling does not publish an outstanding FDIV quotient");
+        dma.advance_graphics(8,v0,v1,gif,gs,vu);
+        const auto quotient=unit ? vu.observe_data(0x4360) : vu.observe(22);
+        require(quotient.value==0x3F000000 && !quotient.unknown && !dma.graphics_sync_needed(8,v0,v1,vu),
+            "Q0 and Q1 publish the genuine quotient on the same cycle through the graphics fast path");
+    }
     for(unsigned unit=0;unit<2;++unit) {
         VuControl vu;Vif vif(unit ? Vif::Unit::Vu1 : Vif::Unit::Vu0);Gif gif;GsRegisters gs;gs.reset(0);program(vu,unit);
         if(unit) {

@@ -22,6 +22,9 @@
 #include "ps2native/disc.hpp"
 #include "ps2native/gif.hpp"
 #include "ps2native/vif.hpp"
+    // RUNTIME_HELPERS_BEGIN
+#include "ps2native/vu_control.hpp"
+    // RUNTIME_HELPERS_END
 #include "ps2native/diagnostic_history.hpp"
 #include <memory>
 
@@ -75,6 +78,12 @@ public:
     // start/end (I_STAT bits 0 and 11); its timing must not change while the
     // IOP runs (the EE syncs the IOP before every GS write).
     void run_until(std::uint64_t cycle, const GsRegisters* video = nullptr);
+    // RUNTIME_HELPERS_BEGIN
+    [[nodiscard]] bool synchronization_due(std::uint64_t target,const GsRegisters* video=nullptr) const noexcept {
+        return (!stop_ && cycle_<target) ||
+            (video ? video_generation_!=video->timing_generation() : video_generation_.has_value());
+    }
+    // RUNTIME_HELPERS_END
     // EE read of IOP RAM at `offset` (the IOP must have been run up to now).
     // Throws DeviceRefusal when the bytes were never written by the IOP, or
     // when the IOP stopped before this time (its later state is unknown).
@@ -145,6 +154,21 @@ public:
     [[nodiscard]] bool reads_ee_ram() const noexcept { return (ee_sif1_chcr_ & 0x100u) != 0u ||
         ((ee_dma_setup_[0][0].value_or(0u)|ee_dma_setup_[1][0].value_or(0u)|ee_dma_setup_[2][0].value_or(0u))&0x100u)!=0u; }
     void advance_gif_dma(std::uint64_t ee_cycle, Gif& gif, GsRegisters& gs);
+    // RUNTIME_HELPERS_BEGIN
+    [[nodiscard]] bool graphics_sync_needed(std::uint64_t cycle,const Vif& vif0,const Vif& vif1,const VuControl& vu) const noexcept {
+        // An armed channel retains priority/arbitration checks even before its
+        // next bus beat; stored refusals always take their original priority.
+        const bool enabled=!ee_dma_suspended_ && (ee_dctrl_&1u);
+        for(unsigned channel=0;channel<3u;++channel)
+            if(graphics_dma_[channel].stop || (enabled && (ee_dma_setup_[channel][0].value_or(0u)&0x100u)))return true;
+        return vu.micro_event_due(cycle) || vif0.drain_pending() || vif1.drain_pending();
+    }
+    // Valid only after graphics_sync_needed() returned false at this boundary.
+    // These anchors are modeled checkpoint state, even while the bus is idle.
+    void stamp_idle_graphics(std::uint64_t cycle) noexcept {
+        graphics_dma_[0].cycle=graphics_dma_[1].cycle=graphics_dma_[2].cycle=cycle;
+    }
+    // RUNTIME_HELPERS_END
     void advance_graphics(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu);
     void advance_vif_dma(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr);
     [[nodiscard]] bool writes_ee_ram() const noexcept { return (ee_dma_setup_[5][0].value_or(0u)&0x100u)!=0; }
@@ -592,6 +616,9 @@ private:
     std::array<bool,2> spu2_irq_pending_{};
     Spu2SampleSink spu2_sample_sink_; // excluded from checkpoints; detached on restore
     void advance_graphics_dma(unsigned channel, std::uint64_t ee_cycle,Vif* vif0,Vif* vif1,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr);
+    // RUNTIME_HELPERS_BEGIN
+    void advance_graphics_due(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu);
+    // RUNTIME_HELPERS_END
     struct GraphicsDma {
         std::uint64_t cycle{};
         bool end{}, inline_data{};
@@ -626,4 +653,10 @@ private:
     std::uint64_t stop_cycle_{};
     DiagnosticHistory<Event> events_;
 };
+    // RUNTIME_HELPERS_BEGIN
+inline void Iop::advance_graphics(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu) {
+    if(!graphics_sync_needed(ee_cycle,vif0,vif1,vu)) {stamp_idle_graphics(ee_cycle);return;}
+    advance_graphics_due(ee_cycle,vif0,vif1,gif,gs,vu);
+}
+    // RUNTIME_HELPERS_END
 } // namespace ps2native

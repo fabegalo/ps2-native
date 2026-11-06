@@ -49,6 +49,11 @@ int main(int argc,char** argv)try {
     gif.write_fifo(2u|(1ull<<15)|(2ull<<58),0,gs);
     gif.write_fifo(0x2222222211111111ull,0x4444444433333333ull,gs);
     memory.write_vu_vector(1,{{0x40800000u,0},{0,0}});memory.vu_issue_q(state.cycles(),0,1,0,0,true);
+    // Use a kuseg address beyond Direct ELF's identity-mapped RAM so this
+    // instruction fetch necessarily exercises a guest-programmed TLB entry.
+    constexpr auto translated_pc=0x04000000u;
+    memory.tlb_write(0,{0u,translated_pc,(0x100u<<6)|0x1Fu,(0x101u<<6)|0x1Fu});
+    require(memory.fetch32(translated_pc)==image.instruction_at(image.entry),"checkpoint source has a warmed TLB instruction mapping");
     const auto file=directory/"pending.ps2ncp";CheckpointContext context{sha256_hex(image.bytes),"{\"pad\":65535,\"field\":12}"};
     const auto before=checkpoint_state_sha256(state,memory);save_checkpoint(file,state,memory,first,context);
     require(checkpoint_state_sha256(state,memory)==before,"saving does not advance or mutate the guest");
@@ -60,7 +65,11 @@ int main(int argc,char** argv)try {
     std::cout<<"LEGACY_SAVE before="<<before<<" continued="<<expected<<'\n';return 0;
 #else
     Memory restored;EEState resumed;prepare_direct_elf(image,nullptr,resumed,restored);
+    restored.write32(0x2000u,0x12345678u);
+    restored.tlb_write(1,{0u,translated_pc,(2u<<6)|0x1Fu,(3u<<6)|0x1Fu});
+    require(restored.fetch32(translated_pc)==0x12345678u,"restore destination warms the same virtual page at a different TLB index");
     const auto loaded=load_checkpoint(file,resumed,restored,context);
+    require(restored.fetch32(translated_pc)==image.instruction_at(image.entry),"restore replaces a warmed destination TLB mapping before instruction fetch");
     require(checkpoint_state_sha256(resumed,restored)==before,"all modeled fields round-trip, including dirty cache and symbolic domains");
     require(restored.read32(0x80000300u)==0x12345678u && restored.load32_observed(0x80000310u).unknown==15,
         "restored CPU-visible cache data and unknown bits are retained");

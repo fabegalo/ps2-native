@@ -311,6 +311,18 @@ private:
     std::array<TlbEntry, kTlbEntries> tlb_{};
     // Entries are undefined after reset until the guest writes them.
     std::array<bool, kTlbEntries> tlb_defined_{};
+    // RUNTIME_HELPERS_BEGIN
+    // Host lookup metadata only: no translated pointers, access permissions,
+    // memory contents or faults. The complete TLB remains modeled state.
+    struct TlbMatchCacheEntry {
+        std::uint32_t key{UINT32_MAX}; // 4 KiB virtual page plus all ASID bits
+        std::uint8_t index{};
+    };
+    mutable std::array<TlbMatchCacheEntry,256> tlb_match_cache_{};
+    void reset_tlb_cache() noexcept {
+        for(auto& entry:tlb_match_cache_)entry.key=UINT32_MAX;
+    }
+    // RUNTIME_HELPERS_END
     Mapping mapping_{Mapping::ElfProgram};
     std::uint8_t asid_{};
     bool error_level_{};

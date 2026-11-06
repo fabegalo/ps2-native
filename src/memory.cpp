@@ -189,6 +189,7 @@ std::size_t Memory::physical_address(std::uint32_t address, std::size_t size) {
 }
 
 void Memory::load(const ElfImage& elf) {
+    reset_tlb_cache();
     reset_data_cache();
     diagnostic_ee_early_digit_carry_=false;fpu_arithmetic_started_=false;
     unknown_words_.clear();fpu_relations_.clear();
@@ -210,6 +211,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
                             std::span<const std::uint8_t> rom1) {
     if (rom0.size() != kBiosRomBytes)
         throw std::runtime_error("BIOS ROM0 must be exactly 4 MiB to be mapped at 0x1FC00000");
+    reset_tlb_cache();
     mapping_ = Mapping::HardwareReset;
     reset_data_cache();
     diagnostic_ee_early_digit_carry_=false;fpu_arithmetic_started_=false;
@@ -263,6 +265,7 @@ void Memory::set_cpu_context(std::uint32_t status, std::uint32_t entry_hi) noexc
 
 void Memory::tlb_write(unsigned index, const TlbEntry& entry) {
     if (index >= kTlbEntries) throw std::runtime_error("TLB index " + std::to_string(index) + " out of range");
+    reset_tlb_cache();
     tlb_[index] = {entry.page_mask & kPageMaskBits, entry.entry_hi & kEntryHiBits,
                    entry.entry_lo0 & kEntryLo0Bits, entry.entry_lo1 & kEntryLo1Bits};
     tlb_defined_[index] = true;
@@ -300,17 +303,26 @@ std::uint32_t Memory::translate_tlb(std::uint32_t address, std::size_t size, boo
                         "EE bus " + access_name(write, size, "TLB") + " at " + hex32(address) + ": " +
                         bus_fault_name(fault) + " exception not modeled (" + detail + ")");
     };
+    // Every supported entry compares only bits above a 4 KiB page. A unique
+    // match therefore remains unique throughout this page for this ASID until
+    // any guest TLB write. Cache its index, then apply the ordinary entry and
+    // access checks below; never cache a physical pointer, fault or permission.
+    const auto key=(address>>12u)|(std::uint32_t{asid_}<<20u);
+    auto& cached=tlb_match_cache_[(key^(key>>8u)^(key>>16u))&(tlb_match_cache_.size()-1u)];
     std::optional<unsigned> match;
-    for (unsigned i = 0; i < kTlbEntries; ++i) {
-        if (!tlb_defined_[i]) continue; // assumed not to match (see tlb_probe)
-        const auto& e = tlb_[i];
-        const auto vpn_mask = entry_vpn_mask(e);
-        if (((address ^ e.entry_hi) & vpn_mask) != 0u) continue;
-        const bool global = (e.entry_lo0 & e.entry_lo1 & 1u) != 0u;
-        if (!global && (e.entry_hi & 0xFFu) != asid_) continue;
-        if (match) throw fail(BusFault::TlbMultipleMatch, "entries " + std::to_string(*match) +
-                              " and " + std::to_string(i));
-        match = i;
+    if(cached.key==key)match=cached.index;
+    else {
+        for (unsigned i = 0; i < kTlbEntries; ++i) {
+            if (!tlb_defined_[i]) continue; // assumed not to match (see tlb_probe)
+            const auto& e = tlb_[i];
+            const auto vpn_mask = entry_vpn_mask(e);
+            if (((address ^ e.entry_hi) & vpn_mask) != 0u) continue;
+            const bool global = (e.entry_lo0 & e.entry_lo1 & 1u) != 0u;
+            if (!global && (e.entry_hi & 0xFFu) != asid_) continue;
+            if (match) throw fail(BusFault::TlbMultipleMatch, "entries " + std::to_string(*match) +
+                                  " and " + std::to_string(i));
+            match = i;
+        }
     }
     if (!match) {
         const auto undefined = std::count(tlb_defined_.begin(), tlb_defined_.end(), false);
@@ -324,6 +336,7 @@ std::uint32_t Memory::translate_tlb(std::uint32_t address, std::size_t size, boo
         // The S bit maps the 16 KiB scratchpad at the entry's 16 KiB aligned VPN2;
         // the match above already bounds the (naturally aligned) access to it.
         scratchpad = true;
+        cached={key,static_cast<std::uint8_t>(*match)};
         return address & (kScratchpadSpan - 1u);
     }
     const auto half = ((e.page_mask | 0x1FFFu) + 1u) >> 1;
@@ -332,6 +345,7 @@ std::uint32_t Memory::translate_tlb(std::uint32_t address, std::size_t size, boo
     if ((lo & 2u) == 0u) throw fail(BusFault::TlbInvalid, "entry " + std::to_string(*match));
     if (write && (lo & 4u) == 0u) throw fail(BusFault::TlbModified, "entry " + std::to_string(*match));
     const auto frame = ((lo >> 6) & 0xFFFFFu) << 12;
+    cached={key,static_cast<std::uint8_t>(*match)};
     return (frame & ~(half - 1u)) | (address & (half - 1u));
 }
 

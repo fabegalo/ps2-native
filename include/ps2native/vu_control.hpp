@@ -147,6 +147,17 @@ public:
         if(path1_ && (!result || path1_->next<*result))result=path1_->next;
         return result;
     }
+    // RUNTIME_HELPERS_BEGIN
+    // Q completion is independent of a microprogram's running state. The
+    // synchronization fast path must include both pipelines after E/Ready.
+    [[nodiscard]] bool micro_event_due(std::uint64_t cycle) const noexcept {
+        return (micro_[0].running && micro_[0].next<=cycle) ||
+               (micro_[1].running && micro_[1].next<=cycle) ||
+               (path1_ && path1_->next<=cycle) ||
+               (pending_q_ && pending_q_->ready<=cycle) ||
+               (pending_q1_ && pending_q1_->ready<=cycle);
+    }
+    // RUNTIME_HELPERS_END
     [[nodiscard]] std::uint32_t diagnostic_micro_pc(unsigned unit) const {return micro_.at(unit).pc;}
     [[nodiscard]] std::uint64_t diagnostic_micro_instructions(unsigned unit) const {return micro_.at(unit).instructions;}
     // VU Mem0 uses qword addresses in VISWR. VU1's integer registers live at

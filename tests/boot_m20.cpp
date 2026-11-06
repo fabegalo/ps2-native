@@ -146,6 +146,57 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     bus_fault([&] { (void)memory.read32(0x00010000u); }, BusFault::TlbMultipleMatch, "entries 1 and 4");
 }
 
+void check_translation_reuse(const std::vector<std::uint8_t>& rom) {
+    Memory memory;
+    memory.reset_for_boot(rom);
+    memory.set_translation_context(0, false);
+    constexpr auto address = 0x04000000u;
+    memory.write32(0x80002000u, 0x11223344u);
+    memory.write32(0x80003000u, 0x55667788u);
+    memory.write32(0x80004000u, 0x99AABBCCu);
+    memory.tlb_write(0, {0u, address, (2u << 6) | 0x1Eu, (3u << 6) | 0x1Eu});
+    memory.tlb_write(1, {0u, address | 1u, (4u << 6) | 0x1Eu, (5u << 6) | 0x1Eu});
+    require(memory.fetch32(address) == 0x11223344u, "first ASID reads its own frame");
+    memory.set_translation_context(1, false);
+    require(memory.fetch32(address) == 0x99AABBCCu, "warmed virtual address changes frame with ASID");
+    memory.set_translation_context(0, false);
+    require(memory.fetch32(address) == 0x11223344u && memory.fetch32(address + 0x1000u) == 0x55667788u,
+            "returning to ASID retains separate even and odd page translations");
+    memory.set_translation_context(2, false);
+    bus_fault([&] { (void)memory.fetch32(address); }, BusFault::TlbRefill, "no entry for ASID 2");
+    memory.tlb_write(0, {0u, address, (2u << 6) | 0x1Fu, (3u << 6) | 0x1Fu});
+    require(memory.fetch32(address) == 0x11223344u, "both global bits make an entry visible to another ASID");
+    memory.set_translation_context(0, false);
+    require(memory.fetch32(address) == 0x11223344u, "warm a unique global translation before overlap");
+    memory.tlb_write(1, {0u, address, (4u << 6) | 0x1Eu, (5u << 6) | 0x1Eu});
+    bus_fault([&] { (void)memory.fetch32(address); }, BusFault::TlbMultipleMatch, "entries 0 and 1");
+    memory.tlb_write(0, {0u, address + 0x2000u, (2u << 6) | 0x1Fu, (3u << 6) | 0x1Fu});
+    require(memory.fetch32(address) == 0x99AABBCCu, "rewriting an overlapping entry restores a unique match");
+    memory.tlb_write(1, {0u, address + 0x4000u, (4u << 6) | 0x1Eu, (5u << 6) | 0x1Eu});
+    memory.tlb_write(0, {0u, address, (2u << 6) | 0x1Fu, (3u << 6) | 0x1Fu});
+    require(memory.fetch32(address) == 0x11223344u, "warm entry before moving the mapping to another index");
+    memory.tlb_write(0, {0u, address + 0x2000u, (2u << 6) | 0x1Fu, (3u << 6) | 0x1Fu});
+    memory.tlb_write(1, {0u, address, (4u << 6) | 0x1Eu, (5u << 6) | 0x1Eu});
+    require(memory.fetch32(address) == 0x99AABBCCu, "warmed address follows its replacement TLB index");
+    memory.tlb_write(1, {0u, address, (4u << 6) | 0x1Au, (5u << 6) | 0x18u});
+    require(memory.fetch32(address) == 0x99AABBCCu, "read-only replacement remains readable");
+    bus_fault([&] { memory.write32(address, 1u); }, BusFault::TlbModified, "TLB modified");
+    bus_fault([&] { (void)memory.fetch32(address + 0x1000u); }, BusFault::TlbInvalid, "TLB invalid");
+
+    constexpr auto large = 0x08000000u;
+    memory.tlb_write(2, {0x6000u, large, (0x10u << 6) | 0x1Fu, (0x18u << 6) | 0x1Fu});
+    for (const auto offset : {0u, 0x1000u, 0x3FFCu, 0x4000u, 0x7000u, 0x7FFCu}) {
+        const auto physical = offset < 0x4000u ? 0x10000u + offset : 0x18000u + offset - 0x4000u;
+        memory.write32(0x80000000u | physical, 0xABCD0000u | offset);
+        require(memory.fetch32(large + offset) == (0xABCD0000u | offset),
+                "large-page subpages and half boundary retain their physical offsets");
+    }
+    bus_fault([&] { (void)memory.fetch32(large + 0x8000u); }, BusFault::TlbRefill, "no entry for ASID 0");
+    memory.reset_for_boot(rom);
+    memory.set_translation_context(0, false);
+    bus_fault([&] { (void)memory.fetch32(large + 0x7000u); }, BusFault::TlbRefill, "undefined since reset");
+}
+
 // The reset vector replaced by one instruction: the stop must name it.
 BootReport run_patched(const std::vector<std::uint8_t>& rom, std::uint32_t word) {
     auto patched = rom;
@@ -324,6 +375,7 @@ int main(int argc, char** argv) {
         check_sha256();
         check_loader(rom, fw);
         check_bus(rom);
+        check_translation_reuse(rom);
         check_interpreter_stops(rom);
         check_boot(rom, fw);
         std::cout << "M2.0 boot: loader, EE bus/TLB, COP0, interpreter and hybrid AOT checks passed\n";

@@ -201,11 +201,7 @@ void VuControl::advance_micro(std::uint64_t cycle,Gif* gif,GsRegisters* gs) {
     // No architectural state can change before the earliest micro/PATH1/Q
     // deadline. Include both FDIV pipelines even after their issuing program
     // has stopped; Q publication is independent of the micro running bits.
-    if((!micro_[0].running || micro_[0].next>cycle) &&
-       (!micro_[1].running || micro_[1].next>cycle) &&
-       (!path1_ || path1_->next>cycle) &&
-       (!pending_q_ || pending_q_->ready>cycle) &&
-       (!pending_q1_ || pending_q1_->ready>cycle)) return;
+    if(!micro_event_due(cycle)) return;
     profiling::Scope profile(profiling::Phase::Vu);
     for(;;) {
         unsigned unit=2;
