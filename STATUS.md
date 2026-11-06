@@ -2,6 +2,22 @@
 
 **Registro vivo de progresso e evidências.** Atualizar este arquivo quando houver avanço **verificado**; não reescrever os READMEs, `AGENTS.md` ou `CLAUDE.md` a cada marco. Relatórios detalhados continuam em `docs/M*-STATUS.md`; o trabalho seguinte fica em `docs/NEXT-TASK.md`.
 
+## Runtime: eventos e tradução TLB — 05/11/2026
+
+- `c23188e` evita sincronização sem evento possível e reutiliza somente
+  índices TLB comprovados por página/ASID. Mantém bytes, permissões,
+  efeitos, relógios, recusas, isolamento e esquema de checkpoint.
+- Cinco trios do menu: 30 milhões em **11,341572 → 7,776684 s**;
+  campo original **1,838974 → 1,254745 s**. Ganho mediano de throughput
+  45,84%; CPU total do processo −28,18%. Houve interferência externa;
+  a combinação venceu todos os pares. Não demonstra tempo real.
+- Estado completo, seis campos RGBA, VRAM/máscaras, 9766 amostras PCM,
+  entrada e ciclos iguais, inclusive interpretação pura, 10 + 20 milhões
+  e Vulkan/D3D12. Vinte testes focados passaram; launcher local recompilado.
+- CI do novo commit impedida: revisão automática recusou o push por faltar
+  autorização específica de publicação. Métodos, amostras e limites em
+  [RUNTIME-PERFORMANCE](docs/RUNTIME-PERFORMANCE.md). Nenhum ensaio ativo.
+
 ## Primeiro caminho GS compute Vulkan e Direct3D 12 — 05/11/2026
 
 Medições de `92dc21c`/`e626526` e seleção verificada em `e9bbc21`.

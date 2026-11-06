@@ -1,5 +1,20 @@
 # Próxima execução — Super Bust-A-Move
 
+## Desempenho após eventos/TLB — 05/11/2026
+
+`c23188e`: cinco trios do menu mediram 11,341572 → 7,776684 s por
+30 milhões; 1,838974 → 1,254745 s por campo. Estado completo, RGBA,
+PCM/entrada e ciclos preservados, incluindo interpretação pura, checkpoint
+10 + 20 milhões e os dois backends. Vinte testes focados passaram;
+`out/launcher-msvc/ps2-native.exe` foi recompilado. Ainda sem tempo real.
+
+Próximo passo operacional: autorização específica para publicar os commits
+em `origin/main`, bloqueada pela revisão automática, e conferir a CI dos
+seis alvos. Depois, coletar perfil após TLB para selecionar o próximo custo
+de memória/execução por instrução. Não reutilizar as antigas proporções
+instrumentadas nem ampliar GS sem nova evidência. Preservar os checkpoints
+e a fronteira funcional abaixo. [Medições e limites](RUNTIME-PERFORMANCE.md).
+
 ## GS GPU — próximo incremento após o primeiro caminho
 
 O caminho compute flat Vulkan/D3D12 está integrado. As janelas comerciais
