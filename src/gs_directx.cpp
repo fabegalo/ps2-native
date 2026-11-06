@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -23,6 +24,15 @@ namespace ps2native {
 namespace {
 using Microsoft::WRL::ComPtr;
 using Clock=std::chrono::steady_clock;
+bool initialization_tracing() {
+    const auto* setting=std::getenv("PS2N_GS_GPU_DIAGNOSTICS");
+    return setting && (!std::strcmp(setting,"1") || !std::strcmp(setting,"trace"));
+}
+template<class... Args>void initialization_trace(bool enabled,const char* format,Args... args) {
+    if(!enabled)return;
+    std::fputs("GS Direct3D 12 init: ",stderr);std::fprintf(stderr,format,args...);
+    std::fputc('\n',stderr);std::fflush(stderr);
+}
 std::uint64_t elapsed(Clock::time_point start) {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now()-start).count());
 }
@@ -38,7 +48,11 @@ struct Event {
 };
 struct SystemModule {
     HMODULE handle{};
-    explicit SystemModule(const wchar_t* name):handle(LoadLibraryExW(name,nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32)) {
+    explicit SystemModule(const wchar_t* name) {
+        const auto trace=initialization_tracing();
+        initialization_trace(trace,"system module load begin: %ls",name);
+        handle=LoadLibraryExW(name,nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
+        initialization_trace(trace,"system module load end: %ls; loaded=%u; error=%lu",name,unsigned(handle!=nullptr),handle?0ul:GetLastError());
         if(!handle)throw std::runtime_error("GS Direct3D 12 system runtime is unavailable");
     }
     ~SystemModule(){FreeLibrary(handle);}
@@ -73,19 +87,24 @@ class DirectXGs final : public GsGpu {
     std::mutex mutex_;
     GsGpuStats stats_{};
     std::string name_;
-    bool diagnostics_{},dred_configured_{},driver_known_{};
+    bool diagnostics_{},dred_configured_{},driver_known_{},trace_initialization_{initialization_tracing()};
     UINT vendor_id_{},device_id_{};
     LARGE_INTEGER driver_version_{};
 
     ComPtr<ID3D12Resource> buffer(UINT64 bytes,D3D12_HEAP_TYPE heap,D3D12_RESOURCE_STATES state,bool uav=false) {
+        initialization_trace(trace_initialization_,"buffer allocation begin: bytes=%llu; heap=%u; state=0x%x; UAV=%u",
+            static_cast<unsigned long long>(bytes),unsigned(heap),unsigned(state),unsigned(uav));
         D3D12_HEAP_PROPERTIES properties{};properties.Type=heap;
         D3D12_RESOURCE_DESC desc{};desc.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;
         desc.Width=bytes;desc.Height=1;desc.DepthOrArraySize=1;desc.MipLevels=1;
         desc.SampleDesc.Count=1;desc.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         if(uav)desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         ComPtr<ID3D12Resource> result;
-        checked(device_->CreateCommittedResource(&properties,D3D12_HEAP_FLAG_NONE,&desc,state,nullptr,IID_PPV_ARGS(&result)),"buffer allocation");
+        const auto hr=device_->CreateCommittedResource(&properties,D3D12_HEAP_FLAG_NONE,&desc,state,nullptr,IID_PPV_ARGS(&result));
+        initialization_trace(trace_initialization_,"buffer allocation HRESULT=0x%08lx",static_cast<unsigned long>(hr));
+        checked(hr,"buffer allocation");
         stats_.storage_bytes+=device_->GetResourceAllocationInfo(0,1,&desc).SizeInBytes;
+        initialization_trace(trace_initialization_,"buffer allocation end");
         return result;
     }
     void transition(D3D12_RESOURCE_STATES before,D3D12_RESOURCE_STATES after) {
@@ -183,12 +202,14 @@ class DirectXGs final : public GsGpu {
     }
 public:
     DirectXGs() {
+        initialization_trace(trace_initialization_,"system runtimes loaded; resolving entry points");
         create_device_=reinterpret_cast<decltype(create_device_)>(GetProcAddress(d3d12_.handle,"D3D12CreateDevice"));
         serialize_root_=reinterpret_cast<decltype(serialize_root_)>(GetProcAddress(d3d12_.handle,"D3D12SerializeRootSignature"));
         create_factory_=reinterpret_cast<CreateFactory>(GetProcAddress(dxgi_.handle,"CreateDXGIFactory1"));
         if(!create_device_ || !serialize_root_ || !create_factory_)
             throw std::runtime_error("GS Direct3D 12 system entry points are unavailable");
         if(const auto* setting=std::getenv("PS2N_GS_GPU_DIAGNOSTICS"))diagnostics_=std::strcmp(setting,"1")==0;
+        initialization_trace(trace_initialization_,"runtime entry points resolved; DRED requested=%u",unsigned(diagnostics_));
         if(diagnostics_) {
             // DRED settings must precede device creation. Neither DRED nor
             // the debug layer is required for normal execution/availability.
@@ -201,20 +222,39 @@ public:
                 dred_configured_=true;
             }
         }
-        checked(create_factory_(IID_PPV_ARGS(&factory_)),"DXGI discovery");
+        initialization_trace(trace_initialization_,"factory creation begin");
+        const auto factory_hr=create_factory_(IID_PPV_ARGS(&factory_));
+        initialization_trace(trace_initialization_,"factory creation end: HRESULT=0x%08lx",static_cast<unsigned long>(factory_hr));
+        checked(factory_hr,"DXGI discovery");
         for(UINT index=0;;++index) {
             ComPtr<IDXGIAdapter1> adapter;
+            initialization_trace(trace_initialization_,"adapter enumeration begin: index=%u",index);
             const auto hr=factory_->EnumAdapters1(index,&adapter);
+            initialization_trace(trace_initialization_,"adapter enumeration end: index=%u; HRESULT=0x%08lx",index,static_cast<unsigned long>(hr));
             if(hr==DXGI_ERROR_NOT_FOUND)break;
             checked(hr,"adapter enumeration");
+            initialization_trace(trace_initialization_,"adapter identity begin: index=%u",index);
             DXGI_ADAPTER_DESC1 desc{};checked(adapter->GetDesc1(&desc),"adapter identity");
+            initialization_trace(trace_initialization_,"adapter identity: index=%u; name=%ls; vendor=0x%x; device=0x%x; flags=0x%x",
+                index,desc.Description,desc.VendorId,desc.DeviceId,desc.Flags);
             if(desc.Flags&DXGI_ADAPTER_FLAG_SOFTWARE)continue;
             ComPtr<ID3D12Device> candidate;
-            if(FAILED(create_device_(adapter.Get(),D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&candidate))))continue;
+            initialization_trace(trace_initialization_,"CreateDevice begin: adapter=%u",index);
+            const auto device_hr=create_device_(adapter.Get(),D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&candidate));
+            initialization_trace(trace_initialization_,"CreateDevice end: adapter=%u; HRESULT=0x%08lx",index,static_cast<unsigned long>(device_hr));
+            if(FAILED(device_hr))continue;
             D3D12_FEATURE_DATA_D3D12_OPTIONS1 options{};
-            if(FAILED(candidate->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1,&options,sizeof(options))) || !options.Int64ShaderOps)continue;
+            initialization_trace(trace_initialization_,"Int64ShaderOps feature query begin: adapter=%u",index);
+            const auto options_hr=candidate->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1,&options,sizeof(options));
+            initialization_trace(trace_initialization_,"Int64ShaderOps feature query end: adapter=%u; HRESULT=0x%08lx; supported=%u",
+                index,static_cast<unsigned long>(options_hr),unsigned(options.Int64ShaderOps));
+            if(FAILED(options_hr) || !options.Int64ShaderOps)continue;
             D3D12_FEATURE_DATA_SHADER_MODEL shader_model{D3D_SHADER_MODEL_6_0};
-            if(FAILED(candidate->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL,&shader_model,sizeof(shader_model))) || shader_model.HighestShaderModel<D3D_SHADER_MODEL_6_0)continue;
+            initialization_trace(trace_initialization_,"shader model feature query begin: adapter=%u",index);
+            const auto model_hr=candidate->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL,&shader_model,sizeof(shader_model));
+            initialization_trace(trace_initialization_,"shader model feature query end: adapter=%u; HRESULT=0x%08lx; model=0x%x",
+                index,static_cast<unsigned long>(model_hr),unsigned(shader_model.HighestShaderModel));
+            if(FAILED(model_hr) || shader_model.HighestShaderModel<D3D_SHADER_MODEL_6_0)continue;
             device_=std::move(candidate);
             if(diagnostics_) {
                 vendor_id_=desc.VendorId;device_id_=desc.DeviceId;
@@ -227,15 +267,19 @@ public:
             adapter_name.pop_back();name_="Direct3D 12: "+adapter_name;break;
         }
         if(!device_)throw std::runtime_error("GS Direct3D 12 needs a hardware adapter with Shader Model 6.0 and Int64ShaderOps");
+        initialization_trace(trace_initialization_,"adapter selected: %s",name_.c_str());
         // A failed/deadline-expired submission must be terminated before its
         // buffers can be released. Older runtimes without this lifecycle API
         // remain on the CPU renderer rather than allowing unbounded waits.
+        initialization_trace(trace_initialization_,"bounded device lifecycle discovery begin");
         checked(device_.As(&lifecycle_),"bounded device lifecycle discovery");
+        initialization_trace(trace_initialization_,"bounded device lifecycle discovery end; queue creation begin");
         D3D12_COMMAND_QUEUE_DESC queue_desc{};queue_desc.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
         checked(device_->CreateCommandQueue(&queue_desc,IID_PPV_ARGS(&queue_)),"queue creation");
         checked(device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&allocator_)),"allocator creation");
         checked(device_->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator_.Get(),nullptr,IID_PPV_ARGS(&commands_)),"command list creation");
         checked(commands_->Close(),"initial command list close");
+        initialization_trace(trace_initialization_,"queue, allocator and command list creation end; root signature creation begin");
         D3D12_ROOT_PARAMETER parameters[5]{};
         parameters[0].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         parameters[0].Constants.Num32BitValues=1;
@@ -250,9 +294,14 @@ public:
         ComPtr<ID3DBlob> serialized,error;
         checked(serialize_root_(&root_desc,D3D_ROOT_SIGNATURE_VERSION_1,&serialized,&error),"root signature serialization");
         checked(device_->CreateRootSignature(0,serialized->GetBufferPointer(),serialized->GetBufferSize(),IID_PPV_ARGS(&root_)),"root signature creation");
+        initialization_trace(trace_initialization_,"root signature creation end");
         D3D12_COMPUTE_PIPELINE_STATE_DESC pipeline_desc{};pipeline_desc.pRootSignature=root_.Get();
         pipeline_desc.CS={ps2n_gs_flat_dxil,sizeof(ps2n_gs_flat_dxil)};
-        checked(device_->CreateComputePipelineState(&pipeline_desc,IID_PPV_ARGS(&pipeline_)),"integer raster pipeline creation");
+        initialization_trace(trace_initialization_,"CreateComputePipelineState begin: DXIL bytes=%zu",sizeof(ps2n_gs_flat_dxil));
+        const auto pipeline_hr=device_->CreateComputePipelineState(&pipeline_desc,IID_PPV_ARGS(&pipeline_));
+        initialization_trace(trace_initialization_,"CreateComputePipelineState end: HRESULT=0x%08lx",static_cast<unsigned long>(pipeline_hr));
+        checked(pipeline_hr,"integer raster pipeline creation");
+        initialization_trace(trace_initialization_,"buffers and fence creation begin");
         device_memory_=buffer(kBufferBytes,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST,true);
         upload_=buffer(kBufferBytes,D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ);
         readback_=buffer(kBufferBytes,D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
@@ -264,7 +313,9 @@ public:
             query_readback_=buffer(16,D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
             stats_.gpu_timestamps=true;
         }
+        initialization_trace(trace_initialization_,"buffers and fence creation end; preflight begin");
         preflight();
+        initialization_trace(trace_initialization_,"preflight end; backend initialization complete");
     }
     GsGpuResult execute(std::span<std::uint32_t> words,std::span<std::uint32_t> known,
                         std::span<const GsGpuCommand> primitives,std::span<const GsGpuRange> uploads,
@@ -425,5 +476,10 @@ public:
     const std::string& device_name() const noexcept override{return name_;}
 };
 }
-std::shared_ptr<GsGpu> create_gs_directx(){return std::make_shared<DirectXGs>();}
+std::shared_ptr<GsGpu> create_gs_directx(){
+    initialization_trace(initialization_tracing(),"create_gs_directx begin (before allocation and system runtime loads)");
+    auto device=std::make_shared<DirectXGs>();
+    initialization_trace(initialization_tracing(),"create_gs_directx end");
+    return device;
+}
 } // namespace ps2native
