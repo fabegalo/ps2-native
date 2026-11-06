@@ -6,6 +6,10 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
+#if __has_include(<dxcore.h>)
+#include <dxcore.h>
+#define PS2N_HAS_DXCORE_HEADERS 1
+#endif
 #include <wrl/client.h>
 #include "gs_flat_dxil.hpp"
 #include <algorithm>
@@ -48,20 +52,23 @@ struct Event {
 };
 struct SystemModule {
     HMODULE handle{};
-    explicit SystemModule(const wchar_t* name) {
+    explicit SystemModule(const wchar_t* name,bool required=true) {
         const auto trace=initialization_tracing();
         initialization_trace(trace,"system module load begin: %ls",name);
         handle=LoadLibraryExW(name,nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
         initialization_trace(trace,"system module load end: %ls; loaded=%u; error=%lu",name,unsigned(handle!=nullptr),handle?0ul:GetLastError());
-        if(!handle)throw std::runtime_error("GS Direct3D 12 system runtime is unavailable");
+        if(!handle && required)throw std::runtime_error("GS Direct3D 12 system runtime is unavailable");
     }
-    ~SystemModule(){FreeLibrary(handle);}
+    ~SystemModule(){if(handle)FreeLibrary(handle);}
     SystemModule(const SystemModule&)=delete;
     SystemModule& operator=(const SystemModule&)=delete;
 };
 class DirectXGs final : public GsGpu {
     // Declared first so the system modules outlive every COM resource.
     SystemModule d3d12_{L"d3d12.dll"},dxgi_{L"dxgi.dll"};
+#ifdef PS2N_HAS_DXCORE_HEADERS
+    SystemModule dxcore_{L"dxcore.dll",false};
+#endif
     decltype(&D3D12CreateDevice) create_device_{};
     decltype(&D3D12SerializeRootSignature) serialize_root_{};
     using CreateFactory=HRESULT(WINAPI*)(REFIID,void**);
@@ -70,6 +77,9 @@ class DirectXGs final : public GsGpu {
     static constexpr UINT64 kResultOffset=2u*kVramBytes;
     static constexpr UINT64 kBufferBytes=kResultOffset+256u;
     ComPtr<IDXGIFactory1> factory_;
+#ifdef PS2N_HAS_DXCORE_HEADERS
+    ComPtr<IDXCoreAdapterFactory> dxcore_factory_;
+#endif
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12Device5> lifecycle_;
     ComPtr<ID3D12CommandQueue> queue_;
@@ -83,7 +93,7 @@ class DirectXGs final : public GsGpu {
     Event event_;
     UINT64 fence_value_{},timestamp_frequency_{};
     std::exception_ptr failure_;
-    bool in_flight_{};
+    bool in_flight_{},initializing_{true};
     std::mutex mutex_;
     GsGpuStats stats_{};
     std::string name_;
@@ -147,9 +157,12 @@ class DirectXGs final : public GsGpu {
         if(SUCCEEDED(fault_status))message<<" GPU_VA=0x"<<fault.PageFaultVA;
     }
     [[noreturn]] void fail_batch(const char* cause) {
+        const bool trace=initializing_ && trace_initialization_;
+        initialization_trace(trace,"preflight failure handling begin: %s",cause);
         // Preserve the driver's status before cleanup can replace it. Adapter
         // identity is diagnostic evidence, never a per-driver skip rule.
         const auto removed=device_ ? device_->GetDeviceRemovedReason() : S_OK;
+        initialization_trace(trace,"preflight device removed status: HRESULT=0x%08lx",static_cast<unsigned long>(removed));
         std::ostringstream optional_details;
         if(diagnostics_) {
             // Diagnostics are bounded and best-effort. Read them before a
@@ -157,7 +170,11 @@ class DirectXGs final : public GsGpu {
             try{append_dred(optional_details);}catch(...){}
         }
         const auto terminated=in_flight_;
-        if(in_flight_){lifecycle_->RemoveDevice();in_flight_=false;}
+        if(in_flight_){
+            initialization_trace(trace,"preflight RemoveDevice begin");
+            lifecycle_->RemoveDevice();in_flight_=false;
+            initialization_trace(trace,"preflight RemoveDevice end");
+        }
         std::ostringstream message;
         message<<cause<<"; adapter=\""<<name_<<"\"; GetDeviceRemovedReason=0x"
             <<std::hex<<static_cast<unsigned long>(removed);
@@ -226,6 +243,21 @@ public:
         const auto factory_hr=create_factory_(IID_PPV_ARGS(&factory_));
         initialization_trace(trace_initialization_,"factory creation end: HRESULT=0x%08lx",static_cast<unsigned long>(factory_hr));
         checked(factory_hr,"DXGI discovery");
+        bool software_seen=false;
+#ifdef PS2N_HAS_DXCORE_HEADERS
+        using CreateDxCoreFactory=HRESULT(WINAPI*)(REFIID,void**);
+        const auto create_dxcore=dxcore_.handle ? reinterpret_cast<CreateDxCoreFactory>(
+            GetProcAddress(dxcore_.handle,"DXCoreCreateAdapterFactory")) : nullptr;
+        if(create_dxcore) {
+            initialization_trace(trace_initialization_,"DXCore factory creation begin");
+            const auto core_hr=create_dxcore(IID_PPV_ARGS(&dxcore_factory_));
+            initialization_trace(trace_initialization_,"DXCore factory creation end: HRESULT=0x%08lx",static_cast<unsigned long>(core_hr));
+            if(FAILED(core_hr))dxcore_factory_.Reset();
+        }
+        if(!dxcore_factory_)initialization_trace(trace_initialization_,"DXCore classification unavailable; retaining DXGI identity and capability checks");
+#else
+        initialization_trace(trace_initialization_,"DXCore headers unavailable at build time; retaining DXGI identity and capability checks");
+#endif
         // DXGI's WARP identity is authoritative even when an enumerated
         // software adapter omits DXGI_ADAPTER_FLAG_SOFTWARE. Preserve the
         // hardware-only contract without matching vendor IDs or names.
@@ -274,6 +306,26 @@ public:
                 continue;
             }
             if(desc.Flags&DXGI_ADAPTER_FLAG_SOFTWARE)continue;
+#ifdef PS2N_HAS_DXCORE_HEADERS
+            if(dxcore_factory_) {
+                ComPtr<IDXCoreAdapter> core_adapter;
+                initialization_trace(trace_initialization_,"DXCore adapter lookup begin: index=%u",index);
+                const auto core_hr=dxcore_factory_->GetAdapterByLuid(desc.AdapterLuid,IID_PPV_ARGS(&core_adapter));
+                initialization_trace(trace_initialization_,"DXCore adapter lookup end: index=%u; HRESULT=0x%08lx",index,static_cast<unsigned long>(core_hr));
+                if(SUCCEEDED(core_hr) && core_adapter && core_adapter->IsPropertySupported(DXCoreAdapterProperty::IsHardware)) {
+                    bool is_hardware{};
+                    initialization_trace(trace_initialization_,"DXCore IsHardware query begin: index=%u",index);
+                    const auto hardware_hr=core_adapter->GetProperty(DXCoreAdapterProperty::IsHardware,sizeof(is_hardware),&is_hardware);
+                    initialization_trace(trace_initialization_,"DXCore IsHardware query end: index=%u; HRESULT=0x%08lx; known=%u; hardware=%s",
+                        index,static_cast<unsigned long>(hardware_hr),unsigned(SUCCEEDED(hardware_hr)),SUCCEEDED(hardware_hr)?(is_hardware?"1":"0"):"unknown");
+                    if(SUCCEEDED(hardware_hr) && !is_hardware) {
+                        software_seen=true;
+                        initialization_trace(trace_initialization_,"adapter excluded before CreateDevice: software identified by DXCore IsHardware=false");
+                        continue;
+                    }
+                } else initialization_trace(trace_initialization_,"DXCore IsHardware unavailable for adapter=%u; retaining capability checks",index);
+            }
+#endif
             ComPtr<ID3D12Device> candidate;
             initialization_trace(trace_initialization_,"CreateDevice begin: adapter=%u",index);
             const auto device_hr=create_device_(adapter.Get(),D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&candidate));
@@ -302,9 +354,12 @@ public:
             WideCharToMultiByte(CP_UTF8,0,desc.Description,-1,adapter_name.data(),bytes,nullptr,nullptr);
             adapter_name.pop_back();name_="Direct3D 12: "+adapter_name;break;
         }
-        if(!device_)throw std::runtime_error(warp_seen ?
-            "GS Direct3D 12 needs a hardware adapter with Shader Model 6.0 and Int64ShaderOps; WARP software identified by DXGI LUID was excluded" :
-            "GS Direct3D 12 needs a hardware adapter with Shader Model 6.0 and Int64ShaderOps");
+        if(!device_) {
+            std::string reason="GS Direct3D 12 needs a hardware adapter with Shader Model 6.0 and Int64ShaderOps";
+            if(warp_seen)reason+="; WARP software identified by DXGI LUID was excluded";
+            if(software_seen)reason+="; software adapter identified by DXCore IsHardware=false was excluded";
+            throw std::runtime_error(reason);
+        }
         initialization_trace(trace_initialization_,"adapter selected: %s",name_.c_str());
         // A failed/deadline-expired submission must be terminated before its
         // buffers can be released. Older runtimes without this lifecycle API
@@ -353,12 +408,16 @@ public:
         }
         initialization_trace(trace_initialization_,"buffers and fence creation end; preflight begin");
         preflight();
+        initializing_=false;
         initialization_trace(trace_initialization_,"preflight end; backend initialization complete");
     }
     GsGpuResult execute(std::span<std::uint32_t> words,std::span<std::uint32_t> known,
                         std::span<const GsGpuCommand> primitives,std::span<const GsGpuRange> uploads,
                         std::span<const GsGpuRange> readbacks) override {
+        const bool trace=initializing_ && trace_initialization_;
+        initialization_trace(trace,"preflight execute mutex begin");
         const std::lock_guard lock(mutex_);
+        initialization_trace(trace,"preflight execute mutex acquired; validating ranges and commands");
         if(failure_)std::rethrow_exception(failure_);
         if(words.size_bytes()!=kVramBytes || known.size_bytes()!=kVramBytes || primitives.size()>256u)
             throw std::runtime_error("GS Direct3D 12 invalid VRAM or batch size");
@@ -384,13 +443,18 @@ public:
             auto start=Clock::now();
             void* mapped{};const D3D12_RANGE no_read{0,0};
             if(!primitives.empty()) {
+                initialization_trace(trace,"preflight primitive Map begin: bytes=%zu",primitives.size_bytes());
                 checked(primitive_upload_->Map(0,&no_read,&mapped),"primitive upload mapping");
+                initialization_trace(trace,"preflight primitive Map end; copy and Unmap begin");
                 std::memcpy(mapped,primitives.data(),primitives.size_bytes());
                 const D3D12_RANGE written{0,primitives.size_bytes()};primitive_upload_->Unmap(0,&written);
                 stats_.command_upload_bytes+=primitives.size_bytes();
+                initialization_trace(trace,"preflight primitive Unmap end");
             }
             if(!uploads.empty()||!primitives.empty()) {
+                initialization_trace(trace,"preflight upload Map begin");
                 checked(upload_->Map(0,&no_read,&mapped),"upload mapping");
+                initialization_trace(trace,"preflight upload Map end; copies begin");
                 auto* bytes=static_cast<std::uint8_t*>(mapped);
                 SIZE_T first=static_cast<SIZE_T>(kBufferBytes),last{};
                 for(const auto& range:uploads) {
@@ -406,11 +470,17 @@ public:
                     std::memset(bytes+kResultOffset,0,12u);stats_.result_upload_bytes+=12u;
                     first=std::min(first,static_cast<SIZE_T>(kResultOffset));last=static_cast<SIZE_T>(kResultOffset)+12u;
                 }
+                initialization_trace(trace,"preflight upload copies end; Unmap begin");
                 const D3D12_RANGE written{first,last};upload_->Unmap(0,&written);
+                initialization_trace(trace,"preflight upload Unmap end");
             }
             stats_.upload_ns+=elapsed(start);
             start=Clock::now();
-            checked(allocator_->Reset(),"allocator reset");checked(commands_->Reset(allocator_.Get(),pipeline_.Get()),"command list reset");
+            initialization_trace(trace,"preflight allocator Reset begin");
+            checked(allocator_->Reset(),"allocator reset");
+            initialization_trace(trace,"preflight allocator Reset end; command list Reset begin");
+            checked(commands_->Reset(allocator_.Get(),pipeline_.Get()),"command list reset");
+            initialization_trace(trace,"preflight command list Reset end; upload commands begin");
             for(const auto& range:uploads) {
                 const auto offset=static_cast<UINT64>(range.first_word)*sizeof(std::uint32_t);
                 const auto size=static_cast<UINT64>(range.word_count)*sizeof(std::uint32_t);
@@ -418,6 +488,7 @@ public:
                 commands_->CopyBufferRegion(device_memory_.Get(),kVramBytes+offset,upload_.Get(),kVramBytes+offset,size);
             }
             if(!primitives.empty()) {
+                initialization_trace(trace,"preflight upload commands end; compute recording begin");
                 commands_->CopyBufferRegion(device_memory_.Get(),kResultOffset,upload_.Get(),kResultOffset,12u);
                 transition(D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 commands_->SetComputeRootSignature(root_.Get());
@@ -443,6 +514,7 @@ public:
                 }
             }
             if(!readbacks.empty()||!primitives.empty()) {
+                initialization_trace(trace,"preflight compute recording end; readback commands begin");
                 transition(primitives.empty()?D3D12_RESOURCE_STATE_COPY_DEST:D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                     D3D12_RESOURCE_STATE_COPY_SOURCE);
                 for(const auto& range:readbacks) {
@@ -454,22 +526,38 @@ public:
                 if(!primitives.empty())commands_->CopyBufferRegion(readback_.Get(),kResultOffset,device_memory_.Get(),kResultOffset,12u);
                 transition(D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
             }
+            initialization_trace(trace,"preflight readback commands end; Close begin");
             checked(commands_->Close(),"batch close");
+            initialization_trace(trace,"preflight Close end; ExecuteCommandLists begin");
             ID3D12CommandList* lists[]{commands_.Get()};in_flight_=true;queue_->ExecuteCommandLists(1,lists);
+            initialization_trace(trace,"preflight ExecuteCommandLists end");
             ++stats_.submissions;
-            const auto signal=++fence_value_;checked(queue_->Signal(fence_.Get(),signal),"batch signal");
+            const auto signal=++fence_value_;
+            initialization_trace(trace,"preflight Signal begin: fence=%llu",static_cast<unsigned long long>(signal));
+            checked(queue_->Signal(fence_.Get(),signal),"batch signal");
+            initialization_trace(trace,"preflight Signal end; fence status query begin");
             stats_.submit_ns+=elapsed(start);start=Clock::now();
-            if(fence_->GetCompletedValue()<signal) {
+            const auto completed=fence_->GetCompletedValue();
+            initialization_trace(trace,"preflight fence status: completed=%llu; requested=%llu",static_cast<unsigned long long>(completed),static_cast<unsigned long long>(signal));
+            if(completed<signal) {
+                initialization_trace(trace,"preflight SetEventOnCompletion begin");
                 checked(fence_->SetEventOnCompletion(signal,event_.value),"completion event");
+                initialization_trace(trace,"preflight SetEventOnCompletion end; fence wait begin: deadline_ms=30000");
                 ++stats_.waits;
-                if(WaitForSingleObject(event_.value,30000)!=WAIT_OBJECT_0)
+                const auto waited=WaitForSingleObject(event_.value,30000);
+                initialization_trace(trace,"preflight fence wait end: status=0x%08lx",static_cast<unsigned long>(waited));
+                if(waited!=WAIT_OBJECT_0)
                     throw std::runtime_error("GS Direct3D 12 rasterization exceeded the 30-second fence deadline");
             }
             in_flight_=false;
             checked(device_->GetDeviceRemovedReason(),"device execution");stats_.wait_ns+=elapsed(start);
+            initialization_trace(trace,"preflight device execution completed");
             if(queries_&&!primitives.empty()) {
+                initialization_trace(trace,"preflight timestamp Map begin");
                 const D3D12_RANGE query_range{0,16};checked(query_readback_->Map(0,&query_range,&mapped),"timestamp mapping");
+                initialization_trace(trace,"preflight timestamp Map end; copy and Unmap begin");
                 UINT64 timestamps[2]{};std::memcpy(timestamps,mapped,sizeof(timestamps));query_readback_->Unmap(0,&no_read);
+                initialization_trace(trace,"preflight timestamp Unmap end");
                 const auto ticks=timestamps[1]-timestamps[0];
                 stats_.gpu_ns+=(ticks/timestamp_frequency_)*1000000000ull+
                     ((ticks%timestamp_frequency_)*1000000000ull)/timestamp_frequency_;
@@ -487,14 +575,19 @@ public:
                     first=std::min(first,static_cast<SIZE_T>(kResultOffset));last=static_cast<SIZE_T>(kResultOffset)+12u;
                 }
                 const D3D12_RANGE readable{first,last};
+                initialization_trace(trace,"preflight result/readback Map begin");
                 checked(readback_->Map(0,&readable,&mapped),"readback mapping");
+                initialization_trace(trace,"preflight result/readback Map end; result validation begin");
                 const auto* bytes=static_cast<const std::uint8_t*>(mapped);
                 if(!primitives.empty()){std::memcpy(result,bytes+kResultOffset,sizeof(result));stats_.result_readback_bytes+=12u;}
                 if(result[0]) {
+                    initialization_trace(trace,"preflight shader proof failed; result Unmap begin");
                     readback_->Unmap(0,&no_read);
+                    initialization_trace(trace,"preflight result Unmap end");
                     throw std::runtime_error("GS Direct3D 12 shader rejected VRAM/texture proof (error mask="+
                         std::to_string(result[0])+": 1 unknown VRAM, 2 UV precision, 4 unloaded CLUT, 8 bilinear precision); batch was not published");
                 }
+                initialization_trace(trace,"preflight result validation end; readback copies begin");
                 for(const auto& range:readbacks) {
                     const auto offset=static_cast<SIZE_T>(range.first_word)*sizeof(std::uint32_t);
                     const auto size=static_cast<SIZE_T>(range.word_count)*sizeof(std::uint32_t);
@@ -503,9 +596,12 @@ public:
                     stats_.readback_bytes+=2ull*size;
                 }
                 if(!readbacks.empty())++stats_.readback_syncs;
+                initialization_trace(trace,"preflight readback copies end; Unmap begin");
                 readback_->Unmap(0,&no_read);stats_.readback_ns+=elapsed(start);
+                initialization_trace(trace,"preflight readback Unmap end");
             }
             if(!primitives.empty()){++stats_.batches;stats_.primitives+=primitives.size();}
+            initialization_trace(trace,"preflight execute end");
             return {result[1],result[2]};
         } catch(const std::exception& error) {fail_batch(error.what());}
         catch(...) {fail_batch("GS Direct3D 12 encountered an unknown host execution error");}
