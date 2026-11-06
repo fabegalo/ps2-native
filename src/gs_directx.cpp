@@ -226,6 +226,32 @@ public:
         const auto factory_hr=create_factory_(IID_PPV_ARGS(&factory_));
         initialization_trace(trace_initialization_,"factory creation end: HRESULT=0x%08lx",static_cast<unsigned long>(factory_hr));
         checked(factory_hr,"DXGI discovery");
+        // DXGI's WARP identity is authoritative even when an enumerated
+        // software adapter omits DXGI_ADAPTER_FLAG_SOFTWARE. Preserve the
+        // hardware-only contract without matching vendor IDs or names.
+        LUID warp_luid{};bool warp_known=false,warp_seen=false;
+        ComPtr<IDXGIFactory4> factory4;
+        initialization_trace(trace_initialization_,"WARP identity factory query begin");
+        const auto factory4_hr=factory_.As(&factory4);
+        initialization_trace(trace_initialization_,"WARP identity factory query end: HRESULT=0x%08lx",static_cast<unsigned long>(factory4_hr));
+        if(SUCCEEDED(factory4_hr)) {
+            ComPtr<IDXGIAdapter1> warp;
+            initialization_trace(trace_initialization_,"EnumWarpAdapter begin");
+            const auto warp_hr=factory4->EnumWarpAdapter(IID_PPV_ARGS(&warp));
+            initialization_trace(trace_initialization_,"EnumWarpAdapter end: HRESULT=0x%08lx",static_cast<unsigned long>(warp_hr));
+            if(SUCCEEDED(warp_hr) && warp) {
+                DXGI_ADAPTER_DESC1 desc{};
+                initialization_trace(trace_initialization_,"WARP adapter identity begin");
+                const auto desc_hr=warp->GetDesc1(&desc);
+                initialization_trace(trace_initialization_,"WARP adapter identity end: HRESULT=0x%08lx",static_cast<unsigned long>(desc_hr));
+                if(SUCCEEDED(desc_hr)) {
+                    warp_luid=desc.AdapterLuid;warp_known=true;
+                    initialization_trace(trace_initialization_,"WARP adapter LUID: high=0x%08lx; low=0x%08lx",
+                        static_cast<unsigned long>(warp_luid.HighPart),static_cast<unsigned long>(warp_luid.LowPart));
+                }
+            }
+        }
+        if(!warp_known)initialization_trace(trace_initialization_,"WARP identity unavailable; retaining adapter flags and capability checks");
         for(UINT index=0;;++index) {
             ComPtr<IDXGIAdapter1> adapter;
             initialization_trace(trace_initialization_,"adapter enumeration begin: index=%u",index);
@@ -237,6 +263,16 @@ public:
             DXGI_ADAPTER_DESC1 desc{};checked(adapter->GetDesc1(&desc),"adapter identity");
             initialization_trace(trace_initialization_,"adapter identity: index=%u; name=%ls; vendor=0x%x; device=0x%x; flags=0x%x",
                 index,desc.Description,desc.VendorId,desc.DeviceId,desc.Flags);
+            const bool warp_match=warp_known && desc.AdapterLuid.HighPart==warp_luid.HighPart &&
+                desc.AdapterLuid.LowPart==warp_luid.LowPart;
+            initialization_trace(trace_initialization_,"adapter LUID: index=%u; high=0x%08lx; low=0x%08lx; WARP known=%u; WARP match=%u",
+                index,static_cast<unsigned long>(desc.AdapterLuid.HighPart),static_cast<unsigned long>(desc.AdapterLuid.LowPart),
+                unsigned(warp_known),unsigned(warp_match));
+            if(warp_match) {
+                warp_seen=true;
+                initialization_trace(trace_initialization_,"adapter excluded before CreateDevice: WARP software identified by DXGI LUID");
+                continue;
+            }
             if(desc.Flags&DXGI_ADAPTER_FLAG_SOFTWARE)continue;
             ComPtr<ID3D12Device> candidate;
             initialization_trace(trace_initialization_,"CreateDevice begin: adapter=%u",index);
@@ -266,7 +302,9 @@ public:
             WideCharToMultiByte(CP_UTF8,0,desc.Description,-1,adapter_name.data(),bytes,nullptr,nullptr);
             adapter_name.pop_back();name_="Direct3D 12: "+adapter_name;break;
         }
-        if(!device_)throw std::runtime_error("GS Direct3D 12 needs a hardware adapter with Shader Model 6.0 and Int64ShaderOps");
+        if(!device_)throw std::runtime_error(warp_seen ?
+            "GS Direct3D 12 needs a hardware adapter with Shader Model 6.0 and Int64ShaderOps; WARP software identified by DXGI LUID was excluded" :
+            "GS Direct3D 12 needs a hardware adapter with Shader Model 6.0 and Int64ShaderOps");
         initialization_trace(trace_initialization_,"adapter selected: %s",name_.c_str());
         // A failed/deadline-expired submission must be terminated before its
         // buffers can be released. Older runtimes without this lifecycle API
