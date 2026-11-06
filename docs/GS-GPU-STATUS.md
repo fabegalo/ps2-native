@@ -1,5 +1,18 @@
 # GS acelerado — primeiro caminho Vulkan e Direct3D 12
 
+## Residência incremental — revisão `4fdd7dd`, 05/11/2026
+
+`da485fc`, `580d381` e `4fdd7dd` implementam coerência por páginas de 8 KiB,
+reuso dos buffers e readback seletivo/fundido, com valores e máscaras de bits
+preservados. Os 25 testes focados passaram na revisão final. A medição
+intermediária completa reduziu readback de 16 MiB para 320 KiB por janela;
+a certificação de desempenho e a CI finais ainda têm pendências.
+
+Resultados por revisão, execução comercial equivalente sem aceleração GPU
+nessa janela, regressão CPU intermediária, amostragem final incompleta e
+estado da CI estão em [GS-GPU-RESIDENCY](GS-GPU-RESIDENCY.md).
+As seções históricas abaixo descrevem a primeira entrega, anterior à residência.
+
 Evidência dos commits `92dc21c` e `e626526`, em 05/11/2026. As medições abaixo
 se referem ao primeiro caminho; os incrementos residentes `da485fc`/`580d381`,
 produzidos em paralelo, têm evidência própria e foram preservados.

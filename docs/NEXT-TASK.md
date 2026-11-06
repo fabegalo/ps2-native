@@ -214,6 +214,20 @@ daquele relatório foi superado por `ps2n-checkpoint inspect`, pela API
 requer `ps2n-capture` e adaptador de salvamento com ABI/imagem idênticas;
 não aplicar adaptador de outra revisão. Evidência no relatório do jogo.
 
+## Fechamento da residência GS
+
+Concluir o job Linux x64 do launcher de `4fdd7dd` (núcleo já aprovado nos seis
+alvos) e repetir cinco pares finais de
+pequenas cargas/preenchimento, além da janela comercial com campos originais,
+sem compilação ou emulação concorrente. A amostragem intermediária identificou
+uma regressão CPU; o ajuste final passou nos testes, mas ainda precisa de
+certificação de desempenho. Preservar os executáveis congelados e comparar
+VRAM, máscaras, estado completo, PCM e entrada antes de anunciar ganho.
+Não atribuir aceleração à GPU nas janelas em que todas as primitivas usam
+fallback. Resultados por revisão em [GS-GPU-RESIDENCY](GS-GPU-RESIDENCY.md).
+Os incrementos paralelos posteriores de cobertura exigem sua própria
+comparação e não entram nas medições congeladas desta etapa.
+
 ## AOT — continuação independente da compatibilidade
 
 `3c3a5b5` integra partições estáveis de 64 KiB com reuso por hash no

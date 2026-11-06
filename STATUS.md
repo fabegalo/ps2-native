@@ -47,6 +47,20 @@ Incrementos posteriores do trabalho paralelo têm relatórios próprios.
 | Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
+## VRAM residente — 05/11/2026
+
+- `da485fc`/`580d381`/`4fdd7dd`: coerência por páginas, uploads/readbacks
+  seletivos, preservação de máscaras e conclusão ordenada de fallback,
+  scanout e checkpoint. 25 testes focados passaram, incluindo as duas APIs
+  na RTX 4070 e sessão Qt com PCM/entrada equivalentes.
+- Cinco pares intermediários demonstraram redução de 98,05% no readback e
+  ganho D3D12 sintético; também revelaram regressão CPU, tratada em `4fdd7dd`.
+  A amostragem final está incompleta. CI do núcleo aprovada nos seis alvos;
+  launcher aprovado em cinco, com Linux x64 pendente.
+  As janelas comerciais verificadas nessa revisão usaram zero primitivas
+  GPU; sem ganho comercial ou gameplay novo demonstrado.
+  Evidência e limites em [GS-GPU-RESIDENCY](docs/GS-GPU-RESIDENCY.md).
+
 ## Particionamento estável AOT — 05/11/2026
 
 - `3c3a5b5` integra unidades nativas por faixas estáveis de 64 KiB,
