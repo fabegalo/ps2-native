@@ -1,5 +1,19 @@
 # Próxima execução — Super Bust-A-Move
 
+## GS GPU — próximo incremento após o primeiro caminho
+
+O caminho compute flat Vulkan/D3D12 está integrado. As janelas comerciais
+históricas ainda usam somente CPU, portanto o próximo incremento deve cobrir
+sprites texturados UV/STQ e CLUT/filtros comprovados, conservando o setup GS,
+as máscaras conhecidas, o fallback e a ordem. Medir uma sequência comercial
+que realmente execute primitivas GPU e comparar VRAM/RGBA/PCM/estado/ciclos
+com o controle; não inferir ganho de FPS de apresentação ou teste sintético.
+
+Apresentação direta continua pendente. Preservar os incrementos residentes
+produzidos em paralelo, os checkpoints originais e a sessão interativa
+abaixo. Não retomar Computer Use sem autorização. Evidência do primeiro
+caminho, regressões/ganhos medidos e limites em [GS-GPU-STATUS](GS-GPU-STATUS.md).
+
 ## Fronteira ativa — menu e AA1, 05/11/2026
 
 O KON audível foi superado por síntese real no SPU2 existente. O diagnóstico

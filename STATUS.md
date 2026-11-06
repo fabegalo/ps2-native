@@ -2,6 +2,36 @@
 
 **Registro vivo de progresso e evidências.** Atualizar este arquivo quando houver avanço **verificado**; não reescrever os READMEs, `AGENTS.md` ou `CLAUDE.md` a cada marco. Relatórios detalhados continuam em `docs/M*-STATUS.md`; o trabalho seguinte fica em `docs/NEXT-TASK.md`.
 
+## Primeiro caminho GS compute Vulkan e Direct3D 12 — 05/11/2026
+
+Medições de `92dc21c`/`e626526` e seleção verificada em `e9bbc21`.
+Incrementos posteriores do trabalho paralelo têm relatórios próprios.
+
+- `92dc21c` integra rasterização GPU real de primitivas flat CT32/24 no GS
+  compartilhado, com blending/testes/Z, máscaras conhecidas, fila ordenada,
+  fallback CPU e checkpoints. Texturas, CLUT, filtros e AA1 conservam o
+  renderer CPU e suas recusas. AOT R5900/VU1 e firmware não foram alterados.
+- RTX 4070: 487 primitivas GPU/288 lotes por backend, VRAM/máscaras/RGBA e
+  estado completo equivalentes. Doze testes focados passaram, incluindo
+  launcher, checkpoints e VU1 AOT; CPU sem dependências GPU também passou.
+  `e626526` reduz readback Vulkan medido em 98,44%; lote fill de 157,723
+  para 80,406 ms. Caso pequeno teve variação e não sustenta ganho único.
+- 29 execuções comerciais preservaram estado, RGBA, PCM, ciclos e cobertura,
+  inclusive 10 + 20 milhões. As janelas históricas executaram **zero
+  primitivas GPU**, com fallback verificado; **sem ganho comercial GPU
+  demonstrado**. O controle contemporâneo mediu 3,296 milhões/s e 1,457 s
+  por campo, abaixo da referência histórica de 3,449/1,423.
+- `e9bbc21` verifica execução D3D12 real antes de disponibilizar o backend e
+  conserva diagnóstico nativo/DRED opcional. CI do
+  [núcleo](https://github.com/fabegalo/ps2-native/actions/runs/42132234795) e
+  [launcher](https://github.com/fabegalo/ps2-native/actions/runs/42132234724)
+  aprovada nos seis alvos, incluindo VU1 AOT/CLI. DirectX ARM64 compilou e
+  recusou disponibilidade antes da seleção; CPU validado, GPU não certificada.
+- Apresentação usa o framebuffer original via scanout/Qt; apresentação GPU
+  direta e texturas/AA1 GPU permanecem pendentes. Os incrementos residentes
+  `da485fc`/`580d381` do trabalho paralelo foram preservados. Método, custos
+  e limites em [GS-GPU-STATUS](docs/GS-GPU-STATUS.md).
+
 ## Estado funcional verificado — 05/11/2026
 
 **Protótipo experimental. Não executa o Browser original até o fim, não possui launcher público nem declara jogos comerciais jogáveis.**
