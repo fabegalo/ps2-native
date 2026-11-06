@@ -535,20 +535,21 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         return static_cast<std::uint32_t>(result);
     };
     // Execution selection follows the common GS setup above. Integer compute
-    // covers flat primitives only; every other effect retains the CPU path.
+    // covers flat primitives and validated textured sprites. Other effects
+    // retain the CPU path, including its explicit precision refusals.
     // Prove injective addressing before parallel writes, including the Z plane.
     auto fallback=textured ? GsGpuFallback::Texture : antialiased ? GsGpuFallback::Antialias :
         (mode&8u) ? GsGpuFallback::Gouraud : (general_unknown_[1]&0xFFFFFFFFull) ?
         GsGpuFallback::UncertainColor : GsGpuFallback::Addressing;
-    if(vram_.gpu_backend() && !textured && !antialiased && !(mode&8u) &&
+    if(vram_.gpu_backend() && (!textured || type==6u) && !antialiased && !(mode&8u) &&
        !(general_unknown_[1]&0xFFFFFFFFull) && left<right && top<bottom &&
        bw && static_cast<unsigned>(right)<=bw &&
-       (!(zwrite || (ztest && zfunc>=2u)) || (zpsm<=1u &&
+       (!(zwrite || (ztest && zfunc>=2u)) || ((zpsm<=1u || zpsm==10u) &&
         (!triangle || (vertices[0].z==z && vertices[1].z==z)))) &&
-       (!blending || (fragment&0x80000000u) || general_[0x49])) {
-        const auto pages=[&](unsigned start) {
+       (!blending || ((!textured || !(tex&(1ull<<34u))) && (fragment&0x80000000u)) || general_[0x49])) {
+        const auto pages=[&](unsigned start,unsigned page_height=32u) {
             std::array<bool,512> touched{};
-            for(unsigned py=static_cast<unsigned>(top)/32u;py<=static_cast<unsigned>(bottom-1)/32u;++py)
+            for(unsigned py=static_cast<unsigned>(top)/page_height;py<=static_cast<unsigned>(bottom-1)/page_height;++py)
                 for(unsigned px=static_cast<unsigned>(left)/64u;px<=static_cast<unsigned>(right-1)/64u;++px) {
                     const auto page=start/8192u+py*(bw/64u)+px;
                     if(page>=512u)return std::optional<std::array<bool,512>>{};
@@ -558,46 +559,151 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         };
         const auto colors=pages(base);
         const bool use_z=zwrite || (ztest && zfunc>=2u);
-        const auto depths=use_z ? pages(zbase) : std::optional{std::array<bool,512>{}};
+        const auto depths=use_z ? pages(zbase,zpsm==10u?64u:32u) : std::optional{std::array<bool,512>{}};
         bool safe=colors.has_value() && depths.has_value();
         if(safe)for(unsigned page=0;page<512u;++page) {
             if((*colors)[page] && (*depths)[page])safe=false;
             if(sampled_pages_[page] && ((*colors)[page] || (*depths)[page])) {
                 safe=false;fallback=GsGpuFallback::TextureHazard;
             }
+            if(textured && (*sprite_source_pages)[page] && ((*colors)[page] || (*depths)[page])) {
+                safe=false;fallback=GsGpuFallback::TextureHazard;
+            }
         }
         const auto pabe=general_[0x49].value_or(0u)&1u;
-        const bool blend=blending && ((fragment&0x80000000u) || !pabe);
+        const bool varying_alpha=textured && (tex&(1ull<<34u));
+        const bool blend=blending && (varying_alpha || (fragment&0x80000000u) || !pabe);
         unsigned color_read=0;
         if(blend) {
-            int factor=static_cast<int>(fragment>>24);
+            int factor=varying_alpha ? 128 : static_cast<int>(fragment>>24);
             if(aa==ab)factor=0;
             else if(ac==2u)factor=static_cast<int>((alpha>>32)&255u);
             else if(ac==1u) {
                 factor=128;
-                if(psm==0u)color_read|=0xFF000000u;
+                if(psm==0u)color_read|=0xFFFFFFFFu;
             }
             // When destination alpha varies, all destination RGB is needed
             // conservatively. Exact cancellation otherwise uses no read.
             const auto dc=(int(aa==1u)-int(ab==1u))*factor+128*int(ad==1u);
-            if(dc || (aa!=ab && ac==1u && psm==0u))color_read|=0xFFFFFFu;
+            if(dc || (aa!=ab && ac==1u && psm==0u) ||
+               (varying_alpha && aa!=ab && ac==0u && (aa==1u || ab==1u)))color_read|=0xFFFFFFu;
         }
         if(safe && (color_read || (ztest && zfunc>=2u))) {
             // Unknown reads retain the synchronous CPU refusal and its cause.
             // A page proof may decline supported pixels; it never invents bits.
             for(unsigned page=0;page<512u && safe;++page) {
                 const auto mask=((*colors)[page] ? color_read : 0u) |
-                    ((*depths)[page] && ztest && zfunc>=2u ? (zpsm==0u ? 0xFFFFFFFFu : 0xFFFFFFu) : 0u);
+                    ((*depths)[page] && ztest && zfunc>=2u ? (zpsm==1u ? 0xFFFFFFu : 0xFFFFFFFFu) : 0u);
                 if(mask && !vram_.page_known(page,mask)) {
                     safe=false;fallback=GsGpuFallback::UnknownDestination;
                 }
             }
         }
+        GsGpuCommand command{};
+        std::array<bool,512> consumed_texture_pages{};
+        if(safe && textured) {
+            command.texture_flags=1u | (bilinear?2u:0u) | ((tex&(1ull<<34u))?4u:0u) |
+                (tfx==1u?8u:0u) | ((diagnostic_texture_precision_&1u)?16u:0u) |
+                ((diagnostic_texture_precision_&2u)?32u:0u);
+            command.tbp=static_cast<unsigned>(tex&0x3FFFu)*256u;
+            command.tbw=static_cast<unsigned>((tex>>14u)&63u)*64u;
+            command.tpsm=static_cast<unsigned>((tex>>20u)&63u);
+            command.tw=static_cast<unsigned>((tex>>26u)&15u);command.th=static_cast<unsigned>((tex>>30u)&15u);
+            command.clamp_u=static_cast<unsigned>(clamp&3u);command.clamp_v=static_cast<unsigned>((clamp>>2u)&3u);
+            command.minu=static_cast<unsigned>((clamp>>4u)&1023u);command.maxu=static_cast<unsigned>((clamp>>14u)&1023u);
+            command.minv=static_cast<unsigned>((clamp>>24u)&1023u);command.maxv=static_cast<unsigned>((clamp>>34u)&1023u);
+            command.u0=sprite_u0;command.v0=sprite_v0;command.u1=sprite_u1;command.v1=sprite_v1;
+            if(command.tpsm==1u && (command.texture_flags&4u))command.texa=static_cast<std::uint32_t>(required(0x3B));
+            safe=texture_flush_generation_.has_value();
+            if(command.tpsm>=19u) {
+                const auto csa=static_cast<unsigned>((tex>>56u)&31u);
+                if(((tex>>51u)&15u) || (tex&(1ull<<55u)) || csa>15u || (command.tpsm==19u && csa))safe=false;
+                else for(unsigned i=0;i<(command.tpsm==20u?16u:256u);++i)
+                    if(clut_[csa*16u+i]) {
+                        command.palette[i]=*clut_[csa*16u+i];command.palette_known[i/32u]|=1u<<(i%32u);
+                    }
+            }
+            if(safe)for(unsigned page=0;page<512u;++page)
+                if((*sprite_source_pages)[page] && dirty_texture_pages_[page])safe=false;
+            // Validate only actual sampled coordinates, excluding zero-weight
+            // bilinear taps. Page proofs avoid readback of known resident data;
+            // a partially known page falls through to its exact texel bits.
+            std::vector<unsigned> columns,rows;
+            const auto axis=[&](std::vector<unsigned>& out,int begin,int end,int p0,int p1,int t0,int t1,
+                                unsigned bits,unsigned wrap,unsigned low,unsigned high,bool vertical=false) {
+                std::array<bool,1024> seen{};
+                for(int pixel=begin;pixel<end;++pixel) {
+                    if(vertical && ((scanmask==2u && !(pixel&1)) || (scanmask==3u && (pixel&1))))continue;
+                    auto den=std::int64_t{p1}-p0;
+                    auto num=std::int64_t{t0}*den+std::int64_t{t1-t0}*(pixel*16-p0);
+                    if(!den || (num%den && !(diagnostic_texture_precision_&1u))){safe=false;return;}
+                    const auto fixed=uv_at(pixel,p0,p1,t0,t1)-(bilinear?8:0);
+                    const auto at=floor16(fixed);
+                    const auto append=[&](int coordinate) {
+                        const auto sample=texture_coordinate(coordinate,bits,wrap,low,high);
+                        if(!seen[sample]){seen[sample]=true;out.push_back(sample);}
+                    };
+                    append(at);
+                    if(bilinear && fixed-at*16)append(at+1);
+                }
+            };
+            const auto bits=command.tpsm==20u?15u:command.tpsm==19u?255u:command.tpsm==1u?0xFFFFFFu:0xFFFFFFFFu;
+            const auto entries=command.tpsm==20u?16u:command.tpsm==19u?256u:0u;
+            bool full_palette=true;
+            for(unsigned i=0;i<entries;++i)if(!(command.palette_known[i/32u]&(1u<<(i%32u))))full_palette=false;
+            bool full_source=true;
+            if(safe)for(unsigned page=0;page<512u;++page)if((*sprite_source_pages)[page] &&
+                !vram_.page_known(page,command.tpsm==1u?0xFFFFFFu:0xFFFFFFFFu))full_source=false;
+            if(!(diagnostic_texture_precision_&1u)) {
+                // The extrema were checked above. For a multi-pixel axis,
+                // an integral fixed-point step proves all interior samples.
+                if(right-left>1 && (std::int64_t{sprite_u1-sprite_u0}*16)%(v.x-first_vertex_->x))safe=false;
+                if(bottom-top>1 && (std::int64_t{sprite_v1-sprite_v0}*16)%(v.y-first_vertex_->y))safe=false;
+            }
+            if(safe) {
+                axis(columns,left,right,first_vertex_->x,v.x,sprite_u0,sprite_u1,
+                     command.tw,command.clamp_u,command.minu,command.maxu);
+                axis(rows,top,bottom,first_vertex_->y,v.y,sprite_v0,sprite_v1,
+                     command.th,command.clamp_v,command.minv,command.maxv,true);
+                const auto pw=command.tpsm<=1u?64u:128u,ph=command.tpsm<=1u?32u:command.tpsm==19u?64u:128u;
+                std::array<bool,16> page_columns{};std::array<bool,32> page_rows{};
+                for(const auto sx:columns)page_columns[sx/pw]=true;
+                for(const auto sy:rows)page_rows[sy/ph]=true;
+                for(unsigned py=0;py<page_rows.size();++py)if(page_rows[py])
+                    for(unsigned px=0;px<page_columns.size();++px)if(page_columns[px]) {
+                        const auto at=(command.tbp+(py*(command.tbw/pw)+px)*8192u)%GsVram::kBytes;
+                        consumed_texture_pages[at/8192u]=true;
+                        consumed_texture_pages[((at+8191u)%GsVram::kBytes)/8192u]=true;
+                    }
+            }
+            if(safe && (!full_source || !full_palette))for(const auto sy:rows)for(const auto sx:columns) {
+                const auto address=GsVram::address(command.tbp,command.tbw,command.tpsm,sx,sy);
+                const auto shift=(address&3u)*8u+(command.tpsm==20u?(sy&2u)*2u:0u);
+                if(!vram_.bits_known(address,bits<<shift)){safe=false;break;}
+                if(!full_palette) {
+                    const auto entry=vram_.read(command.tbp,command.tbw,command.tpsm,sx,sy);
+                    if(!(command.palette_known[entry/32u]&(1u<<(entry%32u)))){safe=false;break;}
+                }
+            }
+            // Without the selected truncation hypothesis, prove the existing
+            // CPU's exact separable arithmetic before publishing any dispatch.
+            if(safe && bilinear && !(diagnostic_texture_precision_&2u)) {
+                try {
+                    for(int sy=top;sy<bottom;++sy) {
+                        if((scanmask==2u && !(sy&1)) || (scanmask==3u && (sy&1)))continue;
+                        for(int sx=left;sx<right;++sx)
+                        (void)filtered_texture(uv_at(sx,first_vertex_->x,v.x,sprite_u0,sprite_u1),
+                                               uv_at(sy,first_vertex_->y,v.y,sprite_v0,sprite_v1));
+                    }
+                } catch(const DeviceRefusal&) {safe=false;}
+            }
+            if(!safe)fallback=GsGpuFallback::Texture;
+        }
         if(safe) {
-            GsGpuCommand command{};
             command.left=left;command.top=top;command.right=right;command.bottom=bottom;
             command.triangle=triangle;command.x0=vertices[0].x;command.y0=vertices[0].y;
             command.x1=vertices[1].x;command.y1=vertices[1].y;command.x2=v.x;command.y2=v.y;
+            if(textured){command.x0=first_vertex_->x;command.y0=first_vertex_->y;command.x1=v.x;command.y1=v.y;}
             command.color=fragment;command.z=z;command.base=base;command.bw=bw;command.psm=psm;
             command.zbase=zbase;command.zpsm=zpsm;command.test=static_cast<std::uint32_t>(test);
             command.frame_mask=static_cast<std::uint32_t>(frame>>32);
@@ -606,13 +712,15 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
             command.fba_known=fba.has_value();command.conditional=conditional;
             command.saturate=saturate;command.pabe=static_cast<std::uint32_t>(pabe);command.blending=blending;
             command.depth_write=zwrite;
-            vram_.enqueue_gpu(command);
+            vram_.enqueue_gpu(command,textured?&consumed_texture_pages:nullptr);
+            if(textured)for(unsigned page=0;page<512u;++page)
+                sampled_pages_[page]=sampled_pages_[page] || consumed_texture_pages[page];
             if(triangle)finish_triangle();else first_vertex_.reset();
             return;
         }
     }
     if(!textured && !antialiased && !(mode&8u) && !(general_unknown_[1]&0xFFFFFFFFull)) {
-        if((zwrite || (ztest && zfunc>=2u)) && (zpsm>1u ||
+        if((zwrite || (ztest && zfunc>=2u)) && ((zpsm>1u && zpsm!=10u) ||
            (triangle && (vertices[0].z!=z || vertices[1].z!=z))))fallback=GsGpuFallback::Depth;
         else if(blending && !(fragment&0x80000000u) && !general_[0x49])fallback=GsGpuFallback::Blend;
     }

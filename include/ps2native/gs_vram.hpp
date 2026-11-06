@@ -32,12 +32,14 @@ public:
     GsVram& operator=(GsVram&&) noexcept;
     void set_gpu_backend(std::shared_ptr<GsGpu> backend);
     [[nodiscard]] const std::shared_ptr<GsGpu>& gpu_backend() const noexcept { return gpu_; }
-    void enqueue_gpu(const GsGpuCommand& command);
+    void enqueue_gpu(const GsGpuCommand& command,
+                     const std::array<bool,kPages>* texture_pages=nullptr);
     // Complete ordered commands without transferring resident VRAM to the CPU.
     void submit_gpu() const;
     void synchronize() const;
     void synchronize_pages(const std::array<bool,kPages>& pages) const;
     [[nodiscard]] bool page_known(unsigned page,std::uint32_t mask) const;
+    [[nodiscard]] bool bits_known(unsigned byte_address,std::uint32_t mask) const;
     [[nodiscard]] std::span<const std::uint32_t> raw_words() const { synchronize(); return words_; }
     [[nodiscard]] std::span<const std::uint32_t> known_bits() const { synchronize(); return known_; }
     [[nodiscard]] std::uint64_t gpu_primitives() const noexcept { return gpu_primitives_; }
@@ -91,7 +93,7 @@ private:
     // power-on unknown pages, which must be uploaded before any GPU access.
     enum class Location : std::uint8_t { Cpu, Equal, Gpu };
     mutable std::array<Location,kPages> locations_{};
-    mutable std::array<bool,kPages> pending_pages_{}, knowledge_cached_{};
+    mutable std::array<bool,kPages> pending_pages_{}, pending_reads_{}, knowledge_cached_{};
     mutable std::array<std::uint32_t,kPages> page_knowledge_{};
     std::uint64_t gpu_primitives_{}, cpu_fallbacks_{};
     std::array<std::uint64_t,static_cast<unsigned>(GsGpuFallback::Count)> fallback_reasons_{};

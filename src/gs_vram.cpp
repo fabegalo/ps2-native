@@ -16,7 +16,7 @@ GsVram& GsVram::operator=(GsVram&& source) noexcept {
     words_=std::move(source.words_);known_=std::move(source.known_);
     revision_=source.revision_;pixel_writes_=source.pixel_writes_;
     gpu_=std::move(source.gpu_);pending_gpu_=std::move(source.pending_gpu_);
-    locations_=source.locations_;pending_pages_=source.pending_pages_;
+    locations_=source.locations_;pending_pages_=source.pending_pages_;pending_reads_=source.pending_reads_;
     knowledge_cached_=source.knowledge_cached_;page_knowledge_=source.page_knowledge_;
     gpu_primitives_=source.gpu_primitives_;cpu_fallbacks_=source.cpu_fallbacks_;
     fallback_reasons_=source.fallback_reasons_;
@@ -34,7 +34,7 @@ GsVram& GsVram::operator=(const GsVram& source) {
     words_=source.words_;known_=source.known_;
     revision_=source.revision_;pixel_writes_=source.pixel_writes_;
     detach_gpu();gpu_.reset();pending_gpu_.clear();gpu_primitives_=cpu_fallbacks_=0;
-    locations_={};pending_pages_={};knowledge_cached_={};fallback_reasons_={};
+    locations_={};pending_pages_={};pending_reads_={};knowledge_cached_={};fallback_reasons_={};
     return *this;
 }
 void GsVram::set_gpu_backend(std::shared_ptr<GsGpu> backend) {
@@ -61,30 +61,59 @@ bool GsVram::page_known(unsigned page,std::uint32_t mask) const {
     if(!gpu_)knowledge_cached_[page]=false;
     cache_page_knowledge(page);
     if((page_knowledge_[page]&mask)==mask)return true;
+    if(!pending_pages_[page] && locations_[page]!=Location::Gpu)return false;
     synchronize_page(page);cache_page_knowledge(page);
     return (page_knowledge_[page]&mask)==mask;
 }
-void GsVram::enqueue_gpu(const GsGpuCommand& command) {
+bool GsVram::bits_known(unsigned byte_address,std::uint32_t mask) const {
+    if(byte_address>=kBytes)throw DeviceRefusal("GS GPU bit proof out of range");
+    const auto page=byte_address/kPageBytes;
+    if(!gpu_)knowledge_cached_[page]=false;
+    cache_page_knowledge(page);
+    if((page_knowledge_[page]&mask)==mask)return true;
+    if(pending_pages_[page] || locations_[page]==Location::Gpu)synchronize_page(page);
+    return (known_[byte_address/4u]&mask)==mask;
+}
+void GsVram::enqueue_gpu(const GsGpuCommand& command,const std::array<bool,kPages>* texture_pages) {
     if(!gpu_)throw DeviceRefusal("GS GPU command without a backend");
     if(pending_gpu_.size()==256u)submit_gpu();
     // The common setup already proves injective CT32/24 page addressing.
     // Track every possible destination, including masked/skipped writes:
     // conservative ownership never claims that an unseen page is clean.
     const auto touch=[&](unsigned base,bool depth) {
-        for(unsigned py=static_cast<unsigned>(command.top)/32u;py<=static_cast<unsigned>(command.bottom-1)/32u;++py)
+        const auto page_height=depth && command.zpsm==10u?64u:32u;
+        for(unsigned py=static_cast<unsigned>(command.top)/page_height;py<=static_cast<unsigned>(command.bottom-1)/page_height;++py)
             for(unsigned px=static_cast<unsigned>(command.left)/64u;px<=static_cast<unsigned>(command.right-1)/64u;++px) {
                 const auto page=base/kPageBytes+py*(command.bw/64u)+px;
                 if(page>=kPages)throw DeviceRefusal("GS GPU command page out of range");
                 cache_page_knowledge(page);pending_pages_[page]=true;
                 if(command.conditional)page_knowledge_[page]&=depth ?
-                    (command.zpsm==0u ? 0u : 0xFF000000u) :
+                    (command.zpsm==1u ? 0xFF000000u : 0u) :
                     (command.frame_mask | (command.psm==1u ? 0xFF000000u : 0u));
-                if(!depth && !command.fba_known && !(command.color&0x80000000u) &&
+                if(!depth && !command.fba_known && ((command.texture_flags&4u) || !(command.color&0x80000000u)) &&
                    command.psm==0u && !(command.frame_mask&0x80000000u))page_knowledge_[page]&=0x7FFFFFFFu;
+                // An ordered, unconditional flat clear can establish a page
+                // proof without downloading its newly produced pixels. Every
+                // word must be covered and every test must pass independently
+                // of destination contents; masked/unknown bits stay unknown.
+                if(!command.triangle && !command.texture_flags && !command.blending &&
+                   !command.conditional && !command.scanmask &&
+                   (!(command.test&1u) || ((command.test>>1u)&7u)==1u) &&
+                   (!(command.test&0x10000u) || ((command.test>>17u)&3u)==1u) &&
+                   command.left<=static_cast<int>(px*64u) && command.right>=static_cast<int>((px+1u)*64u) &&
+                   command.top<=static_cast<int>(py*page_height) && command.bottom>=static_cast<int>((py+1u)*page_height)) {
+                    const auto written=depth ? (command.depth_write ?
+                        (command.zpsm==1u?0xFFFFFFu:0xFFFFFFFFu):0u) :
+                        ~command.frame_mask&(command.psm==0u?0xFFFFFFFFu:0xFFFFFFu);
+                    const auto unknown=!depth && !command.fba_known && !(command.color&0x80000000u) ? 0x80000000u:0u;
+                    page_knowledge_[page]|=written&~unknown;
+                }
             }
     };
     touch(command.base,false);
     if(command.depth_write || ((command.test&0x10000u) && ((command.test>>17u)&3u)>=2u))touch(command.zbase,true);
+    if(texture_pages)for(unsigned page=0;page<kPages;++page)
+        pending_reads_[page]=pending_reads_[page] || (*texture_pages)[page];
     pending_gpu_.push_back(command);++gpu_primitives_;
 }
 void GsVram::submit_gpu() const {
@@ -94,7 +123,7 @@ void GsVram::execute_pending(const std::array<bool,kPages>* read_pages,unsigned 
     if(pending_gpu_.empty())return;
     acquire_gpu();
     std::vector<GsGpuRange> uploads;
-    for(unsigned page=0;page<kPages;++page)if(pending_pages_[page] && locations_[page]==Location::Cpu) {
+    for(unsigned page=0;page<kPages;++page)if((pending_pages_[page] || pending_reads_[page]) && locations_[page]==Location::Cpu) {
         if(!uploads.empty() && uploads.back().first_word+uploads.back().word_count==page*2048u)uploads.back().word_count+=2048u;
         else uploads.push_back({page*2048u,2048u});
     }
@@ -107,16 +136,21 @@ void GsVram::execute_pending(const std::array<bool,kPages>* read_pages,unsigned 
         }
     const auto result=gpu_->execute(words_,known_,pending_gpu_,uploads,reads);
     revision_+=result.revisions;pixel_writes_+=result.pixel_writes;
+    for(const auto& range:uploads)
+        for(unsigned page=range.first_word/2048u;page<(range.first_word+range.word_count)/2048u;++page)
+            locations_[page]=Location::Equal;
     for(unsigned page=0;page<kPages;++page)if(pending_pages_[page])locations_[page]=Location::Gpu;
     if(read_pages || read_page<kPages)for(unsigned page=0;page<kPages;++page)
         if(requested(page) && locations_[page]==Location::Gpu) {
             locations_[page]=Location::Equal;knowledge_cached_[page]=false;
         }
-    pending_gpu_.clear();pending_pages_={};
+    pending_gpu_.clear();pending_pages_={};pending_reads_={};
 }
 void GsVram::synchronize_page(unsigned page) const {
     if(!gpu_)return;
-    if(!pending_gpu_.empty()){execute_pending(nullptr,page);return;}
+    // A CPU reader only depends on writers to its page. In particular, CLUT
+    // loads from unchanged host data need not drain unrelated sprite draws.
+    if(pending_pages_[page]){execute_pending(nullptr,page);return;}
     if(locations_[page]!=Location::Gpu)return;
     const GsGpuRange range{page*2048u,2048u};
     (void)gpu_->execute(words_,known_,{}, {},std::span{&range,1u});
@@ -209,6 +243,9 @@ void GsVram::write(std::uint32_t base, unsigned width, unsigned psm, unsigned x,
 void GsVram::write_word(unsigned at, std::uint32_t value, std::uint32_t mask,
                         std::uint32_t unknown, bool conditional) {
     if(gpu_){
+        // A source upload may not replace bytes an earlier queued primitive
+        // still needs. Disjoint CPU writes are independent of that queue.
+        if(pending_reads_[at/2048u])submit_gpu();
         synchronize_page(at/2048u);
         locations_[at/2048u]=Location::Cpu;knowledge_cached_[at/2048u]=false;
     }

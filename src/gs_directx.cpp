@@ -63,7 +63,7 @@ class DirectXGs final : public GsGpu {
     ComPtr<ID3D12GraphicsCommandList> commands_;
     ComPtr<ID3D12RootSignature> root_;
     ComPtr<ID3D12PipelineState> pipeline_;
-    ComPtr<ID3D12Resource> device_memory_,upload_,readback_,query_readback_;
+    ComPtr<ID3D12Resource> device_memory_,upload_,readback_,query_readback_,primitive_upload_;
     ComPtr<ID3D12Fence> fence_;
     ComPtr<ID3D12QueryHeap> queries_;
     Event event_;
@@ -236,15 +236,17 @@ public:
         checked(device_->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&allocator_)),"allocator creation");
         checked(device_->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator_.Get(),nullptr,IID_PPV_ARGS(&commands_)),"command list creation");
         checked(commands_->Close(),"initial command list close");
-        D3D12_ROOT_PARAMETER parameters[4]{};
+        D3D12_ROOT_PARAMETER parameters[5]{};
         parameters[0].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        parameters[0].Constants.Num32BitValues=sizeof(GsGpuCommand)/sizeof(std::uint32_t);
+        parameters[0].Constants.Num32BitValues=1;
         parameters[0].Constants.ShaderRegister=0;
         for(UINT i=1;i<4;++i) {
             parameters[i].ParameterType=D3D12_ROOT_PARAMETER_TYPE_UAV;
             parameters[i].Descriptor.ShaderRegister=i-1;
         }
-        D3D12_ROOT_SIGNATURE_DESC root_desc{};root_desc.NumParameters=4;root_desc.pParameters=parameters;
+        parameters[4].ParameterType=D3D12_ROOT_PARAMETER_TYPE_SRV;
+        parameters[4].Descriptor.ShaderRegister=0;
+        D3D12_ROOT_SIGNATURE_DESC root_desc{};root_desc.NumParameters=5;root_desc.pParameters=parameters;
         ComPtr<ID3DBlob> serialized,error;
         checked(serialize_root_(&root_desc,D3D_ROOT_SIGNATURE_VERSION_1,&serialized,&error),"root signature serialization");
         checked(device_->CreateRootSignature(0,serialized->GetBufferPointer(),serialized->GetBufferSize(),IID_PPV_ARGS(&root_)),"root signature creation");
@@ -254,6 +256,7 @@ public:
         device_memory_=buffer(kBufferBytes,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST,true);
         upload_=buffer(kBufferBytes,D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ);
         readback_=buffer(kBufferBytes,D3D12_HEAP_TYPE_READBACK,D3D12_RESOURCE_STATE_COPY_DEST);
+        primitive_upload_=buffer(256u*sizeof(GsGpuCommand),D3D12_HEAP_TYPE_UPLOAD,D3D12_RESOURCE_STATE_GENERIC_READ);
         checked(device_->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence_)),"fence creation");
         D3D12_QUERY_HEAP_DESC query_desc{};query_desc.Type=D3D12_QUERY_HEAP_TYPE_TIMESTAMP;query_desc.Count=2;
         if(SUCCEEDED(queue_->GetTimestampFrequency(&timestamp_frequency_)) && timestamp_frequency_ &&
@@ -273,15 +276,30 @@ public:
         for(const auto ranges:{uploads,readbacks})for(const auto& range:ranges)
             if(!range.word_count||range.first_word>=words.size()||range.word_count>words.size()-range.first_word)
                 throw std::runtime_error("GS Direct3D 12 VRAM synchronization range is out of bounds");
-        for(const auto& p:primitives)
+        for(const auto& p:primitives) {
             if(p.left<0||p.top<0||p.right>2048||p.bottom>2048||p.left>=p.right||p.top>=p.bottom||
-               p.psm>1u||(p.zpsm>1u&&(p.depth_write||((p.test&0x10000u)&&((p.test>>17u)&3u)>=2u)))||
+               p.psm>1u||(p.zpsm>1u&&p.zpsm!=10u&&(p.depth_write||((p.test&0x10000u)&&((p.test>>17u)&3u)>=2u)))||
                p.bw>4032u||!p.bw||p.bw%64u||p.right>static_cast<int>(p.bw))
                 throw std::runtime_error("GS Direct3D 12 received an unsupported or aliased primitive packet");
+            if(p.zpsm==10u&&p.z>0xffffu&&(p.depth_write||((p.test&0x10000u)&&((p.test>>17u)&3u)>=2u)))
+                throw std::runtime_error("GS Direct3D 12 received an out-of-range Z16S primitive depth");
+            if(p.texture_flags>63u || ((p.texture_flags&1u) &&
+               (p.triangle||p.tbp>=kVramBytes||p.tbp%256u||p.tbw>4032u||p.tbw%64u||
+                (p.tpsm!=0u&&p.tpsm!=1u&&p.tpsm!=19u&&p.tpsm!=20u)||p.tw>10u||p.th>10u||
+                p.clamp_u>3u||p.clamp_v>3u||p.minu>1023u||p.maxu>1023u||p.minv>1023u||p.maxv>1023u||
+                (p.clamp_u==2u&&p.minu>p.maxu)||(p.clamp_v==2u&&p.minv>p.maxv)||p.x0==p.x1||p.y0==p.y1)))
+                throw std::runtime_error("GS Direct3D 12 received an unsupported texture primitive packet");
+        }
         if(primitives.empty()&&uploads.empty()&&readbacks.empty())return {};
         try {
             auto start=Clock::now();
             void* mapped{};const D3D12_RANGE no_read{0,0};
+            if(!primitives.empty()) {
+                checked(primitive_upload_->Map(0,&no_read,&mapped),"primitive upload mapping");
+                std::memcpy(mapped,primitives.data(),primitives.size_bytes());
+                const D3D12_RANGE written{0,primitives.size_bytes()};primitive_upload_->Unmap(0,&written);
+                stats_.command_upload_bytes+=primitives.size_bytes();
+            }
             if(!uploads.empty()||!primitives.empty()) {
                 checked(upload_->Map(0,&no_read,&mapped),"upload mapping");
                 auto* bytes=static_cast<std::uint8_t*>(mapped);
@@ -318,9 +336,11 @@ public:
                 commands_->SetComputeRootUnorderedAccessView(1,address);
                 commands_->SetComputeRootUnorderedAccessView(2,address+kVramBytes);
                 commands_->SetComputeRootUnorderedAccessView(3,address+kResultOffset);
+                commands_->SetComputeRootShaderResourceView(4,primitive_upload_->GetGPUVirtualAddress());
                 if(queries_)commands_->EndQuery(queries_.Get(),D3D12_QUERY_TYPE_TIMESTAMP,0);
-                for(const auto& primitive:primitives) {
-                    commands_->SetComputeRoot32BitConstants(0,sizeof(GsGpuCommand)/sizeof(std::uint32_t),&primitive,0);
+                for(UINT index=0;index<primitives.size();++index) {
+                    const auto& primitive=primitives[index];
+                    commands_->SetComputeRoot32BitConstants(0,1,&index,0);
                     commands_->Dispatch(static_cast<UINT>((primitive.right-primitive.left+7)/8),
                         static_cast<UINT>((primitive.bottom-primitive.top+7)/8),1);
                     // A dispatch is one original primitive. Make every write and
@@ -383,7 +403,8 @@ public:
                 if(!primitives.empty()){std::memcpy(result,bytes+kResultOffset,sizeof(result));stats_.result_readback_bytes+=12u;}
                 if(result[0]) {
                     readback_->Unmap(0,&no_read);
-                    throw std::runtime_error("GS Direct3D 12 shader encountered unknown VRAM bits; batch was not published");
+                    throw std::runtime_error("GS Direct3D 12 shader rejected VRAM/texture proof (error mask="+
+                        std::to_string(result[0])+": 1 unknown VRAM, 2 UV precision, 4 unloaded CLUT, 8 bilinear precision); batch was not published");
                 }
                 for(const auto& range:readbacks) {
                     const auto offset=static_cast<SIZE_T>(range.first_word)*sizeof(std::uint32_t);

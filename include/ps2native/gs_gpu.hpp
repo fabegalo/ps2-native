@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -15,8 +16,15 @@ struct GsGpuCommand {
     std::uint32_t triangle{}, color{}, z{}, base{}, bw{}, psm{}, zbase{}, zpsm{};
     std::uint32_t test{}, frame_mask{}, alpha{}, alpha_fix{}, scanmask{};
     std::uint32_t fba{}, fba_known{}, conditional{}, saturate{}, pabe{}, blending{}, depth_write{};
+    // Immutable draw-time sampling state. STQ is proved and converted by the
+    // shared setup; the host sampler never supplies GS rounding semantics.
+    std::uint32_t texture_flags{}, tbp{}, tbw{}, tpsm{}, tw{}, th{};
+    std::uint32_t clamp_u{}, clamp_v{}, minu{}, maxu{}, minv{}, maxv{}, texa{};
+    std::int32_t u0{}, v0{}, u1{}, v1{};
+    std::array<std::uint32_t,256> palette{};
+    std::array<std::uint32_t,8> palette_known{};
 };
-static_assert(sizeof(GsGpuCommand) == 120u);
+static_assert(sizeof(GsGpuCommand) == 1244u);
 
 struct GsGpuResult { std::uint64_t revisions{}, pixel_writes{}; };
 // Word-aligned portions of the single logical VRAM and its known-bit mask.
@@ -27,6 +35,7 @@ struct GsGpuStats {
     std::uint64_t upload_ns{}, submit_ns{}, wait_ns{}, readback_ns{}, gpu_ns{};
     std::uint64_t upload_syncs{}, readback_syncs{}, submissions{}, waits{};
     std::uint64_t storage_bytes{}, result_upload_bytes{}, result_readback_bytes{};
+    std::uint64_t command_upload_bytes{};
     bool gpu_timestamps{};
 };
 class GsGpu {

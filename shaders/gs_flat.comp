@@ -1,23 +1,61 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 // Original BSD-3-Clause implementation. Integer GS reference subset: flat
-// sprites/triangles, CT32/24, alpha/depth tests, blending and known-bit joins.
+// sprites/triangles, indexed/CT32/24 texture sprites, alpha/depth tests,
+// blending and known-bit joins. No host sampler or rasterizer rounding.
 layout(local_size_x=8, local_size_y=8) in;
 layout(set=0,binding=0,std430) buffer Vram { uint word[]; } memory_words;
 layout(set=0,binding=1,std430) buffer Knowledge { uint known[]; } memory_known;
 layout(set=0,binding=2,std430) buffer Result { uint error; uint revisions; uint pixel_writes; } result;
-layout(push_constant,std430) uniform Primitive {
+struct Primitive {
     int left; int top; int right; int bottom;
     int x0; int y0; int x1; int y1; int x2; int y2;
     uint triangle; uint color; uint z; uint base; uint bw; uint psm; uint zbase; uint zpsm;
     uint test; uint frame_mask; uint alpha; uint alpha_fix; uint scanmask;
     uint fba; uint fba_known; uint conditional; uint saturate; uint pabe; uint blending; uint depth_write;
-} p;
+    uint texture_flags; uint tbp; uint tbw; uint tpsm; uint tw; uint th;
+    uint clamp_u; uint clamp_v; uint minu; uint maxu; uint minv; uint maxv;
+    uint texa;
+    int u0; int v0; int u1; int v1;
+    uint palette[256]; uint palette_known[8];
+};
+layout(set=0,binding=3,std430) readonly buffer Primitives { Primitive command[]; } primitives;
+layout(push_constant,std430) uniform Selection { uint index; } selection;
+#define p primitives.command[selection.index]
 uint address(uint base,uint x,uint y) {
     uint page=(y/32u)*(p.bw/64u)+x/64u;
     uint block=((x>>3u)&1u)|((y>>2u)&2u)|((x>>2u)&4u)|((y>>1u)&8u)|((x>>1u)&16u);
     uint col=(x&1u)|((y&1u)<<1u)|((x&6u)<<1u)|((y&6u)<<3u);
     return (base+page*8192u+block*256u+col*4u)&0x3fffffu;
+}
+uint depth_address(uint x,uint y) {
+    if(p.zpsm!=10u)return (p.zbase+(address(0u,x,y)^6144u))&0x3fffffu;
+    uint page=(y/64u)*(p.bw/64u)+x/64u;
+    uint block=((y>>3u)&1u)|((x>>3u)&2u)|((y>>3u)&4u)|((y>>1u)&8u)|((x>>1u)&16u);
+    uint col=(x&1u)|((y&1u)<<1u)|((x&6u)<<1u)|((y&6u)<<3u);
+    uint offset=page*8192u+block*256u+col*4u+((x&8u)>>2u);
+    return (p.zbase+(offset^6144u))&0x3fffffu;
+}
+bool read_depth16(uint at,uint shift,out uint value) {
+    value=0u;
+    uint mask=0xffffu<<shift;
+    // The other halfword can belong to another invocation. Atomic loads
+    // avoid a race even though this pixel's own halfword has one writer.
+    uint knowledge=atomicAdd(memory_known.known[at],0u);
+    if((knowledge&mask)!=mask){atomicOr(result.error,1u);return false;}
+    value=(atomicAdd(memory_words.word[at],0u)>>shift)&0xffffu;
+    return true;
+}
+void write_depth16(uint at,uint shift) {
+    uint mask=0xffffu<<shift,value=p.z<<shift;
+    // Disjoint halfword writers share a word. Preserve the neighbor with
+    // atomic updates, and join only this halfword's conditional knowledge.
+    uint old=atomicAnd(memory_words.word[at],~mask);
+    atomicOr(memory_words.word[at],value&mask);
+    uint knowledge=atomicAnd(memory_known.known[at],~mask);
+    uint joined=p.conditional!=0u?knowledge&~(old^value)&mask:mask;
+    atomicOr(memory_known.known[at],joined);
+    atomicAdd(result.revisions,1u);
 }
 int64_t edge(int ax,int ay,int bx,int by,int x,int y) {
     return int64_t(bx-ax)*int64_t(y-ay)-int64_t(by-ay)*int64_t(x-ax);
@@ -29,6 +67,88 @@ bool inside(int ax,int ay,int bx,int by,int x,int y) {
 bool read_word(uint at,uint mask,out uint value) {
     if((memory_known.known[at]&mask)!=mask) {atomicOr(result.error,1u);return false;}
     value=memory_words.word[at]&mask;
+    return true;
+}
+int floor16(int coordinate) {
+    int64_t wide=int64_t(coordinate);
+    return int(wide/int64_t(16)-(wide<int64_t(0)&&wide%int64_t(16)!=int64_t(0)?int64_t(1):int64_t(0)));
+}
+bool sprite_coordinate(int pixel,int a,int b,int first,int last,out int coordinate) {
+    coordinate=0;
+    int64_t den=int64_t(b)-int64_t(a);
+    int64_t num=int64_t(first)*den+(int64_t(last)-int64_t(first))*(int64_t(pixel)*int64_t(16)-int64_t(a));
+    if(den<int64_t(0)){den=-den;num=-num;}
+    if(den==int64_t(0)||(num%den!=int64_t(0)&&(p.texture_flags&16u)==0u)) {
+        atomicOr(result.error,2u);return false;
+    }
+    coordinate=int(num/den-(num<int64_t(0)&&num%den!=int64_t(0)?int64_t(1):int64_t(0)));
+    return true;
+}
+uint texture_coordinate(int coordinate,uint bits,uint mode,uint low,uint high) {
+    if(mode==0u)return uint(coordinate)&((1u<<bits)-1u);
+    if(mode==1u)return uint(clamp(coordinate,0,int((1u<<bits)-1u)));
+    if(mode==2u)return uint(clamp(coordinate,int(low),int(high)));
+    return (uint(coordinate)&low)|high;
+}
+uint texture_address(uint x,uint y) {
+    if(p.tpsm==19u||p.tpsm==20u) {
+        uint page=(y/(p.tpsm==19u?64u:128u))*(p.tbw/128u)+x/128u;
+        uint block=p.tpsm==19u?
+            ((x>>4u)&1u)|((y>>3u)&2u)|((x>>3u)&4u)|((y>>2u)&8u)|((x>>2u)&16u):
+            ((y>>4u)&1u)|((x>>4u)&2u)|((y>>3u)&4u)|((x>>3u)&8u)|((y>>2u)&16u);
+        uint col=(x&1u)|((y&1u)<<1u)|((x&2u)<<1u)|((((x>>2u)^(y>>1u)^(y>>2u))&1u)<<3u);
+        uint byte_offset=p.tpsm==19u?((x>>2u)&2u)|((y>>1u)&1u):(x>>3u)&3u;
+        return (p.tbp+page*8192u+block*256u+((y>>2u)&3u)*64u+col*4u+byte_offset)&0x3fffffu;
+    }
+    uint page=(y/32u)*(p.tbw/64u)+x/64u;
+    uint block=((x>>3u)&1u)|((y>>2u)&2u)|((x>>2u)&4u)|((y>>1u)&8u)|((x>>1u)&16u);
+    uint col=(x&1u)|((y&1u)<<1u)|((x&6u)<<1u)|((y&6u)<<3u);
+    return (p.tbp+page*8192u+block*256u+col*4u)&0x3fffffu;
+}
+bool sample_texture(int u,int v,out uint color) {
+    color=0u;
+    uint x=texture_coordinate(u,p.tw,p.clamp_u,p.minu,p.maxu);
+    uint y=texture_coordinate(v,p.th,p.clamp_v,p.minv,p.maxv);
+    uint at=texture_address(x,y);
+    uint shift=(at&3u)*8u+(p.tpsm==20u?(y&2u)*2u:0u);
+    uint mask=p.tpsm==20u?15u:p.tpsm==19u?255u:p.tpsm==1u?0xffffffu:0xffffffffu;
+    uint raw;
+    if(!read_word(at/4u,mask<<shift,raw))return false;
+    raw>>=shift;
+    if(p.tpsm==0u){color=raw;return true;}
+    if(p.tpsm==1u) {
+        uint alpha=(p.texa&0x8000u)!=0u&&raw==0u?0u:p.texa&255u;
+        color=raw|(((p.texture_flags&4u)!=0u?alpha:0u)<<24u);return true;
+    }
+    if((p.palette_known[raw/32u]&(1u<<(raw&31u)))==0u){atomicOr(result.error,4u);return false;}
+    color=p.palette[raw];return true;
+}
+bool filtered_texture(int u,int v,out uint color) {
+    if((p.texture_flags&2u)==0u)return sample_texture(floor16(u),floor16(v),color);
+    color=0u;
+    int x=floor16(u-8),y=floor16(v-8);
+    uint fx=uint(u-8-x*16),fy=uint(v-8-y*16);
+    uint a,b,c,d;
+    if(!sample_texture(x,y,a))return false;
+    b=a;c=a;d=a;
+    if(fx!=0u&&!sample_texture(x+1,y,b))return false;
+    if(fy!=0u&&!sample_texture(x,y+1,c))return false;
+    if(fx!=0u&&fy!=0u){if(!sample_texture(x+1,y+1,d))return false;}
+    else d=fy!=0u?c:b;
+    for(uint channel=0u;channel<4u;++channel) {
+        uint av=(a>>(channel*8u))&255u,bv=(b>>(channel*8u))&255u;
+        uint cv=(c>>(channel*8u))&255u,dv=(d>>(channel*8u))&255u;
+        uint upper=av*(16u-fx)+bv*fx,lower=cv*(16u-fx)+dv*fx;
+        uint left=av*(16u-fy)+cv*fy,right=bv*(16u-fy)+dv*fy;
+        uint sum=upper*(16u-fy)+lower*fy,value=sum/256u;
+        if(upper%16u!=0u||(fy!=0u&&lower%16u!=0u)||left%16u!=0u||(fx!=0u&&right%16u!=0u)||sum%256u!=0u) {
+            if((p.texture_flags&32u)==0u){atomicOr(result.error,8u);return false;}
+            // Same explicitly selected CPU hypothesis: horizontal truncation,
+            // then vertical truncation. This does not certify physical GS DDA.
+            value=((upper/16u)*(16u-fy)+(lower/16u)*fy)/16u;
+        }
+        color|=value<<(channel*8u);
+    }
     return true;
 }
 void write_word(uint at,uint value,uint mask,uint unknown) {
@@ -46,6 +166,18 @@ void main() {
     if(p.triangle!=0u&&(!inside(p.x0,p.y0,p.x1,p.y1,x*16,y*16)||
         !inside(p.x1,p.y1,p.x2,p.y2,x*16,y*16)||!inside(p.x2,p.y2,p.x0,p.y0,x*16,y*16)))return;
     uint color=p.color,write_mask=p.frame_mask;
+    if((p.texture_flags&1u)!=0u) {
+        int u,v;uint sampled;
+        if(!sprite_coordinate(x,p.x0,p.x1,p.u0,p.u1,u)||!sprite_coordinate(y,p.y0,p.y1,p.v0,p.v1,v)||
+           !filtered_texture(u,v,sampled))return;
+        color=0u;
+        for(uint channel=0u;channel<4u;++channel) {
+            uint fragment=(p.color>>(channel*8u))&255u,texel=(sampled>>(channel*8u))&255u;
+            uint value=channel==3u&&(p.texture_flags&4u)==0u?fragment:
+                (p.texture_flags&8u)!=0u?texel:min(255u,(fragment*texel)>>7u);
+            color|=value<<(channel*8u);
+        }
+    }
     bool color_write=true,depth_write=p.depth_write!=0u;
     if((p.test&1u)!=0u) {
         uint a=color>>24u,reference=(p.test>>4u)&255u,func=(p.test>>1u)&7u;
@@ -60,14 +192,15 @@ void main() {
             if(fail==3u){depth_write=false;write_mask|=0xff000000u;}
         }
     }
-    uint za=(p.zbase+(address(0u,uint(x),uint(y))^6144u))&0x3fffffu;
+    uint za=depth_address(uint(x),uint(y));
     uint zmask=(p.zpsm&15u)==0u?0xffffffffu:0x00ffffffu;
     if((p.test&0x10000u)!=0u) {
         uint func=(p.test>>17u)&3u;
         if(func==0u)return;
         if(func>=2u) {
             uint old_z;
-            if(!read_word(za/4u,zmask,old_z))return;
+            if(p.zpsm==10u){if(!read_depth16(za/4u,(za&2u)*8u,old_z))return;}
+            else if(!read_word(za/4u,zmask,old_z))return;
             if(p.z<old_z||(func==3u&&p.z==old_z))return;
         }
     }
@@ -103,5 +236,8 @@ void main() {
         write_word(at,color,~write_mask,unknown);
         if(p.conditional==0u)atomicAdd(result.pixel_writes,1u);
     }
-    if(depth_write)write_word(za/4u,p.z,zmask,0u);
+    if(depth_write) {
+        if(p.zpsm==10u)write_depth16(za/4u,(za&2u)*8u);
+        else write_word(za/4u,p.z,zmask,0u);
+    }
 }

@@ -74,7 +74,7 @@ private:
     std::uint32_t family_{};
     VkPhysicalDeviceMemoryProperties memory_{};
     struct Buffer {VkBuffer buffer{};VkDeviceMemory memory{};void* mapped{};};
-    Buffer words_,known_,result_;
+    Buffer words_,known_,result_,primitives_;
     VkDescriptorSetLayout descriptors_{};
     VkDescriptorPool descriptor_pool_{};
     VkDescriptorSet descriptor_set_{};
@@ -141,7 +141,9 @@ void VulkanGs::initialize() {
     for(auto candidate:devices) {
         VkPhysicalDeviceFeatures features{};GetPhysicalDeviceFeatures_(candidate,&features);
         VkPhysicalDeviceProperties properties{};GetPhysicalDeviceProperties_(candidate,&properties);
-        if(!features.shaderInt64||properties.apiVersion<VK_API_VERSION_1_1||properties.limits.maxPushConstantsSize<sizeof(GsGpuCommand))continue;
+        if(!features.shaderInt64||properties.apiVersion<VK_API_VERSION_1_1||
+           properties.limits.maxPushConstantsSize<sizeof(std::uint32_t)||
+           properties.limits.maxStorageBufferRange<256u*sizeof(GsGpuCommand))continue;
         std::uint32_t count{};GetPhysicalDeviceQueueFamilyProperties_(candidate,&count,nullptr);
         std::vector<VkQueueFamilyProperties> families(count);GetPhysicalDeviceQueueFamilyProperties_(candidate,&count,families.data());
         for(std::uint32_t n=0;n<count;++n)if(families[n].queueCount&&(families[n].queueFlags&VK_QUEUE_COMPUTE_BIT)) {
@@ -170,12 +172,13 @@ void VulkanGs::initialize() {
 #undef GS_VK_LOAD_DEVICE
     GetDeviceQueue_(device_,family_,0,&queue_);
     create_buffer(words_,GsVram::kBytes);create_buffer(known_,GsVram::kBytes);create_buffer(result_,12u);
-    std::array<VkDescriptorSetLayoutBinding,3> bindings{};
+    create_buffer(primitives_,256u*sizeof(GsGpuCommand));
+    std::array<VkDescriptorSetLayoutBinding,4> bindings{};
     for(unsigned n=0;n<bindings.size();++n){bindings[n].binding=n;bindings[n].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;bindings[n].descriptorCount=1;bindings[n].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
     VkDescriptorSetLayoutCreateInfo descriptors_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     descriptors_info.bindingCount=static_cast<std::uint32_t>(bindings.size());descriptors_info.pBindings=bindings.data();
     check(CreateDescriptorSetLayout_(device_,&descriptors_info,nullptr,&descriptors_),"create descriptor layout");
-    VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(GsGpuCommand)};
+    VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(std::uint32_t)};
     VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layout_info.setLayoutCount=1;layout_info.pSetLayouts=&descriptors_;layout_info.pushConstantRangeCount=1;layout_info.pPushConstantRanges=&push;
     check(CreatePipelineLayout_(device_,&layout_info,nullptr,&layout_),"create pipeline layout");
@@ -184,13 +187,14 @@ void VulkanGs::initialize() {
     VkComputePipelineCreateInfo pipeline_info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     pipeline_info.stage.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;pipeline_info.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;pipeline_info.stage.module=shader_;pipeline_info.stage.pName="main";pipeline_info.layout=layout_;
     check(CreateComputePipelines_(device_,VK_NULL_HANDLE,1,&pipeline_info,nullptr,&pipeline_),"create compute pipeline");
-    VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,3};
+    VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,4};
     VkDescriptorPoolCreateInfo descriptor_pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};descriptor_pool_info.maxSets=1;descriptor_pool_info.poolSizeCount=1;descriptor_pool_info.pPoolSizes=&pool_size;
     check(CreateDescriptorPool_(device_,&descriptor_pool_info,nullptr,&descriptor_pool_),"create descriptor pool");
     VkDescriptorSetAllocateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};set_info.descriptorPool=descriptor_pool_;set_info.descriptorSetCount=1;set_info.pSetLayouts=&descriptors_;
     check(AllocateDescriptorSets_(device_,&set_info,&descriptor_set_),"allocate descriptor set");
-    std::array<VkDescriptorBufferInfo,3> buffer_info{{{words_.buffer,0,GsVram::kBytes},{known_.buffer,0,GsVram::kBytes},{result_.buffer,0,12u}}};
-    std::array<VkWriteDescriptorSet,3> writes{};
+    std::array<VkDescriptorBufferInfo,4> buffer_info{{{words_.buffer,0,GsVram::kBytes},{known_.buffer,0,GsVram::kBytes},
+        {result_.buffer,0,12u},{primitives_.buffer,0,256u*sizeof(GsGpuCommand)}}};
+    std::array<VkWriteDescriptorSet,4> writes{};
     for(unsigned n=0;n<writes.size();++n){writes[n].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;writes[n].dstSet=descriptor_set_;writes[n].dstBinding=n;writes[n].descriptorCount=1;writes[n].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;writes[n].pBufferInfo=&buffer_info[n];}
     UpdateDescriptorSets_(device_,static_cast<std::uint32_t>(writes.size()),writes.data(),0,nullptr);
     VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};pool_info.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;pool_info.queueFamilyIndex=family_;
@@ -241,8 +245,16 @@ GsGpuResult VulkanGs::execute(std::span<std::uint32_t> words,std::span<std::uint
         // The GS caller additionally proves non-aliasing framebuffer/depth
         // pages and constant triangle attributes. Defend the dispatch ABI.
         if(p.left<0||p.top<0||p.right>2048||p.bottom>2048||p.left>=p.right||p.top>=p.bottom||
-           p.psm>1u||(p.zpsm>1u&&(p.depth_write||((p.test&0x10000u)&&((p.test>>17u)&3u)>=2u)))||
+           p.psm>1u||(p.zpsm>1u&&p.zpsm!=10u&&(p.depth_write||((p.test&0x10000u)&&((p.test>>17u)&3u)>=2u)))||
            p.bw>4032u||!p.bw||p.bw%64u||p.right>static_cast<int>(p.bw))throw DeviceRefusal("GS Vulkan received an unsupported or aliased primitive packet");
+        if(p.zpsm==10u&&p.z>0xffffu&&(p.depth_write||((p.test&0x10000u)&&((p.test>>17u)&3u)>=2u)))
+            throw DeviceRefusal("GS Vulkan received an out-of-range Z16S primitive depth");
+        if(p.texture_flags>63u || ((p.texture_flags&1u) &&
+           (p.triangle||p.tbp>=GsVram::kBytes||p.tbp%256u||p.tbw>4032u||p.tbw%64u||
+            (p.tpsm!=0u&&p.tpsm!=1u&&p.tpsm!=19u&&p.tpsm!=20u)||p.tw>10u||p.th>10u||
+            p.clamp_u>3u||p.clamp_v>3u||p.minu>1023u||p.maxu>1023u||p.minv>1023u||p.maxv>1023u||
+            (p.clamp_u==2u&&p.minu>p.maxu)||(p.clamp_v==2u&&p.minv>p.maxv)||p.x0==p.x1||p.y0==p.y1)))
+            throw DeviceRefusal("GS Vulkan received an unsupported texture primitive packet");
     }
     try {
         auto before=Clock::now();
@@ -253,7 +265,11 @@ GsGpuResult VulkanGs::execute(std::span<std::uint32_t> words,std::span<std::uint
             stats_.upload_bytes+=2ull*bytes;
         }
         if(!uploads.empty())++stats_.upload_syncs;
-        if(!commands.empty()){std::memset(result_.mapped,0,12u);stats_.result_upload_bytes+=12u;}
+        if(!commands.empty()) {
+            std::memset(result_.mapped,0,12u);stats_.result_upload_bytes+=12u;
+            std::memcpy(primitives_.mapped,commands.data(),commands.size_bytes());
+            stats_.command_upload_bytes+=commands.size_bytes();
+        }
         stats_.upload_ns+=elapsed(before);
         std::array<std::uint32_t,3> result{};
         if(!commands.empty()) {
@@ -266,8 +282,9 @@ GsGpuResult VulkanGs::execute(std::span<std::uint32_t> words,std::span<std::uint
             CmdPipelineBarrier_(command_,VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&host_barrier,0,nullptr,0,nullptr);
             CmdBindPipeline_(command_,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline_);
             CmdBindDescriptorSets_(command_,VK_PIPELINE_BIND_POINT_COMPUTE,layout_,0,1,&descriptor_set_,0,nullptr);
-            for(const auto& p:commands) {
-                CmdPushConstants_(command_,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(p),&p);
+            for(std::uint32_t index=0;index<commands.size();++index) {
+                const auto& p=commands[index];
+                CmdPushConstants_(command_,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(index),&index);
                 CmdDispatch_(command_,(static_cast<std::uint32_t>(p.right-p.left)+7u)/8u,(static_cast<std::uint32_t>(p.bottom-p.top)+7u)/8u,1);
                 VkMemoryBarrier order{VK_STRUCTURE_TYPE_MEMORY_BARRIER};order.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;order.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
                 CmdPipelineBarrier_(command_,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&order,0,nullptr,0,nullptr);
@@ -285,7 +302,8 @@ GsGpuResult VulkanGs::execute(std::span<std::uint32_t> words,std::span<std::uint
             stats_.wait_ns+=elapsed(before);check(wait,"wait for primitives (10 second deadline)");in_flight_=false;
             before=Clock::now();std::memcpy(result.data(),result_.mapped,12u);
             stats_.readback_ns+=elapsed(before);stats_.result_readback_bytes+=12u;
-            if(result[0])throw DeviceRefusal("GS Vulkan primitive consumed unknown VRAM bits; batch not committed");
+            if(result[0])throw DeviceRefusal("GS Vulkan shader rejected VRAM/texture proof (error mask="+
+                std::to_string(result[0])+": 1 unknown VRAM, 2 UV precision, 4 unloaded CLUT, 8 bilinear precision); batch not committed");
             if(queries_) {
                 std::array<std::uint64_t,2> timestamps{};
                 check(GetQueryPoolResults_(device_,queries_,0,2,sizeof(timestamps),timestamps.data(),sizeof(std::uint64_t),VK_QUERY_RESULT_64_BIT),"read GPU timestamps");
@@ -321,7 +339,7 @@ void VulkanGs::cleanup() noexcept {
         if(shader_&&DestroyShaderModule_)DestroyShaderModule_(device_,shader_,nullptr);
         if(layout_&&DestroyPipelineLayout_)DestroyPipelineLayout_(device_,layout_,nullptr);
         if(descriptors_&&DestroyDescriptorSetLayout_)DestroyDescriptorSetLayout_(device_,descriptors_,nullptr);
-        for(auto* b:{&result_,&known_,&words_}) {
+        for(auto* b:{&primitives_,&result_,&known_,&words_}) {
             if(b->mapped&&UnmapMemory_)UnmapMemory_(device_,b->memory);
             if(b->buffer&&DestroyBuffer_)DestroyBuffer_(device_,b->buffer,nullptr);
             if(b->memory&&FreeMemory_)FreeMemory_(device_,b->memory,nullptr);

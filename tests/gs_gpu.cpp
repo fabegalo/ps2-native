@@ -62,9 +62,17 @@ struct Stream {
 };
 void same(const Stream& cpu,const Stream& gpu,const std::string& label,bool scan=true) {
     const auto a=cpu.gs.vram().raw_words(),b=gpu.gs.vram().raw_words();
-    require(std::equal(a.begin(),a.end(),b.begin(),b.end()),label+": full VRAM values");
+    const auto different=std::mismatch(a.begin(),a.end(),b.begin());
+    if(different.first!=a.end()) {
+        const auto word=static_cast<unsigned>(different.first-a.begin());
+        throw std::runtime_error(label+": first VRAM difference at byte "+boot_checks::hex8(word*4u)+
+            ", expected="+boot_checks::hex8(*different.first)+", actual="+boot_checks::hex8(*different.second));
+    }
     const auto ak=cpu.gs.vram().known_bits(),bk=gpu.gs.vram().known_bits();
-    require(std::equal(ak.begin(),ak.end(),bk.begin(),bk.end()),label+": full known-bit masks");
+    const auto unknown=std::mismatch(ak.begin(),ak.end(),bk.begin());
+    if(unknown.first!=ak.end())throw std::runtime_error(label+": first knowledge difference at byte "+
+        boot_checks::hex8(static_cast<unsigned>(unknown.first-ak.begin())*4u)+", expected="+
+        boot_checks::hex8(*unknown.first)+", actual="+boot_checks::hex8(*unknown.second));
     require(cpu.gs.vram().revision()==gpu.gs.vram().revision(),label+": VRAM revision");
     require(cpu.gs.vram().pixel_writes()==gpu.gs.vram().pixel_writes(),label+": proven color writes");
     require(cpu.gif.packets()==gpu.gif.packets(),label+": original GIF packet order");
@@ -72,6 +80,14 @@ void same(const Stream& cpu,const Stream& gpu,const std::string& label,bool scan
         cpu.gs.observe_csr().unknown==gpu.gs.observe_csr().unknown,label+": CSR flags and uncertainty");
     if(scan) {
         const auto af=cpu.gs.scanout(1234),bf=gpu.gs.scanout(1234);
+        require(af.width==bf.width && af.height==bf.height && af.stride==bf.stride && af.rgba.size()==bf.rgba.size(),
+            label+": scanout geometry");
+        const auto pixel=std::mismatch(af.rgba.begin(),af.rgba.end(),bf.rgba.begin());
+        if(pixel.first!=af.rgba.end()) {
+            const auto offset=static_cast<unsigned>(pixel.first-af.rgba.begin()),x=(offset%af.stride)/4u,y=offset/af.stride;
+            throw std::runtime_error(label+": first RGBA difference at ("+std::to_string(x)+","+std::to_string(y)+
+                "), channel "+std::to_string(offset%4u));
+        }
         require(af.rgba==bf.rgba && af.revision==bf.revision && af.ee_cycle==bf.ee_cycle,
             label+": framebuffer bytes, revision and guest cycle");
     }
@@ -357,6 +373,390 @@ void check_pipeline(std::shared_ptr<GsGpu> gpu) {
         },psm);
     }
 }
+constexpr unsigned texture_base=0x10000u,palette_base=0x30000u;
+GsVram& fixture_vram(Stream& s) {
+    // Synthetic source setup and explicit unknown-bit injection use the
+    // public coherent VRAM writes; the GsRegisters object itself is mutable.
+    return const_cast<GsVram&>(s.gs.vram());
+}
+std::uint32_t texture_grid(unsigned x,unsigned y) {
+    return 0x80000000u|(x&255u)|((y&255u)<<8u)|(((3u*x+5u*y)&255u)<<16u);
+}
+std::uint32_t palette_color(unsigned index,unsigned bank=0) {
+    return 0x80000000u|((7u*index+bank)&255u)|(((11u*index+3u*bank)&255u)<<8u)|
+        (((13u*index+5u*bank)&255u)<<16u);
+}
+void palette_source(Stream& s,unsigned base,unsigned count,unsigned bank=0) {
+    for(unsigned i=0;i<count;++i) {
+        // Independent CSM1 index-to-source layout, also exercised by T8
+        // indices 8,16,24 whose two exchanged index bits are distinct.
+        const auto x=(i&7u)|((i&16u)>>1u),y=((i&8u)>>3u)|((i&0xE0u)>>4u);
+        fixture_vram(s).write(base,64,0,x,y,palette_color(i,bank));
+    }
+}
+void texture_source(Stream& s,unsigned psm) {
+    const unsigned w=psm<=1u?128u:256u,h=psm<=1u?64u:psm==19u?128u:256u;
+    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x)
+        fixture_vram(s).write(texture_base,w,psm,x,y,psm<=1u?texture_grid(x,y):(x+3u*y)&(psm==20u?15u:255u));
+    if(psm>=19u)palette_source(s,palette_base,psm==20u?16u:256u);
+    s.ad(0x3F,0);
+}
+std::uint64_t texture_register(unsigned psm,unsigned bank=0,unsigned cld=0,bool tcc=true,bool decal=true,
+                               unsigned source=texture_base,unsigned palette=palette_base) {
+    const unsigned tw=psm<=1u?7u:8u,th=psm<=1u?6u:psm==19u?7u:8u,bw=psm<=1u?128u:256u;
+    return source/256u|(std::uint64_t{bw/64u}<<14u)|(std::uint64_t{psm}<<20u)|
+        (std::uint64_t{tw}<<26u)|(std::uint64_t{th}<<30u)|(std::uint64_t{tcc}<<34u)|
+        (std::uint64_t{decal}<<35u)|(std::uint64_t{palette/256u}<<37u)|
+        (std::uint64_t{bank}<<56u)|(std::uint64_t{cld}<<61u);
+}
+void textured_uv(Stream& s,int x0,int y0,int x1,int y1,unsigned u0,unsigned v0,unsigned u1,unsigned v1,
+                 unsigned color=0x80808080u,bool blend=false,unsigned z=0) {
+    s.ad(0,0x116u|(blend?64u:0u));s.ad(1,color);
+    s.ad(3,u0|(std::uint64_t{v0}<<16u));s.vertex(x0*16,y0*16,z);
+    s.ad(3,u1|(std::uint64_t{v1}<<16u));s.vertex(x1*16,y1*16,z);
+}
+void texture_state(Stream& s,unsigned psm,bool tcc=true,bool decal=true,unsigned bank=0,unsigned cld=1) {
+    s.ad(6,texture_register(psm,bank,psm>=19u?cld:0u,tcc,decal));
+    s.ad(8,0);s.ad(0x14,0);s.ad(0x3B,0x40u);
+}
+void check_textured_nearest(std::shared_ptr<GsGpu> gpu) {
+    for(const auto psm:{20u,19u,0u,1u}) {
+        Stream cpu,accelerated(gpu);
+        for(auto* s:{&cpu,&accelerated}) {
+            s->setup();texture_source(*s,psm);s->sprite(0,0,width,height,0x80604020u);texture_state(*s,psm);
+        }
+        const unsigned u=psm<=1u?60u:124u,v=psm<=1u?28u:psm==19u?60u:124u;
+        const auto before=accelerated.gs.vram().gpu_primitives();
+        for(auto* s:{&cpu,&accelerated})textured_uv(*s,2,2,10,6,u*16u,v*16u,(u+8u)*16u,(v+4u)*16u);
+        require(accelerated.gs.vram().gpu_primitives()==before+1u,"nearest format "+std::to_string(psm)+" actually selects GPU texture rasterization");
+        same(cpu,accelerated,"nearest texture page edges "+std::to_string(psm));
+        for(unsigned y=0;y<4u;++y)for(unsigned x=0;x<8u;++x) {
+            const auto expected=psm>=19u?palette_color((u+x+3u*(v+y))&(psm==20u?15u:255u)):
+                psm==1u?(texture_grid(u+x,v+y)&0xFFFFFFu)|0x40000000u:texture_grid(u+x,v+y);
+            require(accelerated.gs.vram().read(0,64,0,x+2u,y+2u)==expected,
+                "independent nearest expected pixel across source pages, format "+std::to_string(psm));
+        }
+        const auto uploaded=gpu->stats().upload_bytes;
+        for(auto* s:{&cpu,&accelerated})textured_uv(*s,12,2,13,3,64,64,80,80);
+        accelerated.gs.vram().submit_gpu();
+        require(gpu->stats().upload_bytes==uploaded,"read-only texture pages are retained after the first GPU batch");
+        for(auto* s:{&cpu,&accelerated}) {
+            // Reversed screen axes retain their original endpoint mapping;
+            // clipping is applied only to coverage, never to the UV origin.
+            s->ad(0x40,3u|(10ull<<16u)|(3ull<<32u)|(7ull<<48u));
+            textured_uv(*s,12,9,0,1,0,0,12u*16u,8u*16u);
+        }
+        same(cpu,accelerated,"inverted axes and clipped UV origin "+std::to_string(psm));
+        for(unsigned y=3;y<8u;++y)for(unsigned x=3;x<11u;++x) {
+            const unsigned sx=12u-x,sy=9u-y;
+            const auto expected=psm>=19u?palette_color((sx+3u*sy)&(psm==20u?15u:255u)):
+                psm==1u?(texture_grid(sx,sy)&0xFFFFFFu)|0x40000000u:texture_grid(sx,sy);
+            require(accelerated.gs.vram().read(0,64,0,x,y)==expected,"independent inverted/scissor texture pixel");
+        }
+    }
+}
+void check_texture_palette_snapshots(std::shared_ptr<GsGpu> gpu) {
+    Stream cpu({},16),accelerated(gpu,16);
+    for(auto* s:{&cpu,&accelerated}) {
+        s->setup();texture_source(*s,20);palette_source(*s,palette_base+8192u,16,7);
+        s->sprite(0,0,width,height,0x80000000u);s->ad(0x3F,0);
+        s->ad(6,texture_register(20,0,1));
+        s->ad(6,texture_register(20,1,1,true,true,texture_base,palette_base+8192u));
+        s->ad(8,0);s->ad(0x14,0);
+    }
+    const auto before=gpu->stats();
+    const auto primitives=accelerated.gs.vram().gpu_primitives();
+    for(auto* s:{&cpu,&accelerated}) {
+        s->ad(6,texture_register(20,0));textured_uv(*s,0,0,8,2,0,0,128,32);
+        s->ad(6,texture_register(20,1));textured_uv(*s,8,0,16,2,0,0,128,32);
+    }
+    require(accelerated.gs.vram().gpu_primitives()==primitives+2u,"two partially loaded T4 banks both rasterize on GPU");
+    require(gpu->stats().batches==before.batches,"later TEX0 bank selection does not execute or replace an earlier palette snapshot");
+    same(cpu,accelerated,"queued per-command T4 palette bank snapshots");
+    for(unsigned y=0;y<2u;++y)for(unsigned x=0;x<8u;++x) {
+        const auto i=(x+3u*y)&15u;
+        require(accelerated.gs.vram().read(0,64,0,x,y)==palette_color(i) &&
+            accelerated.gs.vram().read(0,64,0,x+8u,y)==palette_color(i,7),"independent per-command palette bank values");
+    }
+    for(auto* s:{&cpu,&accelerated}) {
+        // Reloading from changed source memory changes only future draws.
+        palette_source(*s,palette_base,16,19);s->ad(0x3F,0);
+        s->ad(0x16,texture_register(20,0,1));textured_uv(*s,16,0,24,2,0,0,128,32);
+        const auto fallbacks=s->gs.vram().cpu_fallbacks(),primitives_before=s->gs.vram().gpu_primitives();
+        s->ad(0x42,0x44);s->ad(0,3u|128u|64u);s->ad(1,0x80402010u);
+        s->vertex(26*16,3*16);s->vertex(30*16,3*16);s->vertex(26*16,7*16);
+        s->sprite(32,0,40,8,0x80AABBCCu);
+        if(s->gs.gpu_backend())require(s->gs.vram().cpu_fallbacks()==fallbacks+1u &&
+            s->gs.vram().gpu_primitives()==primitives_before+1u,"CLUT reload -> textured GPU -> AA1 CPU -> GPU preserves explicit routing");
+        s->ad(6,texture_register(20,2));s->ad(0,0x116);s->ad(1,0x80808080u);s->ad(3,0);s->vertex(0,64);
+        s->ad(3,128u|(32ull<<16u));
+        const auto writes=s->gs.vram().pixel_writes();
+        rejects([&]{s->vertex(128,96);},"unloaded CLUT");
+        require(s->gs.vram().pixel_writes()==writes,"an unloaded T4 bank refuses before its first destination write");
+    }
+    same(cpu,accelerated,"TEX2 reload and unloaded partial CLUT bank");
+    require(accelerated.gs.vram().read(0,64,0,16,0)==palette_color(0,19),"TEX2 reload affects only the later sprite");
+}
+void check_clut_reload_pending(std::shared_ptr<GsGpu> gpu) {
+    Stream cpu,accelerated(gpu);
+    for(auto* s:{&cpu,&accelerated}) {
+        s->setup();texture_source(*s,20);palette_source(*s,palette_base+8192u,16,7);
+        s->sprite(0,0,width,height,0x80000000u);s->ad(0x3F,0);texture_state(*s,20);
+    }
+    const auto before=gpu->stats();
+    const auto primitives=accelerated.gs.vram().gpu_primitives();
+    for(auto* s:{&cpu,&accelerated}) {
+        textured_uv(*s,0,0,8,2,0,0,128,32);
+        s->ad(6,texture_register(20,0,1,true,true,texture_base,palette_base+8192u));
+        textured_uv(*s,8,0,16,2,0,0,128,32);
+    }
+    require(accelerated.gs.vram().gpu_primitives()==primitives+2u && gpu->stats().batches==before.batches,
+        "a CPU-resident CLUT reload preserves both pending draws and their independent palette versions");
+    for(auto* s:{&cpu,&accelerated})fixture_vram(*s).write(texture_base,256,20,0,0,7);
+    require(gpu->stats().batches==before.batches+1u,"CPU overwrite of a queued texture source completes its earlier readers first");
+    same(cpu,accelerated,"pending CLUT snapshots survive a later source overwrite");
+    require(accelerated.gs.vram().read(0,64,0,0,0)==palette_color(0) &&
+        accelerated.gs.vram().read(0,64,0,8,0)==palette_color(0,7),"earlier draws retain original texture indices and palette versions");
+    const auto uploaded=gpu->stats().upload_bytes;
+    for(auto* s:{&cpu,&accelerated}){s->ad(0x3F,0);textured_uv(*s,16,0,17,1,0,0,16,16);}
+    accelerated.gs.vram().submit_gpu();
+    require(gpu->stats().upload_bytes==uploaded+2u*GsVram::kPageBytes,"the CPU source edit uploads only its value/mask page");
+    same(cpu,accelerated,"later GPU texture sees the ordered partial CPU source change");
+    require(accelerated.gs.vram().read(0,64,0,16,0)==palette_color(7,7),"later draw consumes the new index through the new CLUT snapshot");
+}
+void check_texture_functions(std::shared_ptr<GsGpu> gpu) {
+    for(const unsigned psm:{0u,1u,19u,20u})for(const bool tcc:{false,true})for(const bool decal:{false,true}) {
+        Stream cpu,accelerated(gpu);
+        constexpr auto shade=0x40804020u;
+        for(auto* s:{&cpu,&accelerated}) {
+            s->setup(1);texture_source(*s,psm);s->sprite(0,0,width,height,0x00808080u);texture_state(*s,psm,tcc,decal);
+            textured_uv(*s,0,0,1,1,16,16,32,32,shade);
+        }
+        same(cpu,accelerated,"TCC/TFX/TEXA CT24 destination");
+        auto sampled=psm>=19u?palette_color(4):texture_grid(1,1);
+        if(psm==1u)sampled=(sampled&0xFFFFFFu)|0x40000000u;
+        unsigned expected=0;
+        for(unsigned c=0;c<3u;++c) {
+            const auto f=(shade>>(c*8u))&255u,t=(sampled>>(c*8u))&255u;
+            expected|=(decal?t:std::min(255u,f*t/128u))<<(c*8u);
+        }
+        require(accelerated.gs.vram().read(0,64,1,0,0)==expected,"independent MODULATE/DECAL RGB expected result");
+    }
+    paired(gpu,"CT24 TEXA black AEM and unknown unused high byte",[](Stream& s){
+        for(unsigned y=0;y<32u;++y)for(unsigned x=0;x<64u;++x)fixture_vram(s).write(texture_base,64,1,x,y,0);
+        s.ad(0x3F,0);s.sprite(0,0,width,height,0x80000000u);
+        s.ad(6,texture_register(1,0,0,true,true));s.ad(8,0);s.ad(0x14,0);s.ad(0x3B,0x8040u);
+        textured_uv(s,0,0,1,1,0,0,16,16);
+        require(s.gs.vram().read(0,64,0,0,0)==0,"AEM black expands to transparent black, independent of unknown source high byte");
+    });
+}
+void check_texture_coordinates(std::shared_ptr<GsGpu> gpu) {
+    Stream cpu,accelerated(gpu);
+    const auto small_texture=[] {return (texture_register(0)&~((15ull<<26u)|(15ull<<30u)))|(3ull<<26u)|(3ull<<30u);};
+    for(auto* s:{&cpu,&accelerated}) {
+        s->setup();texture_source(*s,0);s->sprite(0,0,width,height,0x80000000u);
+        s->ad(6,small_texture());s->ad(0x14,0);
+        const std::array<std::uint64_t,4> clamps{0,5,2u|(2ull<<2u)|(2ull<<4u)|(5ull<<14u)|(2ull<<24u)|(5ull<<34u),
+            3u|(3ull<<2u)|(3ull<<4u)|(8ull<<14u)|(3ull<<24u)|(8ull<<34u)};
+        for(unsigned n=0;n<clamps.size();++n) {
+            s->ad(8,clamps[n]);textured_uv(*s,static_cast<int>(n),0,static_cast<int>(n+1u),1,160,160,176,176);
+        }
+        s->ad(8,0);s->ad(0,0x16);s->ad(1,0x3F00000080808080ull);
+        s->ad(2,0xBE000000BE000000ull);s->vertex(4*16,0);
+        s->ad(1,0x4000000080808080ull);s->ad(2,0x3EC000003EC00000ull);s->vertex(5*16,16);
+    }
+    same(cpu,accelerated,"all clamp modes and exact negative STQ sprite");
+    const std::array<unsigned,5> positions{2,7,5,10,7};
+    for(unsigned x=0;x<positions.size();++x)require(accelerated.gs.vram().read(0,64,0,x,0)==texture_grid(positions[x],positions[x]),
+        "independent repeat/clamp/region-clamp/region-repeat/signed-STQ samples");
+    for(auto* s:{&cpu,&accelerated}) {
+        s->ad(0,0x16);s->ad(1,0x3F80000080808080ull);s->ad(2,0);s->vertex(0,32);
+        s->ad(1,0x4040000080808080ull);s->ad(2,0x3F8000003F800000ull);
+        const auto writes=s->gs.vram().pixel_writes();
+        rejects([&]{s->vertex(16,48);},"fractional STQ");
+        require(s->gs.vram().pixel_writes()==writes,"inexact STQ remains a common refusal before drawing");
+        s->gif.reset(); // A refused A+D word was not committed by the parser.
+        s->ad(8,0);s->ad(0,0x116);s->ad(3,8u|(8ull<<16u));s->vertex(0,48);
+        s->ad(3,24u|(24ull<<16u));
+        rejects([&]{s->vertex(48,64);},"fractional UV DDA");
+    }
+    same(cpu,accelerated,"strict STQ and fractional UV precision refusal");
+    for(const unsigned precision:{0u,2u}) {
+        Stream a({},precision),b(gpu,precision);
+        for(auto* s:{&a,&b}) {
+            s->setup();texture_source(*s,0);
+            for(unsigned y=0;y<8u;++y)for(unsigned x=0;x<8u;++x)
+                fixture_vram(*s).write(texture_base,128,0,x,y,0x80000000u|(x*16u)|(y*16u<<8u)|((x+y)*8u<<16u));
+            s->sprite(0,0,width,height,0x80000000u);s->ad(6,small_texture());s->ad(8,0);s->ad(0x14,0x60);
+            textured_uv(*s,0,0,1,1,12,20,28,36);
+            require(s->gs.vram().read(0,64,0,0,0)==0x80080C04u,"independent exact bilinear quarter/three-quarter sample");
+            if(precision) {
+                textured_uv(*s,1,0,2,1,9,9,25,25);
+                require(s->gs.vram().read(0,64,0,1,0)==0x80000101u,"explicit filter hypothesis truncates horizontal then vertical");
+            } else {
+                const auto writes=s->gs.vram().pixel_writes();
+                rejects([&]{textured_uv(*s,1,0,2,1,9,9,25,25);},"fractional bilinear truncation");
+                require(s->gs.vram().pixel_writes()==writes,"physical precision uncertainty is not silently rounded by the GPU");
+            }
+        }
+        same(a,b,"bilinear exact and explicitly selected staged truncation");
+    }
+    paired(gpu,"explicit nominal rational sprite UV",[](Stream& s){
+        texture_source(s,0);s.sprite(0,0,width,height,0x80000000u);texture_state(s,0);
+        textured_uv(s,0,2,3,3,8,8,24,24);
+        require(s.gs.vram().read(0,64,0,0,2)==texture_grid(0,0) &&
+            s.gs.vram().read(0,64,0,1,2)==texture_grid(0,0) &&
+            s.gs.vram().read(0,64,0,2,2)==texture_grid(1,0),"rational experiment floors the same 10.4 UV as the CPU");
+    },0,1);
+}
+void check_texture_pipeline(std::shared_ptr<GsGpu> gpu) {
+    for(unsigned fail=0;fail<4u;++fail)for(unsigned pabe=0;pabe<2u;++pabe) {
+        Stream cpu,accelerated(gpu);
+        for(auto* s:{&cpu,&accelerated}) {
+            s->setup();texture_source(*s,20);
+            for(unsigned i=0;i<3u;++i)fixture_vram(*s).write(palette_base,64,0,i,0,((0x40u+i*0x40u)<<24u)|0x80u);
+            s->ad(0x4E,32u);s->sprite(0,0,width,height,0x80402010u,7);
+            texture_state(*s,20);s->ad(0x49,pabe);s->ad(0x42,0x44u);
+            s->ad(0x4C,(1u<<16u)|(0x0000FF00ull<<32u));
+            s->ad(0x47,(1u<<16u)|(2u<<17u)|1u|(5u<<1u)|(0x80u<<4u)|(fail<<12u));
+            textured_uv(*s,0,0,3,1,0,0,48,16,0x80808080u,true,9);
+        }
+        same(cpu,accelerated,"textured alpha/AFAIL/PABE/FBMSK/depth");
+        const auto expected=fail==0u || fail==2u?0x80402010u:
+            fail==3u?(pabe?0x80002080u:0x80202048u):(pabe?0x40002080u:0x40202048u);
+        require(accelerated.gs.vram().read(0,64,0,0,0)==expected &&
+            accelerated.gs.vram().read_depth(32u*8192u,64,0,0,0)==(fail==2u?9u:7u),
+            "independent textured alpha-fail color/depth expected result");
+        require(accelerated.gs.vram().read(0,64,0,1,0)==0x80002080u &&
+            accelerated.gs.vram().read(0,64,0,2,0)==0xC00020B8u &&
+            accelerated.gs.vram().read_depth(32u*8192u,64,0,1,0)==9u,
+            "independent variable source alpha blend, saturation, mask and depth result");
+    }
+    Stream cpu,accelerated(gpu);
+    for(auto* s:{&cpu,&accelerated}) {
+        s->setup(0,true,false);texture_source(*s,20);fixture_vram(*s).write(palette_base,64,0,0,0,0x40112233u);
+        s->sprite(0,0,width,height,0x80000000u);texture_state(*s,20);
+        textured_uv(*s,0,0,1,1,0,0,16,16);
+        require(s->gs.vram().read(0,64,1,0,0)==0x112233u,"known textured RGB does not require unknown FBA alpha");
+        rejects([&]{(void)s->gs.vram().read(0,64,0,0,0);},"unwritten bits");
+    }
+    same(cpu,accelerated,"textured alpha preserves unknown FBA proof",false);
+}
+void check_texture_residency(std::shared_ptr<GsGpu> gpu) {
+    Stream cpu,accelerated(gpu);
+    for(auto* s:{&cpu,&accelerated}) {
+        s->setup();s->sprite(0,0,width,height,0x80402010u);
+        s->ad(0x4C,8u|(1u<<16u));s->sprite(0,0,64,32,0x80A06020u);s->ad(0x3F,0);
+        s->ad(0x4C,1u<<16u);s->ad(6,256u|(1ull<<14u)|(6ull<<26u)|(5ull<<30u)|(1ull<<34u)|(1ull<<35u));
+        s->ad(8,0);s->ad(0x14,0);
+    }
+    const auto before=gpu->stats();
+    const auto primitives=accelerated.gs.vram().gpu_primitives();
+    for(auto* s:{&cpu,&accelerated})textured_uv(*s,0,0,8,8,0,0,128,128);
+    accelerated.gs.vram().submit_gpu();
+    const auto after=gpu->stats();
+    require(accelerated.gs.vram().gpu_primitives()==primitives+1u,"GPU-rendered texture is consumed by a later GPU sprite");
+    require(after.readback_bytes==before.readback_bytes && after.upload_bytes==before.upload_bytes,
+        "resident rendered texture and framebuffer need no VRAM readback or reupload");
+    same(cpu,accelerated,"render-to-texture resident dependency");
+    require(accelerated.gs.vram().read(0,64,0,0,0)==0x80A06020u,"rendered source expected color");
+    for(auto* s:{&cpu,&accelerated}) {
+        // A transfer dirties the earlier cached page; only guest TEXFLUSH
+        // authorizes sampling the new bytes. Preserve the neighboring words.
+        s->upload(texture_base,0,2,1,0x8040201080112233ull);
+        const auto writes=s->gs.vram().pixel_writes();
+        rejects([&]{textured_uv(*s,8,0,10,1,0,0,32,16);},"cached texture page changed");
+        require(s->gs.vram().pixel_writes()==writes,"stale texture cache refuses before writing");
+        s->gif.reset();
+        s->ad(0x3F,0);textured_uv(*s,8,0,10,1,0,0,32,16);
+        s->sprite(16,0,24,8,0x80FEDCBAu);
+    }
+    same(cpu,accelerated,"resident source partial upload, TEXFLUSH, textured return");
+    require(accelerated.gs.vram().read(0,64,0,8,0)==0x80112233u &&
+        accelerated.gs.vram().read(0,64,0,9,0)==0x80402010u &&
+        accelerated.gs.vram().read(texture_base,64,0,2,0)==0x80A06020u,"partial texture upload preserves its resident neighbors");
+    for(auto* s:{&cpu,&accelerated}) {
+        s->ad(0x4C,8u|(1u<<16u));s->ad(0,0x116);s->ad(1,0x80808080u);s->ad(3,0);s->vertex(0,0);
+        s->ad(3,128u|(128ull<<16u));const auto writes=s->gs.vram().pixel_writes();
+        rejects([&]{s->vertex(128,128);},"cache feedback");
+        require(s->gs.vram().pixel_writes()==writes,"source/destination alias refuses before the first shader write");
+    }
+    same(cpu,accelerated,"feedback refusal preserves prior resident work");
+    paired(gpu,"unknown indexed nibble never becomes zero",[](Stream& s){
+        texture_source(s,20);s.sprite(0,0,width,height,0x80000000u);texture_state(s,20);
+        fixture_vram(s).write(texture_base,256,20,0,0,7,0,1);
+        const auto writes=s.gs.vram().pixel_writes();
+        rejects([&]{textured_uv(s,0,0,1,1,0,0,16,16);},"unwritten bits");
+        require(s.gs.vram().pixel_writes()==writes,"unknown source nibble causes synchronous refusal before destination changes");
+        s.gif.reset();
+        fixture_vram(s).write(texture_base,256,20,0,0,7);textured_uv(s,0,0,1,1,0,0,16,16);
+        require(s.gs.vram().read(0,64,0,0,0)==palette_color(7),"later known nibble permits the original palette color");
+    });
+}
+void check_depth16s(std::shared_ptr<GsGpu> gpu) {
+    constexpr unsigned zb=32u*8192u;
+    for(const unsigned psm:{0u,1u})for(const unsigned zfunc:{2u,3u})for(const bool zmask:{false,true}) {
+        Stream cpu,accelerated(gpu);
+        for(auto* s:{&cpu,&accelerated}) {
+            s->setup(psm);texture_source(*s,20);
+            s->ad(0x4C,(2u<<16u)|(std::uint64_t{psm}<<24u));
+            s->ad(0x40,(63ull<<16u)|(127ull<<48u));s->ad(0x4E,32u|(10u<<24u));
+            s->ad(0x47,3u<<16u);s->sprite(0,0,64,128,0x80402010u,7);
+            s->ad(0x40,(63ull<<16u)|(65ull<<48u));
+            texture_state(*s,20);s->ad(0x47,(1u<<16u)|(zfunc<<17u));
+            s->ad(0x4E,32u|(10u<<24u)|(std::uint64_t{zmask}<<32u));
+        }
+        const auto primitives=accelerated.gs.vram().gpu_primitives();
+        for(auto* s:{&cpu,&accelerated})textured_uv(*s,0,63,64,66,0,0,64u*16u,48,0x80808080u,false,7);
+        require(accelerated.gs.vram().gpu_primitives()==primitives+1u,"Z16S comparison selects textured GPU raster across 64-row depth pages");
+        same(cpu,accelerated,"PSMZ16S GEQUAL/GREATER equal boundary CT"+std::to_string(psm));
+        const auto equal_color=(zfunc==2u?palette_color(3):0x80402010u)&(psm==1u?0xFFFFFFu:0xFFFFFFFFu);
+        require(accelerated.gs.vram().read(0,128,psm,0,64)==equal_color,
+            "independent Z16S equal-depth comparison result");
+        for(auto* s:{&cpu,&accelerated}) {
+            textured_uv(*s,0,63,64,66,0,0,64u*16u,48,0x80808080u,false,9);
+            textured_uv(*s,0,64,1,65,16,0,32,16,0x80808080u,false,8);
+        }
+        same(cpu,accelerated,"PSMZ16S write/mask, adjacent halfwords and source dependency");
+        require(accelerated.gs.vram().read_depth(zb,128,10,0,64)==(zmask?7u:9u) &&
+            accelerated.gs.vram().read_depth(zb,128,10,8,64)==(zmask?7u:9u),
+            "independent Z16S mask preserves or changes both halves of the same physical word");
+        const auto packed=accelerated.gs.vram().word_at(zb+22528u);
+        require(packed==(zmask?0x00070007u:0x00090009u),"independent PSMZ16S page/halfword address vector and atomic neighbor preservation");
+        const auto expected=zmask?palette_color(1):palette_color(3);
+        require(accelerated.gs.vram().read(0,128,psm,0,64)==(expected&(psm==1u?0xFFFFFFu:0xFFFFFFFFu)),
+            "Z16S written depth controls a later textured sprite in original command order");
+    }
+    for(unsigned fail=0;fail<4u;++fail) {
+        Stream cpu,accelerated(gpu);
+        for(auto* s:{&cpu,&accelerated}) {
+            s->setup();texture_source(*s,20);fixture_vram(*s).write(palette_base,64,0,0,0,0x40112233u);
+            s->ad(0x4E,32u|(10u<<24u));s->ad(0x47,3u<<16u);s->sprite(0,0,width,height,0x80402010u,7);
+            texture_state(*s,20);s->ad(0x47,(3u<<16u)|1u|(fail<<12u));
+            textured_uv(*s,0,0,16,1,0,0,0,0,0x80808080u,false,9);
+        }
+        same(cpu,accelerated,"PSMZ16S alpha-fail write selection");
+        const auto expected=fail==0u || fail==2u?0x80402010u:fail==3u?0x80112233u:0x40112233u;
+        require(accelerated.gs.vram().read(0,64,0,0,0)==expected &&
+            accelerated.gs.vram().word_at(zb+6144u)==(fail==2u?0x00090009u:0x00070007u),
+            "independent alpha-fail selection controls both Z16S halfword writes");
+    }
+    Stream cpu,accelerated(gpu);
+    for(auto* s:{&cpu,&accelerated}) {
+        s->setup(0,false);texture_source(*s,20);
+        for(unsigned x=0;x<16u;++x) {
+            fixture_vram(*s).write(0,64,0,x,0,0x80402010u);
+            fixture_vram(*s).write_depth(zb,64,10,x,0,7);
+        }
+        s->ad(0x4E,32u|(10u<<24u));s->ad(0x47,3u<<16u);texture_state(*s,20);
+        textured_uv(*s,0,0,16,1,0,0,0,0,0x80808080u,false,9);
+    }
+    same(cpu,accelerated,"PSMZ16S conditional known-bit joins in neighboring halves",false);
+    const auto at=(zb+6144u)/4u;
+    require(accelerated.gs.vram().raw_words()[at]==0x00090009u &&
+        accelerated.gs.vram().known_bits()[at]==0xFFF1FFF1u,
+        "independent conditional Z16S join preserves every equal bit and both neighboring halfwords");
+}
 void check_fallback_and_transfers(std::shared_ptr<GsGpu> gpu) {
     for(const unsigned order:{0u,2u})paired(gpu,"GPU source with overlapping directional local copy",[&](Stream& s){
         s.sprite(0,0,width,height,0x80000000u);
@@ -413,8 +813,52 @@ void check_fallback_and_transfers(std::shared_ptr<GsGpu> gpu) {
     require(snapshot.vram().read(0,64,0,0,0)==0x80402010u && source.gs.vram().read(0,64,0,0,0)==0x80ABCDEFu,
         "a guest-state copy cannot share writable VRAM with later GPU commands");
 }
-void check_guest(std::shared_ptr<GsGpu> gpu,const std::filesystem::path& output) {
-    auto fixture=m29::build();
+m29::Program textured_guest_fixture() {
+    auto rom=m20::build_firmware().rom;
+    m20::Assembler a(m20::kResetVector);
+    using namespace m20;
+    unsigned data=0x3000u;
+    const auto put64=[&](unsigned at,std::uint64_t value) {
+        for(unsigned byte=0;byte<8u;++byte)rom.at(at+byte)=static_cast<std::uint8_t>(value>>(byte*8u));
+    };
+    const auto privileged=[&](unsigned address,std::uint64_t value) {
+        put64(data,value);a.la(t0,address);a.la(t1,kResetVector+data);a.lq(t2,0,t1);a.sd(t2,0,t0);data+=16;
+    };
+    privileged(0xB2000010u,2u<<13u);privileged(0xB2000020u,0);privileged(0xB2000000u,0xFF25u);
+    privileged(0xB2000070u,1u<<9u);privileged(0xB2000080u,((width-1ull)<<32u)|((height-1ull)<<44u));
+    privileged(0xB2000060u,2u|(2ull<<42u));
+    std::vector<std::pair<std::uint64_t,std::uint64_t>> commands;
+    const auto ad=[&](unsigned reg,std::uint64_t value){commands.emplace_back(value,reg);};
+    ad(0x1A,1);ad(0x18,0);ad(0x4C,1u<<16u);ad(0x40,((width-1ull)<<16u)|((height-1ull)<<48u));
+    ad(0x47,3u<<16u);ad(0x4E,1ull<<32u);ad(0x22,0);ad(0x46,1);ad(0x49,0);ad(0x4A,0);
+    ad(0,6);ad(1,0x80402010u);ad(5,0);ad(5,width*16u|(std::uint64_t{height*16u}<<16u));
+    const auto transfer=[&](unsigned base,unsigned psm,unsigned bw,unsigned w,unsigned h) {
+        ad(0x50,(std::uint64_t{base/256u}<<32u)|(std::uint64_t{bw/64u}<<48u)|(std::uint64_t{psm}<<56u));
+        ad(0x51,0);ad(0x52,w|(std::uint64_t{h}<<32u));ad(0x53,0);
+    };
+    transfer(palette_base,0,64,8,2);
+    for(unsigned i=0;i<16u;i+=2u)ad(0x54,palette_color(i)|(std::uint64_t{palette_color(i+1u)}<<32u));
+    transfer(texture_base,20,128,8,2);ad(0x54,0xFEDCBA9876543210ull);ad(0x3F,0);
+    ad(6,texture_base/256u|(2ull<<14u)|(20ull<<20u)|(3ull<<26u)|(1ull<<30u)|
+        (1ull<<34u)|(std::uint64_t{palette_base/256u}<<37u)|(1ull<<61u));
+    ad(8,0);ad(0x14,0);ad(0,0x116);ad(1,0x80808080u);ad(3,0);ad(5,0);
+    ad(3,128u|(32ull<<16u));ad(5,128u|(32ull<<16u));
+    // The second sprite consumes the copied palette, independent of a later
+    // register latch change while the first textured command is queued.
+    ad(0,0x116);ad(3,0);ad(5,128u);ad(3,128u|(32ull<<16u));ad(5,256u|(32ull<<16u));
+    const auto packet=data;
+    put64(data,commands.size()|(1ull<<15u)|(1ull<<60u));put64(data+8u,0xEu);data+=16u;
+    for(const auto& [low,high]:commands){put64(data,low);put64(data+8u,high);data+=16u;}
+    a.la(t0,kResetVector+packet);a.la(t1,0xB0006000u);a.addiu(t2,zero,static_cast<unsigned>(commands.size()+1u));
+    a.label("packet");a.lq(t3,0,t0);a.sq(t3,0,t1);a.addiu(t0,t0,16u);a.addiu(t2,t2,0xFFFFu);a.bne(t2,zero,"packet");a.nop();
+    a.addiu(t4,zero,15000u);a.label("wait");a.addiu(t4,t4,0xFFFFu);a.bne(t4,zero,"wait");a.nop();
+    const auto stop=a.here();a.brk();const auto code=le_words(a.finish());
+    require(code.size()<kResetSize,"textured synthetic ROM code fits RESET");
+    std::fill(rom.begin(),rom.begin()+kResetSize,0);std::copy(code.begin(),code.end(),rom.begin());
+    return {std::move(rom),stop};
+}
+void check_guest(std::shared_ptr<GsGpu> gpu,const std::filesystem::path& output,bool textured=false) {
+    auto fixture=textured?textured_guest_fixture():m29::build();
     // Both processors fetch the same synthetic ROM. Distinguish their actual
     // modeled reset SR.ERL values, then leave the IOP executing a real branch
     // loop instead of feeding it the EE-only LQ instruction in the test card.
@@ -439,7 +883,18 @@ void check_guest(std::shared_ptr<GsGpu> gpu,const std::filesystem::path& output)
         reports[run]=run_ee_boot(state,memory,nullptr,options);
         require(reports[run].outcome==BootOutcome::StopAddress,"synthetic guest boundary: "+reports[run].reason);
         const auto frame=memory.gs().scanout(state.retired_instructions);
-        require(sha256_hex(frame.rgba)=="43564b222dee0155325d1db289518d63f6a02af60690dd6da83ad69d002e3f54",
+        if(textured) {
+            require(frame.width==width && frame.height==height,"textured synthetic guest scanout geometry");
+            std::vector<std::uint8_t> expected;
+            for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
+                const auto pixel=y<2u && x<16u?palette_color((x%8u)+y*8u):0x80402010u;
+                for(unsigned channel=0;channel<3u;++channel)expected.push_back(static_cast<std::uint8_t>(pixel>>(channel*8u)));
+                expected.push_back(255u);
+            }
+            require(frame.rgba==expected,"independent complete textured guest RGBA expected result");
+            if(run)require(memory.gs().vram().gpu_primitives()==3u && memory.gs().vram().cpu_fallbacks()==0u,
+                "guest GIF executes one clear and two actual textured GPU sprites");
+        } else require(sha256_hex(frame.rgba)=="43564b222dee0155325d1db289518d63f6a02af60690dd6da83ad69d002e3f54",
             "original synthetic GIF/GS guest produces the RGBA golden digest");
         state_hash[run]=checkpoint_state_sha256(state,memory);
         if(!output.empty()) {
@@ -462,9 +917,15 @@ void check_guest(std::shared_ptr<GsGpu> gpu,const std::filesystem::path& output)
         frames[0][n].ee_cycle==frames[1][n].ee_cycle,"each modeled field has identical pixels and guest cycle");
     if(!output.empty()) {
         EEState state;Memory memory;prepare_ee_boot(bios,nullptr,state,memory);memory.set_gs_gpu_backend(gpu);
-        BootOptions options;options.max_instructions=750;options.stop_at=fixture.stop;
-        const auto batches_before=gpu->stats().batches;
-        const auto boundary=run_ee_boot(state,memory,nullptr,options);
+        BootOptions options;options.max_instructions=textured?1u:750u;options.stop_at=fixture.stop;
+        auto batches_before=gpu->stats().batches;
+        auto boundary=run_ee_boot(state,memory,nullptr,options);
+        if(textured) {
+            while(memory.gs().vram().gpu_primitives()<2u && state.retired_instructions<5000u &&
+                  boundary.outcome==BootOutcome::BudgetExhausted)boundary=run_ee_boot(state,memory,nullptr,options);
+            require(memory.gs().vram().gpu_primitives()==2u,"checkpoint stops immediately after first guest textured kick");
+            batches_before=gpu->stats().batches;
+        }
         require(boundary.outcome==BootOutcome::BudgetExhausted && memory.gs().vram().gpu_primitives()>0 &&
             gpu->stats().batches==batches_before,"mid-stream checkpoint boundary retains pending original GPU primitives");
         CheckpointContext context;context.scenario_sha256=std::string(64,'a');
@@ -560,8 +1021,11 @@ int main(int argc,char** argv)try {
     check_device_batch(api);check_fused_readback(gpu);check_detach_coherence(gpu);check_fused_scanout(gpu);
     check_partial_coherence(gpu);check_resident_batches(gpu);
     check_completion_order(gpu);check_pending_knowledge(gpu);
-    check_raster(gpu);check_pipeline(gpu);check_fallback_and_transfers(gpu);
-    check_guest(gpu,argc>1?std::filesystem::path{argv[1]}:std::filesystem::path{});
+    check_raster(gpu);check_pipeline(gpu);
+    check_textured_nearest(gpu);check_texture_palette_snapshots(gpu);check_clut_reload_pending(gpu);check_texture_functions(gpu);
+    check_texture_coordinates(gpu);check_texture_pipeline(gpu);check_texture_residency(gpu);check_depth16s(gpu);check_fallback_and_transfers(gpu);
+    const auto output=argc>1?std::filesystem::path{argv[1]}:std::filesystem::path{};
+    check_guest(gpu,output);check_guest(gpu,output.empty()?output:output/"textured",true);
     require(gpu->stats().primitives>0 && gpu->stats().batches>0,"commands were rasterized by the selected GPU");
     std::cout<<"GPU raster, full VRAM/knowledge, fallback and guest checkpoint equivalence passed on "
         <<gpu->device_name()<<"; GPU primitives="<<gpu->stats().primitives<<", batches="<<gpu->stats().batches<<'\n';
