@@ -18,6 +18,32 @@
   autorização específica de publicação. Métodos, amostras e limites em
   [RUNTIME-PERFORMANCE](docs/RUNTIME-PERFORMANCE.md). Nenhum ensaio ativo.
 
+## Sprites comerciais na GPU — 05/11/2026
+
+- `659ab18` estende o GS compute existente com sprites T4/T8/CT32/24,
+  CLUT por comando, UV/STQ comprovado, filtros inteiros e Z16S atômico.
+  TEXA/TFX, alfa/blending, máscaras e conhecimento conservam o caminho
+  comum; AOT R5900/VU1, firmware e clocks não foram alterados.
+- RTX 4070: Vulkan e D3D12 passaram 1209 primitivas/231 lotes cada,
+  com pixels esperados independentes, VRAM/máscaras completas, RGBA,
+  estado/ciclos/IRQ e save/load. Treze testes CPU focados passaram;
+  build sem backends passou cinco testes e dois skips GPU esperados.
+- Super Bust-A-Move, menu, 30 milhões: **282 sprites texturizados GPU
+  (222 T4 + 60 T8), 12 limpezas e zero fallback na janela** nos dois
+  backends. Estado completo, seis campos, 9766 amostras PCM e 12 polls
+  SIO2 coincidiram com CPU e GPU anterior, inclusive em 10 + 20 milhões.
+  O segundo campo já contém 47 sprites texturizados GPU. O menu também
+  foi observado na janela experimental Vulkan, encerrada com segurança.
+- Cinco rodadas alternadas com aquecimento: Vulkan 10,555834 s/30 milhões
+  e 1,696387 s/campo; D3D12 10,651491 s e 1,736655 s/campo. Controles
+  sofreram carga externa transitória; **sem ganho total robusto nem
+  tempo real demonstrados**. Bytes, sincronizações, amostras e limites
+  estão em [GS-GPU-TEXTURES](docs/GS-GPU-TEXTURES.md).
+- O profiler existente aponta sincronização, EE, memória e IOP como limite;
+  GS ficou em cerca de 1% do tempo instrumentado nos caminhos GPU.
+- Triângulos texturizados, AA1/Gouraud e casos sem prova mantêm CPU;
+  apresentação direta e gameplay completo continuam não demonstrados.
+
 ## Primeiro caminho GS compute Vulkan e Direct3D 12 — 05/11/2026
 
 Medições de `92dc21c`/`e626526` e seleção verificada em `e9bbc21`.
@@ -50,7 +76,7 @@ Incrementos posteriores do trabalho paralelo têm relatórios próprios.
 
 ## Estado funcional verificado — 05/11/2026
 
-**Protótipo experimental. Não executa o Browser original até o fim, não possui launcher público nem declara jogos comerciais jogáveis.**
+**Protótipo experimental com launcher local e sessão de checkpoint ao vivo. Não executa o Browser original até o fim nem declara jogos comerciais jogáveis.**
 
 | Componente | Evidência até este ponto | Limite |
 |---|---|---|
@@ -58,9 +84,9 @@ Incrementos posteriores do trabalho paralelo têm relatórios próprios.
 | Boot EE | ROM0 reais, COP0/TLB, memória, RDRAM, início do kernel em RAM e AOT híbrido com trace | CPU e dispositivos ainda parciais |
 | Direct ELF | BOOT2 de ISO pelo loader comum, ambiente bare-metal, Count/Compare, SYSCALL/BREAK para handler convidado, usuário/supervisor/ERL e overlays AOT verificados | Não instala kernel/serviços; ELF comercial executado, sem imagem ou jogabilidade |
 | IOP | Inicialização R3000A, NVM externa, MECHACON, timers/VBLANK, SIF e EE→IOP SIF1 com bytes reais | Sem linker IRX, SIF0, RPC ou serviços completos; DMA/timing ainda parciais |
-| GS/GIF | VRAM 4 MiB, CT32/24 e índices T4/T8, profundidade, sprites UV/CLUT/blending, PATH2/3 e scanout; título e menu original de Super Bust-A-Move com navegação visual no diagnóstico experimental | Primeira partida bloqueada por AA1; boot original não concluído; hipóteses explícitas e formatos/efeitos/timing parciais |
-| SPU2 | Síntese ADPCM/Gaussiana, pitch, ADSR, KON/KOFF, loop/ENDX/NAX, IRQ de RAM, mix estéreo e WAV real; estado numérico completo em checkpoints | Sem backend de áudio do host; noise, sweeps e fontes audíveis de efeitos/ADMA ainda recusados; timing físico não certificado |
-| Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca persistente, identificação de BIOS/NVM pelo núcleo e de discos ISO/BIN/CUE, diagnóstico `ps2n-boot` assíncrono; janela real validada no Windows | Jogar e Browser bloqueados (sem runtime); sem release; diálogos e arrastar e soltar não automatizados |
+| GS/GIF | VRAM 4 MiB, CT32/24 e índices T4/T8, sprites UV/STQ, CLUT/blending, PATH2/3 e scanout; sprites texturizados e Z16S nos backends Vulkan/D3D12, com menu comercial equivalente; AA1 experimental CPU | Primeira partida não demonstrada; boot original não concluído; hipóteses explícitas e formatos/efeitos/timing parciais |
+| SPU2 | Síntese ADPCM/Gaussiana, pitch, ADSR, KON/KOFF, loop/ENDX/NAX, IRQ de RAM e mix estéreo; PCM ao vivo no Windows ouvido pelo mantenedor; checkpoints completos | Noise, sweeps e fontes audíveis de efeitos/ADMA ainda recusados; timing físico não certificado; som entrecortado pela lentidão |
+| Launcher desktop | `ps2-native` (Qt 6 opcional): biblioteca, diagnóstico e Modo de Teste Experimental com checkpoint verificado, thread própria, GS, teclado/XInput e PCM ao vivo | Jogar e Browser originais bloqueados; 0–1 FPS observados na sessão; gamepad físico e sequência manual completa ainda não validados; sem release |
 | Distribuição | Builds/testes sintéticos nas seis arquiteturas de CI | Builds não comprovam funcionamento do firmware/jogo em cada host; sem release |
 
 ## VRAM residente — 05/11/2026

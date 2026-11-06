@@ -15,21 +15,64 @@ de memória/execução por instrução. Não reutilizar as antigas proporções
 instrumentadas nem ampliar GS sem nova evidência. Preservar os checkpoints
 e a fronteira funcional abaixo. [Medições e limites](RUNTIME-PERFORMANCE.md).
 
-## GS GPU — próximo incremento após o primeiro caminho
+## GS GPU — após os sprites texturizados comerciais
 
-O caminho compute flat Vulkan/D3D12 está integrado. As janelas comerciais
-históricas ainda usam somente CPU, portanto o próximo incremento deve cobrir
-sprites texturados UV/STQ e CLUT/filtros comprovados, conservando o setup GS,
-as máscaras conhecidas, o fallback e a ordem. Medir uma sequência comercial
-que realmente execute primitivas GPU e comparar VRAM/RGBA/PCM/estado/ciclos
-com o controle; não inferir ganho de FPS de apresentação ou teste sintético.
+`659ab18` completou o caminho comercial do menu com 222 sprites T4, 60 T8
+e 12 limpezas rasterizados por Vulkan e D3D12, com CLUT e Z16S reais do
+estado capturado. Zero fallback nessa janela; estado completo, RGBA, PCM,
+entrada, ciclos/IRQ e continuação 10 + 20 milhões iguais ao controle.
+Sprites CT32/24, STQ/filtros comprovados e hipóteses explícitas também têm
+regressões. Não registrar texturas ou CLUT como ausentes dessa entrega.
 
-Apresentação direta continua pendente. Preservar os incrementos residentes
-produzidos em paralelo, os checkpoints originais e a sessão interativa
-abaixo. Não retomar Computer Use sem autorização. Evidência do primeiro
-caminho, regressões/ganhos medidos e limites em [GS-GPU-STATUS](GS-GPU-STATUS.md).
+O próximo trabalho de desempenho precisa partir do gargalo medido e repetir
+uma coleta estável no cenário atual: a cobertura GPU aumentou, mas as cinco
+rodadas tiveram interferência externa e não demonstram ganho total robusto.
+O perfil existente apontou sincronização/EE/memória/IOP; investigar suas
+chamadas antes de ampliar rasterização, preservando efeitos/entrada/áudio
+e medindo campos originais. Triângulos texturizados, AA1/Gouraud e apresentação
+direta continuam fora desta entrega; só ampliar após evidência do cenário.
 
-## Fronteira ativa — menu e AA1, 05/11/2026
+A primeira partida continua não demonstrada; a fronteira interativa é o
+menu em `out/game-first/interactive-menu.json`. AA1/STQ já existem no CPU
+experimental e não devem ser registrados como bloqueio ainda não implementado.
+Preservar os checkpoints e as anotações anteriores abaixo.
+A autorização de Computer Use desta conferência
+terminou ao fechar o launcher; não retomar outra sessão sem novo pedido.
+Evidência e limites em [GS-GPU-TEXTURES](GS-GPU-TEXTURES.md).
+
+## Fronteira ativa — sessão interativa, 05/11/2026
+
+`feed1d8` conecta o launcher Qt ao runtime compartilhado, com checkpoint
+completo, GS ao vivo, teclado/XInput e PCM do SPU2. `210c48b` corrige a largura
+do painel no Qt 6.4. No Windows, o título apareceu, Enter/Start iniciou a
+animação GAME MENU e o mantenedor confirmou ouvir som do jogo. A execução
+observada ficou em 0–1 FPS e aproximadamente 0,75–0,88% do clock EE modelado.
+**A sessão ainda não oferece velocidade adequada para jogar.**
+
+O mantenedor interrompeu Computer Use com Escape e depois fechou o launcher.
+Não retomar controle da janela sem novo pedido. Pausa/retomada/parada,
+salvamento, entrada SIO2, RGBA/PCM e equivalência de estado foram exercitados
+pelo teste `launcher-experimental-session`; isso não substitui a sequência
+manual completa nem comprova gameplay. Nenhum ensaio comercial deve ficar ativo.
+
+Ponto local mais próximo para teste pessoal:
+`out/game-first/interactive-menu.json`, com checkpoint completo
+`superbust-interactive-menu.ps2ncp`, EE `0x1D2F00`, 12.281.266.633 instruções,
+cenário GS 61 já revisado. Originais preservados; ROM0/ROM1/NVM/disco fixados
+pelo manifesto. Esse ponto deriva do menu anterior ao Cross, com uma
+instrução executada e a hipótese GS existente explicitamente refinada.
+O manifesto antigo `interactive-session.json` continua disponível no título.
+
+Próximo trabalho: completar a sequência humana Up/Down/Cross, verificar a
+primeira partida por imagem e resposta dos direcionais, e isolar a próxima
+recusa real se ocorrer. AA1/STQ já estão na main: dois testes gráficos e uma
+continuação de um milhão desde `superbust-before-game-shading.ps2ncp` passaram,
+sem recusa EE/IOP. Não registrar AA1 como bloqueio atual nem declarar gameplay
+apenas porque essa janela avançou. Não adicionar otimizações sem nova medida
+e comparação de estado. Uso, medidas e limites em
+[INTERACTIVE-TEST-STATUS](INTERACTIVE-TEST-STATUS.md).
+
+## Fronteira anterior — menu e AA1, 05/11/2026 (histórico)
 
 O KON audível foi superado por síntese real no SPU2 existente. O diagnóstico
 alcançou o título e o GAME MENU original: Start abriu o menu, Down selecionou

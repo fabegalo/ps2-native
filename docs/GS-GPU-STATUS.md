@@ -1,5 +1,18 @@
 # GS acelerado — primeiro caminho Vulkan e Direct3D 12
 
+## Sprites texturizados comerciais — revisão `659ab18`
+
+O incremento posterior renderiza T4/T8/CT32/24 com CLUT imutável por comando,
+UV/STQ e filtros inteiros, integrado à VRAM residente. Inclui Z16S necessário
+à captura real, com atomics que preservam a metade vizinha da palavra.
+Vulkan e D3D12 executaram 282 sprites texturizados e 12 limpezas do menu de
+Super Bust-A-Move, com zero fallback nessa janela e estado/RGBA/PCM idênticos
+ao CPU, inclusive após checkpoint. Cinco rodadas pareadas mediram o cenário;
+a variação externa impede declarar ganho total robusto ou tempo real.
+
+Contrato, resultados independentes, medição por campo original e CI estão em
+[GS-GPU-TEXTURES](GS-GPU-TEXTURES.md). As seções seguintes são históricas.
+
 ## Residência incremental — revisão `4fdd7dd`, 05/11/2026
 
 `da485fc`, `580d381` e `4fdd7dd` implementam coerência por páginas de 8 KiB,
