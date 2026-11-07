@@ -229,7 +229,7 @@ std::uint32_t GsVram::read_bits(std::uint32_t base,unsigned width,unsigned psm,u
     if(gpu_)synchronize_page(addr/kPageBytes);
     const auto at = addr / 4u, shift = (addr & 3u) * 8u + (psm == 20u ? (y & 2u) * 2u : 0u);
     const auto bits = (psm == 20u ? 15u : psm == 19u ? 255u : psm==2u || psm==10u ? 0xFFFFu : psm == 1u ? 0xFFFFFFu : 0xFFFFFFFFu)&mask;
-    if (((known_[at] >> shift) & bits) != bits) throw DeviceRefusal("GS VRAM read: pixel contains unwritten bits");
+    if (((known_[at] >> shift) & bits) != bits) throw DeviceRefusal("GS VRAM read: pixel contains unwritten bits (PSM="+std::to_string(psm)+" XY="+std::to_string(x)+","+std::to_string(y)+" address="+std::to_string(addr)+" required="+std::to_string(bits)+" known="+std::to_string(known_[at]>>shift)+")");
     return (words_[at] >> shift) & bits;
 }
 void GsVram::write(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y,

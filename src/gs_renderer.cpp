@@ -224,12 +224,15 @@ std::uint32_t GsRegisters::sample_texture(std::uint64_t tex,std::uint64_t clamp,
         throw DeviceRefusal("GS sampling requires TEXFLUSH after a cached texture page changed; stale texture cache is not modeled");
     sampled_pages_[first]=true;sampled_pages_[last]=true;
     const bool packed=psm==2u || psm==10u;
-    const auto raw=vram_.read_bits(base,bw,psm,x,y,packed && !(tex&(1ull<<34u)) ? 0x7FFFu : 0xFFFFFFFFu);
+    const auto raw=vram_.read_bits(base,bw,psm,x,y,packed ? 0x7FFFu : 0xFFFFFFFFu);
     if(packed) {
         const auto rgb=((raw&31u)<<3u)|(((raw>>5u)&31u)<<11u)|(((raw>>10u)&31u)<<19u);
         if(!(tex&(1ull<<34u)))return rgb;
         const auto texa=required(0x3Bu);
-        const auto alpha=(texa&(1u<<15u)) && !raw ? 0u : static_cast<std::uint32_t>(texa>>((raw&0x8000u)?32u:0u))&255u;
+        const auto alpha0=(texa&(1u<<15u)) && !raw ? 0u : static_cast<std::uint32_t>(texa)&255u;
+        const auto alpha1=static_cast<std::uint32_t>(texa>>32u)&255u;
+        // Equal expansion results consume no selector bit, including AEM.
+        const auto alpha=alpha0==alpha1 ? alpha0 : vram_.read_bits(base,bw,psm,x,y,0x8000u) ? alpha1 : alpha0;
         return rgb|(alpha<<24u);
     }
     if(psm==0u)return raw;

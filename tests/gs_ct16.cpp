@@ -78,10 +78,18 @@ int main(int argc,char** argv) try {
         gs.general_write(0x4C,1u|(1u<<16u));gs.general_write(0x40,(7ull<<16u)|(7ull<<48u));gs.general_write(0x47,3u<<16u);gs.general_write(0x4E,1ull<<32u);gs.general_write(0x22,0);gs.general_write(0x4A,0);
         gs.general_write(6,(1ull<<14u)|(std::uint64_t{psm}<<20u)|(3ull<<26u)|(3ull<<30u)|(1ull<<34u)|(1ull<<35u));gs.general_write(8,0);gs.general_write(0x14,0);
         gs.general_write(0x3B,0x9100000023ull|(aem ? 0x8000ull : 0ull));
-        const auto draw=[&](unsigned x,unsigned y,unsigned u,unsigned v) {gs.general_write(3,u*16u|(std::uint64_t{v*16u}<<16u));gs.general_write(5,x*16u|(std::uint64_t{y*16u}<<16u));gs.general_write(5,(x+1u)*16u|(std::uint64_t{(y+1u)*16u}<<16u));};
+        const auto draw=[&](unsigned x,unsigned y,unsigned u,unsigned v) {gs.general_write(0,0x116u);gs.general_write(3,u*16u|(std::uint64_t{v*16u}<<16u));gs.general_write(5,x*16u|(std::uint64_t{y*16u}<<16u));gs.general_write(5,(x+1u)*16u|(std::uint64_t{(y+1u)*16u}<<16u));};
         const std::array<std::uint32_t,8> expected{aem?0u:0x23000000u,0x91000000u,0x230000F8u,0x910000F8u,0x2300F800u,0x23F80000u,0x23F8F8F8u,0x9100F800u};
         for(unsigned n=0;n<8u;++n){draw(n%4u,n/4u,n%4u,n/4u);require(gs.vram().read(8192,64,0,n%4u,n/4u)==expected[n],"CT16 texture expansion uses zero-filled RGB5 and TEXA TA0/TA1, with AEM applying only to an all-zero raw texel");}
         require(!gpu || gs.vram().cpu_fallbacks()>0u,"unsupported compute texture formats retain the real CPU sampling path");
+        auto& alpha_vram=const_cast<GsVram&>(gs.vram());alpha_vram.write(0,64,psm,0,0,0x1Fu,0,0x8000u);gs.general_write(0x3F,0);
+        gs.general_write(0x3B,0x8000000080ull|(aem?0x8000ull:0ull));draw(4,1,0,0);
+        require(gs.vram().read(8192,64,0,4,1)==0x800000F8u,"equal TEXA alpha values do not consume an unknown CT16 selector for nonblack RGB");
+        alpha_vram.write(0,64,psm,0,0,0,0,0x8000u);gs.general_write(0x3F,0);
+        if(aem)rejects([&]{draw(5,1,0,0);},"unwritten bits");else {draw(5,1,0,0);require(gs.vram().read(8192,64,0,5,1)==0x80000000u,"equal alpha remains independent of the selector for black without AEM");}
+        gs.general_write(0x3B,aem?0x8000ull:0ull);draw(6,1,0,0);
+        require(gs.vram().read(8192,64,0,6,1)==0u,"zero TEXA endpoints remain proven even for black AEM with unknown selector");
+        gs.general_write(0x3B,0x9100000023ull);rejects([&]{draw(7,1,0,0);},"unwritten bits");
         gs.general_write(6,(1ull<<14u)|(std::uint64_t{psm}<<20u)|(3ull<<26u)|(3ull<<30u)|(1ull<<35u));
         auto& vram=const_cast<GsVram&>(gs.vram());vram.write(0,64,psm,0,0,0x1Fu,0,0x8000u);gs.general_write(0x3F,0);
         draw(4,0,0,0);require(gs.vram().read(8192,64,0,4,0)==0x800000F8u,"RGB-only CT16 sampling consumes no unknown alpha bit and retains the real fragment alpha");
@@ -91,7 +99,7 @@ int main(int argc,char** argv) try {
         GsRegisters gs;gs.reset(0);gs.set_gpu_backend(gpu);setup(gs,psm,4,2,0,64);gs.image_write(0x001F001F001F001Full,0x001F001F001F001Full);gs.general_write(0x3F,0);
         gs.general_write(0,0x116u);gs.general_write(1,0x80808080u);gs.general_write(0x18,0);gs.general_write(0x1A,1);gs.general_write(0x4C,4u|(1u<<16u));gs.general_write(0x40,(7ull<<16u)|(7ull<<48u));gs.general_write(0x47,3u<<16u);gs.general_write(0x4E,1ull<<32u);gs.general_write(0x22,0);gs.general_write(0x4A,0);
         gs.general_write(6,(1ull<<14u)|(std::uint64_t{psm}<<20u)|(3ull<<26u)|(7ull<<30u)|(1ull<<35u));gs.general_write(8,0);gs.general_write(0x14,0);
-        const auto draw=[&]{gs.general_write(3,1024ull<<16u);gs.general_write(5,0);gs.general_write(5,16u|(16ull<<16u));};
+        const auto draw=[&]{gs.general_write(0,0x116u);gs.general_write(3,1024ull<<16u);gs.general_write(5,0);gs.general_write(5,16u|(16ull<<16u));};
         draw();require(gs.vram().read(32768,64,0,0,0)==0x800000F8u,"CT16 texture row 64 addresses its actual second 64x64 page");
         setup(gs,psm,4,2);gs.image_write(0,0);draw();require(gs.vram().read(32768,64,0,0,0)==0x800000F8u,"a cold first-page upload cannot invalidate a cached second-page CT16 texel");
         setup(gs,psm,4,2,0,64);gs.image_write(0x001F001F001F001Full,0x001F001F001F001Full);rejects(draw,"TEXFLUSH");gs.general_write(0x3F,0);draw();
