@@ -14,6 +14,19 @@ void program(VuControl& vu,unsigned unit) {
 }
 int main() try {
     {
+        VuControl vu;Vif vif;Gif gif;GsRegisters gs;gs.reset(0);program(vu,1);
+        vif.write_fifo(0x0200000003000000ull,0,gif,gs,&vu,90);
+        vif.write_fifo(0x1400000004000123ull,0,gif,gs,&vu,100);
+        vif.write_fifo(0x0700123413000000ull,0,gif,gs,&vu,100);
+        for(std::uint64_t cycle=100;cycle<107;++cycle) {
+            advance_vpus(cycle,nullptr,&vif,&vu,gif,gs);
+            require(vu.micro_running(1) && vif.processing(),"FLUSHA cannot bypass a running VU or its E-bit drain");
+        }
+        advance_vpus(107,nullptr,&vif,&vu,gif,gs);
+        require(!vu.micro_running(1) && !vif.processing() && vif.read_register(0x30)==0x1234,
+            "FLUSHA releases the following command on the genuine VU Ready event");
+    }
+    {
         Iop dma;VuControl vu;Vif v0(Vif::Unit::Vu0),v1;Gif gif;GsRegisters gs;gs.reset(0);dma.reset({},nullptr);
         std::vector<std::uint8_t> ram(0x200);ram[0x103]=0x70;dma.attach_ee_ram(ram); // zero-payload END
         require(!dma.graphics_sync_needed(100,v0,v1,vu),"idle graphics has no hardware event to service");

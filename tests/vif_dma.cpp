@@ -129,6 +129,23 @@ void idle_flush_and_directhl() {
     paths.gif.write_path2(8,0x62,paths.gs);
     paths.v1.write_dma_tag(0x11000000u,paths.gif,paths.gs);
     paths.v0.write_dma_tag(0x10000000u,paths.gif,paths.gs);
+    for(const bool path3:{false,true}) {
+        Fixture all;
+        if(path3)all.gif.write_fifo(0x1000000000008001ull,0xEu,all.gs);
+        else all.gif.write_path2(0x1000000000008001ull,0xEu,all.gs);
+        all.v1.write_dma_tag(0x0700123413FFFFFFull,all.gif,all.gs);
+        require(all.v1.processing() && (all.v1.observe_status().value&0xAu)==0xAu,
+            "FLUSHA retains the command and following MARK while a GIF path still needs payload");
+        rejects([&]{(void)all.v1.read_register(0x30);},"before write/command");
+        if(path3)all.gif.write_fifo(0xFFFFFFFFAABBCCDDull,0x62,all.gs);
+        else all.gif.write_path2(0xFFFFFFFFAABBCCDDull,0x62,all.gs);
+        advance_vpus(1,nullptr,&all.v1,nullptr,all.gif,all.gs);
+        require(!all.v1.processing() && all.v1.read_register(0x30)==0x1234 &&
+            all.gs.read(kGsSiglblid+4,4)==0xAABBCCDDu,"FLUSHA releases MARK only after actual GIF completion");
+    }
+    paths.v1.write_dma_tag(0x13ABCDEFu,paths.gif,paths.gs);
+    require(!paths.v1.processing(),"FLUSHA completes on idle VU/GIF and ignores NUM/IMMEDIATE");
+    rejects([&]{paths.v0.write_dma_tag(0x13000000u,paths.gif,paths.gs);},"VIF1-only");
     rejects([&]{paths.v0.write_dma_tag(0x11000000u,paths.gif,paths.gs);},"VIF1-only");
     rejects([&]{paths.v0.write_dma_tag(0x51000001u,paths.gif,paths.gs);},"VIF1-only");
 }

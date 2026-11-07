@@ -144,11 +144,14 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
         const bool payload=direct_left_ || mpg_left_ || unpack_left_ || pending_!=Pending::None;
         const auto op=command>>24u;
         if(!payload && !(command&0x80000000u) && vu && vu->micro_running(unit_==Unit::Vu1) &&
-            (op==0x10u || (op==0x11u && unit_==Unit::Vu1) || op==0x14u || op==0x17u || op==0x4Au)) {
+            (op==0x10u || ((op==0x11u || op==0x13u) && unit_==Unit::Vu1) || op==0x14u || op==0x17u || op==0x4Au)) {
             code_=command;waiting_=true;return;
         }
-        if(!payload && op==0x11u && unit_==Unit::Vu1 && vu && vu->path1_transfer_pending()) {
-            if(vu->path1_end_on_kick())refuse(" FLUSH completion after an E-bit XGKICK is not verified");
+        if(!payload && (op==0x11u || op==0x13u) && unit_==Unit::Vu1 && vu && vu->path1_transfer_pending()) {
+            if(op==0x11u && vu->path1_end_on_kick())refuse(" FLUSH completion after an E-bit XGKICK is not verified");
+            code_=command;waiting_=gif_waiting_=true;return;
+        }
+        if(!payload && op==0x13u && unit_==Unit::Vu1 && (gif.read_stat()&0xFC0u)) {
             code_=command;waiting_=gif_waiting_=true;return;
         }
         ++input_index_;
@@ -185,7 +188,7 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
         const auto opcode=command>>24u,immediate=command&0xFFFFu;
         if(command&0x80000000u) refuse(" interrupt-bearing command is not modeled");
         if((opcode&0x60u)==0x60u){start_unpack(command,vu);code_=command;continue;}
-        if(unit_==Unit::Vu0 && (opcode==2u || opcode==3u || opcode==6u || opcode==0x11u || opcode==0x50u || opcode==0x51u))
+        if(unit_==Unit::Vu0 && (opcode==2u || opcode==3u || opcode==6u || opcode==0x11u || opcode==0x13u || opcode==0x50u || opcode==0x51u))
             refuse(" received a VIF1-only command: "+std::to_string(opcode));
         switch(opcode) {
             case 0: break; // NOP ignores NUM and IMMEDIATE.
@@ -199,6 +202,7 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
             case 6: gif.set_vif_path3_mask((immediate&0x8000u)!=0u);break;
             case 7: mark_=immediate;mark_detected_=true;break;
             case 0x10: // The FIFO decoder waited for the actual Ready event.
+            case 0x13: // FLUSHA also waited for all active/requested GIF paths.
                 break;
             case 0x11:
                 // EE manual: FLUSH waits for VU1 and PATH1/2, not PATH3.
