@@ -10,6 +10,10 @@ For coding tasks, use the [Ponytail skill](https://github.com/DietrichGebert/pon
 
 Implement, run the relevant checks, correct failures, and validate the affected user path. Preserve error handling, accessibility and required correctness checks; saving tokens is not a reason to omit them. Report checks actually performed and remaining limitations, not unmeasured productivity claims. A new blocker changes the next diagnostic step; it is not by itself a reason to end the task with another plan when independent work within scope remains possible.
 
+For runtime/codegen failures, compatibility blockers and performance investigations, use the local [ps2-native investigation skill](skills/ps2-native-investigation/SKILL.md). It adapts the useful layer diagnosis, targeted probing and hypothesis review from [PS2 Recomp Agent Skill](https://github.com/hkmodd/ps2-recomp-Agent-SKILL/tree/a1cafc23ac2d37d16ce979d3d4987a0bb6989dda) to this repository's tools and contracts. Read only the resources needed for the affected path; ordinary documentation or UI edits do not need the investigation workflow.
+
+Use the current request and verified artifacts to select the active frontier. Historical stop points, missing generated files and older reports are context to verify, not reasons to repeat completed work or block an independent task. Keep existing user stop requests effective. After repeated failure of the same hypothesis, change the diagnostic method and continue useful authorized work; do not add a fixed retry count or another approval gate.
+
 ## What the system is
 
 ps2-native is a **generic PlayStation 2 static AOT recompiler and native compatibility runtime**, not a port restricted to one game. Original R5900 code and supported VU1 microprograms are translated to C++20 and compiled for the host. The explicit reference interpreter handles uncovered code; report its actual use rather than describing it as native execution.
@@ -56,6 +60,8 @@ Inspect `git status`, relevant callers, existing helpers and tests before editin
 
 Reuse the existing preparation, tracing, benchmark and launcher interfaces. Extend them only when the request needs it. Do not build another profiler, launcher, renderer abstraction or runtime just to avoid integrating the current ones. Consult pinned primary references for the affected behavior; do not import another port's game-specific shortcuts, DMA timing or HLE assumptions as PS2 hardware facts.
 
+Before implementing a missing behavior, look for a suitable existing implementation or independent test in the relevant reference projects. Adapt the smallest useful component to the shared state and interfaces, with its origin recorded and the existing reuse requirements preserved. An emulator comparison is evidence about that implementation, not a physical-console measurement; Ghidra and debugger MCP integrations are optional tools to discover, not assumed prerequisites.
+
 Respect outstanding stop requests and permission requirements for Computer Use, installations and external actions. Ordinary scoped checks already authorized by the task need no repeated request for the same permission. Supervise bounded runs and clean up only processes created by the task. If a required permission or local input is unavailable, state the limitation and complete the independent authorized work; do not fabricate a test or leave a run unattended.
 
 ## How to test
@@ -83,7 +89,9 @@ Generated output and caches must be content-addressed and owned by the correct p
 
 Header/ABI, shader, generator or compiler changes invalidate all affected artifacts. Keep required runtime identity checks on checkpoint reuse. Do not impose another project's compiler, SSE baseline, PGO or LTO settings. No mandatory AVX/AVX2 or global fast-math; optional SIMD needs capability checks and a portable path. Evaluate LTO/PGO only with measured build time, memory, disk and gameplay impact; profile identity must prevent stale reuse.
 
-Reuse bounded local diagnostics. Keep exit codes and actionable errors, identify truncation, and collect only the task's processes. Export only an explicit reviewed allowlist with path/private-data redaction; no full environment dumps or automatic upload. Firmware, discs, saves, game-derived traces, microcode captures and generated proprietary code are not public diagnostic attachments. Basic frame accounting and intrusive timing are separate modes.
+Edit headers when the shared contract needs it and rebuild their actual dependents; do not hide state in globals or duplicate declarations to avoid compilation. Fix persistent AOT defects in the generator or shared semantics and regenerate the affected output. Use the established host toolchain, CMake configuration and affected targets; an ordinary incremental build needs no extra approval. Reuse valid artifacts, and rebuild invalid ones without blanket bans on headers, target selection or regeneration.
+
+Reuse bounded local diagnostics with a distinct output path per experiment so failures and previous samples remain available. Keep exit codes and actionable errors, distinguish timeout from success, identify truncation, and collect only the task's processes by their owned handles/PIDs. Export only an explicit reviewed allowlist with path/private-data redaction; no full environment dumps or automatic upload. Firmware, discs, saves, game-derived traces, microcode captures and generated proprietary code are not public diagnostic attachments. Basic frame accounting and intrusive timing are separate modes.
 
 ## Documentation, language and publication
 
