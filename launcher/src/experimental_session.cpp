@@ -29,6 +29,12 @@ namespace ps2native { const AotModule& session_aot_module(); }
 #ifdef PS2N_SESSION_AUX_AOT
 namespace ps2native { const AotModule& session_aux_aot_module(); }
 #endif
+#ifdef PS2N_SESSION_BIOS_AOT
+namespace ps2native { const AotModule& session_bios_aot_module(); }
+#endif
+#ifdef PS2N_SESSION_KERNEL_AOT
+namespace ps2native { const AotModule& session_kernel_aot_module(); }
+#endif
 namespace ps2launcher {
 using namespace ps2native;
 using frontend::SessionState;
@@ -68,6 +74,8 @@ struct ExperimentalSession::Impl {
     HostAudio audio;
     std::uint64_t frames{},painted{},cycles{},aot{},interpreted{},polls{},nonzero{},submitted{},lastFrames{},lastCycles{},underruns{};
     std::uint64_t lastPoll{},lastButtons{0xFFFF};
+    std::uint64_t iopAot{},iopInterpreted{},vu0Aot{},vu0Interpreted{},vu1Aot{},vu1Interpreted{},gpuPrimitives{},gpuBatches{};
+    QString graphics;
     bool hadAudio{},focused{},audioEmpty{};
     Clock::time_point sampleTime{Clock::now()};
     QString audioStatus,gamepadStatus;
@@ -97,7 +105,8 @@ bool ExperimentalSession::active()const{auto s=state();return s==SessionState::S
 bool ExperimentalSession::paused()const{return state()==SessionState::Paused;}
 bool ExperimentalSession::originalBoot()const{std::lock_guard lock(p_->mutex);return p_->originalBoot;}
 QString ExperimentalSession::manifest()const{return p_->manifest;}
-void ExperimentalSession::setManifest(const QString& value){if(active())return;p_->manifest=value;{std::lock_guard lock(p_->mutex);p_->originalBoot=false;}QSettings().setValue("experimental/manifest",value);emit manifestChanged();emit changed();}
+void ExperimentalSession::setManifest(const QString& value){if(active())return;setSessionManifest(value);QSettings().setValue("experimental/manifest",value);}
+void ExperimentalSession::setSessionManifest(const QString& value){if(active())return;p_->manifest=value;{std::lock_guard lock(p_->mutex);p_->originalBoot=false;}emit manifestChanged();emit changed();}
 void ExperimentalSession::selectManifest(const QUrl& url){setManifest(local_path(url));}
 void ExperimentalSession::begin(bool reviewed){p_->reviewed=reviewed;frontend::SessionRequest r;r.experimental_manifest=fspath(p_->manifest);start(r);}
 void ExperimentalSession::start(const frontend::SessionRequest& request){
@@ -111,6 +120,8 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
         p_->input.clear();p_->pcm.clear();p_->pcmBytes=0;p_->keys=p_->sampled=p_->gamepad=0xFFFF;p_->save.clear();
         p_->frames=p_->painted=p_->cycles=p_->aot=p_->interpreted=p_->polls=p_->nonzero=p_->submitted=0;
         p_->lastFrames=p_->lastCycles=p_->underruns=0;p_->lastPoll=0;p_->lastButtons=0xFFFF;
+        p_->iopAot=p_->iopInterpreted=p_->vu0Aot=p_->vu0Interpreted=p_->vu1Aot=p_->vu1Interpreted=p_->gpuPrimitives=p_->gpuBatches=0;
+        p_->graphics=QStringLiteral("software GS");
         p_->hadAudio=p_->audioEmpty=false;p_->sampleTime=Clock::now();
         p_->mapping={0x20,0,0,0x10,1,8,2,4,0,0,0x100,0x200,0x8000,0x2000,0x1000,0x4000};
     }
@@ -123,6 +134,7 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
         const auto base=request.experimental_manifest.parent_path();
         const auto path=[&](const char* name){auto f=fspath(qstr(required(config,name)));return f.is_absolute()?f:base/f;};
         auto memory=std::make_unique<Memory>();EEState ee;
+        std::shared_ptr<GsGpu> selectedGpu;
         // IOP keeps a pointer to the validated NVM for the entire session.
         std::optional<NvmImage> sessionNvm;
         CheckpointContext context;CheckpointInfo info;
@@ -151,7 +163,10 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
             }
             auto disc=std::make_shared<DiscImage>(discPath);
             (void)disc->boot_path();
-            prepare_ee_boot(bios,nullptr,ee,*memory,hardware,sessionNvm?&*sessionNvm:nullptr);
+#ifdef PS2N_SESSION_BIOS_AOT
+            module=&session_bios_aot_module();
+#endif
+            prepare_ee_boot(bios,module,ee,*memory,hardware,sessionNvm?&*sessionNvm:nullptr);
             const auto medium=probe.info.find("media");
             memory->mount_disc(std::move(disc),medium!=probe.info.end() && medium->second=="DVD"?Iop::DiscMedium::Ps2Dvd:Iop::DiscMedium::Ps2Cd,true);
         }else{
@@ -179,9 +194,9 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
         if(graphics!=QStringLiteral("cpu") && graphics!=QStringLiteral("vulkan") && graphics!=QStringLiteral("directx"))
             throw std::runtime_error("Unknown gs_backend in experimental manifest");
         if(graphics!=QStringLiteral("cpu")) {
-            std::string reason;auto gpu=create_gs_gpu(reason,graphics==QStringLiteral("vulkan") ? GsGpuApi::Vulkan : GsGpuApi::DirectX);
-            if(!gpu)throw std::runtime_error("Experimental GPU GS unavailable: "+reason);
-            memory->set_gs_gpu_backend(std::move(gpu));
+            std::string reason;selectedGpu=create_gs_gpu(reason,graphics==QStringLiteral("vulkan") ? GsGpuApi::Vulkan : GsGpuApi::DirectX);
+            if(!selectedGpu)throw std::runtime_error("Experimental GPU GS unavailable: "+reason);
+            memory->set_gs_gpu_backend(selectedGpu);
         }
         const auto liveIdentity=QByteArray("ps2n-live-sio2-poll-queue-v1:")+QByteArray::fromStdString(info.scenario_sha256);
         context.scenario_sha256=sha256_hex(std::span(reinterpret_cast<const std::uint8_t*>(liveIdentity.constData()),static_cast<std::size_t>(liveIdentity.size())));
@@ -195,10 +210,11 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
             // instruction, including instructions after each block entry.
             for(std::size_t i=0;i<a.block_count;++i){
                 const auto pc=a.blocks[i].address;
-                const auto segment=std::find_if(elf.segments.begin(),elf.segments.end(),[&](const auto& s){return (s.flags&1u) && pc>=s.vaddr && pc-s.vaddr+4u<=s.file_size;});
+                const auto sourcePc=pc>=0x80000000u && pc<0xC0000000u ? pc&0x1FFFFFFFu : pc;
+                const auto segment=std::find_if(elf.segments.begin(),elf.segments.end(),[&](const auto& s){return (s.flags&1u) && sourcePc>=s.vaddr && sourcePc-s.vaddr+4u<=s.file_size;});
                 if(segment==elf.segments.end())throw std::runtime_error("AOT block outside verified executable ELF");
-                for(unsigned j=0;j<4;++j){const auto byte=memory->diagnostic_ram(pc+j,1);
-                    if(byte.unknown || byte.value!=elf.bytes[segment->file_offset+pc-segment->vaddr+j])throw std::runtime_error("AOT block bytes differ from checkpoint RAM");}
+                for(unsigned j=0;j<4;++j){const auto byte=memory->diagnostic_ram(sourcePc+j,1);
+                    if(byte.unknown || byte.value!=elf.bytes[segment->file_offset+sourcePc-segment->vaddr+j])throw std::runtime_error("AOT block bytes differ from checkpoint RAM");}
             }
             blocks.insert(blocks.end(),a.blocks,a.blocks+a.block_count);
         };
@@ -208,6 +224,9 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
 #endif
 #ifdef PS2N_SESSION_AUX_AOT
         addModule(session_aux_aot_module(),"aux_aot_elf");
+#endif
+#ifdef PS2N_SESSION_KERNEL_AOT
+        addModule(session_kernel_aot_module(),"kernel_aot_elf");
 #endif
         if(!blocks.empty()){
             std::sort(blocks.begin(),blocks.end(),[](const auto& a,const auto& b){return a.address<b.address;});
@@ -237,7 +256,12 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
         BootReport boundary;boundary.outcome=BootOutcome::BudgetExhausted;boundary.pc=ee.pc;
         {
             std::lock_guard lock(p_->mutex);p_->cycles=ee.cycles();p_->lastCycles=ee.cycles();p_->sampleTime=Clock::now();p_->state=SessionState::Running;
+            if(selectedGpu)p_->graphics=qstr(selectedGpu->device_name());
+#ifdef PS2N_NATIVE_ONLY
+            p_->status=original?tr("Original BIOS boot with game disc — static AOT, software GS. Missing translations are reported explicitly."):QStringLiteral("Experimental — %1\n%2").arg(module?tr("Static AOT"):tr("Missing AOT"),qstr(required(config,"hypotheses")));
+#else
             p_->status=original?tr("Original BIOS boot with game disc — reference interpreter, software GS. Compatibility is incomplete; execution stops at the first unsupported behavior."):QStringLiteral("Experimental — %1\n%2").arg(module?QStringLiteral("AOT + interpretador explícito"):QStringLiteral("somente interpretador"),qstr(required(config,"hypotheses")));
+#endif
             const auto map=config.value("gamepad_mapping").toArray();
             if(!map.isEmpty()){
                 if(map.size()!=16)throw std::runtime_error("gamepad_mapping needs 16 XInput masks (one per PS2 bit)");
@@ -266,7 +290,7 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
                     context.host_metadata="{\"input\":\"live-sio2\",\"source_scenario\":\""+info.scenario_sha256+"\"}";
                     save_checkpoint(saving,ee,*memory,boundary,context);
                     auto savedConfig=config;
-                    for(const auto key:{"rom0","rom1","nvm","disc","aot_elf","aux_aot_elf"})if(config.contains(QLatin1String(key)))savedConfig[QLatin1String(key)]=qpath(path(key));
+                    for(const auto key:{"rom0","rom1","nvm","disc","aot_elf","aux_aot_elf","kernel_aot_elf"})if(config.contains(QLatin1String(key)))savedConfig[QLatin1String(key)]=qpath(path(key));
                     savedConfig["checkpoint"]=qpath(std::filesystem::absolute(saving));
                     savedConfig["checkpoint_sha256"]=qstr(sha256_file(saving));savedConfig["scenario_sha256"]=qstr(context.scenario_sha256);
                     const auto json=QJsonDocument(savedConfig).toJson();
@@ -278,6 +302,10 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
             boundary=run_ee_boot(ee,*memory,module,options);
             {
                 std::lock_guard lock(p_->mutex);p_->cycles=ee.cycles();p_->aot+=boundary.aot_instructions;p_->interpreted+=boundary.interpreted_instructions;
+                p_->iopAot=iop.native_instructions();p_->iopInterpreted=iop.interpreted_instructions();
+                p_->vu0Aot=memory->vu0_aot_stats().native_instructions;p_->vu0Interpreted=memory->vu0_aot_stats().interpreted_instructions;
+                p_->vu1Aot=memory->vu1_aot_stats().native_instructions;p_->vu1Interpreted=memory->vu1_aot_stats().interpreted_instructions;
+                if(selectedGpu){p_->gpuPrimitives=selectedGpu->stats().primitives;p_->gpuBatches=selectedGpu->stats().batches;}
                 p_->nonzero+=nonzero;nonzero=0;
                 if(!pcm.isEmpty() && p_->audioReady){p_->pcmBytes+=static_cast<std::size_t>(pcm.size());p_->pcm.push_back(std::move(pcm));pcm.clear();}else pcm.clear();
             }
@@ -346,6 +374,9 @@ void ExperimentalSession::tick(){
                 .arg(fps,0,'f',2).arg(speed,0,'f',2).arg(total?100.0*static_cast<double>(p_->aot)/static_cast<double>(total):0,0,'f',2)
                 .arg(p_->aot).arg(total).arg(p_->polls).arg(p_->lastPoll).arg(p_->lastButtons,4,16,QChar('0')).arg(p_->nonzero).arg(p_->submitted).arg(p_->underruns)
                 .arg(p_->audioStatus,p_->gamepadStatus,p_->state==SessionState::Paused?QStringLiteral(" | PAUSADO"):QString{});
+            p_->metrics+=QStringLiteral("\nIOP AOT %1 / interpretadas %2 | VU0 AOT %3 / interpretadas %4 | VU1 AOT %5 / interpretadas %6\nGS: %7 | primitivas GPU: %8; lotes: %9")
+                .arg(p_->iopAot).arg(p_->iopInterpreted).arg(p_->vu0Aot).arg(p_->vu0Interpreted).arg(p_->vu1Aot).arg(p_->vu1Interpreted)
+                .arg(p_->graphics).arg(p_->gpuPrimitives).arg(p_->gpuBatches);
             p_->lastFrames=p_->painted;p_->lastCycles=p_->cycles;p_->sampleTime=now;refresh=true;
         }
     }

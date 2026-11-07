@@ -35,7 +35,7 @@ set_target_properties(ps2-native PROPERTIES
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
 target_compile_definitions(ps2-native PRIVATE PS2N_VERSION="${PROJECT_VERSION}")
 target_include_directories(ps2-native PRIVATE src)
-target_link_libraries(ps2-native PRIVATE ps2n_frontend
+target_link_libraries(ps2-native PRIVATE ps2n_frontend_native
     Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Svg)
 if(WIN32)
     target_link_libraries(ps2-native PRIVATE winmm)
@@ -47,15 +47,16 @@ else()
     endif()
 endif()
 # Local, offline AOT only. No proprietary translation is shipped or compiled
-# at runtime. Empty sources keep the explicit interpreter path available.
+# at runtime. Missing sources produce an explicit native-only diagnostic.
 set(PS2N_SESSION_AOT_SOURCE "" CACHE FILEPATH "Local ELF AOT translation for experimental Qt sessions")
 set(PS2N_SESSION_AUX_AOT_SOURCE "" CACHE FILEPATH "Optional second local ELF AOT translation")
-foreach(kind IN ITEMS AOT AUX_AOT)
+set(PS2N_SESSION_KERNEL_AOT_SOURCE "" CACHE FILEPATH "Optional local loaded EE kernel AOT translation")
+foreach(kind IN ITEMS AOT AUX_AOT KERNEL_AOT)
     if(PS2N_SESSION_${kind}_SOURCE)
         string(TOLOWER "${kind}" symbol)
         add_library(ps2n-session-${symbol} OBJECT)
         ps2n_target_aot_source(ps2n-session-${symbol} "${PS2N_SESSION_${kind}_SOURCE}")
-        target_link_libraries(ps2n-session-${symbol} PRIVATE ps2n_core)
+        target_link_libraries(ps2n-session-${symbol} PRIVATE ps2n_core_native)
         target_compile_definitions(ps2n-session-${symbol} PRIVATE
             aot_module=session_${symbol}_module idle_aot_module=session_${symbol}_module
             run_recompiled=run_session_${symbol} run_idle_recompiled=run_session_idle_${symbol})
@@ -63,6 +64,18 @@ foreach(kind IN ITEMS AOT AUX_AOT)
         target_compile_definitions(ps2-native PRIVATE PS2N_SESSION_${kind})
     endif()
 endforeach()
+if(PS2N_BIOS_AOT_SOURCE)
+    add_library(ps2n-session-bios OBJECT)
+    ps2n_target_aot_source(ps2n-session-bios "${PS2N_BIOS_AOT_SOURCE}")
+    target_compile_definitions(ps2n-session-bios PRIVATE aot_module=session_bios_aot_module
+        run_recompiled=run_session_bios_recompiled)
+    target_link_libraries(ps2n-session-bios PRIVATE ps2n_core_native)
+    target_link_libraries(ps2-native PRIVATE ps2n-session-bios)
+    target_compile_definitions(ps2-native PRIVATE PS2N_SESSION_BIOS_AOT)
+endif()
+if(TARGET ps2n_native_modules)
+    target_link_libraries(ps2-native PRIVATE ps2n_native_modules)
+endif()
 if(MSVC)
     target_compile_options(ps2-native PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
 else()
@@ -130,11 +143,11 @@ if(WIN32)
 endif()
 
 # ps2n-boot is the diagnostic the launcher runs; keep it next to the launcher.
-add_dependencies(ps2-native ps2n-boot)
+add_dependencies(ps2-native ps2n-native)
 if(APPLE)
     # Inside the bundle so the launcher finds it when the .app is moved.
     add_custom_command(TARGET ps2-native POST_BUILD
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different $<TARGET_FILE:ps2n-boot> $<TARGET_FILE_DIR:ps2-native>/
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different $<TARGET_FILE:ps2n-native> $<TARGET_FILE_DIR:ps2-native>/
         VERBATIM)
 endif()
 

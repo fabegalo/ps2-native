@@ -1,4 +1,7 @@
 {
+  "Static AOT": "AOT estática",
+  "Missing AOT": "AOT ausente",
+  "Original BIOS boot with game disc — static AOT, software GS. Missing translations are reported explicitly.": "Boot original da BIOS com o disco do jogo — AOT estática, GS por software. Traduções ausentes são informadas explicitamente.",
   "Open checkpoint manifest…": "Abrir manifesto de checkpoint…",
   "Game not started": "Jogo não iniciado",
   "Select an identified PlayStation 2 disc.": "Selecione um disco de PlayStation 2 identificado.",
@@ -8,7 +11,7 @@
   "Validating BIOS and disc; booting from reset…": "Validando BIOS e disco; iniciando pelo reset…",
   "Original BIOS boot with game disc — reference interpreter, software GS. Compatibility is incomplete; execution stops at the first unsupported behavior.": "Boot original da BIOS com o disco do jogo — interpretador de referência, GS por software. A compatibilidade está incompleta; a execução para no primeiro comportamento não suportado.",
   "ps2-native — Game session": "ps2-native — Sessão do jogo",
-  "Original BIOS boot — reference interpreter, software GS; compatibility incomplete": "Boot original da BIOS — interpretador de referência, GS por software; compatibilidade incompleta",
+  "Original BIOS boot — static AOT; compatibility incomplete": "Boot original da BIOS — AOT estática; compatibilidade incompleta",
   "Identified PlayStation 2 disc. Play attempts original BIOS boot and reports the first unsupported behavior. Gameplay compatibility is unverified.": "Disco de PlayStation 2 identificado. Jogar tenta o boot original da BIOS e informa o primeiro comportamento não suportado. Compatibilidade de gameplay não verificada.",
   "Home": "Início",
   "Library": "Biblioteca",

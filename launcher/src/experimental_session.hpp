@@ -29,6 +29,7 @@ public:
     bool originalBoot() const;
     QString manifest() const;
     void setManifest(const QString&);
+    void setSessionManifest(const QString&);
     Q_INVOKABLE void selectManifest(const QUrl&);
     Q_INVOKABLE void begin(bool reviewedRuntimeChange);
     Q_INVOKABLE void pause();

@@ -28,7 +28,7 @@ Window {
         anchors.fill: parent; anchors.margins: 14; spacing: 8
         Label {
             Layout.fillWidth: true
-            text: Experimental.originalBoot ? qsTr("Original BIOS boot — reference interpreter, software GS; compatibility incomplete") : "Modo de Teste Experimental — checkpoint verificado, separado do boot original"
+            text: Experimental.originalBoot ? qsTr("Original BIOS boot — static AOT; compatibility incomplete") : "Modo de Teste Experimental — checkpoint verificado, separado do boot original"
             color: "#f4c36a"; font.bold: true; wrapMode: Text.Wrap
         }
         RowLayout {

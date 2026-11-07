@@ -781,9 +781,9 @@ QString Launcher::bootToolOverride() const { return qpath(settings_.boot_tool); 
 QString Launcher::bootTool() const {
     if (!settings_.boot_tool.empty()) return qpath(settings_.boot_tool);
     const QString dir = QCoreApplication::applicationDirPath();
-    const QStringList candidates{dir + QLatin1Char('/') + exe_name(QStringLiteral("ps2n-boot")),
+    const QStringList candidates{dir + QLatin1Char('/') + exe_name(QStringLiteral("ps2n-native")),
                                  // macOS: next to the .app bundle (build tree layout).
-                                 dir + QStringLiteral("/../../../") + exe_name(QStringLiteral("ps2n-boot"))};
+                                 dir + QStringLiteral("/../../../") + exe_name(QStringLiteral("ps2n-native"))};
     for (const auto& candidate : candidates)
         if (QFileInfo(candidate).isFile()) return QDir::toNativeSeparators(QFileInfo(candidate).canonicalFilePath());
     return QDir::toNativeSeparators(candidates.front());

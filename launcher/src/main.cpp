@@ -69,8 +69,8 @@ int main(int argc, char* argv[]) {
     ps2launcher::Launcher launcher(data);
     ps2launcher::ExperimentalSession session;
     launcher.setRuntimeSession(&session);
-    if(parser.isSet(run_experimental))session.setManifest(parser.value(run_experimental));
-    else if(parser.isSet(experimental))session.setManifest(parser.value(experimental));
+    if(parser.isSet(run_experimental))session.setSessionManifest(parser.value(run_experimental));
+    else if(parser.isSet(experimental))session.setSessionManifest(parser.value(experimental));
     qmlRegisterSingletonInstance("PS2Native.Backend",1,0,"Experimental",&session);
     qmlRegisterType<ps2launcher::GameView>("PS2Native.Backend",1,0,"GameView");
     qmlRegisterSingletonInstance("PS2Native.Backend", 1, 0, "Launcher", &launcher);
