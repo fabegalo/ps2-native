@@ -15,8 +15,8 @@ constexpr std::array kCapabilities{
     CapabilityStatus{Capability::FirmwareBrowser, "PS2 Browser", false,
                      "The original firmware does not reach the Browser yet: its boot stops at hardware that is not modeled."},
     CapabilityStatus{Capability::DiscBoot, "Game boot", false,
-                     "Discs can be registered and identified. Game execution exists only as an experimental "
-                     "checkpoint experiment, without demonstrated gameplay; normal game boot remains unavailable."},
+                     "Play attempts original BIOS boot with the selected disc and reports unsupported behavior; "
+                     "successful game boot and gameplay compatibility remain unverified."},
     CapabilityStatus{Capability::Controller, "Controller input", false,
                      "Live keyboard/XInput mapping exists only in the experimental checkpoint session; original boot remains incomplete."},
     CapabilityStatus{Capability::Audio, "Audio", false,

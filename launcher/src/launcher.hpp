@@ -120,6 +120,8 @@ public:
     Q_INVOKABLE void attachNvm(const QString& biosId, const QUrl& file);
     Q_INVOKABLE void detachNvm(const QString& biosId);
     Q_INVOKABLE bool startDiagnostic(const QString& biosId);
+    void setRuntimeSession(ps2native::frontend::RuntimeSession* session) { session_ = session; }
+    Q_INVOKABLE bool startGame(const QString& id);
     Q_INVOKABLE void setCoversFolder(const QUrl& folder);
     Q_INVOKABLE void clearCoversFolder();
     Q_INVOKABLE void setBootToolOverride(const QUrl& file);
@@ -131,6 +133,7 @@ public:
     Q_INVOKABLE QString formatCount(double value) const;
 
 signals:
+    void gameStarted();
     void loadedChanged();
     void activityChanged();
     void activeBiosChanged();
@@ -162,6 +165,7 @@ private:
     [[nodiscard]] ps2native::frontend::ProbeContext probe_context() const;
 
     QString data_dir_;
+    ps2native::frontend::RuntimeSession* session_{};
     ps2native::frontend::Library library_;
     ps2native::frontend::LauncherSettings settings_;
     std::unique_ptr<EntryListModel> game_model_;

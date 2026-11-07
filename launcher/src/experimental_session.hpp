@@ -13,6 +13,7 @@ class ExperimentalSession final:public QObject,public ps2native::frontend::Runti
     Q_PROPERTY(QString metrics READ metrics NOTIFY changed)
     Q_PROPERTY(bool active READ active NOTIFY changed)
     Q_PROPERTY(bool paused READ paused NOTIFY changed)
+    Q_PROPERTY(bool originalBoot READ originalBoot NOTIFY changed)
     Q_PROPERTY(QString manifest READ manifest WRITE setManifest NOTIFY manifestChanged)
 public:
     explicit ExperimentalSession(QObject* parent=nullptr);
@@ -25,6 +26,7 @@ public:
     QString metrics() const;
     bool active() const;
     bool paused() const;
+    bool originalBoot() const;
     QString manifest() const;
     void setManifest(const QString&);
     Q_INVOKABLE void selectManifest(const QUrl&);

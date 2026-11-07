@@ -141,6 +141,9 @@ endif()
 if(BUILD_TESTING)
     qt_add_executable(ps2n-experimental-tests
         ../tests/experimental_session.cpp
+        src/launcher.cpp src/launcher.hpp
+        src/entry_model.cpp src/entry_model.hpp
+        src/diagnostic_runner.cpp src/diagnostic_runner.hpp
         src/experimental_session.cpp src/experimental_session.hpp
         src/host_audio.cpp src/host_audio.hpp)
     set_target_properties(ps2n-experimental-tests PROPERTIES AUTOMOC ON)

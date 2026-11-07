@@ -4,9 +4,9 @@
 // firmware's own screens. What the runtime cannot do yet is reported here with
 // its reason so the UI disables it explicitly instead of faking it.
 //
-// Original boot remains a crash-isolated ps2n-boot diagnostic. The Qt
-// experimental checkpoint session implements RuntimeSession with the same
-// EE/IOP/GS/SPU2 core; normal boot capabilities remain independently gated.
+// BIOS diagnostics run in ps2n-boot. The Qt session can attempt original disc
+// boot from reset or restore an explicitly selected experimental checkpoint.
+// Both use the same EE/IOP/GS/SPU2 core and report unsupported behavior.
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -42,17 +42,19 @@ enum class RendererMode : std::uint8_t { GsFaithful, Native };
 // ROMVER/profile, NVM) and fails explicitly.
 struct SessionRequest {
     std::filesystem::path rom0;
+    std::string expected_rom0_sha256;
+    std::string expected_nvm_sha256;
+    std::string expected_disc_boot;
     std::string console_profile;        // MODEL:MAINBOARD, empty: none
     std::filesystem::path nvm;          // empty: none
     std::optional<std::filesystem::path> disc; // empty: firmware only (Browser)
     RendererMode renderer{RendererMode::GsFaithful};
     // Explicit local manifest for a reviewed checkpoint experiment. Empty for
-    // original boot; the experimental implementation refuses original boot.
+    // original boot from reset with the selected disc mounted.
     std::filesystem::path experimental_manifest;
 };
 enum class SessionState : std::uint8_t { Idle, Starting, Running, Paused, Stopping, Stopped, Failed };
-// Experimental checkpoint sessions implement this contract. This does not
-// enable DiscBoot or FirmwareBrowser in the original boot path.
+// A boot attempt does not certify DiscBoot or FirmwareBrowser compatibility.
 class RuntimeSession {
 public:
     virtual ~RuntimeSession() = default;

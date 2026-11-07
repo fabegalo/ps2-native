@@ -23,6 +23,10 @@ ApplicationWindow {
     function navigate(index) { currentPage = index }
     function showGame(id) { currentPage = 1; libraryPage.select(id) }
     ExperimentalWindow { id: experimentalWindow }
+    Connections {
+        target: Launcher
+        function onGameStarted() { experimentalWindow.show(); experimentalWindow.raise(); experimentalWindow.requestActivate() }
+    }
     Component.onCompleted: { if (openExperimentalSession) experimentalWindow.show() }
     Shortcut { sequence: "Ctrl+T"; onActivated: experimentalWindow.show() }
     Button {

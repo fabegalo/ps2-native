@@ -681,6 +681,39 @@ void Launcher::detachNvm(const QString& biosId) {
     }
 }
 
+bool Launcher::startGame(const QString& id) {
+    const auto fail = [&](const QString& reason) {
+        emit notify(QStringLiteral("error"), tr("Game not started"), reason);
+        return false;
+    };
+    const auto* game = library_.find(utf8(id));
+    if (!game || game->kind != ContentKind::Disc || game->status != ProbeStatus::Valid || game->value("platform") != "PlayStation 2")
+        return fail(tr("Select an identified PlayStation 2 disc."));
+    const auto* bios = library_.find(settings_.active_bios);
+    if (!bios || bios->kind != ContentKind::Bios || bios->status != ProbeStatus::Valid)
+        return fail(tr("Select a valid BIOS in the BIOS page first."));
+    if (!bios->nvm_path.empty() && bios->nvm_status != ProbeStatus::Valid)
+        return fail(tr("The attached NVM is not valid for this console profile. Detach it or choose its console."));
+    if (!session_) return fail(tr("Game session is unavailable."));
+    const auto state = session_->state();
+    if (state == fe::SessionState::Starting || state == fe::SessionState::Running ||
+        state == fe::SessionState::Paused || state == fe::SessionState::Stopping)
+        return fail(tr("Stop the current session before starting another game."));
+    fe::SessionRequest request;
+    request.rom0 = bios->path;
+    request.expected_rom0_sha256 = bios->value("sha256");
+    request.console_profile = bios->console_profile;
+    request.nvm = bios->nvm_path;
+    const auto nvmHash = bios->nvm_info.find("sha256");
+    if (nvmHash != bios->nvm_info.end()) request.expected_nvm_sha256 = nvmHash->second;
+    request.disc = game->path;
+    request.expected_disc_boot = game->value("boot");
+    request.renderer = settings_.renderer == "native" ? fe::RendererMode::Native : fe::RendererMode::GsFaithful;
+    session_->start(request);
+    emit gameStarted();
+    return true;
+}
+
 bool Launcher::startDiagnostic(const QString& biosId) {
     const auto* e = library_.find(utf8(biosId));
     if (e == nullptr || e->kind != ContentKind::Bios) return false;

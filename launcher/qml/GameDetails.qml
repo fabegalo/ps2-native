@@ -143,8 +143,9 @@ Rectangle {
                     text: qsTr("Play")
                     iconName: "play"
                     variant: "primary"
-                    available: false
-                    reason: qsTr("Not available yet: game execution is still an experimental diagnostic. ps2-native will not pretend to boot a game.")
+                    available: !Experimental.active
+                    reason: qsTr("Stop the current session before starting another game.")
+                    onClicked: Launcher.startGame(panel.entryId)
                 }
                 RowLayout {
                     Layout.fillWidth: true

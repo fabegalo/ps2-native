@@ -3,6 +3,7 @@
 #include "qt_support.hpp"
 #include "ps2native/boot.hpp"
 #include "ps2native/checkpoint.hpp"
+#include "ps2native/frontend/content.hpp"
 #include "ps2native/sha256.hpp"
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -55,7 +56,7 @@ struct ExperimentalSession::Impl {
     std::condition_variable cv;
     std::thread worker;
     SessionState state{SessionState::Idle};
-    bool stop{},pause{},reviewed{},audioReady{};
+    bool stop{},pause{},reviewed{},audioReady{},originalBoot{};
     QString manifest,status{QStringLiteral("Selecione um manifesto local de checkpoint experimental.")},error,metrics;
     std::filesystem::path save;
     QImage frame;
@@ -94,8 +95,9 @@ QString ExperimentalSession::status()const{std::lock_guard lock(p_->mutex);retur
 QString ExperimentalSession::metrics()const{std::lock_guard lock(p_->mutex);return p_->metrics;}
 bool ExperimentalSession::active()const{auto s=state();return s==SessionState::Starting || s==SessionState::Running || s==SessionState::Paused || s==SessionState::Stopping;}
 bool ExperimentalSession::paused()const{return state()==SessionState::Paused;}
+bool ExperimentalSession::originalBoot()const{std::lock_guard lock(p_->mutex);return p_->originalBoot;}
 QString ExperimentalSession::manifest()const{return p_->manifest;}
-void ExperimentalSession::setManifest(const QString& value){if(active())return;p_->manifest=value;QSettings().setValue("experimental/manifest",value);emit manifestChanged();}
+void ExperimentalSession::setManifest(const QString& value){if(active())return;p_->manifest=value;{std::lock_guard lock(p_->mutex);p_->originalBoot=false;}QSettings().setValue("experimental/manifest",value);emit manifestChanged();emit changed();}
 void ExperimentalSession::selectManifest(const QUrl& url){setManifest(local_path(url));}
 void ExperimentalSession::begin(bool reviewed){p_->reviewed=reviewed;frontend::SessionRequest r;r.experimental_manifest=fspath(p_->manifest);start(r);}
 void ExperimentalSession::start(const frontend::SessionRequest& request){
@@ -104,27 +106,62 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
     p_->audioReady=p_->audio.open();p_->audioStatus=p_->audioReady?p_->audio.description():p_->audio.error();
     {
         std::lock_guard lock(p_->mutex);p_->state=SessionState::Starting;p_->stop=p_->pause=false;p_->error.clear();
-        p_->status=QStringLiteral("Validando dependências e restaurando checkpoint…");p_->frame={};p_->newFrame=false;
+        p_->originalBoot=request.experimental_manifest.empty();
+        p_->status=p_->originalBoot?tr("Validating BIOS and disc; booting from reset…"):QStringLiteral("Validando dependências e restaurando checkpoint…");p_->frame={};p_->newFrame=false;
         p_->input.clear();p_->pcm.clear();p_->pcmBytes=0;p_->keys=p_->sampled=p_->gamepad=0xFFFF;p_->save.clear();
         p_->frames=p_->painted=p_->cycles=p_->aot=p_->interpreted=p_->polls=p_->nonzero=p_->submitted=0;
         p_->lastFrames=p_->lastCycles=p_->underruns=0;p_->lastPoll=0;p_->lastButtons=0xFFFF;
         p_->hadAudio=p_->audioEmpty=false;p_->sampleTime=Clock::now();
         p_->mapping={0x20,0,0,0x10,1,8,2,4,0,0,0x100,0x200,0x8000,0x2000,0x1000,0x4000};
     }
+    emit frameReady(QImage{});
     emit changed();
     const bool reviewed=p_->reviewed;
     p_->worker=std::thread([this,request,reviewed]{try{
-        if(request.experimental_manifest.empty())throw std::runtime_error("Original boot is unavailable in the experimental session; select a manifest");
-        const auto config=readManifest(request.experimental_manifest);
+        const bool original=request.experimental_manifest.empty();
+        const auto config=original?QJsonObject{}:readManifest(request.experimental_manifest);
         const auto base=request.experimental_manifest.parent_path();
         const auto path=[&](const char* name){auto f=fspath(qstr(required(config,name)));return f.is_absolute()?f:base/f;};
+        auto memory=std::make_unique<Memory>();EEState ee;
+        // IOP keeps a pointer to the validated NVM for the entire session.
+        std::optional<NvmImage> sessionNvm;
+        CheckpointContext context;CheckpointInfo info;
+        std::vector<AotBlock> blocks;AotModule merged{};const AotModule* module=nullptr;
+        if(original){
+            if(request.renderer!=frontend::RendererMode::GsFaithful)throw std::runtime_error("Native renderer is unavailable for original boot");
+            if(request.expected_rom0_sha256.empty())throw std::runtime_error("Original boot requires the identified ROM0 SHA-256");
+            const auto bios=load_bios_rom0(read_file(request.rom0),BiosLoadOptions{request.expected_rom0_sha256});
+            const auto* hardware=request.console_profile.empty()?nullptr:find_console_hardware(request.console_profile);
+            if(!request.console_profile.empty() && !hardware)throw std::runtime_error("Unknown console profile");
+            if(!request.nvm.empty()){
+                if(!hardware || request.expected_nvm_sha256.empty())throw std::runtime_error("NVM requires an identified console profile and SHA-256");
+                sessionNvm=load_nvm_image(read_file(request.nvm),*hardware,NvmLoadOptions{request.expected_nvm_sha256});
+            }
+            if(!request.disc)throw std::runtime_error("No game disc selected");
+            const auto probe=frontend::probe_disc(*request.disc);
+            if(probe.status!=frontend::ProbeStatus::Valid || !probe.info.contains("platform") || probe.info.at("platform")!="PlayStation 2")
+                throw std::runtime_error("Disc refused: "+probe.error);
+            if(request.expected_disc_boot.empty() || probe.info.at("boot")!=request.expected_disc_boot)
+                throw std::runtime_error("Disc BOOT2 differs from the identified library entry; reidentify the disc");
+            auto discPath=*request.disc;
+            if(probe.info.contains("cue_tracks")){
+                const auto sheet=frontend::parse_cue_sheet(discPath);
+                if(!sheet.data_track())throw std::runtime_error("CUE has no data track");
+                discPath=sheet.data_track()->file;
+            }
+            auto disc=std::make_shared<DiscImage>(discPath);
+            (void)disc->boot_path();
+            prepare_ee_boot(bios,nullptr,ee,*memory,hardware,sessionNvm?&*sessionNvm:nullptr);
+            const auto medium=probe.info.find("media");
+            memory->mount_disc(std::move(disc),medium!=probe.info.end() && medium->second=="DVD"?Iop::DiscMedium::Ps2Dvd:Iop::DiscMedium::Ps2Cd,true);
+        }else{
         const auto bios=load_bios_rom0(read_file(path("rom0")),BiosLoadOptions{required(config,"rom0_sha256")});
         const auto* hardware=find_console_hardware(required(config,"console"));if(!hardware)throw std::runtime_error("Unknown console profile");
-        const auto nvm=load_nvm_image(read_file(path("nvm")),*hardware,NvmLoadOptions{required(config,"nvm_sha256")});
+        sessionNvm=load_nvm_image(read_file(path("nvm")),*hardware,NvmLoadOptions{required(config,"nvm_sha256")});
+        const auto& nvm=*sessionNvm;
         const auto r=config.value("rom1_identity").toObject();
         Rom1Identity identity{required(r,"rom0_sha256"),required(r,"romver"),required(r,"model"),required(r,"mainboard"),required(r,"sha256"),required(r,"build"),required(r,"dvd_version"),required(r,"provenance")};
         const auto rom1=load_bios_rom1(read_file(path("rom1")),bios,*hardware,identity);
-        auto memory=std::make_unique<Memory>();EEState ee;
         prepare_ee_boot(bios,nullptr,ee,*memory,hardware,&nvm,nullptr,&rom1);
         if(config.contains("rtc_epoch_utc")) {
             bool valid=false;const auto epoch=config.value("rtc_epoch_utc").toString().toULongLong(&valid);
@@ -136,8 +173,8 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
         memory->mount_disc(std::make_shared<DiscImage>(path("disc")),medium=="ps2-cd"?Iop::DiscMedium::Ps2Cd:Iop::DiscMedium::Ps2Dvd,true);
         const auto checkpointPath=path("checkpoint");
         if(sha256_file(checkpointPath)!=required(config,"checkpoint_sha256"))throw std::runtime_error("Checkpoint file SHA-256 differs from reviewed manifest");
-        CheckpointContext context;context.scenario_sha256=required(config,"scenario_sha256");context.expected_disc_sha256=required(config,"disc_sha256");context.allow_runtime_change=reviewed;
-        const auto info=load_checkpoint(checkpointPath,ee,*memory,context);
+        context.scenario_sha256=required(config,"scenario_sha256");context.expected_disc_sha256=required(config,"disc_sha256");context.allow_runtime_change=reviewed;
+        info=load_checkpoint(checkpointPath,ee,*memory,context);
         const auto graphics=config.value("gs_backend").toString(QStringLiteral("cpu"));
         if(graphics!=QStringLiteral("cpu") && graphics!=QStringLiteral("vulkan") && graphics!=QStringLiteral("directx"))
             throw std::runtime_error("Unknown gs_backend in experimental manifest");
@@ -150,7 +187,6 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
         context.scenario_sha256=sha256_hex(std::span(reinterpret_cast<const std::uint8_t*>(liveIdentity.constData()),static_cast<std::size_t>(liveIdentity.size())));
         // Loading restores the existing diagnostic assumptions, without adding
         // any refinement, hardware defaults or title-specific behavior here.
-        std::vector<AotBlock> blocks;AotModule merged{};const AotModule* module=nullptr;
         const auto addModule=[&](const AotModule& a,const char* elfKey){
             const auto elf=parse_ee_elf(read_file(path(elfKey)));
             if(std::string_view(a.source_kind)!="elf" || sha256_hex(elf.bytes)!=a.source_sha256)throw std::runtime_error("Compiled AOT/ELF identity differs");
@@ -178,6 +214,7 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
             for(std::size_t i=1;i<blocks.size();++i)if(blocks[i-1].address==blocks[i].address)throw std::runtime_error("Compiled session AOT modules overlap");
             merged.blocks=blocks.data();merged.block_count=blocks.size();module=&merged;
         }
+        }
         auto& iop=const_cast<Iop&>(memory->iop());
         iop.set_pad_poll_source([this](unsigned port,std::uint64_t cycle){
             if(port)return std::uint16_t{0xFFFF};
@@ -200,7 +237,7 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
         BootReport boundary;boundary.outcome=BootOutcome::BudgetExhausted;boundary.pc=ee.pc;
         {
             std::lock_guard lock(p_->mutex);p_->cycles=ee.cycles();p_->lastCycles=ee.cycles();p_->sampleTime=Clock::now();p_->state=SessionState::Running;
-            p_->status=QStringLiteral("Experimental — %1\n%2").arg(module?QStringLiteral("AOT + interpretador explícito"):QStringLiteral("somente interpretador"),qstr(required(config,"hypotheses")));
+            p_->status=original?tr("Original BIOS boot with game disc — reference interpreter, software GS. Compatibility is incomplete; execution stops at the first unsupported behavior."):QStringLiteral("Experimental — %1\n%2").arg(module?QStringLiteral("AOT + interpretador explícito"):QStringLiteral("somente interpretador"),qstr(required(config,"hypotheses")));
             const auto map=config.value("gamepad_mapping").toArray();
             if(!map.isEmpty()){
                 if(map.size()!=16)throw std::runtime_error("gamepad_mapping needs 16 XInput masks (one per PS2 bit)");
@@ -222,6 +259,7 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
             }
             if(!saving.empty()){
                 try{
+                    if(original)throw std::runtime_error("Checkpoint export requires an experimental manifest");
                     if(std::filesystem::exists(saving))throw std::runtime_error("Manual save refuses to overwrite an existing checkpoint");
                     auto sidecar=saving;sidecar+=".json";
                     if(std::filesystem::exists(sidecar))throw std::runtime_error("Manual save manifest already exists");

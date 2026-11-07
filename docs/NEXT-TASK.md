@@ -1,5 +1,15 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
+## Após conectar Play — 07/11/2026
+
+O botão Jogar tenta o reset original com a BIOS ativa e o disco selecionado,
+na janela compartilhada, com interpretador/GS software explícitos e recusa
+visível. O executável local está em `out/launcher-build/ps2-native.exe`.
+Próxima validação: testar os títulos locais por esse fluxo e registrar o
+primeiro PC/motivo real; resolver a fronteira compartilhada observada.
+Não confundir a tentativa com boot concluído ou gameplay. Não foram retomadas
+as sessões comerciais históricas; manifests/checkpoints continuam separados.
+
 ## Após reutilização do leitor IPU — 07/11/2026
 
 `SETIQ` com FB/BP não alinhados e `SETVQ` com BP não alinhado já foram

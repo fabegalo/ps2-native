@@ -6,7 +6,7 @@ import PS2Native.Backend
 
 Window {
     id: panel
-    title: "ps2-native — Modo de Teste Experimental"
+    title: Experimental.originalBoot ? qsTr("ps2-native — Game session") : "ps2-native — Modo de Teste Experimental"
     width: 1100; height: 760
     minimumWidth: 800; minimumHeight: 620
     color: "#101621"
@@ -28,10 +28,11 @@ Window {
         anchors.fill: parent; anchors.margins: 14; spacing: 8
         Label {
             Layout.fillWidth: true
-            text: "Modo de Teste Experimental — checkpoint verificado, separado do boot original"
+            text: Experimental.originalBoot ? qsTr("Original BIOS boot — reference interpreter, software GS; compatibility incomplete") : "Modo de Teste Experimental — checkpoint verificado, separado do boot original"
             color: "#f4c36a"; font.bold: true; wrapMode: Text.Wrap
         }
         RowLayout {
+            visible: !Experimental.originalBoot
             Layout.fillWidth: true
             TextField {
                 Layout.fillWidth: true; enabled: !Experimental.active
@@ -43,16 +44,18 @@ Window {
         }
         CheckBox {
             id: reviewed
+            visible: !Experimental.originalBoot
             text: "Autorizo a troca revisada de runtime, preservando o cenário e as dependências do checkpoint"
             enabled: !Experimental.active
             palette.windowText: "#dfe8f7"
         }
         RowLayout {
-            Button { text: "Iniciar"; enabled: !Experimental.active; onClicked: { Experimental.begin(reviewed.checked); video.forceActiveFocus() } }
+            Button { text: qsTr("Open checkpoint manifest…"); visible: Experimental.originalBoot; enabled: !Experimental.active; onClicked: manifestDialog.open() }
+            Button { text: "Iniciar"; visible: !Experimental.originalBoot; enabled: !Experimental.active; onClicked: { Experimental.begin(reviewed.checked); video.forceActiveFocus() } }
             Button { text: "Pausar"; enabled: Experimental.active && !Experimental.paused; onClicked: Experimental.pause() }
             Button { text: "Continuar"; enabled: Experimental.paused; onClicked: { Experimental.resume(); video.forceActiveFocus() } }
             Button { text: "Parar"; enabled: Experimental.active; onClicked: Experimental.stop() }
-            Button { text: "Salvar checkpoint…"; enabled: Experimental.paused; onClicked: saveDialog.open() }
+            Button { text: "Salvar checkpoint…"; visible: !Experimental.originalBoot; enabled: Experimental.paused; onClicked: saveDialog.open() }
             Label { text: "Setas • Enter = Start • Z = Cross • X = Circle • Backspace = Select"; color: "#dfe8f7"; wrapMode: Text.Wrap; Layout.fillWidth: true }
         }
         ComboBox {

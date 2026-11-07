@@ -1,5 +1,20 @@
 # STATUS — ps2-native
 
+## Play conectado ao boot original — 07/11/2026
+
+- **Jogar** abre a sessão existente com a BIOS ativa e o disco selecionado,
+  desde o reset original. Revalida ROM0/NVM, perfil e BOOT2; não exige
+  checkpoint nem injeta ELF ou hipóteses de diagnóstico.
+- Interpretador de referência e GS por software ficam explícitos. Recusas
+  mostram PC/motivo; pausa, parada, teclado/XInput e PCM usam o caminho comum.
+  O modo de checkpoint continua separado e acessível após a tentativa.
+- Launcher Windows x64 compilado com Qt 6.8.3/MSVC Release `/O2` em
+  `out/launcher-build/ps2-native.exe`. Cinco testes do launcher passaram,
+  incluindo Play pela biblioteca, mesma recusa do núcleo, hash de BIOS,
+  retomada experimental e importação/restauração da UI offscreen.
+- Sem sessão comercial/humana, ganho de desempenho ou CI nesta entrega.
+  Boot bem-sucedido e gameplay de cada título continuam não demonstrados.
+
 ## Código reutilizado no IPU — 07/11/2026
 
 - Copiado/adaptado `bits_at` do ps2-web-recomp, revisão fixada, com atribuição:

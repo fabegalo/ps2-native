@@ -1,5 +1,29 @@
 # Modo de Teste Experimental — 05/11/2026
 
+## Play pelo boot original — 07/11/2026
+
+O botão **Jogar**, nos detalhes de cada disco, agora tenta o boot original
+com a BIOS ativa e esse disco montado. Não usa checkpoint ou injeção ELF.
+A janela identifica interpretador de referência e GS por software e exibe
+o PC/motivo da primeira recusa. O Native ainda é recusado explicitamente.
+Selecione uma BIOS válida antes de iniciar; NVM anexada precisa ser válida
+para o perfil selecionado. ROM0/NVM são conferidos por hash no worker;
+o disco é reidentificado e seu BOOT2 conferido contra a biblioteca.
+
+O build local atual fica em `out/launcher-build/ps2-native.exe`, Release
+MSVC `/O2`, Qt 6.8.3. As DLLs requeridas ficam ao lado do executável;
+`qt.conf` aponta os plugins/QML à instalação local de Qt já existente.
+Não é um pacote portátil. A instalação tem metadados antigos que impedem
+`windeployqt`; as dependências foram copiadas da instalação efetiva.
+
+Cinco testes `launcher-*` passaram. O teste da sessão usa a biblioteca e
+`startGame`, compara a recusa/PC com execução independente do reset original,
+recusa hash de BIOS divergente e confere nova tentativa/parada. Os testes
+anteriores preservam input, RGBA, PCM, checkpoint e UI offscreen. Não houve
+sessão humana, execução comercial pelo Play, medição de velocidade ou CI.
+
+O texto abaixo descreve o caminho de checkpoint e evidências históricas.
+
 O launcher Qt existente implementa `RuntimeSession` em uma thread própria,
 retomando um checkpoint completo verificado. Não inicia um segundo emulador,
 não injeta ELF ou serviços no convidado e não habilita Jogar/Browser originais.

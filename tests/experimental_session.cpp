@@ -1,6 +1,7 @@
 // Exercises the real Qt worker and shared EE/IOP/GS/SPU2 runtime. Original
 // synthetic firmware/data only; no physical-hardware or commercial claims.
 #include "experimental_session.hpp"
+#include "launcher.hpp"
 #include "qt_support.hpp"
 #include "bios_program.hpp"
 #include "iso_image.hpp"
@@ -177,6 +178,43 @@ int main(int argc,char** argv)try {
     require(session.last_error().find("scenario identity")!=std::string::npos,"identity mismatch fails visibly");
     session.setManifest(qpath(fixture.root/"session.json"));session.begin(false);session.stop();
     until([&]{return !session.active();},"stop during validation");
+    // Play uses the selected library disc and BIOS, without a checkpoint or
+    // diagnostic assumptions. Its first refusal must match the shared core.
+    auto originalMemory=std::make_unique<Memory>();EEState originalEe;
+    prepare_ee_boot(fixture.bios,nullptr,originalEe,*originalMemory,fixture.hardware,&fixture.nvm);
+    originalMemory->mount_disc(std::make_shared<DiscImage>(fixture.root/"disc.iso"),Iop::DiscMedium::Ps2Cd,true);
+    BootOptions originalOptions;originalOptions.max_instructions=100000;originalOptions.tail_instructions=0;
+    const auto refusal=run_ee_boot(originalEe,*originalMemory,nullptr,originalOptions);
+    require(refusal.outcome==BootOutcome::BlockPoint,"original fixture independently refuses unsupported hardware");
+    Launcher launcher(qpath(fixture.root/"library"));launcher.setRuntimeSession(&session);launcher.initialize();
+    until([&]{return launcher.loaded() && launcher.pendingTasks()==0;},"load play library");
+    require(!launcher.startGame("missing"),"unknown game cannot start");
+    launcher.importPaths({qpath(fixture.root/"rom0.bin"),qpath(fixture.root/"disc.iso")},"auto");
+    until([&]{return launcher.pendingTasks()==0 && launcher.gameCount()==1 && launcher.biosCount()==1;},"identify play inputs");
+    const auto biosId=qstr(frontend::library_id_for(fixture.root/"rom0.bin"));
+    require(launcher.setActiveBios(biosId),"select play BIOS");
+    launcher.setConsoleProfile(biosId,qstr(std::string(fixture.hardware->model)+":"+std::string(fixture.hardware->mainboard)));
+    launcher.attachNvm(biosId,QUrl::fromLocalFile(qpath(fixture.root/"nvm.bin")));
+    until([&]{return launcher.pendingTasks()==0;},"identify play NVM");
+    const auto gameId=qstr(frontend::library_id_for(fixture.root/"disc.iso"));
+    bool opened=false;QObject::connect(&launcher,&Launcher::gameStarted,&launcher,[&]{opened=true;});
+    require(launcher.startGame(gameId) && opened,"Play launches the real session window path");
+    require(observed.isNull(),"a new boot clears the previous session's image");
+    until([&]{return !session.active();},"original boot refusal");
+    require(session.originalBoot() && session.state()==frontend::SessionState::Failed,"original boot visibly fails");
+    require(session.last_error().find(refusal.reason)!=std::string::npos &&
+        session.last_error().find(QString::number(refusal.pc,16).toStdString())!=std::string::npos,
+        "Play reports the same PC and hardware refusal as original reset execution");
+    require(launcher.startGame(gameId),"Play can retry after a refusal");
+    session.stop();until([&]{return !session.active();},"stop original boot");
+    frontend::SessionRequest changedBios;changedBios.rom0=fixture.root/"rom0.bin";
+    changedBios.expected_rom0_sha256=std::string(64,'0');changedBios.disc=fixture.root/"disc.iso";
+    session.start(changedBios);until([&]{return !session.active();},"changed BIOS refusal");
+    require(session.state()==frontend::SessionState::Failed && session.last_error().find("SHA-256")!=std::string::npos,
+        "original boot rejects a BIOS that differs from library identification");
+    session.setManifest(qpath(fixture.root/"session.json"));
+    require(!session.originalBoot(),"checkpoint panel remains accessible after Play");
+    launcher.flush();
     std::cout<<"Experimental Qt runtime lifecycle, input, GS, PCM and complete-state equivalence passed\n";
     return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
