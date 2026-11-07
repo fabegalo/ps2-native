@@ -667,7 +667,7 @@ void execute_cache_instruction(ExecutionContext& ctx, std::uint32_t word) {
     cpu.cache(word);
 }
 
-void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
+static void interpret_instruction_impl(ExecutionContext& ctx,SystemEventObserver* events,InterpreterDecodeCache* cache) {
     auto& state = ctx.state;
     auto& memory = ctx.memory;
     state.instruction_pc=state.pc;
@@ -679,7 +679,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
     state.instruction_pc = pc;
     state.instruction_in_delay_slot = state.delay_pending;
     const auto word = memory.fetch32(pc);
-    const auto instruction = decode_r5900(pc, word);
+    const auto instruction = cache ? cache->decode(pc,word) : decode_r5900(pc,word);
     if (instruction.has_delay_slot() && state.delay_pending)
         throw std::runtime_error("Control transfer in an active delay slot is unsupported");
     Interpreter cpu(ctx, events);
@@ -940,5 +940,11 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         case MipsOpcode::Syscall: case MipsOpcode::Break: break; // Handled above.
     }
     (void)ee::retire(ctx, frame);
+}
+void interpret_instruction(ExecutionContext& ctx,SystemEventObserver* events) {
+    interpret_instruction_impl(ctx,events,nullptr);
+}
+void interpret_instruction(ExecutionContext& ctx,SystemEventObserver* events,InterpreterDecodeCache& cache) {
+    interpret_instruction_impl(ctx,events,&cache);
 }
 } // namespace ps2native

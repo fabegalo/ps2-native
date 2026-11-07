@@ -1,5 +1,16 @@
 # STATUS — ps2-native
 
+## Interpretador: cache de decodificação medido — 07/11/2026
+
+- Cache local por execução reutiliza PC/palavra decodificados após o fetch
+  validado; mantém referência sem cache e não altera o formato de checkpoint.
+- Boot experimental reconstruído, 32 milhões interpretadas: cinco pares
+  **3,20387 → 2,78142 s**, tempo −13,19%, throughput +15,19%.
+- Estado completo igual antes/depois e em 10 + 22 milhões; **5/5** regressões
+  passaram na fonte congelada. Evidências e hipóteses em
+  [RUNTIME-PERFORMANCE](docs/RUNTIME-PERFORMANCE.md#cache-de-decodificação-do-interpretador--07112026).
+  Sem medição de gameplay/launcher ou nova certificação de título/host.
+
 ## Preparação observada e autotests executáveis — 07/11/2026
 
 - `ps2n-dev` aceita `observed=events.ndjson`: valida sequência/bytes, acrescenta

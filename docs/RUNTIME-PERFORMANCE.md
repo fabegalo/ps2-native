@@ -1,5 +1,77 @@
 # Runtime: fronteiras de evento e tradução de memória — 05/11/2026
 
+## Cache de decodificação do interpretador — 07/11/2026
+
+O dispatcher compartilhado agora reutiliza metadados de até 256 instruções
+por chamada de `run_ee_boot`, com chave PC/palavra. A leitura de memória ocorre
+antes de consultar o cache: privilégios, TLB, bits desconhecidos e mudanças de
+código continuam sendo verificados. O cache é local à execução, não contém
+código host gerado e não entra no checkpoint. A API sem cache permanece como
+referência. Os blocos AOT e as semânticas das instruções não foram alterados.
+
+A seleção veio de sampling do Release no trecho de boot reconstruído, não do
+perfil histórico do tabuleiro: entre 1.404 amostras da thread principal,
+`try_decode_r5900`/ `decode_r5900` somaram 14,46%. Foi usado o
+[sampler existente de gow-native-pc](https://github.com/Vnnc1/gow-native-pc/blob/fbca76d2981881363c5b7f63eacb880244a8c162/tools/profile/sampler.cpp),
+compilado localmente e dirigido ao PID criado pela tarefa. O código do sampler
+ficou em `out/`; nenhum profiler foi adicionado ao produto.
+
+### Medição e equivalência
+
+Cenário: 32 milhões de instruções do boot experimental reconstruído, ROM0
+`d6653f4e…`, SCPH-70004:GH-032-11 e NVM `5c3c7a94…`. Conserva as hipóteses
+já registradas em `out/reconstruction/experiment-stage1.args.json` para
+encoder, SYNCV, SBUS, IOP e SPU2. Não é boot original sem hipóteses nem
+execução de um jogo. Todas as 32 milhões de instruções foram interpretadas;
+zero instruções EE AOT ou VU1 foram usadas nessa janela.
+
+Fonte congelada em `out/investigation-nov07/source`: `b0bbed1` mais as
+alterações locais presentes no início da coleta, preservadas em
+`baseline-working.diff`, e somente este incremento entre os dois executáveis.
+MSVC 19.44, Ninja, Release `/O2 /Ob2 /DNDEBUG /Z7`, link `/DEBUG`,
+profiling intrusivo OFF, backends GPU OFF. `/Z7` evita a falha C1902 do
+gerenciador PDB encontrada na configuração inicial com `/Zi`, sem encerrar
+serviços de compilação de outras tarefas. As duas variantes usam os mesmos
+flags; os símbolos correspondentes foram preservados.
+
+Cinco pares com ordem alternada, após um aquecimento por variante, sem build
+ou testes desta tarefa durante a coleta. Tempos de execução, excluindo carga
+de checkpoint, salvamento, hashing e exportação:
+
+| Par | Antes (s) | Depois (s) |
+|---|---:|---:|
+| 1 | 3,20387 | 2,79908 |
+| 2 | 3,09927 | 2,78142 |
+| 3 | 3,18577 | 2,76248 |
+| 4 | 3,23499 | 2,83813 |
+| 5 | 3,24235 | 2,74888 |
+| Mediana | **3,20387** | **2,78142** |
+
+Todos os pares favoreceram o cache. Tempo mediano **−13,19%**, throughput
+**+15,19%** nesta janela. Amostras completas, aquecimentos e executáveis:
+`out/investigation-nov07/primary-results.json`, `reference/` e `build/`.
+O cache remove uma parte do custo de fallback; esses números não medem FPS,
+launcher, áudio ouvido nem gameplay comercial.
+
+Validação separada antes/depois e continuação de 10 + 22 milhões produziram
+o mesmo checkpoint completo: PC `0x8000E5E8`, 32 milhões de instruções/ciclos,
+payload SHA-256
+`86eca61f3fd27c3643fb62d9fa0f6d1e1e7bbf7eb73b6ad6958564397745558b`.
+O esquema permaneceu `11a100b3…`; só a identidade de runtime muda.
+A continuação usa cache frio após a restauração. Resumo e checkpoints privados
+em `out/investigation-nov07/validation-summary.json` e `*-validation.ps2ncp`.
+A igualdade é do estado modelado, não uma certificação física ou audiovisual.
+
+**5/5 regressões passaram** na fonte congelada: boot M2.0 híbrido, cache EE,
+timers, contexto EE e checkpoint completo. O novo caso cobre hit, colisão,
+bytes modificados, palavra desconhecida, instrução não suportada seguida de
+reparo, remapeamento TLB e privilégio. Log `focused-tests.log` no mesmo diretório.
+A repetição separada do sampling obteve 1.416 amostras da thread de execução;
+fetch/TLB, execução EE e observação continuam relevantes. Seus tempos não
+participam da série primária. Alterações concorrentes posteriores ao snapshot
+não recebem esta medição. Sem publicação/CI, sessão gráfica ou ganho no jogo
+demonstrado nesta etapa; nenhum ensaio de emulação permaneceu ativo.
+
 ## Artefatos comerciais ausentes; incremento de preparação — 07/11/2026
 
 Nesta execução o mantenedor confirmou ter apagado `out/`. Os discos e a

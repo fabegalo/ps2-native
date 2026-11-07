@@ -35,4 +35,21 @@ public:
 // shared semantics (identical to AOT blocks); COP0, TLB, ERET, EI/DI, CACHE and
 // PREF here. Throws BusError, GuestStop or std::runtime_error (unknown encoding).
 void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events = nullptr);
+    // RUNTIME_HELPERS_BEGIN
+// Per-run decode metadata only; fetch still checks the current guest bytes.
+class InterpreterDecodeCache {
+public:
+    [[nodiscard]] MipsInstruction decode(std::uint32_t pc,std::uint32_t word) {
+        auto& entry=entries_[((pc>>2u)^(pc>>12u))&(entries_.size()-1u)];
+        if(!entry.valid || entry.instruction.pc!=pc || entry.instruction.word!=word) {
+            entry.instruction=decode_r5900(pc,word);entry.valid=true;
+        }
+        return entry.instruction;
+    }
+private:
+    struct Entry {MipsInstruction instruction{};bool valid{};};
+    std::array<Entry,256> entries_{};
+};
+void interpret_instruction(ExecutionContext& ctx,SystemEventObserver* events,InterpreterDecodeCache& cache);
+    // RUNTIME_HELPERS_END
 } // namespace ps2native

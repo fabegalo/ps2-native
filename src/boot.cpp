@@ -254,6 +254,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
     // An unaligned stop address can never match an instruction PC.
     ExecutionContext ctx{state, memory, executed, options.max_instructions, 0xFFFFFFFFu, &tracer};
     AotDispatchCache dispatch;
+    InterpreterDecodeCache interpreter_decode;
     const auto start_retired = state.retired_instructions;
     ObserverScope scope(memory, &tracer, options, state);
     {
@@ -295,7 +296,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                         throw std::runtime_error("AOT block at " + hex32(state.pc) + " made no progress");
                 } else {
                     flush_interrupt_cache(ctx);
-                    interpret_instruction(ctx, &tracer);
+                    interpret_instruction(ctx, &tracer,interpreter_decode);
                 }
             }
             report.pc = state.pc;

@@ -7,6 +7,44 @@
 using namespace ps2native;
 using namespace boot_checks;
 namespace {
+void interpreter_decode_cache() {
+    auto owner=std::make_unique<Memory>();auto& memory=*owner;
+    memory.reset_for_boot(m20::build_firmware().rom);
+    auto state=ee_reset_state();std::uint64_t executed=0;
+    ExecutionContext ctx{state,memory,executed,100,0xFFFFFFFFu};
+    InterpreterDecodeCache cache;
+    const auto step=[&](std::uint32_t pc){state.pc=pc;interpret_instruction(ctx,nullptr,cache);};
+    memory.write32(0x80001000u,0x24080001u);
+    step(0x80001000u);step(0x80001000u);
+    require(state.reg32(8)==1 && executed==2,"cached instruction retires on a warm decode");
+    memory.write32(0x80001000u,0x24080002u);
+    step(0x80001000u);
+    require(state.reg32(8)==2,"changed executable bytes replace the cached instruction");
+    memory.write32(0x80001400u,0x24090009u);
+    step(0x80001400u);step(0x80001000u);
+    require(state.reg32(8)==2 && state.reg32(9)==9,"colliding decode slots retain each instruction's operands");
+    const auto retired=state.retired_instructions;
+    memory.store32_observed(0x80001000u,{0x24080002u,1u});
+    device_refused([&]{step(0x80001000u);},"unknown RAM bits");
+    require(state.retired_instructions==retired,"warm decode still refuses an unknown instruction before retirement");
+    memory.write32(0x80001000u,0x4C000000u);
+    rejects([&]{step(0x80001000u);},"not implemented by the interpreter");
+    memory.write32(0x80001000u,0x24080002u);step(0x80001000u);
+    require(state.reg32(8)==2,"failed decode does not poison its cache slot");
+
+    state.set_cp0(Cop0::Status,0);
+    memory.write32(0x80000000u,0x24080003u);
+    memory.write32(0x80002000u,0x24080007u);
+    memory.tlb_write(0,{0,0x00100000u,0x1Fu,0x5Fu});
+    step(0x00100000u);
+    require(state.reg32(8)==3,"cached interpreter uses the current TLB mapping");
+    memory.tlb_write(0,{0,0x00100000u,0x9Fu,0xDFu});
+    step(0x00100000u);
+    require(state.reg32(8)==7,"TLB remap fetches a new word before consulting decode metadata");
+    state.set_cp0(Cop0::Status,0x10u);
+    bus_fault([&]{step(0x80001000u);},BusFault::Privilege,"privilege mode");
+}
+
 void privilege_and_cache() {
     Memory memory;
     const auto rom=m20::build_firmware().rom;
@@ -1096,6 +1134,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
+    try {interpreter_decode_cache();privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

@@ -1,5 +1,20 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
+## Após o cache do interpretador — 07/11/2026
+
+O cache por execução foi implementado e medido no boot experimental reconstruído:
+32 milhões interpretadas em 3,20387 → 2,78142 s, cinco pares favoráveis e estado
+completo igual, inclusive continuação 10 + 22 milhões. Cinco regressões passaram.
+O snapshot e as hipóteses estão em
+[RUNTIME-PERFORMANCE](RUNTIME-PERFORMANCE.md#cache-de-decodificação-do-interpretador--07112026).
+
+Para otimizar novamente, partir do novo perfil e do cenário efetivamente
+reconstruído; fetch/TLB, execução EE e observação continuam relevantes.
+Este checkpoint de boot não substitui o tabuleiro comercial perdido. Restaurar
+a cena do jogo com suas identidades antes de atribuir ganho à partida ou ao
+launcher. As alterações concorrentes posteriores ao snapshot precisam de
+validação própria; preservar seus fontes, cenários e dados.
+
 ## Prioridade após exclusão de out — 07/11/2026
 
 O mantenedor confirmou a exclusão de `out/`: os checkpoints/manifestos e perfis
