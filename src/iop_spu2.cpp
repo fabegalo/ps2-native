@@ -141,15 +141,15 @@ Iop::Spu2Sample Iop::synthesize_spu2(unsigned core,std::uint64_t sample_cycle) {
         v.output=v.phase ? gain(interpolated,v.envelope) : 0;
         if(v.output)++v.nonzero_samples;
         auto step=pitch;
-        if(voice && route(0x180u,voice))step=std::min(0x3FFFu,static_cast<std::uint32_t>((pitch*(32768+previous_output))>>15));
+        if(voice && previous_output && route(0x180u,voice))step=std::min(0x3FFFu,static_cast<std::uint32_t>((pitch*(32768+previous_output))>>15));
         previous_output=v.output;
         v.pitch_counter+=step;v.read+=v.pitch_counter>>12u;v.pitch_counter&=0xFFFu;
         const auto l=gain(v.output,direct_volume(spu2_known_register(param)));
         const auto r=gain(v.output,direct_volume(spu2_known_register(param+2u)));
-        if(route(0x188u,voice))left+=l;
-        if(route(0x190u,voice))right+=r;
-        if(route(0x18Cu,voice))wet_left+=l;
-        if(route(0x194u,voice))wet_right+=r;
+        if(l && route(0x188u,voice))left+=l;
+        if(r && route(0x190u,voice))right+=r;
+        if(l && route(0x18Cu,voice))wet_left+=l;
+        if(r && route(0x194u,voice))wet_right+=r;
         if(voice==1 || voice==3)capture(0x400u+core*0x800u+(voice==3?0x200u:0u)+static_cast<unsigned>((sample_cycle/768u-1u)&511u),static_cast<std::int16_t>(v.output));
     }
     const bool external=core && spu2_last_sample_[0] && spu2_last_sample_[0]->cycle==sample_cycle &&
@@ -158,14 +158,16 @@ Iop::Spu2Sample Iop::synthesize_spu2(unsigned core,std::uint64_t sample_cycle) {
     const auto pos=static_cast<unsigned>((sample_cycle/768u-1u)&511u);
     capture(0x1000u+core*0x800u+pos,saturate(left));capture(0x1200u+core*0x800u+pos,saturate(right));
     capture(0x1400u+core*0x800u+pos,saturate(wet_left));capture(0x1600u+core*0x800u+pos,saturate(wet_right));
-    const auto mix=spu2_known_register(base+0x198u);
-    left=(mix&0x800u)?saturate(left):0;right=(mix&0x400u)?saturate(right):0;
-    // Existing effects/ADMA validation refuses any audible uncomputed source.
-    if(core && spu2_last_sample_[0] && spu2_last_sample_[0]->cycle==sample_cycle) {
-        if(mix&0x8u)left+=gain(spu2_last_sample_[0]->left,static_cast<std::int16_t>(spu2_known_register(0x1F900790u)));
-        if(mix&0x4u)right+=gain(spu2_last_sample_[0]->right,static_cast<std::int16_t>(spu2_known_register(0x1F900792u)));
+    if(left || right || external) {
+        const auto mix=spu2_known_register(base+0x198u);
+        left=(mix&0x800u)?saturate(left):0;right=(mix&0x400u)?saturate(right):0;
+        // Existing effects/ADMA validation refuses any audible uncomputed source.
+        if(core && spu2_last_sample_[0] && spu2_last_sample_[0]->cycle==sample_cycle) {
+            if(mix&0x8u)left+=gain(spu2_last_sample_[0]->left,static_cast<std::int16_t>(spu2_known_register(0x1F900790u)));
+            if(mix&0x4u)right+=gain(spu2_last_sample_[0]->right,static_cast<std::int16_t>(spu2_known_register(0x1F900792u)));
+        }
     }
-    return {sample_cycle,saturate(gain(saturate(left),direct_volume(spu2_known_register(0x1F900760u+core*0x28u)))),
-                         saturate(gain(saturate(right),direct_volume(spu2_known_register(0x1F900762u+core*0x28u))))};
+    return {sample_cycle,left ? saturate(gain(saturate(left),direct_volume(spu2_known_register(0x1F900760u+core*0x28u)))) : std::int16_t{0},
+                         right ? saturate(gain(saturate(right),direct_volume(spu2_known_register(0x1F900762u+core*0x28u)))) : std::int16_t{0}};
 }
 } // namespace ps2native

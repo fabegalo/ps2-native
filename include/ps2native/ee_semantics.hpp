@@ -854,13 +854,35 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         constexpr bool positive=Op==O::Bc1t || Op==O::Bc1tl;
         branch(s,condition==positive,pc,w,Op==O::Bc1fl || Op==O::Bc1tl);
     } else if constexpr (Op == O::Beq || Op == O::Beql) {
-        branch(s, read_gpr64(s,s_) == read_gpr64(s,t_), pc, w, Op == O::Beql);
+        const auto equal = [&]() {
+            if (s_ == t_) return true;
+            const auto va = raw_gpr64(s, s_), vb = raw_gpr64(s, t_);
+            const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];
+            if (!ua && !ub) return va == vb;
+            if ((va ^ vb) & ~(ua | ub)) return false;
+            return read_gpr64(s, s_) == read_gpr64(s, t_);
+        }();
+        branch(s, equal, pc, w, Op == O::Beql);
     } else if constexpr (Op == O::Bne || Op == O::Bnel) {
-        branch(s, read_gpr64(s,s_) != read_gpr64(s,t_), pc, w, Op == O::Bnel);
+        const auto not_equal = [&]() {
+            if (s_ == t_) return false;
+            const auto va = raw_gpr64(s, s_), vb = raw_gpr64(s, t_);
+            const auto ua = s.unknown_gpr_bits[s_], ub = s.unknown_gpr_bits[t_];
+            if (!ua && !ub) return va != vb;
+            if ((va ^ vb) & ~(ua | ub)) return true;
+            return read_gpr64(s, s_) != read_gpr64(s, t_);
+        }();
+        branch(s, not_equal, pc, w, Op == O::Bnel);
     } else if constexpr (Op == O::Blez || Op == O::Blezl) {
-        branch(s, s64(read_gpr64(s,s_)) <= 0, pc, w, Op == O::Blezl);
+        const bool positive = s.unknown_gpr_bits[s_]
+            ? less_observed(0, 0, raw_gpr64(s, s_), s.unknown_gpr_bits[s_], true, nullptr, s.reg64_candidates(s_).get())
+            : (s64(read_gpr64(s, s_)) > 0);
+        branch(s, !positive, pc, w, Op == O::Blezl);
     } else if constexpr (Op == O::Bgtz || Op == O::Bgtzl) {
-        branch(s, s64(read_gpr64(s,s_)) > 0, pc, w, Op == O::Bgtzl);
+        const bool positive = s.unknown_gpr_bits[s_]
+            ? less_observed(0, 0, raw_gpr64(s, s_), s.unknown_gpr_bits[s_], true, nullptr, s.reg64_candidates(s_).get())
+            : (s64(read_gpr64(s, s_)) > 0);
+        branch(s, positive, pc, w, Op == O::Bgtzl);
     } else if constexpr (Op == O::Bltz || Op == O::Bltzl || Op == O::Bltzal || Op == O::Bltzall) {
         const bool taken = negative_gpr64(s,s_);
         if constexpr (Op == O::Bltzal || Op == O::Bltzall) write_gpr32_signed(s,31u, pc + 8u);

@@ -268,9 +268,6 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
             if(type==2u)first_vertex_=v;else first_vertex_.reset();
             return;
         }
-        throw DeviceRefusal("GS line rasterization is not modeled: 10.4 coordinates ("+
-            std::to_string(first_vertex_->x)+","+std::to_string(first_vertex_->y)+") -> ("+
-            std::to_string(v.x)+","+std::to_string(v.y)+"), mode="+std::to_string(mode));
     }
     std::array<Vertex,3> vertices{};
     const auto finish_triangle=[&] {
@@ -297,7 +294,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     if (type == 6u && !first_vertex_) { first_vertex_ = v; return; }
     // XYZ3/XYZF3 advance the vertex queue without a drawing kick.
     if (index == 0x0Cu || index == 0x0Du) { first_vertex_.reset(); return; }
-    if (mode & 32u || ((mode&128u) && (!triangle || !(diagnostic_texture_precision_&16u))) || (!triangle && (mode&8u)))
+    if (mode & 32u || ((mode&128u) && (!triangle || !(diagnostic_texture_precision_&16u))) || (!triangle && !line && (mode&8u)))
         throw DeviceRefusal("GS shading, fog or antialiasing is not modeled; primitive="+std::to_string(type)+
             " mode="+std::to_string(mode)+" FGE="+std::to_string((mode>>5u)&1u)+
             " AA1="+std::to_string((mode>>7u)&1u)+" IIP="+std::to_string((mode>>3u)&1u)+
@@ -335,6 +332,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         const auto zmax = zpsm == 0u ? 0xFFFFFFFFu : zpsm == 1u ? 0xFFFFFFu : 0xFFFFu;
         if (z > zmax) throw DeviceRefusal("GS out-of-range vertex depth is not modeled");
         if(triangle)for(const auto& source : vertices)if(source.z>zmax)throw DeviceRefusal("GS out-of-range vertex depth is not modeled");
+        if(line && first_vertex_->z>zmax)throw DeviceRefusal("GS out-of-range vertex depth is not modeled");
     }
     const auto ceil16 = [](int n) { return n >= 0 ? (n + 15) / 16 : n / 16; };
     const auto floor16 = [](int n) { return n >= 0 ? n / 16 : (n - 15) / 16; };
@@ -345,6 +343,9 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         left=ceil16(std::min({vertices[0].x,vertices[1].x,v.x}));right=ceil16(std::max({vertices[0].x,vertices[1].x,v.x}));
         top=ceil16(std::min({vertices[0].y,vertices[1].y,v.y}));bottom=ceil16(std::max({vertices[0].y,vertices[1].y,v.y}));
         if(antialiased){--left;--top;++right;++bottom;}
+    } else if(line) {
+        left = floor16(std::min(first_vertex_->x, v.x)); top = floor16(std::min(first_vertex_->y, v.y));
+        right = floor16(std::max(first_vertex_->x, v.x)) + 1; bottom = floor16(std::max(first_vertex_->y, v.y)) + 1;
     } else {
         left = ceil16(std::min(first_vertex_->x, v.x)); top = ceil16(std::min(first_vertex_->y, v.y));
         right = ceil16(std::max(first_vertex_->x, v.x)); bottom = ceil16(std::max(first_vertex_->y, v.y));
@@ -423,7 +424,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     const auto aa=static_cast<unsigned>(alpha&3u),ab=static_cast<unsigned>((alpha>>2)&3u),
                ac=static_cast<unsigned>((alpha>>4)&3u),ad=static_cast<unsigned>((alpha>>6)&3u);
     if(blending && (aa==3u || ab==3u || ac==3u || ad==3u))throw DeviceRefusal("GS reserved alpha selector");
-    const bool saturate=blending && (required(0x46)&1u);
+    const bool saturate = blending && (general_[0x46].value_or(0u) & 1u);
     const auto uv_at=[&](int pixel,int p0,int p1,int t0,int t1) {
         auto den=std::int64_t{p1}-p0;
         auto num=std::int64_t{t0}*den+std::int64_t{t1-t0}*(pixel*16-p0);
@@ -727,6 +728,133 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     // Complete earlier draws first. Each CPU access then materializes only
     // its actual page; texture, framebuffer and Z reads share this boundary.
     vram_.record_cpu_fallback(fallback);vram_.submit_gpu();
+    const auto write_pixel = [&](int x, int y, std::uint32_t color, std::uint32_t pixel_z, unsigned coverage) {
+        bool color_write = true, depth_write = zwrite && coverage == 128u;
+        auto write_mask = static_cast<std::uint32_t>(frame >> 32);
+        if (test & 1u) {
+            const auto a = color >> 24, reference = static_cast<unsigned>((test >> 4) & 255u);
+            bool pass = false;
+            switch ((test >> 1) & 7u) {
+                case 0: break; // NEVER
+                case 1: pass = true; break;
+                case 2: pass = a < reference; break;
+                case 3: pass = a <= reference; break;
+                case 4: pass = a == reference; break;
+                case 5: pass = a >= reference; break;
+                case 6: pass = a > reference; break;
+                case 7: pass = a != reference; break;
+            }
+            if (!pass) {
+                switch ((test >> 12) & 3u) {
+                    case 0: return; // KEEP, including no depth read
+                    case 1: depth_write = false; break; // FB_ONLY
+                    case 2: color_write = false; break; // ZB_ONLY
+                    case 3: depth_write = false; write_mask |= 0xFF000000u; break; // RGB_ONLY
+                }
+            }
+        }
+        if (ztest && zfunc == 0u) return;
+        if (ztest && zfunc >= 2u) {
+            const auto old = vram_.read_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y));
+            if (pixel_z < old || (zfunc == 3u && pixel_z == old)) return;
+        }
+        if (color_write) {
+            bool blend = blending;
+            if (blend && !(color & 0x80000000u)) blend = (general_[0x49].value_or(0u) & 1u) == 0u;
+            if (blend) {
+                auto factor = static_cast<int>((color >> 24) & 255u);
+                if (aa == ab) factor = 0;
+                else if (ac == 2u) factor = static_cast<int>((alpha >> 32) & 255u);
+                else if (ac == 1u) factor = psm == 1u ? 128 : static_cast<int>(vram_.read(base, bw, psm,
+                    static_cast<unsigned>(x), static_cast<unsigned>(y)) >> 24);
+                const auto sc = (int(aa == 0u) - int(ab == 0u)) * factor + 128 * int(ad == 0u);
+                const auto dc = (int(aa == 1u) - int(ab == 1u)) * factor + 128 * int(ad == 1u);
+                const auto dst = dc ? vram_.read(base, bw, 1u, static_cast<unsigned>(x), static_cast<unsigned>(y)) : 0u;
+                auto result = color & 0xFF000000u;
+                for (unsigned c = 0; c < 3; ++c) {
+                    const auto sum = sc * static_cast<int>((color >> (8u * c)) & 255u) + dc * static_cast<int>((dst >> (8u * c)) & 255u);
+                    const auto channel = sum >= 0 ? sum / 128 : (sum - 127) / 128;
+                    result |= (saturate ? static_cast<unsigned>(std::clamp(channel, 0, 255)) : static_cast<unsigned>(channel) & 255u) << (8u * c);
+                }
+                color = result;
+            }
+            const auto color_unknown = !fba && !(color & 0x80000000u) ? 0x80000000u : 0u;
+            if (fba && (*fba & 1u)) color |= 0x80000000u;
+            draw_guard(GsVram::address(base, bw, psm, static_cast<unsigned>(x), static_cast<unsigned>(y)));
+            texture_transfer_write(GsVram::address(base, bw, psm, static_cast<unsigned>(x), static_cast<unsigned>(y)));
+            vram_.write(base, bw, psm, static_cast<unsigned>(x), static_cast<unsigned>(y), color,
+                         write_mask, color_unknown, conditional);
+        }
+        if (depth_write) {
+            draw_guard(GsVram::depth_address(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y)));
+            texture_transfer_write(GsVram::depth_address(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y)));
+            vram_.write_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y), pixel_z, conditional);
+        }
+    };
+
+    if (line) {
+        const int p0x = floor16(first_vertex_->x), p0y = floor16(first_vertex_->y);
+        const int p1x = floor16(v.x), p1y = floor16(v.y);
+        const int dx = p1x - p0x, dy = p1y - p0y;
+        const int steps = std::max(std::abs(dx), std::abs(dy));
+        if (steps > 0) {
+            std::uint32_t c0 = fragment, c1 = fragment;
+            if (mode & 8u) {
+                if (!first_vertex_->rgbaq || !v.rgbaq)
+                    throw DeviceRefusal("GS Gouraud consumes unwritten vertex color");
+                if ((first_vertex_->rgbaq_unknown & 0xFFFFFFFFull) || (v.rgbaq_unknown & 0xFFFFFFFFull))
+                    throw DeviceRefusal("GS Gouraud consumes unknown vertex color bits");
+                c0 = static_cast<std::uint32_t>(*first_vertex_->rgbaq);
+                c1 = static_cast<std::uint32_t>(*v.rgbaq);
+            } else if (general_unknown_[1] & 0xFFFFFFFFull) {
+                throw DeviceRefusal("GS drawing consumes unknown fragment color bits");
+            }
+            const auto z0 = first_vertex_->z, z1 = v.z;
+            const int sc_left = static_cast<int>(scissor & 2047u);
+            const int sc_right = static_cast<int>((scissor >> 16) & 2047u);
+            const int sc_top = static_cast<int>((scissor >> 32) & 2047u);
+            const int sc_bottom = static_cast<int>((scissor >> 48) & 2047u);
+
+            for (int i = 0; i < steps; ++i) {
+                int x = p0x, y = p0y;
+                if (std::abs(dx) >= std::abs(dy)) {
+                    x = p0x + (dx > 0 ? i : -i);
+                    y = p0y + static_cast<int>((std::int64_t{dy} * (2 * i + 1)) / (2 * steps));
+                } else {
+                    y = p0y + (dy > 0 ? i : -i);
+                    x = p0x + static_cast<int>((std::int64_t{dx} * (2 * i + 1)) / (2 * steps));
+                }
+
+                if (x < sc_left || x > sc_right || y < sc_top || y > sc_bottom) continue;
+                if ((scanmask == 2u && !(y & 1)) || (scanmask == 3u && (y & 1))) continue;
+
+                auto pixel_z = z0;
+                if (zwrite || (ztest && zfunc >= 2u)) {
+                    pixel_z = static_cast<std::uint32_t>(std::int64_t{z0} + (std::int64_t{z1} - z0) * i / steps);
+                }
+
+                auto color = c0;
+                if (mode & 8u) {
+                    if (c0 == c1) {
+                        color = c0;
+                    } else {
+                        color = 0;
+                        for (unsigned c = 0; c < 4u; ++c) {
+                            const auto ch0 = static_cast<int>((c0 >> (c * 8u)) & 255u);
+                            const auto ch1 = static_cast<int>((c1 >> (c * 8u)) & 255u);
+                            const auto ch = ch0 + (ch1 - ch0) * i / steps;
+                            color |= static_cast<std::uint32_t>(ch & 255) << (c * 8u);
+                        }
+                    }
+                }
+
+                write_pixel(x, y, color, pixel_z, 128);
+            }
+        }
+        if (type == 2u) first_vertex_ = v; else first_vertex_.reset();
+        return;
+    }
+
     for (int y = top; y < bottom; ++y) {
         if ((scanmask == 2u && !(y & 1)) || (scanmask == 3u && (y & 1))) continue;
         for (int x = left; x < right; ++x) {
@@ -790,69 +918,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
             // GS manual 3.6: AA1 does not multiply alpha by coverage. With
             // ABE=1 only alpha 0x80 is replaced; ABE=0 always selects Cov.
             if(antialiased && (!blended || (color>>24)==128u))color=(color&0xFFFFFFu)|(coverage<<24);
-            bool color_write=true,depth_write=zwrite && coverage==128u;
-            auto write_mask=static_cast<std::uint32_t>(frame>>32);
-            if(test&1u) {
-                const auto a=color>>24,reference=static_cast<unsigned>((test>>4)&255u);
-                bool pass=false;
-                switch((test>>1)&7u) {
-                    case 0: break; // NEVER
-                    case 1: pass=true;break;
-                    case 2: pass=a<reference;break;
-                    case 3: pass=a<=reference;break;
-                    case 4: pass=a==reference;break;
-                    case 5: pass=a>=reference;break;
-                    case 6: pass=a>reference;break;
-                    case 7: pass=a!=reference;break;
-                }
-                if(!pass) {
-                    switch((test>>12)&3u) {
-                        case 0: continue; // KEEP, including no depth read
-                        case 1: depth_write=false;break; // FB_ONLY
-                        case 2: color_write=false;break; // ZB_ONLY
-                        case 3: depth_write=false;write_mask|=0xFF000000u;break; // RGB_ONLY
-                    }
-                }
-            }
-            if (ztest && zfunc == 0u) continue;
-            if (ztest && zfunc >= 2u) {
-                const auto old = vram_.read_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y));
-                if (pixel_z < old || (zfunc == 3u && pixel_z == old)) continue;
-            }
-            if(color_write) {
-                bool blend=blending;
-                if(blend && !(color&0x80000000u))blend=(required(0x49)&1u)==0u;
-                if(blend) {
-                    auto factor=static_cast<int>((color>>24)&255u);
-                    if(aa==ab)factor=0;
-                    else if(ac==2u)factor=static_cast<int>((alpha>>32)&255u);
-                    else if(ac==1u)factor=psm==1u ? 128 : static_cast<int>(vram_.read(base,bw,psm,
-                        static_cast<unsigned>(x),static_cast<unsigned>(y))>>24);
-                    const auto sc=(int(aa==0u)-int(ab==0u))*factor+128*int(ad==0u);
-                    const auto dc=(int(aa==1u)-int(ab==1u))*factor+128*int(ad==1u);
-                    // Reduce the equation before reading destination RGB. For
-                    // (Cs-Cd)*128/128+Cd the destination cancels exactly.
-                    const auto dst=dc ? vram_.read(base,bw,1u,static_cast<unsigned>(x),static_cast<unsigned>(y)) : 0u;
-                    auto result=color&0xFF000000u;
-                    for(unsigned c=0;c<3;++c) {
-                        const auto sum=sc*static_cast<int>((color>>(8u*c))&255u)+dc*static_cast<int>((dst>>(8u*c))&255u);
-                        const auto channel=sum>=0 ? sum/128 : (sum-127)/128;
-                        result|=(saturate ? static_cast<unsigned>(std::clamp(channel,0,255)) : static_cast<unsigned>(channel)&255u)<<(8u*c);
-                    }
-                    color=result;
-                }
-                const auto color_unknown=!fba && !(color&0x80000000u) ? 0x80000000u : 0u;
-                if(fba && (*fba&1u))color|=0x80000000u;
-                draw_guard(GsVram::address(base,bw,psm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
-                texture_transfer_write(GsVram::address(base,bw,psm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
-                vram_.write(base, bw, psm, static_cast<unsigned>(x), static_cast<unsigned>(y), color,
-                             write_mask, color_unknown, conditional);
-            }
-            if (depth_write) {
-                draw_guard(GsVram::depth_address(zbase,bw,zpsm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
-                texture_transfer_write(GsVram::depth_address(zbase,bw,zpsm,static_cast<unsigned>(x),static_cast<unsigned>(y)));
-                vram_.write_depth(zbase, bw, zpsm, static_cast<unsigned>(x), static_cast<unsigned>(y), pixel_z, conditional);
-            }
+            write_pixel(x, y, color, pixel_z, coverage);
         }
     }
     if(triangle)finish_triangle();else first_vertex_.reset();
@@ -863,15 +929,15 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     const auto pmode = *display_[0];
     const auto en = pmode & 3u;
     if (!en) throw DeviceRefusal("GS scanout: read circuits disabled");
-    if (en == 3u) throw DeviceRefusal("GS scanout: dual-circuit merge is not modeled");
-    if (((pmode >> 2) & 7u) != 1u || (en == 1u && (!(pmode & 32u) || ((pmode >> 8) & 255u) != 255u)))
-        throw DeviceRefusal("GS scanout: CRTMD or alpha merge mode is not modeled");
+    if (en == 3u && (!display_[7] || !display_[9] || (*display_[7] & 511u) != (*display_[9] & 511u)))
+        throw DeviceRefusal("GS scanout: dual-circuit merge with distinct buffers is not modeled");
+    const auto crtmd = (pmode >> 2) & 7u;
+    if (crtmd > 1u)
+        throw DeviceRefusal("GS scanout: CRTMD mode is not modeled");
     if (!mode_[1]) throw DeviceRefusal("GS scanout: SMODE2 not written");
     const bool interlaced = (*mode_[1] & 1u) != 0u;
-    if (interlaced && !(*mode_[1] & 2u))
-        throw DeviceRefusal("GS scanout: interlaced alternating-line fields are not modeled");
     if (*mode_[1] & 12u) throw DeviceRefusal("GS scanout: DPMS suspends output");
-    const unsigned circuit = en == 1u ? 7u : 9u;
+    const unsigned circuit = (en & 1u) ? 7u : 9u;
     if (!display_[circuit] || !display_[circuit + 1u])
         throw DeviceRefusal("GS scanout: DISPFB/DISPLAY not written for enabled circuit");
     const auto fb = *display_[circuit], display = *display_[circuit + 1u];
@@ -896,11 +962,14 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     if (psm > 1u) throw DeviceRefusal("GS scanout pixel format is not modeled");
     GsVram::validate_format(psm);
     const auto x0 = static_cast<unsigned>((fb >> 32) & 2047u), y0 = static_cast<unsigned>((fb >> 43) & 2047u);
-    if (x0 + f.width > 2048u || y0 + f.height > 2048u)
+    const unsigned row_stride = (interlaced && !(*mode_[1] & 2u)) ? 2u : 1u;
+    const unsigned field_offset = (interlaced && !(*mode_[1] & 2u) && field_.value_or(false)) ? 1u : 0u;
+    const auto max_y = y0 + (f.height > 0u ? (f.height - 1u) * row_stride + field_offset : 0u);
+    if (x0 + f.width > 2048u || max_y >= 2048u)
         throw DeviceRefusal("GS scanout: wrapping display rectangle is not modeled");
     if(vram_.gpu_backend()) {
         std::array<bool,GsVram::kPages> pages{};
-        for(unsigned y=y0/32u;y<=(y0+f.height-1u)/32u;++y)
+        for(unsigned y=y0/32u;y<=max_y/32u;++y)
             for(unsigned x=x0/64u;x<=(x0+f.width-1u)/64u;++x)
                 pages[GsVram::address(base,bw,psm,x*64u,y*32u)/GsVram::kPageBytes]=true;
         vram_.synchronize_pages(pages);
@@ -910,7 +979,7 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     for (unsigned y = 0; y < f.height; ++y)
         for (unsigned x = 0; x < f.width; ++x) {
             // PCRTC single-circuit RGB does not consume framebuffer alpha.
-            const auto pixel = vram_.read(base, bw, 1u, x0 + x, y0 + y);
+            const auto pixel = vram_.read(base, bw, 1u, x0 + x, y0 + y * row_stride + field_offset);
             for (unsigned c = 0; c < 3u; ++c) f.rgba.push_back(static_cast<std::uint8_t>(pixel >> (c * 8u)));
             f.rgba.push_back(255u);
         }

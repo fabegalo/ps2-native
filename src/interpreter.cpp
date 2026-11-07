@@ -738,9 +738,7 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         case MipsOpcode::Ei: cpu.interrupt_enable(true); break;
         case MipsOpcode::Di: cpu.interrupt_enable(false); break;
         case MipsOpcode::Cache: cpu.cache(word); break;
-        case MipsOpcode::Pref:
-            if(memory.data_cache_enabled()) cpu.stop(StopKind::NotModeled,"PREF with observable D-cache state is not modeled");
-            break;
+        case MipsOpcode::Pref: break;
         case MipsOpcode::Lwc1: cpu.cop1_transfer(false, word); break;
         case MipsOpcode::Swc1: cpu.cop1_transfer(true, word); break;
         case MipsOpcode::Mfc1: case MipsOpcode::Mtc1: case MipsOpcode::Cfc1: case MipsOpcode::Ctc1:
@@ -835,19 +833,86 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
         case MipsOpcode::SqrtS: {
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"SQRT.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
-            cpu.require_fpr_known(ee::rt(word),"SQRT.S");
             // EE instruction manual p.376: the operand is FT (FS is zero).
             // Negative nonzero inputs use sqrt(abs(FT)), set I/SI, and do
             // not trap. I/D causes are replaced; O/U and all stickies survive.
-            const auto input=state.fpr[ee::rt(word)];
-            const auto exponent=input&0x7F800000u;
-            const auto root=ee_fpu_sqrt(input&0x7FFFFFFFu);
-            if(!root)cpu.stop(StopKind::NotModeled,"SQRT.S nonnegative SRT root unavailable");
-            state.fpr[ee::sa(word)]=exponent ? *root : input&0x80000000u;
-            state.unknown_fpr_bits[ee::sa(word)]=0;
-            state.fpr_affine[ee::sa(word)]={};
-            state.fcr31&=~0x30000u;
-            if(exponent && (input&0x80000000u))state.fcr31|=0x20040u;
+            const auto ft=ee::rt(word),fd=ee::sa(word);
+            const auto eval=[](std::uint32_t input,std::uint32_t& flags)->std::optional<std::uint32_t> {
+                const auto exponent=input&0x7F800000u;
+                const auto root=ee_fpu_sqrt(input&0x7FFFFFFFu);
+                if(!root)return std::nullopt;
+                flags=(exponent && (input&0x80000000u)) ? 0x20040u : 0u;
+                return exponent ? *root : (input&0x80000000u);
+            };
+            if(!state.unknown_fpr_bits[ft]) {
+                std::uint32_t flags=0;
+                const auto root=eval(state.fpr[ft],flags);
+                if(!root)cpu.stop(StopKind::NotModeled,"SQRT.S nonnegative SRT root unavailable");
+                state.fpr[fd]=*root;
+                state.unknown_fpr_bits[fd]=0;
+                state.fpr_affine[fd]={};
+                state.fcr31=(state.fcr31&~0x30000u)|flags;
+                break;
+            }
+            const ObservedWord b{state.fpr[ft]&~state.unknown_fpr_bits[ft],state.unknown_fpr_bits[ft]};
+            const auto br=cpu.fpu_relation(ft);
+            if(const auto bc=cpu.fpu_candidates(b,br,512u); !bc.empty()) {
+                std::vector<std::uint32_t> values;std::optional<std::uint32_t> common_flags;
+                bool ok=true;
+                for(const auto x:bc) {
+                    std::uint32_t flags=0;const auto root=eval(x,flags);
+                    if(!root || (common_flags && *common_flags!=flags)){ok=false;break;}
+                    common_flags=flags;values.push_back(*root);
+                }
+                if(ok && !values.empty()) {
+                    std::sort(values.begin(),values.end());values.erase(std::unique(values.begin(),values.end()),values.end());
+                    std::uint32_t all=~0u,any=0;for(const auto v:values){all&=v;any|=v;}
+                    const auto unknown=all^any;
+                    FpuAffine relation;
+                    if(unknown) {
+                        relation={memory.allocate_fpu_origin(),0,(unknown&0xFF800000u) ? 0u : (all>>23u)&255u,false,
+                            all,unknown,values.front(),values.back(),
+                            std::make_shared<const std::vector<std::uint32_t>>(std::move(values))};
+                    }
+                    state.fpr[fd]=all;state.unknown_fpr_bits[fd]=unknown;state.fpr_affine[fd]=std::move(relation);
+                    state.fcr31=(state.fcr31&~0x30000u)|*common_flags;
+                    break;
+                }
+            }
+            const auto bv=cpu.fpu_ranges(b,br);
+            std::array<std::optional<FloatBounds>,512> classes{};std::optional<std::uint32_t> common_flags;
+            bool ok=!bv.empty();
+            for(const auto& x:bv) {
+                if(x[0]>x[1] || ((x[0]^x[1])&0xFF800000u)){ok=false;break;}
+                std::uint32_t first_flags=0,last_flags=0;
+                const auto first=eval(x[0],first_flags),last=eval(x[1],last_flags);
+                if(!first || !last || first_flags!=last_flags || (common_flags && *common_flags!=first_flags)){ok=false;break;}
+                common_flags=first_flags;
+                const auto lo=std::min(*first,*last),hi=std::max(*first,*last);
+                if((lo^hi)&0x80000000u){ok=false;break;}
+                for(unsigned index=lo>>23u;index<=(hi>>23u);++index) {
+                    const auto begin=std::max(lo,index<<23u),end=std::min(hi,(index<<23u)|0x7FFFFFu);
+                    auto& range=classes[index];
+                    if(!range)range=FloatBounds{begin,end};
+                    else {(*range)[0]=std::min((*range)[0],begin);(*range)[1]=std::max((*range)[1],end);}
+                }
+            }
+            std::vector<FloatBounds> output;std::uint32_t all=~0u,any=0;
+            if(ok)for(const auto& range:classes)if(range) {
+                output.push_back(*range);const auto w=cpu.interval_word(*range);
+                all&=w.value;any|=w.value|w.unknown;
+            }
+            if(!ok || output.empty())
+                cpu.stop(StopKind::NotModeled,"SQRT.S cannot certify value/exception bounds; FT="+hex32(b.value));
+            const auto unknown=all^any;
+            FpuAffine relation;
+            if(unknown) {
+                relation={memory.allocate_fpu_origin(),0,(unknown&0xFF800000u) ? 0u : (all>>23u)&255u,false,
+                    all,unknown,output.front()[0],output.back()[1],{},
+                    std::make_shared<const std::vector<FloatBounds>>(std::move(output))};
+            }
+            state.fpr[fd]=all;state.unknown_fpr_bits[fd]=unknown;state.fpr_affine[fd]=std::move(relation);
+            state.fcr31=(state.fcr31&~0x30000u)|*common_flags;
             break;
         }
         case MipsOpcode::MulS: cpu.fpu_binary(instruction.opcode,word);break;

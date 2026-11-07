@@ -1,4 +1,12 @@
-# Próxima execução — Super Bust-A-Move
+# Próxima execução — Shadow of the Colossus & Super Bust-A-Move
+
+## Shadow of the Colossus — após a primeira saída de vídeo (771M instruções) — 07/11/2026
+
+- **Estado atingido**: 771.216.676 instruções EE e 96.402.084 instruções IOP. 21 quadros consecutivos de vídeo NTSC 480i capturados em `out/sotc/frame-1.bmp` a `frame-21.bmp`. Checkpoints válidos em `out/sotc/sotc-700m.ps2ncp` e `out/sotc/sotc-740m.ps2ncp`.
+- **Próximo passo operacional**:
+  1. Continuar a execução a partir do checkpoint `out/sotc/sotc-740m.ps2ncp` até a sequência de logos/introdução e a tela de título do Shadow of the Colossus.
+  2. Monitorar comandos de DMA de textura e primitivas tridimensionais (triângulos texturizados e VU1 microcode) conforme a cena do templo/introdução é instanciada.
+  3. Preservar rigorosamente a fidelidade de hardware da Sony PS2 sem atalhos ou hacks de título.
 
 ## Desempenho após eventos/TLB — 05/11/2026
 

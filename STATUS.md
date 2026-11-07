@@ -2,6 +2,28 @@
 
 **Registro vivo de progresso e evidências.** Atualizar este arquivo quando houver avanço **verificado**; não reescrever os READMEs, `AGENTS.md` ou `CLAUDE.md` a cada marco. Relatórios detalhados continuam em `docs/M*-STATUS.md`; o trabalho seguinte fica em `docs/NEXT-TASK.md`.
 
+## Shadow of the Colossus: primeira renderização de vídeo e 771M instruções — 07/11/2026
+
+- **Execução comprovada**: Shadow of the Colossus (USA) (`SCUS-97472`, ISO SHA-256 `d431a5b7...`) sob firmware autenticada SCPH-70004:GH-032-11 v2.00 PAL (ROM0/ROM1/NVM).
+- **Instruções executadas**: EE atingiu **771.216.676 instruções totais retiradas** (731.216.676 de instruções de jogo) e IOP atingiu **96.402.084 instruções retiradas**. SIF0 transferiu 4.330.288 bytes e SIF1 108.144 bytes.
+- **Gráficos GS e saída de vídeo**: 115 pacotes GIF reais processados com mais de 10.552.768 escritas de pixels no VRAM.
+- **21 quadros consecutivos de vídeo NTSC 480i ($512 \times 224$)** gerados pelo scanout do GS e salvos em `out/sotc/frame-1.bmp` a `frame-21.bmp`.
+- **Bloqueios de hardware resolvidos no núcleo compartilhado**:
+  1. *GS Line Rasterization* (`src/gs_renderer.cpp`): rasterização de primitivas Line e LineStrip por DDA no eixo maior com intervalo half-open $[V_0, V_1)$, interpolação linear Gouraud, profundidade Z e alpha blending.
+  2. *GS Registros pós-reset* (`src/gs_renderer.cpp`): `COLCLAMP` (0x46) e `PABE` (0x49) com valor padrão 0 pós-reset de hardware.
+  3. *GS Scanout PMODE & SMODE2* (`src/gs_renderer.cpp`): suporte a leitura de circuitos duplos mesclados (`EN1=1, EN2=1`) apontando para a mesma base VRAM, e leitura de campos entrelaçados alternados (`SMODE2 INT=1, FFMD=0`) com stride 2 por paridade de campo vertical.
+  4. *MECHACON & CDVD* (`src/iop.cpp`): comando CancelPOffRdy (`S 0x1B`), GetToc DVD-5 (`N 0x09`), velocidade de rotação, comandos de posicionamento Standby/Pause/Seek e leitura ReadDvd.
+  5. *USB Host Controller* (`src/iop.cpp`): modelagem de registradores OpenHCI USB 0x1F801600.
+  6. *SPU2 & ADMA* (`src/iop_spu2.cpp`, `src/iop.cpp`): roteamento estéreo zero-gain e quiescência do canal ADMA ao desativar CHCR.
+  7. *EE Semantics & Interpreter* (`include/ps2native/ee_semantics.hpp`, `src/interpreter.cpp`): branch bounds com incerteza para BEQ/BNE/BLEZ/BGTZ, SQRT.S com bounds monotônicos certificados e PREF hint NOP.
+- **Testes de regressão e validação**:
+  - `tests/cdvd_dma.cpp`: aprovado (GetToc e transferências DVD DMA).
+  - `tests/ee_fpu_knowledge.cpp`: aprovado (limites numéricos de SQRT.S e FPU).
+  - `tests/mechacon_boot_certify.cpp`: aprovado (enquadramento e respostas de CancelPOffRdy).
+- **Checkpoints persistidos**:
+  - `out/sotc/sotc-700m.ps2ncp` (731.216.676 instruções EE).
+  - `out/sotc/sotc-740m.ps2ncp` (771.216.676 instruções EE).
+
 ## Runtime: eventos e tradução TLB — 05/11/2026
 
 - `c23188e` evita sincronização sem evento possível e reutiliza somente

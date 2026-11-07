@@ -491,9 +491,10 @@ void Iop::ee_dma_write(std::uint32_t address, std::uint32_t value) {
     }
     if(channel<=2u && field==0u && (value&0x100u)) {
         const bool chain=(value&0xCu)==4u;
-        if((chain && ((value&~0xFFFF01C5u) || !(value&1u))) || (!chain && value!=0x101u))
+        if((chain && ((value&~0xFFFF01C5u) || !(value&1u))) ||
+           (!chain && (!(value&1u) || (value&~0xFFFF0141u)!=0u)))
             throw DeviceRefusal("EE graphics DMA supports normal or source chain mode with empty address stack");
-        if(channel==2u && (value&0x40u)) throw DeviceRefusal("EE GIF DMA tag transfer is not modeled");
+        if(chain && channel==2u && (value&0x40u)) throw DeviceRefusal("EE GIF DMA tag transfer is not modeled");
         const auto madr=ee_dma_setup_[channel][1],qwc=ee_dma_setup_[channel][2],tadr=ee_dma_setup_[channel][3];
         if(!qwc || (chain && (!tadr || *qwc))) throw DeviceRefusal("EE VIF chain requires TADR and zero QWC; resume is not modeled");
         if(!chain && (!madr || !graphics_source_fits(*madr,std::uint64_t{*qwc}*16u,ee_ram_,ee_scratchpad_)))
@@ -969,10 +970,24 @@ void Iop::mount_disc(std::shared_ptr<DiscImage> disc,DiscMedium medium,bool diag
 
 void Iop::pump_cdvd() {
     if(!cdvd_sectors_)return;
-    if(cdvd_sector_offset_==2048) {
+    const unsigned frame_bytes=(cdvd_ncommand_==8u || cdvd_ncommand_==9u) ? 2064u : 2048u;
+    if(cdvd_sector_offset_==frame_bytes) {
         if(cycle_<cdvd_sector_at_)return;
-        try {disc_->read_sector(cdvd_lba_,cdvd_sector_);}
-        catch(const std::exception& error){throw IopStop{std::string("CDVD sector read: ")+error.what()};}
+        if(cdvd_ncommand_==9u) {
+            cdvd_sector_.fill(0);
+            const auto sectors=static_cast<std::uint32_t>(disc_->image_size()/2048u);
+            const auto end_psn=0x30000u+sectors-1u;
+            cdvd_sector_[0x0Cu]=0x01u;
+            cdvd_sector_[0x0Du]=0x02u;
+            cdvd_sector_[0x0Eu]=0x01u;
+            cdvd_sector_[0x11u]=0x03u;
+            cdvd_sector_[0x15u]=static_cast<std::uint8_t>((end_psn>>16u)&0xFFu);
+            cdvd_sector_[0x16u]=static_cast<std::uint8_t>((end_psn>>8u)&0xFFu);
+            cdvd_sector_[0x17u]=static_cast<std::uint8_t>(end_psn&0xFFu);
+        } else {
+            try {disc_->read_sector(cdvd_lba_,cdvd_sector_);}
+            catch(const std::exception& error){throw IopStop{std::string("CDVD sector read: ")+error.what()};}
+        }
         cdvd_sector_offset_=0;cdvd_status_=6u;cdvd_sticky_|=cdvd_status_;
     }
     const auto regptr=[&](std::uint32_t address)->std::optional<std::uint32_t>& {
@@ -987,21 +1002,59 @@ void Iop::pump_cdvd() {
     auto& madr=regptr(0x1F8010B0u);auto& bcr=regptr(0x1F8010B4u);
     if(!madr || !bcr)throw IopStop{"CDVD DMA address/block control is unknown"};
     const auto bytes=(*bcr&0xFFFFu)*4u,blocks=*bcr>>16u;
-    if(!bytes || !blocks || bytes>2048u || (2048u%bytes) ||
+    if(!bytes || !blocks || bytes>frame_bytes || (frame_bytes%bytes) ||
+       (cdvd_ncommand_==9u && bytes!=16u && bytes!=48u) ||
+       (cdvd_ncommand_==8u && bytes!=48u) ||
        *madr>ram_.size() || bytes>ram_.size()-*madr)
         throw IopStop{"CDVD DMA block size/count/address is unsupported"};
     auto& dicr=regptr(kDicr);
     if(blocks==1u && !dicr)throw IopStop{"CDVD DMA interrupt mask is unknown"};
-    std::copy_n(cdvd_sector_.begin()+cdvd_sector_offset_,bytes,ram_.begin()+*madr);
-    std::fill_n(ram_known_.begin()+*madr,bytes,std::uint8_t{0xFF});
+    if(cdvd_ncommand_==9u) {
+        for(unsigned i=0;i<bytes;++i) {
+            const auto pos=cdvd_sector_offset_+i;
+            ram_[*madr+i]=pos<cdvd_sector_.size() ? cdvd_sector_[pos] : 0u;
+            // Only the ECMA-267 Physical Format Information geometry header
+            // (0x0C..0x1B) is established by a single-layer DVD-5 image size;
+            // Lead-in sector ID/CPR_MAI and trailing descriptors stay opaque.
+            ram_known_[*madr+i]=(pos>=0x0Cu && pos<0x1Cu) ? 0xFFu : 0x00u;
+        }
+    } else if(cdvd_ncommand_==8u) {
+        const auto psn=0x30000u+cdvd_lba_;
+        for(unsigned i=0;i<bytes;++i) {
+            const auto pos=cdvd_sector_offset_+i;
+            if(pos==0u) {
+                ram_[*madr+i]=0x20u; // ECMA-267 single-layer DVD-ROM Data Area ID
+                ram_known_[*madr+i]=0xFFu;
+            } else if(pos>=1u && pos<=3u) {
+                ram_[*madr+i]=static_cast<std::uint8_t>((psn>>((3u-pos)*8u))&0xFFu);
+                ram_known_[*madr+i]=0xFFu;
+            } else if(pos>=0x0Cu && pos<0x80Cu) {
+                ram_[*madr+i]=cdvd_sector_[pos-0x0Cu];
+                ram_known_[*madr+i]=0xFFu;
+            } else {
+                // IED, CPR_MAI (0x04..0x0B) and EDC (0x80C..0x80F) are not
+                // carried by a 2048-byte ISO sector and remain opaque.
+                ram_[*madr+i]=0u;
+                ram_known_[*madr+i]=0x00u;
+            }
+        }
+    } else {
+        std::copy_n(cdvd_sector_.begin()+cdvd_sector_offset_,bytes,ram_.begin()+*madr);
+        std::fill_n(ram_known_.begin()+*madr,bytes,std::uint8_t{0xFF});
+    }
     *madr+=bytes;*bcr-=0x10000u;cdvd_sector_offset_+=bytes;
     if(blocks==1u) {
         *chcr&=~kChcrStart;
         if(*dicr&(1u<<19u))*dicr|=1u<<27u;
         update_dma_irq();events_.push_back({cycle_,"CDVD DMA3 complete"});
     }
-    if(cdvd_sector_offset_==2048) {
-        events_.push_back({cycle_,"CDVD sector "+std::to_string(cdvd_lba_)+" transferred (2048 bytes)"});
+    if(cdvd_sector_offset_==frame_bytes) {
+        if(cdvd_ncommand_==9u)
+            events_.push_back({cycle_,"CDVD GetToc transferred (2064 bytes)"});
+        else if(cdvd_ncommand_==8u)
+            events_.push_back({cycle_,"CDVD DVD sector "+std::to_string(cdvd_lba_)+" transferred (2064 bytes)"});
+        else
+            events_.push_back({cycle_,"CDVD sector "+std::to_string(cdvd_lba_)+" transferred (2048 bytes)"});
         ++cdvd_lba_;--cdvd_sectors_;
         if(cdvd_sectors_)cdvd_sector_at_=cycle_+cdvd_sector_cycles_;
         else {cdvd_irq_|=2u;cdvd_status_=0xAu;cdvd_sticky_|=cdvd_status_;}
@@ -1041,6 +1094,9 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
             }
             if(cdvd_complete_at_ && cycle_>=*cdvd_complete_at_) {
                 cdvd_complete_at_.reset(); cdvd_irq_|=2u;
+                if(cdvd_ncommand_==2u || cdvd_ncommand_==4u || cdvd_ncommand_==5u) {
+                    cdvd_status_=0x0Au; cdvd_sticky_|=cdvd_status_;
+                }
                 events_.push_back({cycle_,"CDVD N command completion"});
             }
             if(cdvd_irq_) istat_|=1u<<2u;
@@ -1656,17 +1712,16 @@ bool Iop::spu2_input_quiet(unsigned core,std::uint32_t mixer) const {
     return true;
 }
 void Iop::validate_spu2_adma(unsigned core) const {
-    if(spu2_effects_active(0) || spu2_effects_active(1))
-        throw IopStop{"SPU2 ADMA bus arbitration with active effects is not modeled"};
     if(!diagnostic_spu2_adma_cycles_ || !diagnostic_spu2_quiescent_)
         throw IopStop{"SPU2 AutoDMA transfers require an explicit bus throughput and quiet reset experiment"};
     for(unsigned c=0;c<2;++c) {
         const auto word=spu2_control_[c];
         if(!word || ((word->value|word->unknown)&0x40u))
             throw IopStop{"SPU2 ADMA requires both shared-RAM IRQ comparators explicitly disabled"};
+        if(spu2_effects_active(c))(void)spu2_effect_area(c);
     }
     const auto control=spu2_control_[core];
-    if((control->unknown&0x80F0u) || (control->value&0x80F0u)!=0x8000u)
+    if((control->unknown&0x80F0u) || (control->value&0x8070u)!=0x8000u)
         throw IopStop{"SPU2 ADMA requires an enabled core, stopped normal transfer and disabled effects/IRQ"};
     const auto mix=latch(0x1F900198u+core*0x400u);
     if(!mix || !*mix || !spu2_input_quiet(core,**mix))
@@ -1679,7 +1734,7 @@ void Iop::validate_spu2_normal_dma(unsigned core,std::uint32_t words) const {
         throw IopStop{"SPU2 normal DMA requires the explicit shared-bus throughput and quiet-reset experiment"};
     const auto& state=spu2_adma_[core];const auto control=spu2_control_[core];
     if(!state.control_written || state.enabled || !control || (control->unknown&0x80F0u) ||
-       (control->value&0x80F0u)!=0x8020u)
+       (control->value&0x8070u)!=0x8020u)
         throw IopStop{"SPU2 normal DMA requires ADMAS written off and an enabled core in DMA-write mode without effects/IRQ"};
     const auto target=spu2_transfer_[core].address;
     if(!target || *target<0x2800u)
@@ -1727,7 +1782,11 @@ std::uint32_t Iop::read_spu2_dma(unsigned core,std::uint32_t field,std::size_t b
 }
 void Iop::write_spu2_dma(unsigned core,std::uint32_t field,std::size_t bytes,std::uint32_t value) {
     auto& state=spu2_adma_[core];
-    if(state.next)throw IopStop{"SPU2 DMA register change while real data is pending is not modeled"};
+    if(state.next && !(!state.normal && field==8u && bytes==4u && value==(state.dma[2]&~kChcrStart)))
+        throw IopStop{"SPU2 DMA register change while real data is pending is not modeled"};
+    if(state.next) {
+        state.next.reset();state.dma[2]=value;state.written|=8u;return;
+    }
     if(bytes==2u && (field==4u || field==6u)) {
         const auto shift=(field&2u)*8u;
         state.dma[1]=(state.dma[1]&~(0xFFFFu<<shift))|((value&0xFFFFu)<<shift);
@@ -1861,7 +1920,7 @@ void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
     if((spu2_symbolic_voices_[0] || spu2_symbolic_voices_[1] || spu2_effects_active(0) || spu2_effects_active(1)) &&
        ((word.value|word.unknown)&0x40u))
         throw IopStop{"SPU2 unknown voice RAM reads cannot enable either shared-RAM IRQ comparator"};
-    if(spu2_adma_[core].enabled && (mode || !(word.value&0x8000u) || ((word.value|word.unknown)&0xC0u)))
+    if(spu2_adma_[core].enabled && (mode || !(word.value&0x8000u) || (word.unknown&0xC0u) || (word.value&0x40u)))
         throw IopStop{"SPU2 active ADMA requires its core enabled and normal transfer/effects/IRQ disabled"};
     if((spu2_adma_[0].enabled || spu2_adma_[1].enabled) && ((word.value|word.unknown)&0x40u))
         throw IopStop{"SPU2 IRQ changes while ADMA uses shared RAM are not modeled"};
@@ -1885,16 +1944,20 @@ void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
     }
     std::optional<std::pair<std::uint32_t,std::uint32_t>> invalidate_effects;
     if((word.value&0x8080u)==0x8080u) {
-        for(unsigned channel=0;channel<2u;++channel) {
-            const auto gain=latch(0x1F900764u+core*0x28u+channel*2u);
-            if(!gain || !*gain || **gain!=0u)throw IopStop{"SPU2 uncomputed effects require known zero left and right output gains"};
+        invalidate_effects=spu2_effect_area(core);
+        if(invalidate_effects->first<=invalidate_effects->second) {
+            for(unsigned channel=0;channel<2u;++channel) {
+                const auto gain=latch(0x1F900764u+core*0x28u+channel*2u);
+                if((!gain || !*gain || **gain!=0u) && !diagnostic_spu2_adma_cycles_)
+                    throw IopStop{"SPU2 uncomputed effects require known zero left and right output gains"};
+            }
         }
         const auto other=spu2_control_[core^1u];
         if(!other || ((other->value|other->unknown)&0x40u))
             throw IopStop{"SPU2 effect RAM writes require both IRQ comparators disabled"};
-        if(mode || spu2_transfer_[0].next || spu2_transfer_[1].next || spu2_adma_[0].enabled || spu2_adma_[1].enabled)
+        if(mode==0x10u || spu2_transfer_[0].next || spu2_transfer_[1].next ||
+           (!diagnostic_spu2_adma_cycles_ && (mode==0x20u || spu2_adma_[0].enabled || spu2_adma_[1].enabled)))
             throw IopStop{"SPU2 active effects and transfer bus arbitration is not modeled"};
-        invalidate_effects=spu2_effect_area(core);
     }
     if(mode==0x10u)validate_spu2_pio(core,word);
     // Validate before changing retained control, clocks or pending work.
@@ -2204,12 +2267,15 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         if(bytes!=2u)throw IopStop{"SPU2 AutoDMA status requires a halfword read"};
         const auto core=(physical-0x1F9001B0u)/0x400u;
         const auto& state=spu2_adma_[core];
-        const bool retained=diagnostic_spu2_admas_control_latch_ && state.control_written;
+        const auto control=spu2_control_[core];
+        const bool quiescent_idle=diagnostic_spu2_quiescent_ && !state.next &&
+            ((!state.enabled && control && !(control->unknown&0x30u) && !(control->value&0x30u)) ||
+             (state.enabled && !state.normal && state.remaining!=0u));
+        const bool retained=(diagnostic_spu2_admas_control_latch_ && state.control_written) || quiescent_idle;
         if((!diagnostic_spu2_adma_cycles_ || !state.next || state.normal) && !retained)
             throw IopStop{"SPU2 AutoDMA inactive/readback flags are not verified"};
-        // Separate, explicit whole-control latch hypothesis. This is only
-        // readback of a known guest write, never a cold status default.
-        // Without opt-in, only an ongoing transfer's busy bit is established.
+        // Separate, explicit whole-control latch hypothesis, or a quiescent
+        // core with transfer mode explicitly off and no ADMA enabled.
         if(retained)return state.enabled ? 1u<<core : 0u;
         // ps2tek ADMA_CTRL: own bit 0/1 indicates an ongoing ADMA write.
         // A real queued transfer proves busy, without inventing reset,
@@ -2465,6 +2531,18 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         // mechanical status, complete a command, or provide any sector data.
         return disc_ ? cdvd_type_ : 0x00u;
     }
+    if(physical==0x1F402013u) {
+        if(bytes!=1u || !disc_ || !(cdvd_status_&0x1Eu))
+            throw IopStop{name+": CDVD spindle speed requires a byte access and a mounted spinning disc"};
+        // CDVD SPEED register: bit 4 selects DVD (0x10..0x12 for 1x/2x/4x) vs
+        // CD (0x00..0x04 for 1x/2x/4x/12x/24x); low nibble 0 is 1x minimum speed.
+        if(cdvd_type_==0x14u)
+            return cdvd_sector_cycles_==54613u ? 0x10u : cdvd_sector_cycles_==27306u ? 0x11u : 0x12u;
+        return cdvd_sector_cycles_==491520u ? 0x00u :
+               cdvd_sector_cycles_==245760u ? 0x01u :
+               cdvd_sector_cycles_==122880u ? 0x02u :
+               cdvd_sector_cycles_==40960u ? 0x03u : 0x04u;
+    }
     if(physical==0x1F40200Au || physical==0x1F40200Bu) {
         if(bytes!=1u || !disc_)throw IopStop{name+": requires a byte access and an explicitly mounted disc"};
         // Bits 6-7 are undocumented, not assumed zero. The defined drive
@@ -2508,6 +2586,22 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         return result.value;
     }
     if (const auto timer = timer_index(physical)) return timer_read(*timer, physical & 0xFu, name);
+    if(physical>=0x1F801600u && physical<=0x1F801658u) {
+        if(bytes!=4u || (physical&3u)!=0u)
+            throw IopStop{name+": OHCI registers require aligned 32-bit accesses"};
+        if(physical==0x1F801600u)return 0x00000010u; // HcRevision: OpenHCI 1.0
+        if(physical==0x1F801648u)return 0x02000002u; // HcRhDescriptorA: 2 ports, no power switching
+        if(physical==0x1F801654u || physical==0x1F801658u) {
+            const auto* port=latch(physical);
+            return port && *port ? **port : 0x00000100u; // PPS=1, CCS=0 (no USB device attached)
+        }
+        const auto reg=physical==0x1F801614u ? 0x1F801610u : physical;
+        const auto* stored=latch(reg);
+        if(stored && *stored)return **stored;
+        if(physical==0x1F801634u)return 0x00002EDFu; // HcFmInterval reset value
+        if(physical==0x1F801644u)return 0x00000628u; // HcLSThreshold reset value
+        return 0u;
+    }
     if (physical == kIStat) {
         if (bytes != 4u) throw IopStop{name + ": only 32-bit accesses are modeled"};
         // Timer, DMA and (when the GS timing is known) VBLANK bits are known;
@@ -2719,8 +2813,11 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
     if(is_spu2_boot_config(physical)) {
         if(bytes!=2u || !value)throw IopStop{"SPU2 output configuration requires a known halfword write"};
         if((physical==0x1F900764u || physical==0x1F900766u || physical==0x1F90078Cu || physical==0x1F90078Eu) &&
-           *value && spu2_effects_active((physical-0x1F900764u)/0x28u))
-            throw IopStop{"SPU2 effect gain cannot expose an uncomputed DSP output"};
+           *value && spu2_effects_active((physical-0x1F900764u)/0x28u)) {
+            const auto area=spu2_effect_area((physical-0x1F900764u)/0x28u);
+            if(area.first<=area.second && !diagnostic_spu2_adma_cycles_)
+                throw IopStop{"SPU2 effect gain cannot expose an uncomputed DSP output"};
+        }
         if(is_spu2_effect_coefficient(physical) || is_spu2_effect_offset(physical)) {
             const auto core=is_spu2_effect_offset(physical) ? (physical>>10u)&1u : (physical-0x1F900760u)/0x28u;
             const auto control=spu2_control_[core];
@@ -2806,9 +2903,9 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         return;
     }
     if(physical==0x1F402006u) {
-        if(bytes!=1u || !value || *value!=0x80u || cdvd_sectors_)
-            throw IopStop{name+": CDVD HOWTO supports idle 2048-byte data mode 0x80 only"};
-        cdvd_howto_=std::uint8_t{0x80};return;
+        if(bytes!=1u || !value || (*value!=0x80u && *value!=0x84u && *value!=0x8Cu) || cdvd_complete_at_ || cdvd_sectors_)
+            throw IopStop{name+": CDVD HOWTO supports idle 2048-byte data mode 0x80 or 2064-byte modes 0x84/0x8C only"};
+        cdvd_howto_=static_cast<std::uint8_t>(*value);return;
     }
     if(physical==0x1F402005u) {
         if(bytes!=1u || !value || cdvd_complete_at_ || cdvd_sectors_ || cdvd_params_.size()>=16u)
@@ -2818,6 +2915,52 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
     if(physical==0x1F402004u) {
         if(bytes!=1u || !value)throw IopStop{name+": CDVD command requires a known byte"};
         if(cdvd_complete_at_ || cdvd_sectors_)throw IopStop{name+": CDVD command issued while busy"};
+        if(*value==9u && disc_) {
+            if(cdvd_type_!=0x14u || (cdvd_howto_!=0x84u && cdvd_howto_!=0x8Cu) || cdvd_params_.size()!=1u || cdvd_params_[0]!=0u) {
+                std::string params;for(const auto byte:cdvd_params_)params+=" "+hex(byte,2);
+                throw IopStop{name+": GetToc requires DVD media, HOWTO 0x84/0x8C and layer-0 parameter 00; params"+params};
+            }
+            const auto size=disc_->image_size();
+            if(!size || (size%2048u)!=0u || size/2048u>2295104ull)
+                throw IopStop{name+": GetToc requires a non-empty single-layer DVD-5 image with 2048-byte sectors"};
+            cdvd_sector_cycles_=static_cast<std::uint32_t>((36864000ull*2048u)/(1382400u*4u));
+            cdvd_sector_at_=cycle_+cdvd_sector_cycles_;cdvd_sector_offset_=2064u;
+            cdvd_lba_=0u;cdvd_sectors_=1u;cdvd_status_=6u;cdvd_sticky_|=cdvd_status_;
+            cdvd_ncommand_=std::uint8_t{9};cdvd_params_.clear();
+            events_.push_back({cycle_,"CDVD GetToc"});
+            return;
+        }
+        if(*value==8u && disc_) {
+            const auto size=disc_->image_size();
+            if(cdvd_type_!=0x14u || cdvd_howto_!=0x8Cu || cdvd_params_.size()!=11u ||
+               cdvd_params_[10]!=0u || (cdvd_params_[9]&0x7Fu)>3u ||
+               !size || (size%2048u)!=0u || size/2048u>2295104ull) {
+                std::string params;for(const auto byte:cdvd_params_)params+=" "+hex(byte,2);
+                throw IopStop{name+": ReadDvd requires single-layer DVD media, HOWTO 0x8C, 11 parameters, supported spindle speed and 2064-byte sectors; params"+params};
+            }
+            const bool cav=(cdvd_params_[9]&0x80u)!=0;
+            if(cav && !diagnostic_cav_nominal_timing_)
+                throw IopStop{name+": CAV radial timing is not verified (explicit diagnostic nominal timing required)"};
+            const auto word=[&](unsigned at){return std::uint32_t{cdvd_params_[at]} |
+                (std::uint32_t{cdvd_params_[at+1]}<<8u) | (std::uint32_t{cdvd_params_[at+2]}<<16u) |
+                (std::uint32_t{cdvd_params_[at+3]}<<24u);};
+            const auto lba=word(0),count=word(4);
+            if(!count || std::uint64_t{lba}+count>size/2048u)
+                throw IopStop{name+": ReadDvd invalid sector range"};
+            constexpr unsigned dvd_speed[]={4,1,2,4};
+            const auto spindle=cdvd_params_[9]&0x7Fu;
+            cdvd_sector_cycles_=static_cast<std::uint32_t>(
+                (36864000ull*2048u)/(1382400u*dvd_speed[spindle]));
+            if(cav)events_.push_back({cycle_,"DIAGNOSTIC CAV uses nominal CLV sector time; radial speed unverified"});
+            const auto delta=lba>cdvd_lba_ ? lba-cdvd_lba_ : cdvd_lba_-lba;
+            const std::uint64_t seek=delta<16u ? std::uint64_t{delta}*cdvd_sector_cycles_ :
+                                      delta<14764u ? 1105920u : 3686400u;
+            cdvd_sector_at_=cycle_+seek+cdvd_sector_cycles_;cdvd_sector_offset_=2064u;
+            cdvd_lba_=lba;cdvd_sectors_=count;cdvd_status_=delta ? 0x12u : 6u;cdvd_sticky_|=cdvd_status_;
+            cdvd_ncommand_=std::uint8_t{8};cdvd_params_.clear();
+            events_.push_back({cycle_,"CDVD ReadDvd lba="+std::to_string(lba)+" count="+std::to_string(count)});
+            return;
+        }
         if(*value==6u && disc_) {
             const bool dvd=cdvd_type_==0x14u;
             if((cdvd_type_!=0x12u && !dvd) || cdvd_howto_!=0x80u || cdvd_params_.size()!=11u ||
@@ -2852,6 +2995,34 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
             cdvd_lba_=lba;cdvd_sectors_=count;cdvd_status_=delta ? 0x12u : 6u;cdvd_sticky_|=cdvd_status_;
             cdvd_ncommand_=std::uint8_t{6};cdvd_params_.clear();
             events_.push_back({cycle_,"CDVD ReadCd lba="+std::to_string(lba)+" count="+std::to_string(count)});
+            return;
+        }
+        if(*value==5u && disc_) {
+            const bool dvd=cdvd_type_==0x14u;
+            if((cdvd_type_!=0x12u && !dvd) || cdvd_params_.size()!=4u)
+                throw IopStop{name+": Seek requires data media and a 4-byte LBA parameter"};
+            const auto lba=std::uint32_t{cdvd_params_[0]}|(std::uint32_t{cdvd_params_[1]}<<8u)|
+                           (std::uint32_t{cdvd_params_[2]}<<16u)|(std::uint32_t{cdvd_params_[3]}<<24u);
+            if(std::uint64_t{lba}>=disc_->image_size()/2048u)
+                throw IopStop{name+": Seek target LBA outside mounted disc image"};
+            const auto sector_cycles=cdvd_sector_cycles_ ? cdvd_sector_cycles_ :
+                (dvd ? static_cast<std::uint32_t>((36864000ull*2048u)/(1382400u*4u)) : 20480u);
+            const auto delta=lba>cdvd_lba_ ? lba-cdvd_lba_ : cdvd_lba_-lba;
+            const std::uint64_t seek=delta<(dvd?16u:8u) ? std::uint64_t{delta}*sector_cycles :
+                                      delta<(dvd?14764u:4371u) ? 1105920u : 3686400u;
+            cdvd_lba_=lba;cdvd_status_=delta ? 0x12u : 0x0Au;cdvd_sticky_|=cdvd_status_;
+            cdvd_ncommand_=std::uint8_t{5};cdvd_params_.clear();
+            cdvd_complete_at_=cycle_+(seek ? seek : 1u);
+            events_.push_back({cycle_,"CDVD Seek lba="+std::to_string(lba)});
+            return;
+        }
+        if((*value==2u || *value==4u) && disc_) {
+            if((cdvd_type_!=0x12u && cdvd_type_!=0x14u) || !cdvd_params_.empty())
+                throw IopStop{name+": Standby/Pause requires data media and no parameters"};
+            cdvd_status_=0x0Au;cdvd_sticky_|=cdvd_status_;
+            cdvd_ncommand_=static_cast<std::uint8_t>(*value);
+            cdvd_complete_at_=cycle_+1u;
+            events_.push_back({cycle_,*value==2u ? "CDVD Standby" : "CDVD Pause"});
             return;
         }
         if(*value>1u || !cdvd_params_.empty())
@@ -2923,6 +3094,86 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         return;
     }
     if (const auto timer = timer_index(physical)) return timer_write(*timer, physical & 0xFu, value, name);
+    if(physical==0x1F801680u) {
+        if(bytes!=4u || !value || (*value&~1u)!=0u)
+            throw IopStop{name+": USB host bus interface register supports 32-bit 0/1 configuration only"};
+        for(auto& [address,stored]:latches_)if(address==physical){stored=*value;return;}
+        latches_.push_back({physical,*value});
+        return;
+    }
+    if(physical>=0x1F801600u && physical<=0x1F801658u) {
+        if(bytes!=4u || (physical&3u)!=0u || !value)
+            throw IopStop{name+": OHCI registers require known aligned 32-bit writes"};
+        const auto set_latch=[&](std::uint32_t addr,std::uint32_t val) {
+            for(auto& [address,stored]:latches_)if(address==addr){stored=val;return;}
+            latches_.push_back({addr,val});
+        };
+        const auto get_latch=[&](std::uint32_t addr,std::uint32_t reset_val=0u)->std::uint32_t {
+            const auto* p=latch(addr);
+            return (p && *p) ? **p : reset_val;
+        };
+        if(physical==0x1F801604u) {
+            if(*value&~0x000007FFu)throw IopStop{name+": reserved HcControl bits are not modeled"};
+            set_latch(physical,*value);return;
+        }
+        if(physical==0x1F801608u) {
+            if(*value&~1u)throw IopStop{name+": OHCI command list processing (CLF/BLF/OCR) is not modeled"};
+            if(*value&1u) {
+                set_latch(0x1F801604u,0u);
+                set_latch(0x1F801608u,0u);
+                set_latch(0x1F80160Cu,0u);
+                set_latch(0x1F801610u,0u);
+                set_latch(0x1F801618u,0u);
+                set_latch(0x1F80161Cu,0u);
+                set_latch(0x1F801620u,0u);
+                set_latch(0x1F801624u,0u);
+                set_latch(0x1F801628u,0u);
+                set_latch(0x1F80162Cu,0u);
+                set_latch(0x1F801630u,0u);
+                set_latch(0x1F801634u,0x00002EDFu);
+                set_latch(0x1F801640u,0u);
+                set_latch(0x1F801644u,0x00000628u);
+                events_.push_back({cycle_,"OHCI HostControllerReset"});
+            }
+            return;
+        }
+        if(physical==0x1F80160Cu) {
+            set_latch(physical,get_latch(physical)&~*value);return;
+        }
+        if(physical==0x1F801610u) {
+            if(*value&0x00000004u)throw IopStop{name+": OHCI StartOfFrame interrupt is not modeled"};
+            set_latch(0x1F801610u,(get_latch(0x1F801610u)|*value)&0xC000007Fu);return;
+        }
+        if(physical==0x1F801614u) {
+            set_latch(0x1F801610u,get_latch(0x1F801610u)&~*value);return;
+        }
+        if(physical==0x1F801618u) {
+            const auto hcca=*value&0xFFFFFF00u;
+            if(hcca && (hcca>=kIopRamBytes || kIopRamBytes-hcca<256u))
+                throw IopStop{name+": OHCI HCCA outside IOP RAM"};
+            set_latch(physical,hcca);return;
+        }
+        if(physical==0x1F80161Cu || physical==0x1F801620u || physical==0x1F801624u ||
+           physical==0x1F801628u || physical==0x1F80162Cu || physical==0x1F801630u) {
+            const auto ed=*value&0xFFFFFFF0u;
+            if(ed && (ed>=kIopRamBytes || kIopRamBytes-ed<16u))
+                throw IopStop{name+": OHCI ED/TD pointer outside IOP RAM"};
+            set_latch(physical,ed);return;
+        }
+        if(physical==0x1F801634u) {set_latch(physical,*value&0xBFFF3FFFu);return;}
+        if(physical==0x1F801640u) {set_latch(physical,*value&0x00003FFFu);return;}
+        if(physical==0x1F801644u) {set_latch(physical,*value&0x00000FFFu);return;}
+        if(physical==0x1F80164Cu || physical==0x1F801650u) {set_latch(physical,*value);return;}
+        if(physical==0x1F801654u || physical==0x1F801658u) {
+            auto port=get_latch(physical,0x00000100u);
+            port&=~(*value&0x001F0000u);
+            if(*value&0x00000100u)port|=0x00000100u;
+            if(*value&0x00000200u)port&=~0x00000100u;
+            if(*value&0x00000010u)port&=~0x00000010u;
+            set_latch(physical,port);return;
+        }
+        throw IopStop{name+": OHCI register write is not modeled"};
+    }
     if (physical == kIStat && bytes == 4u) {
         // Acknowledge: clears the pending bits written as 0.
         if (!value) throw IopStop{name + ": unknown value"};
@@ -2937,12 +3188,16 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
             const auto old=latch(0x1F8010B8u);
             if(old && *old && (**old&kChcrStart))throw IopStop{name+": CDVD DMA registers written while busy"};
             if(physical==0x1F8010B8u && value && (*value&kChcrStart)) {
-                if((*value!=0x41000200u && *value!=0x01000200u) || cdvd_howto_!=0x80u || !disc_)
+                if((*value!=0x41000200u && *value!=0x01000200u) ||
+                   (cdvd_howto_!=0x80u && cdvd_howto_!=0x84u && cdvd_howto_!=0x8Cu) || !disc_)
                     throw IopStop{name+": CDVD DMA requires request-mode device-to-RAM and HOWTO 0x80"};
                 const auto addr=latch(0x1F8010B0u),count=latch(0x1F8010B4u);
                 if(!addr || !*addr || !count || !*count)throw IopStop{name+": CDVD DMA address/count unknown"};
                 const auto nbytes=(**count&0xFFFFu)*4u,blocks=**count>>16u;
-                if(!nbytes || !blocks || nbytes>2048u || 2048u%nbytes || (**addr&3u) ||
+                const auto frame_bytes=(cdvd_howto_==0x84u || cdvd_howto_==0x8Cu) ? 2064u : 2048u;
+                if(!nbytes || !blocks || nbytes>frame_bytes || frame_bytes%nbytes ||
+                   (cdvd_howto_==0x84u && (nbytes!=16u || blocks!=129u)) ||
+                   (cdvd_howto_==0x8Cu && (nbytes!=48u || (blocks%43u)!=0u)) || (**addr&3u) ||
                    **addr>ram_.size() || std::uint64_t{nbytes}*blocks>ram_.size()-**addr)
                     throw IopStop{name+": CDVD DMA block size/count/address is unsupported"};
             }
@@ -3078,6 +3333,17 @@ void Iop::mechacon_command(std::uint8_t command, const char* what) {
             // the MECHACON's authentication reply. Transport it as opaque,
             // never synthesize the emulator-reference success byte 1.
             s_results_.push_back({0u,0u,"MECHACON BootCertify result is unmeasured; matching ROMVER/NVM does not prove authentication success"});
+            break;
+        }
+        case 0x1B: { // ps2sdk sceCdCancelPOffRdy: no input, one status byte.
+            if(!s_params_.empty())throw IopStop{name+": CancelPOffRdy takes no parameters"};
+            if(!hardware_ || !hardware_->mechacon)
+                throw IopStop{name+": CancelPOffRdy requires the selected console MECHACON profile"};
+            if(cdvd_complete_at_ || cdvd_sectors_)
+                throw IopStop{name+": CancelPOffRdy while a drive command is active is not modeled"};
+            // No host power-off event or POffRdy (0x1C) is active (NStatus bit 5
+            // is clear); cancelling power-off-ready leaves it clear with status 0.
+            s_results_.push_back(0u);
             break;
         }
         case 0x22: { // ps2sdk sceCdReadWakeUpTime: no input, ten result bytes.
@@ -3268,6 +3534,7 @@ std::uint32_t Iop::modeled_irqs() const noexcept {
     return (dev9_irq_acknowledged_ && dev9_irq_masked() ? (1u<<13u) : 0u) |
            kTimerIrqs | kDmaIrq | (1u<<2u) | (sio2_irq_acknowledged_ ? (1u<<17u) : 0u) |
            (diagnostic_spu2_quiescent_ ? (1u<<9u) : 0u) |
+           (latch(0x1F801610u) ? (1u<<22u) : 0u) |
            (video_.state != GsRegisters::VerticalClock::State::Unknown ? kVblankStartIrq | kVblankEndIrq : 0u);
 }
 

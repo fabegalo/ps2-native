@@ -365,7 +365,14 @@ int main() try {
     const auto conversion_flags=state.fcr31;step(math(0x24,11,6,0));
     require(state.fpr[11]==1 && !state.unknown_fpr_bits[11] && state.fcr31==conversion_flags,
         "CVT.W.S eliminates fraction uncertainty only when every allowed value truncates to the same integer");
-    for(const auto word : {math(4,11,0,6),math(0x1C,11,6,2),math(0x18,0,6,2)}) {
+    state.fcr31=0x0183C079u;step(math(4,11,0,6));
+    require(state.fcr31==0x0180C079u,"bounded SQRT.S clears I/D causes while preserving unrelated flags");
+    for(const auto input:*state.fpr_affine[6].candidates) {
+        const auto root=ee_fpu_sqrt(input);require(root.has_value(),"concrete SQRT.S reference is available");
+        require(!((*root^state.fpr[11])&~state.unknown_fpr_bits[11]),
+            "bounded SQRT.S retains every concrete root in the destination known-bit mask");
+    }
+    for(const auto word : {math(0x1C,11,6,2),math(0x18,0,6,2)}) {
         state.fpr[11]=0x12345678;state.unknown_fpr_bits[11]=0;state.fcr31=0x0183C079;
         rejects([&]{step(word);},word==math(0x1C,11,6,2) ? "not certified" : "unknown FPR bits");
         require(state.fpr[11]==0x12345678 && !state.unknown_fpr_bits[11] && state.fcr31==0x0183C079,

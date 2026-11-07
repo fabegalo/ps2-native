@@ -85,6 +85,24 @@ int main() try {
         rejects([&]{iop.diagnostic_forbid_dvdp_error_bit_clear();},"before execution");
         iop.reset(rom,profile,&nvm);iop.run_until(300);require(iop.stopped(),"reset removes the single-bit reply assumption");
     }
+    for(const auto board:{"SCPH-70004:GH-032-11","SCPH-70004:GH-032-32"}) {
+        const auto* profile=find_console_hardware(board);const auto nvm=nvm_for(*profile);
+        Iop ok;ok.reset(program({},1,0x1B),profile,&nvm);ok.ee_write(0x100,4,0xA55A5AA5);ok.run_until(300);
+        require(!ok.stopped() && ok.ee_read(0x100,1)==0 && ok.ee_read(0x101,1)==0x5A &&
+            ok.diagnostic_ram32(0x104)==0 && ok.diagnostic_ram32(0x108)==0x40,
+            "CancelPOffRdy returns one known zero status byte when no host power-off request is pending");
+        Iop overread;overread.reset(program({},2,0x1B),profile,&nvm);overread.run_until(300);
+        require(overread.stopped() && overread.stop_reason()->find("no result byte is pending")!=std::string::npos,
+            "CancelPOffRdy exposes a single status byte");
+        const std::array<std::uint8_t,1> extra{0};
+        Iop bad_param;bad_param.reset(program(extra,0,0x1B),profile,&nvm);bad_param.run_until(300);
+        require(bad_param.stopped() && bad_param.stop_reason()->find("CancelPOffRdy takes no parameters")!=std::string::npos,
+            "CancelPOffRdy rejects unexpected parameter bytes");
+        auto no_mecha=*profile;no_mecha.mechacon.reset();
+        Iop unprofiled;unprofiled.reset(program({},0,0x1B),&no_mecha,&nvm);unprofiled.run_until(300);
+        require(unprofiled.stopped() && unprofiled.stop_reason()->find("selected console MECHACON profile")!=std::string::npos,
+            "CancelPOffRdy requires a selected console MECHACON profile");
+    }
     DiagnosticAssumptions explicit_input;require(explicit_input.empty(),"default assumptions remain empty");
     explicit_input.mechacon_forbid_dvdp_error_bit_clear=true;require(!explicit_input.empty(),"the bit experiment always marks execution diagnostic");
     std::cout<<"BootCertify framing, profile binding, opaque reply transport, FIFO bounds and reset checks passed\n";

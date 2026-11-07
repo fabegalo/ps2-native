@@ -524,8 +524,15 @@ void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t val
         const auto prefix=target.region==BusRegion::Scratchpad ? 0x80000000u : uses_data_cache(target) ? 0x40000000u : 0u;
         for(auto at=target.offset&~3u;at<=((target.offset+size-1u)&~3u);at+=4u)fpu_relations_.erase(prefix|at);
     }
+    const bool gs_csr_rmw = unknown && (size == 4u || size == 8u) && target.physical == kGsCsr &&
+        !(unknown & 0x31Full) && [&] {
+            const auto width_mask = size == 4u ? 0xFFFFFFFFull : ~0ull;
+            const auto observed = registers_.observe_gs_csr();
+            return ((unknown ^ observed.unknown) & ~0x31Full & width_mask) == 0u &&
+                   (((value & ~unknown) ^ (observed.value & ~observed.unknown)) & ~0x231Full & width_mask) == 0u;
+        }();
     if (unknown && target.region != BusRegion::MainRam && target.region != BusRegion::Scratchpad && target.region!=BusRegion::VuMemory &&
-        (size != 4u || target.physical != 0x1000E020u))
+        (size != 4u || target.physical != 0x1000E020u) && !gs_csr_rmw)
         throw device_refusal(BusFault::Device, true, size, address, target.physical, target.region, what,
                              "unknown MMIO bits cannot be stored in this device");
     value &= ~std::uint64_t{unknown};
@@ -543,7 +550,8 @@ void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t val
         }
     } else if (is_ee_register_region(target.region)) {
         try {
-            if (unknown) registers_.write_dma_word(target.physical,
+            if (gs_csr_rmw) registers_.write(target.physical, size, value & 0x31Full);
+            else if (unknown) registers_.write_dma_word(target.physical,
                 {static_cast<std::uint32_t>(value),static_cast<std::uint32_t>(unknown)});
             else registers_.write(target.physical, size, value);
         } catch (const DeviceRefusal& refusal) {
