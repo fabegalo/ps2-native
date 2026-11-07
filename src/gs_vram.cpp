@@ -4,6 +4,26 @@
 #include <string>
 
 namespace ps2native {
+namespace {
+// Compile-time page offsets retain the existing swizzle algebra and runtime validation.
+template<unsigned Width,unsigned Height,class Offset>
+consteval auto page_offsets(Offset offset) {
+    std::array<std::uint16_t,Width*Height> result{};
+    for(unsigned y=0;y<Height;++y)for(unsigned x=0;x<Width;++x)
+        result[y*Width+x]=static_cast<std::uint16_t>(offset(x,y));
+    return result;
+}
+constexpr auto ct32_offsets=page_offsets<64,32>([](unsigned x,unsigned y) {
+    const auto block=((x>>3)&1u)|((y>>2)&2u)|((x>>2)&4u)|((y>>1)&8u)|((x>>1)&16u);
+    const auto word=(x&1u)|((y&1u)<<1)|((x&6u)<<1)|((y&6u)<<3);
+    return block*256u+word*4u;
+});
+constexpr auto t8_offsets=page_offsets<128,64>([](unsigned x,unsigned y) {
+    const auto block=((x>>4)&1u)|((y>>3)&2u)|((x>>3)&4u)|((y>>2)&8u)|((x>>2)&16u);
+    const auto word=(x&1u)|((y&1u)<<1)|((x&2u)<<1)|((((x>>2)^(y>>1)^(y>>2))&1u)<<3);
+    return block*256u+((y>>2)&3u)*64u+word*4u+((x>>2)&2u)+((y>>1)&1u);
+});
+}
 GsVram::GsVram() : words_(kBytes / 4u), known_(kBytes / 4u) {}
 GsVram::~GsVram(){detach_gpu();}
 void GsVram::detach_gpu() noexcept {
@@ -192,6 +212,7 @@ std::uint32_t GsVram::address(std::uint32_t base, unsigned width, unsigned psm, 
         // Indexed pages span two 64-texel BW units. The low BW bit does
         // not contribute to the page-row stride (also used by small mip levels).
         const auto page = (y / (psm == 19u ? 64u : 128u)) * (width / 128u) + x / 128u;
+        if(psm==19u)return (base+page*8192u+t8_offsets[(y&63u)*128u+(x&127u)])&(kBytes-1u);
         const auto block = psm == 19u
             ? ((x >> 4) & 1u) | ((y >> 3) & 2u) | ((x >> 3) & 4u) |
               ((y >> 2) & 8u) | ((x >> 2) & 16u)
@@ -216,10 +237,7 @@ std::uint32_t GsVram::address(std::uint32_t base, unsigned width, unsigned psm, 
         return (base+page*8192u+block*256u+word*4u+((x&8u)>>2))&(kBytes-1u);
     }
     const auto page = (y / 32u) * (width / 64u) + x / 64u;
-    const auto block = ((x >> 3) & 1u) | ((y >> 2) & 2u) | ((x >> 2) & 4u) |
-                       ((y >> 1) & 8u) | ((x >> 1) & 16u);
-    const auto word = (x & 1u) | ((y & 1u) << 1) | ((x & 6u) << 1) | ((y & 6u) << 3);
-    return (base + page * 8192u + block * 256u + word * 4u) & (kBytes - 1u);
+    return (base+page*8192u+ct32_offsets[(y&31u)*64u+(x&63u)])&(kBytes-1u);
 }
 std::uint32_t GsVram::read(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y) const {
     return read_bits(base,width,psm,x,y,0xFFFFFFFFu);

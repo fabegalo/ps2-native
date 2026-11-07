@@ -1,6 +1,7 @@
 #include "ps2native/ee_registers.hpp"
 #include "ps2native/ee.hpp"
 
+#include <bit>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -148,7 +149,10 @@ void EeRegisters::advance_timer_at(unsigned index,std::uint64_t stamp) {
     if (!(timer.mode & kModeEnable)) {timer.anchor_cycle=stamp;return;}
     const auto clock=timer_clock(timer.mode,gs_);
     if (!clock.period) { timer.anchor_cycle=stamp; return; }
-    const auto ticks=(stamp-clock.epoch)/clock.period-(timer.anchor_cycle-clock.epoch)/clock.period;
+    const auto source=timer.mode&kModeClock;
+    const auto shift=std::countr_zero(kEeCyclesPerBusCycle)+4u*source;
+    const auto ticks=source!=kModeHblank ? (stamp>>shift)-(timer.anchor_cycle>>shift) :
+        (stamp-clock.epoch)/clock.period-(timer.anchor_cycle-clock.epoch)/clock.period;
     if (!ticks) return;
     if ((timer.mode & (kModeClearOnCompare|kModeCompareIrq)) && !timer.compare)
         throw DeviceRefusal("T"+std::to_string(index)+" counts with undefined COMP (reset value not verified)");

@@ -11,6 +11,32 @@
 
 namespace ps2native {
 namespace {
+constexpr std::size_t latch_slot(std::uint32_t physical) {
+    return ((physical>>1u)^(physical>>13u))&4095u;
+}
+const std::optional<std::uint32_t>* find_latch_slow(
+    const std::vector<std::pair<std::uint32_t,std::optional<std::uint32_t>>>& latches,
+    std::array<std::uint16_t,4096>& lookup,std::size_t& cached_size,std::uint32_t physical) {
+    if(latches.size()>=lookup.size()) {
+        for(const auto& [address,value]:latches)if(address==physical)return &value;
+        return nullptr;
+    }
+    if(cached_size!=latches.size()) {
+        lookup.fill(0u);
+        for(std::size_t i=0;i<latches.size();++i) {
+            auto slot=latch_slot(latches[i].first);
+            while(lookup[slot])slot=(slot+1u)&4095u;
+            lookup[slot]=static_cast<std::uint16_t>(i+1u);
+        }
+        cached_size=latches.size();
+    }
+    auto slot=latch_slot(physical);
+    while(const auto index=lookup[slot]) {
+        if(latches[index-1u].first==physical)return &latches[index-1u].second;
+        slot=(slot+1u)&4095u;
+    }
+    return nullptr;
+}
 std::string hex(std::uint32_t value, int digits = 8) {
     std::ostringstream stream;
     stream << "0x" << std::uppercase << std::hex << std::setw(digits) << std::setfill('0') << value;
@@ -3817,23 +3843,12 @@ void Iop::enter_exception(std::uint32_t code, std::uint32_t pc, bool delay_slot)
 }
 
 const std::optional<std::uint32_t>* Iop::latch(std::uint32_t physical) const {
-    const auto slot=[](std::uint32_t address){return (address>>2u)&4095u;};
-    if(latch_lookup_size_!=latches_.size()) {
-        if(latches_.size()>65535u) {
-            for(const auto& [address,value]:latches_)if(address==physical)return &value;
-            return nullptr;
-        }
-        latch_lookup_.fill(0u);
-        for(std::size_t i=0;i<latches_.size();++i)
-            latch_lookup_[slot(latches_[i].first)]=static_cast<std::uint16_t>(i+1u);
-        latch_lookup_size_=latches_.size();
+    if(latch_lookup_size_==latches_.size()) {
+        const auto index=latch_lookup_[latch_slot(physical)];
+        if(!index)return nullptr;
+        if(latches_[index-1u].first==physical)return &latches_[index-1u].second;
     }
-    const auto index=latch_lookup_[slot(physical)];
-    if(!index)return nullptr;
-    if(latches_[index-1u].first==physical)return &latches_[index-1u].second;
-    // Collisions retain the general lookup; cached indices never cache values.
-    for(const auto& [address,value]:latches_)if(address==physical)return &value;
-    return nullptr;
+    return find_latch_slow(latches_,latch_lookup_,latch_lookup_size_,physical);
 }
 
 std::optional<bool> Iop::interrupt_line() const {

@@ -265,8 +265,9 @@ void check_latch_lookup() {
     for(unsigned offset=0;offset<=0x20u;offset+=4u)a.sw(t0,0x1000+offset,t1);
     a.la(t2,0xBF808000u);
     for(unsigned offset=0;offset<=0x1Cu;offset+=4u)a.sw(t0,0x240+offset,t2);
-    a.ori(t0,zero,0x5678u);a.sw(t0,0x1074,t1);a.label("done");a.nop();
-    const auto rom=rom_of(a);Iop iop;iop.reset(rom,&kProfile);
+    a.la(t2,0xBF900000u);a.sh(t0,0x348,t2);
+    a.ori(t0,zero,0x5678u);a.sw(t0,0x1074,t1);a.sh(t0,0x34A,t2);a.label("done");a.nop();
+    const auto rom=rom_of(a);Iop iop;iop.reset(rom,&kProfile);iop.diagnostic_spu2_reserved_latches();
     require(!iop.diagnostic_latch(0x1F801074u),"unwritten latch remains unknown");
     iop.run_until(index_of(a,"warm"));
     require(iop.diagnostic_latch(0x1F801074u)==0x1234u,"warm latch lookup");
@@ -275,6 +276,9 @@ void check_latch_lookup() {
         for(unsigned offset=0;offset<=0x1Cu;offset+=4u)
             require(iop.diagnostic_latch(0x1F808240u+offset)==0x1234u,"indexed latch lookups retain values");
         require(!iop.diagnostic_latch(0x1F805074u),"lookup hash collision cannot alias a different address");
+        require(!iop.diagnostic_latch(0x1F803076u),"open-addressed collision stops at an empty slot");
+        require(iop.diagnostic_latch(0x1F900348u)==0x1234u && iop.diagnostic_latch(0x1F90034Au)==0x5678u,
+                "adjacent halfword latches remain distinct");
         require(iop.diagnostic_latch(0x1F801074u)==0x5678u,"lookup observes writes after vector growth");
     }
     iop.reset(rom,&kProfile);
