@@ -25,6 +25,34 @@ void setup(m20::Assembler& a,unsigned core,bool irq,unsigned mode=0u) {
 void payload(Iop& iop,bool unknown=false){for(unsigned n=0;n<32u;++n)if(!unknown || n!=3u)iop.ee_write(0x20000u+n,1,0x31u+n);}
 }
 int main() try {
+    for(unsigned core=0;core<2;++core)for(const bool unknown:{false,true}) {
+        m20::Assembler a(kEeResetVector);setup(a,core,true);
+        const auto dma=core ? 0xBF801500u : 0xBF8010C0u,spu=0xBF900000u+core*0x400u;
+        const auto wait=[&](const char* label){a.la(8,dma+8u);a.label(label);a.lw(9,0,8);a.nop();a.r(0,9,9,24,2);a.andi(9,9,1);a.bne(9,0,label);a.nop();};
+        sw(a,dma+8u,0x01000201u);wait("upload");
+        sh(a,spu+0x19Au,0x8000u);sh(a,spu+0x1A8u,0xFu);sh(a,spu+0x1AAu,0x849Fu);
+        sh(a,spu+0x19Au,0x8030u);sw(a,dma,0x21000u);sw(a,dma+4u,0x00020004u);
+        a.la(8,dma+8u);a.la(9,0x01000200u);a.label("readstart");a.sw(9,0,8);wait("download");
+        a.la(10,0xA0000100u);a.la(9,1);a.sw(9,0,10);a.la(8,dma);a.lw(9,0,8);a.nop();a.sw(9,4,10);a.lw(9,4,8);a.nop();a.sw(9,8,10);a.lw(9,8,8);a.nop();a.sw(9,12,10);a.la(8,spu+0x344u);a.lhu(9,0,8);a.nop();a.andi(9,9,0x80u);a.sw(9,16,10);idle(a);
+        const auto start=(a.at("readstart")-kEeResetVector)/4u;const auto rom=image(a);Iop iop;
+        iop.reset(rom,nullptr,nullptr,false,std::nullopt,{},false,true);iop.diagnostic_spu2_adma_word_cycles(17);payload(iop,unknown);
+        while(iop.pc()!=a.at("readstart") && !iop.stopped() && iop.cycle()<10000)iop.run_until(iop.cycle()+1u);
+        require(!iop.stopped() && iop.pc()==a.at("readstart"),"upload completes before the independent read request");
+        const auto actual_start=iop.cycle();
+        iop.run_until(actual_start+16u);
+        require(!iop.stopped() && !iop.diagnostic_ram32(0x21000u),"read DMA cannot publish before its bus edge");
+        iop.run_until(actual_start+17u);
+        require(!iop.stopped() && iop.spu2_dma_words(core)==9u,"first read word reaches its bus edge; core="+std::to_string(core)+" words="+std::to_string(iop.spu2_dma_words(core))+" start="+std::to_string(start));
+        require(!iop.stopped() && iop.ee_read(0x21000u,2)==0x3231u && !iop.diagnostic_ram32(0x21004u),"read DMA copies actual first word only at the modeled bus edge");
+        iop.run_until(actual_start+400u);
+        require(!iop.stopped() && iop.ee_read(0x100u,4)==1u && iop.spu2_dma_words(core)==16u,"read DMA completes actual payload on both cores");
+        for(unsigned n=0;n<16;++n) {
+            if(unknown && n==1u)require(!iop.diagnostic_ram32(0x21000u),"unknown sound halfword remains unknown in destination RAM");
+            else require(iop.ee_read(0x21000u+n*2u,2)==((0x31u+n*2u)|((0x32u+n*2u)<<8u)),"download preserves independent little-endian payload");
+        }
+        require(iop.ee_read(0x104u,4)==0x21020u && iop.ee_read(0x108u,4)==4u &&
+            !(iop.ee_read(0x10Cu,4)&0x1000000u) && iop.ee_read(0x110u,4)==0x80u,"read completion updates MADR/BCR/CHCR and STATX only after final bytes");
+    }
     for(unsigned core=0;core<2u;++core)for(const auto latency:{3u,17u})
     for(const bool irq:{false,true})for(const bool unknown:{false,true}) {
         m20::Assembler a(kEeResetVector);setup(a,core,irq);const auto dma=core ? 0xBF801500u : 0xBF8010C0u;

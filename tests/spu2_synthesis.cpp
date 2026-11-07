@@ -47,6 +47,7 @@ std::vector<std::uint8_t> firmware(unsigned mode,unsigned core=0) {
         a.la(8,base+0x1C6u);a.lhu(9,0,8);a.nop();a.sw(9,8,10);
         a.la(8,base+0x1CAu);a.lhu(9,0,8);a.nop();a.sw(9,12,10);
     }
+    if(mode==15){a.la(8,base+0x1C8u);a.lhu(9,0,8);a.nop();a.beq(9,0,"idle");a.nop();a.raw(0x0000000Du);}
     a.label("idle");a.beq(0,0,"idle");a.nop();
     auto rom=m20::build_firmware().rom;const auto code=m20::le_words(a.finish());
     std::copy(code.begin(),code.end(),rom.begin());return rom;
@@ -97,6 +98,12 @@ int main(int argc,char** argv)try {
             auto gap=samples;gap[2].cycle+=1;rejects([&]{save_spu2_wav(directory/"gap.wav",gap);},"contiguous");
         }
     }
+    for(unsigned core=0;core<2;++core){
+        const auto rom=firmware(15,core);Iop strict;reset(strict,rom);strict.run_until(10000);
+        require(strict.stopped() && strict.stop_reason()->find("voice address reserved bits")!=std::string::npos,"strict high-address readback retains reserved-bit uncertainty");
+        Iop explicit_zero;reset(explicit_zero,rom);explicit_zero.diagnostic_spu2_voice_address_reserved_zero();explicit_zero.run_until(10000);
+        require(!explicit_zero.stopped() && explicit_zero.spu2_voice(core,0).decoded_samples>4,"explicit readback policy preserves actual voice decoding and permits NAX high comparison");
+    }
     {
         const auto rom=firmware(0);EEState state;Memory memory;
         const auto prepare=[&](EEState& s,Memory& m){
@@ -110,6 +117,7 @@ int main(int argc,char** argv)try {
         require(!memory.iop().stopped() && memory.iop().spu2_voice(0,0).modeled,"full-system checkpoint fixture has an actual pending decoder/envelope");
         const auto file=directory/"active.ps2ncp";CheckpointContext context{sha256_hex(rom),"active-spu2"};
         if(file_exists(file))remove_file(file); // this test's own synthetic artifact
+        memory.diagnostic_spu2_voice_address_reserved_zero();
         save_checkpoint(file,state,memory,first,context);const auto before=checkpoint_state_sha256(state,memory);
         std::vector<Iop::Spu2Sample> continuous;
         const_cast<Iop&>(memory.iop()).set_spu2_sample_sink([&](unsigned core,const auto& sample){if(!core)continuous.push_back(sample);});

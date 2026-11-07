@@ -267,6 +267,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     spu2_adma_bus_available_=0;spu2_adma_last_grant_=1u;
     graphics_dma_={};
     spr_dma_cycle_=0;
+    diagnostic_spu2_voice_address_reserved_zero_=false;
     dma_irq_output_=false;
     // Cold drive: no command or host tray/power event has been submitted.
     // Only NOP/NOPsync completion is modeled; other commands fail before issue.
@@ -1828,8 +1829,8 @@ void Iop::validate_spu2_normal_dma(unsigned core,std::uint32_t words) const {
         throw IopStop{"SPU2 normal DMA requires the explicit shared-bus throughput and quiet-reset experiment"};
     const auto& state=spu2_adma_[core];const auto control=spu2_control_[core];
     if(!state.control_written || state.enabled || !control || (control->unknown&0x80F0u) ||
-       (control->value&0x8070u)!=0x8020u)
-        throw IopStop{"SPU2 normal DMA requires ADMAS written off and an enabled core in DMA-write mode without effects/IRQ"};
+       (control->value&0x8060u)!=0x8020u)
+        throw IopStop{"SPU2 normal DMA requires ADMAS written off and an enabled core in DMA mode without IRQ"};
     const auto target=spu2_transfer_[core].address;
     if(!target || *target<0x2800u)
         throw IopStop{"SPU2 normal DMA target is unknown or starts in dynamic buffers"};
@@ -1888,7 +1889,12 @@ void Iop::write_spu2_dma(unsigned core,std::uint32_t field,std::size_t bytes,std
     }
     if(bytes!=4u || (field!=0u && field!=4u && field!=8u))throw IopStop{"SPU2 DMA requires known words or BCR halfwords"};
     if(field==8u && (value&kChcrStart)) {
-        if(value!=0x01000201u)throw IopStop{"SPU2 DMA supports incrementing RAM-to-device request mode only"};
+        if(value!=0x01000201u && value!=0x01000200u)throw IopStop{"SPU2 DMA supports incrementing request mode only"};
+        const bool read=(value&1u)==0;
+        if(read && state.enabled)throw IopStop{"SPU2 AutoDMA read mode is not modeled"};
+        const auto control=spu2_control_[core];
+        if(!state.enabled && (!control || (control->unknown&0x30u) || (control->value&0x30u)!=(read ? 0x30u : 0x20u)))
+            throw IopStop{"SPU2 DMA direction differs from transfer control"};
         if(state.enabled)validate_spu2_adma(core);
         if((state.written&7u)!=7u)throw IopStop{"SPU2 DMA needs programmed address and both BCR halves"};
         const auto blocks=state.dma[1]>>16u,block_words=state.dma[1]&0xFFFFu;
@@ -1936,8 +1942,14 @@ bool Iop::tick_spu2_adma(unsigned core) {
     const auto target=state.normal ? *spu2_transfer_[core].address : 0x2000u+core*0x400u+state.fill_bank*0x100u+
         (state.fill_word>=128u ? 0x200u : 0u)+(state.fill_word%128u)*2u;
     if(spu2_ram_.empty()){spu2_ram_.resize(0x100000u);spu2_ram_written_.resize(0x100000u);}
+    const bool read=state.normal && !(state.dma[2]&1u);
     for(unsigned n=0;n<2;++n) {
         const auto destination=(target+n)&0xFFFFFu;
+        if(read) {
+            const auto half=spu2_ram_[destination];
+            for(unsigned b=0;b<2;++b){ram_[source+2u*n+b]=static_cast<std::uint8_t>(half>>(8u*b));ram_known_[source+2u*n+b]=spu2_ram_written_[destination] ? 0xFFu : 0u;}
+            continue;
+        }
         spu2_ram_[destination]=static_cast<std::uint16_t>(ram_[source+2u*n]|(std::uint16_t{ram_[source+2u*n+1u]}<<8u));
         // No captured CD/SPDIF/voice sample or arbitration result is invented
         // when a normal transfer wraps into the device's dynamic RAM area.
@@ -2018,13 +2030,13 @@ void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
         throw IopStop{"SPU2 active ADMA requires its core enabled and normal transfer/effects/IRQ disabled"};
     if((spu2_adma_[0].enabled || spu2_adma_[1].enabled) && ((word.value|word.unknown)&0x40u))
         throw IopStop{"SPU2 IRQ changes while ADMA uses shared RAM are not modeled"};
-    if(mode==0x30u)throw IopStop{"SPU2 DMA read processing/control configuration is not modeled"};
+
     const bool normal_pending=(spu2_adma_[0].normal && spu2_adma_[0].next) ||
                               (spu2_adma_[1].normal && spu2_adma_[1].next);
     if(normal_pending && ((word.value|word.unknown)&0xC0u))
         throw IopStop{"SPU2 effects/IRQ changes during normal DMA are not modeled"};
     if(spu2_adma_[core].normal && spu2_adma_[core].next &&
-       ((word.value&0x8030u)!=0x8020u))throw IopStop{"SPU2 normal DMA cancellation while data is pending is not modeled"};
+       ((word.value&0x8030u)!=(spu2_adma_[core].dma[2]&1u ? 0x8020u : 0x8030u)))throw IopStop{"SPU2 normal DMA cancellation while data is pending is not modeled"};
     auto& transfer=spu2_transfer_[core];
     if(transfer.next && (mode!=0x10u || !(word.value&0x8000u)))
         throw IopStop{"SPU2 PIO cancellation while real FIFO data is pending is not modeled"};
@@ -2269,8 +2281,10 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
             const auto address=field>=8u ? std::optional<std::uint32_t>{v.next} : v.loop;
             if(!address)throw IopStop{"SPU2 loop address is not established"};
             const bool low=(field&2u)!=0;
-            undefined_load_="SPU2 voice address reserved bits are unknown";
-            undefined_known_=(low ? 0xFFFFu : 0xFu)|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
+            if(!low && !diagnostic_spu2_voice_address_reserved_zero_) {
+                undefined_load_="SPU2 voice address reserved bits are unknown";
+                undefined_known_=0x3Fu|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
+            }
             return low ? *address&0xFFFFu : *address>>16u;
         }
     }
@@ -2351,7 +2365,7 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         if(word->value&0x30u)known&=~0x30u; // transfer-mode echo fields remain unverified
         undefined_known_=known|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
         const auto& dma=spu2_adma_[core];
-        const bool normal_mode=(word->value&0x30u)==0x20u;
+        const bool normal_mode=(word->value&0x20u)!=0u;
         if(normal_mode && !dma.normal)undefined_known_&=~0x80u;
         const auto irq=spu2_irq_pending_[core]?0x40u:0u;
         if(spu2_transfer_[core].next || (dma.normal && dma.next))return 0x400u|irq;

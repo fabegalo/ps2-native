@@ -110,6 +110,10 @@ public:
         if(cycle_)throw DeviceRefusal("ForbidDVDP error-bit experiment requires reset state before execution");
         diagnostic_forbid_dvdp_error_clear_=true;
     }
+    void diagnostic_spu2_voice_address_reserved_zero() {
+        if(stop_)throw DeviceRefusal("SPU2 voice readback experiment requires a non-refused boundary");
+        diagnostic_spu2_voice_address_reserved_zero_=true;
+    }
     // Explicit initial alarm-control experiment: seconds=FF (disabled),
     // minute bit 7=0. Status, time and user word remain opaque. Power cause
     // comes independently from the external event supplied to reset().
@@ -628,6 +632,7 @@ private:
     };
     std::array<GraphicsDma,3> graphics_dma_{};
     std::uint64_t spr_dma_cycle_{};
+    bool diagnostic_spu2_voice_address_reserved_zero_{};
     std::optional<std::uint8_t> cdvd_howto_;
     std::vector<std::uint8_t> cdvd_params_;
     std::uint32_t cdvd_lba_{}, cdvd_sectors_{}, cdvd_sector_cycles_{};

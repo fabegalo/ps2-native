@@ -54,5 +54,17 @@ int main() try {
         gs.general_write(0x51,1ull|(2ull<<32)|(2ull<<59));gs.general_write(0x52,4ull|(1ull<<32));gs.general_write(0x53,2);
         for(unsigned n=0;n<4u;++n)require(gs.vram().read(0,64,psm,n+2,0)==n+2,"right-to-left local copy preserves overlapping packed pixels");
     }
-    std::cout<<"PSMCT16/16S swizzle, halfword knowledge, real IMAGE packing, wrap and overlap passed\n";
+    for(unsigned psm:{2u,10u}) {
+        GsRegisters gs;gs.reset(0);setup(gs,psm,4,2,3,4);
+        gs.image_write(0x0000000003E0001Full,0x000000007FFF7C00ull);
+        gs.write(kGsPmode,8,0xFF25,0,{});gs.write(kGsSmode2,8,0,0,{});
+        gs.write(kGsDispfb1,8,(1u<<9)|(std::uint64_t{psm}<<15)|(3ull<<32)|(4ull<<43),0,{});
+        gs.write(kGsDisplay1,8,(1ull<<32)|(1ull<<44),0,{});
+        const std::vector<std::uint8_t> expected{248,0,0,255,0,248,0,255,0,0,248,255,248,248,248,255};
+        auto& vram=const_cast<GsVram&>(gs.vram());vram.write(0,64,psm,3,4,0x1F,0,0x8000);
+        require(gs.scanout(12).rgba==expected,"CT16/16S scanout uses real swizzled RGB5, source offset and zero-bit expansion without consuming alpha");
+        vram.write(0,64,psm,3,4,0x1F,0,1u);
+        rejects([&]{(void)gs.scanout(12);},"unwritten bits");
+    }
+    std::cout<<"PSMCT16/16S swizzle, halfword knowledge, real IMAGE packing, wrap, overlap and RGB scanout passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

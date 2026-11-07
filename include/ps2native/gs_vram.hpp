@@ -48,6 +48,8 @@ public:
         if(gpu_){++cpu_fallbacks_;++fallback_reasons_[static_cast<unsigned>(reason)];}
     }
     [[nodiscard]] const auto& fallback_reasons() const noexcept { return fallback_reasons_; }
+    [[nodiscard]] std::uint32_t read_bits(std::uint32_t base,unsigned width,unsigned psm,
+                                         unsigned x,unsigned y,std::uint32_t mask) const;
     // HOST_INPUT_END
     void invalidate(); // power-on contents are unknown; CSR.RESET does not erase VRAM
     static void validate_format(unsigned psm);

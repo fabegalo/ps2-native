@@ -222,10 +222,13 @@ std::uint32_t GsVram::address(std::uint32_t base, unsigned width, unsigned psm, 
     return (base + page * 8192u + block * 256u + word * 4u) & (kBytes - 1u);
 }
 std::uint32_t GsVram::read(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y) const {
+    return read_bits(base,width,psm,x,y,0xFFFFFFFFu);
+}
+std::uint32_t GsVram::read_bits(std::uint32_t base,unsigned width,unsigned psm,unsigned x,unsigned y,std::uint32_t mask) const {
     const auto addr = address(base, width, psm, x, y);
     if(gpu_)synchronize_page(addr/kPageBytes);
     const auto at = addr / 4u, shift = (addr & 3u) * 8u + (psm == 20u ? (y & 2u) * 2u : 0u);
-    const auto bits = psm == 20u ? 15u : psm == 19u ? 255u : psm==2u || psm==10u ? 0xFFFFu : psm == 1u ? 0xFFFFFFu : 0xFFFFFFFFu;
+    const auto bits = (psm == 20u ? 15u : psm == 19u ? 255u : psm==2u || psm==10u ? 0xFFFFu : psm == 1u ? 0xFFFFFFu : 0xFFFFFFFFu)&mask;
     if (((known_[at] >> shift) & bits) != bits) throw DeviceRefusal("GS VRAM read: pixel contains unwritten bits");
     return (words_[at] >> shift) & bits;
 }

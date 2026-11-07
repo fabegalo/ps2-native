@@ -102,6 +102,9 @@ public:
     void configure_rtc(std::uint64_t utc_epoch_seconds) { iop_.configure_rtc(utc_epoch_seconds); }
     void diagnostic_spu2_7ca_latch() { iop_.diagnostic_spu2_7ca_latch(); }
     void diagnostic_spu2_reserved_latches() { iop_.diagnostic_spu2_reserved_latches(); }
+    // RUNTIME_HELPERS_BEGIN
+    void diagnostic_spu2_voice_address_reserved_zero() { iop_.diagnostic_spu2_voice_address_reserved_zero(); }
+    // RUNTIME_HELPERS_END
     void mount_disc(std::shared_ptr<DiscImage> disc,Iop::DiscMedium medium,bool diagnostic_cav_nominal_timing=false) {
         iop_.mount_disc(std::move(disc),medium,diagnostic_cav_nominal_timing);
     }

@@ -25,7 +25,11 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
     const std::array<std::uint8_t,8> spr_tag{0x5F,0x53,0x50,0x52,0x44,0x4D,0x41,0x31};
     const auto spr_at=std::search(old_payload.begin(),old_payload.end(),spr_tag.begin(),spr_tag.end());
     require(spr_at!=old_payload.end(),"current checkpoint has a tagged fromSPR clock extension");
-    old_payload.erase(spr_at,spr_at+16);payload=old_payload;
+    if(std::string_view(schema)!="5662ca9c89ac26516224d7aa8f3e777e8d72ec24255364cfedd3481e13db1882")old_payload.erase(spr_at,spr_at+16);
+    const std::array<std::uint8_t,8> voice_tag{0x53,0x50,0x32,0x4E,0x41,0x58,0x41,0x31};
+    const auto voice_at=std::search(old_payload.begin(),old_payload.end(),voice_tag.begin(),voice_tag.end());
+    require(voice_at!=old_payload.end(),"current checkpoint has a tagged voice readback policy");
+    old_payload.erase(voice_at,voice_at+9);payload=old_payload;
     std::vector<std::uint8_t> bytes{'P','S','2','N','C','P','0','1'};
     const auto integer=[&](std::uint64_t value,unsigned size){for(unsigned i=0;i<size;++i)bytes.push_back(static_cast<std::uint8_t>(value>>(8u*i)));};
     info.schema_sha256=schema;
@@ -180,6 +184,11 @@ int main(int argc,char** argv)try {
     (void)load_checkpoint(current_file,state,memory,context);
     const auto exact=checkpoint_state_sha256(state,memory);
     auto reviewed=context;reviewed.allow_runtime_change=true;
+    const auto voice_file=directory/"legacy-voice-readback.ps2ncp";
+    write_file_atomically(voice_file,legacy_envelope(current_info,current_payload,"5662ca9c89ac26516224d7aa8f3e777e8d72ec24255364cfedd3481e13db1882"));
+    rejects([&]{(void)load_checkpoint(voice_file,resumed,restored,context);},"schema");
+    (void)load_checkpoint(voice_file,resumed,restored,reviewed);
+    require(checkpoint_state_sha256(resumed,restored)==exact,"old fromSPR checkpoints retain state and keep voice readback experiment disabled");
     for(const auto* schema:{"72d8f630ea9a0befdba0e33bbc9d80394b6a2c29db31cf0a402bd6299876a61e",
             "cd1aa8bf7755b3926af94afc8385147b755b5de6b335faa25049d9f719960ecd",
             "3613da6d23479169c5d84e8eea6a68ed75b7acc10e86c5c324238a5cbccf495f",

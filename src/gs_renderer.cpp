@@ -959,7 +959,7 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     const auto base = static_cast<unsigned>(fb & 511u) * 8192u;
     const auto bw = static_cast<unsigned>((fb >> 9) & 63u) * 64u;
     const auto psm = static_cast<unsigned>((fb >> 15) & 31u);
-    if (psm > 1u) throw DeviceRefusal("GS scanout pixel format is not modeled");
+    if (psm!=0u && psm!=1u && psm!=2u && psm!=10u) throw DeviceRefusal("GS scanout pixel format is not modeled: "+std::to_string(psm));
     GsVram::validate_format(psm);
     const auto x0 = static_cast<unsigned>((fb >> 32) & 2047u), y0 = static_cast<unsigned>((fb >> 43) & 2047u);
     const unsigned row_stride = (interlaced && !(*mode_[1] & 2u)) ? 2u : 1u;
@@ -979,8 +979,10 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     for (unsigned y = 0; y < f.height; ++y)
         for (unsigned x = 0; x < f.width; ++x) {
             // PCRTC single-circuit RGB does not consume framebuffer alpha.
-            const auto pixel = vram_.read(base, bw, 1u, x0 + x, y0 + y * row_stride + field_offset);
-            for (unsigned c = 0; c < 3u; ++c) f.rgba.push_back(static_cast<std::uint8_t>(pixel >> (c * 8u)));
+            const bool packed=psm==2u || psm==10u;
+            const auto pixel = vram_.read_bits(base,bw,psm,x0+x,y0+y*row_stride+field_offset,packed ? 0x7FFFu : 0xFFFFFFu);
+            // GS manual p.89: PCRTC expands RGB5 by appending three zero bits.
+            for (unsigned c = 0; c < 3u; ++c) f.rgba.push_back(static_cast<std::uint8_t>(packed ? ((pixel>>(c*5u))&31u)<<3u : pixel>>(c*8u)));
             f.rgba.push_back(255u);
         }
     return f;
