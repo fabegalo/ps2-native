@@ -11,6 +11,7 @@ int main(int argc,char** argv) try {
     auto disc=std::make_shared<DiscImage>(path);
     m20::Assembler a(0xBFC00000u);
     a.la(8,0xBF402000u);a.lbu(9,0xA,8);a.nop();a.andi(9,9,0x3F);a.sw(9,0x1000,0);
+    a.lbu(9,0xA,8);a.nop();a.i(0x0E,9,9,1);a.andi(9,9,1);a.sw(9,0x100C,0);
     a.lbu(9,0xB,8);a.nop();a.andi(9,9,0x3F);a.sw(9,0x1004,0);
     a.lbu(9,0xF,8);a.nop();a.sw(9,0x1008,0);
     a.label("idle");a.beq(0,0,"idle");a.nop();
@@ -42,6 +43,7 @@ int main(int argc,char** argv) try {
     require(iop.ee_cdvd_read(0x1F402018u,1)==1,"busy command does not report a completed update");
     iop.run_until(100);
     require(!iop.stopped(),iop.stop_reason().value_or(""));
+    require(iop.ee_read(0x100C,4)==1,"DVD status XORI/ANDI consumes only the known tray bit without inventing bits 6-7");
     require(iop.ee_read(0x1000,4)==0xA && iop.ee_read(0x1004,4)==0xA && iop.ee_read(0x1008,4)==0x12,
             "IOP observes actual mounted state, masks undocumented bits and reads the medium type");
     rejects([&]{iop.mount_disc(disc,Iop::DiscMedium::Ps2Dvd);},"active reset state");

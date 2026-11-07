@@ -4200,7 +4200,10 @@ void Iop::step() {
         case 0x0B: set_reg(rt, reg(rs) < imm ? 1u : 0u); break;
         case 0x0C: and_immediate(rt, rs, uimm); break;
         case 0x0D: or_value(rt,rs,uimm,~0u,{}); break;
-        case 0x0E: set_reg(rt, reg(rs) ^ uimm); break;
+        case 0x0E:
+            if(gpr_defined_&(1u<<rs))set_reg(rt,gpr_[rs]^uimm);
+            else if(rt)write_=PendingLoad{rt,(gpr_[rs]^uimm)&gpr_known_[rs],false,gpr_origin_[rs],gpr_known_[rs]};
+            break;
         case 0x0F: set_reg(rt, uimm << 16); break;
         case 0x10:                                                                              // COP0
             if (rs == 0x00) load_reg(rt, cop0_read(rd));                                        // MFC0 (load delay)

@@ -18,6 +18,22 @@ void input(m20::Assembler& a) {
 }
 }
 int main() try {
+    for(const unsigned destination:{0u,9u,11u})for(const unsigned immediate:{0u,1u,0xA5u,0xFFFFu}) {
+        m20::Assembler a(kEeResetVector);input(a);a.ori(9,9,0xA5u);a.i(0x0E,9,destination,immediate);
+        a.andi(10,destination,0xA5u);a.sw(10,0x100,8);
+        const auto iop=run(a);
+        require(!iop.stopped() && iop.ee_read(0x100,4)==(destination ? ((0xA5u^immediate)&0xA5u) : 0u),"XORI transports exact known bits, aliases and immutable zero");
+        if(destination) {
+            require(iop.diagnostic_gpr(destination).unknown==~0xA5u,"XORI does not resolve any unknown source bits");
+            m20::Assembler b(kEeResetVector);input(b);b.i(0x0E,9,destination,immediate);b.beq(destination,0,"idle");b.nop();
+            require(run(b).stopped(),"unknown XORI bits cannot choose a branch");
+        }
+    }
+    {
+        m20::Assembler a(kEeResetVector);a.lui(8,0xA000u);a.la(9,7);a.lw(9,0x300,8);
+        a.i(0x0E,9,9,3);a.sw(9,0x100,8);const auto iop=run(a);
+        require(!iop.stopped() && iop.ee_read(0x100,4)==4,"XORI reads the old operand and overrides an aliased delayed load");
+    }
     for(const bool consume:{false,true}) {
         m20::Assembler a(kEeResetVector);a.la(8,0xBF402018u);
         a.lbu(9,0,8);a.nop();a.la(10,0xA0000100u);a.sb(9,0,10);
