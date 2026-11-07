@@ -301,7 +301,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
             " xy16=("+std::to_string(vertices[0].x)+","+std::to_string(vertices[0].y)+") ("+
             std::to_string(vertices[1].x)+","+std::to_string(vertices[1].y)+") ("+
             std::to_string(v.x)+","+std::to_string(v.y)+") z="+std::to_string(v.z));
-    if(textured && !(mode&256u) && type!=6u)throw DeviceRefusal("GS STQ triangle texture drawing precision is not established");
+
     const auto frame = required(static_cast<std::uint8_t>(0x4Cu + context));
     const auto scissor = required(static_cast<std::uint8_t>(0x40u + context));
     const auto test = required(static_cast<std::uint8_t>(0x47u + context));
@@ -356,6 +356,25 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     bottom = std::min(bottom, static_cast<int>((scissor >> 48) & 2047u) + 1);
     const auto tex=textured ? required(static_cast<std::uint8_t>(6u+context)) : 0;
     const auto clamp=textured ? required(static_cast<std::uint8_t>(8u+context)) : 0;
+    if(textured && triangle && !(mode&256u)) {
+        const auto tw=static_cast<unsigned>((tex>>26u)&15u),th=static_cast<unsigned>((tex>>30u)&15u);
+        if(tw>10u || th>10u)throw DeviceRefusal("GS texture dimensions are not modeled");
+        std::optional<std::uint32_t> q;
+        for(auto& source:vertices) {
+            if(!source.st || !source.rgbaq)throw DeviceRefusal("GS STQ triangle consumes unwritten coordinates");
+            if(source.st_unknown || (source.rgbaq_unknown>>32u))throw DeviceRefusal("GS STQ triangle consumes unknown coordinate bits");
+            const auto current=static_cast<std::uint32_t>(*source.rgbaq>>32u);
+            if(q && *q!=current)throw DeviceRefusal("GS varying-Q triangle texture precision is not established (Q="+std::to_string(*q)+","+std::to_string(current)+")");
+            q=current;
+        }
+        // A constant Q reduces perspective interpolation to the existing
+        // affine plane. Reuse its exact-grid and gradient checks unchanged.
+        for(auto& source:vertices) {
+            source.u=exact_stq_coordinate(static_cast<std::uint32_t>(*source.st),*q,tw);
+            source.v=exact_stq_coordinate(static_cast<std::uint32_t>(*source.st>>32u),*q,th);
+            if(source.u<0 || source.v<0)throw DeviceRefusal("GS negative STQ triangle coordinate range is not modeled");
+        }
+    }
     int sprite_u0=first_vertex_?first_vertex_->u:0,sprite_v0=first_vertex_?first_vertex_->v:0,sprite_u1=v.u,sprite_v1=v.v;
     if(textured && type==6u && !(mode&256u)) {
         if(!first_vertex_->st || !v.st || !v.rgbaq)throw DeviceRefusal("GS STQ sprite consumes unwritten coordinates");
@@ -375,8 +394,12 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     bool bilinear=false;
     if(textured) {
         const auto lod=required(static_cast<std::uint8_t>(0x14u+context));
-        const auto magnification=static_cast<unsigned>((lod>>5u)&1u),minification=static_cast<unsigned>((lod>>6u)&7u);
-        if(minification>1u)throw DeviceRefusal("GS mipmap texture levels are not modeled");
+        const auto magnification=static_cast<unsigned>((lod>>5u)&1u);
+        auto minification=static_cast<unsigned>((lod>>6u)&7u);
+        if(minification>5u)throw DeviceRefusal("GS reserved minification filter");
+        // MXL=0 clamps both mipmap samples to level zero; only the spatial
+        // nearest/linear filter remains. No unprovided mip level is fetched.
+        if(minification>=2u && !(lod&0x1Cu))minification=minification>=4u ? 1u : 0u;
         // GS manual 3.4.12: MMIN=0/1 always uses level zero. When both
         // filters agree, neither Q nor K can change the sampling operation.
         auto selected=magnification;
@@ -414,6 +437,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
                 }
             }
         }
+        if(selected>1u)throw DeviceRefusal("GS mipmap texture levels are not modeled (TEX1="+std::to_string(lod)+")");
         bilinear=selected!=0u;
         if(bilinear && (((tex>>26u)&15u)<3u || ((tex>>30u)&15u)<3u))
             throw DeviceRefusal("GS bilinear texture dimensions must be at least 8 by 8");
@@ -901,7 +925,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
             if(textured) {
                 int u=0,tv=0;
                 if(triangle) {
-                    for(unsigned n=0;n<3u;++n)if(!vertices[n].uv)throw DeviceRefusal("GS triangle consumes unwritten UV coordinates");
+                    for(unsigned n=0;n<3u;++n)if((mode&256u) && !vertices[n].uv)throw DeviceRefusal("GS triangle consumes unwritten UV coordinates");
                     u=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].u),static_cast<std::uint32_t>(vertices[1].u),static_cast<std::uint32_t>(vertices[2].u)},true));
                     tv=static_cast<int>(interpolate(weights,{static_cast<std::uint32_t>(vertices[0].v),static_cast<std::uint32_t>(vertices[1].v),static_cast<std::uint32_t>(vertices[2].v)},true));
                 } else {u=uv_at(x,first_vertex_->x,v.x,sprite_u0,sprite_u1);tv=uv_at(y,first_vertex_->y,v.y,sprite_v0,sprite_v1);}

@@ -88,7 +88,14 @@ int main() try {
                 "explicit zero-Q experiment selects positive saturated LOD without replacing source color or UV");
         } else rejects([&]{pixel(zero,0,0,16,16);},"exceptional Q");
     }
-    gs.general_write(0x14,0x80);rejects([&]{pixel(gs,7,0,16,16);},"mipmap");
+    for(unsigned filter=2u;filter<=5u;++filter) {
+        const auto linear=filter>=4u;
+        gs.general_write(0x14,(filter<<6u)|(linear?32u:0u));pixel(gs,7,0,16,16);
+        require(gs.vram().read(0,64,0,7,0)==(linear ? 0x80080808u : source(1,1)),"MXL zero retains the actual nearest/linear minification filter while clamping every mip level to the uploaded base");
+    }
+    gs.general_write(0x14,0x0000000100000085ull);rejects([&]{pixel(gs,7,0,16,16);},"mipmap");
+    gs.general_write(0x14,0x0000080000000085ull);pixel(gs,7,0,16,16);
+    require(gs.vram().read(0,64,0,7,0)==source(1,1),"strict magnification never consumes the configured mipmap minification path");
     gs.general_write(0x14,0x60);const auto before=gs.vram().pixel_writes();
     rejects([&]{pixel(gs,7,0,9,9);},"fractional bilinear truncation");
     require(gs.vram().pixel_writes()==before,"unproven intermediate rounding cannot fabricate even one fragment");
