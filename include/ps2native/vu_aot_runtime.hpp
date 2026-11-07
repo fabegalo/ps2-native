@@ -12,11 +12,17 @@ class GsRegisters;
 inline constexpr unsigned kVuAotAbi=1;
 struct VuAotImage { std::array<ObservedWord,4096> words; };
 [[nodiscard]] std::string vu1_aot_identity(const VuAotImage& image,bool diagnostic_power_two_carry=false);
+    // HOST_INPUT_BEGIN
+[[nodiscard]] std::string vu_aot_identity(const VuAotImage&,unsigned unit,bool diagnostic_power_two_carry=false);
+    // HOST_INPUT_END
 struct VuAotModule {
     std::string_view identity;
     const VuAotImage* image;
     bool diagnostic_power_two_carry;
     bool (*step)(VuControl&,Gif*,GsRegisters*);
+    // HOST_INPUT_BEGIN
+    unsigned unit{1};
+    // HOST_INPUT_END
 };
 // Generated objects register immutable descriptors. No compiler or dynamic
 // loader runs during gameplay; a missing translation is interpreted explicitly.

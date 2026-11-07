@@ -10,6 +10,9 @@ namespace ps2native {
 struct VuAotOptions {
     std::vector<std::uint32_t> entries{0};
     bool diagnostic_power_two_carry{};
+    // HOST_INPUT_BEGIN
+    unsigned unit{1};
+    // HOST_INPUT_END
 };
 struct VuAotInstruction {
     std::uint32_t lower{},upper{};

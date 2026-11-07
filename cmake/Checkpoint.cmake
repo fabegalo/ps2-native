@@ -11,6 +11,8 @@ list(FILTER checkpoint_headers EXCLUDE REGEX "/ee_semantics[.]hpp$")
 # Extending the decoder must change the runtime identity, not the wire schema.
 list(FILTER checkpoint_headers EXCLUDE REGEX "/mips[.]hpp$")
 list(FILTER checkpoint_headers EXCLUDE REGEX "/vu_fixed[.]hpp$")
+list(FILTER checkpoint_headers EXCLUDE REGEX "/iop_(aot|ops)[.]hpp$")
+list(FILTER checkpoint_headers EXCLUDE REGEX "/ee_system[.]hpp$")
 # Boot options/reports and host profiling counters are never serialized.
 list(FILTER checkpoint_headers EXCLUDE REGEX "/(boot|profile)[.]hpp$")
 # Offline code-generation artifacts contain no serialized machine state.

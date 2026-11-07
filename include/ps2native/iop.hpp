@@ -57,6 +57,9 @@ inline constexpr std::uint8_t kRetailToolBoardId = 0xFFu;
 // its value comes from the console profile (ConsoleHardware::dev9_revision).
 inline constexpr std::uint32_t kDev9Revision = 0x1F80146Eu;
 
+    // RUNTIME_HELPERS_BEGIN
+struct IopExecutionStop { std::string reason; };
+    // RUNTIME_HELPERS_END
 class Iop {
     friend struct CheckpointAccess;
 public:
@@ -67,6 +70,16 @@ public:
         std::string text;
     };
     Iop();
+    // RUNTIME_HELPERS_BEGIN
+    template<std::uint32_t Word> void execute_native();
+    void require_aot(bool required) noexcept {iop_aot_required_=required;}
+    void enable_aot(bool enabled) noexcept {iop_aot_enabled_=enabled;}
+    [[nodiscard]] std::uint64_t native_instructions() const noexcept {return native_instructions_;}
+    [[nodiscard]] std::uint64_t interpreted_instructions() const noexcept {return interpreted_instructions_;}
+    using InstructionObserver=std::function<void(std::uint32_t,std::uint32_t)>;
+    void set_instruction_observer(InstructionObserver observer) {instruction_observer_=std::move(observer);}
+    [[nodiscard]] std::string code_identity(std::uint32_t pc) const;
+    // RUNTIME_HELPERS_END
     // User/front-panel power-on with `rom0` (empty: no ROM, the IOP stays stopped) on console
     // `hardware` (nullptr: none, so its PRId read stops the IOP), whose
     // MECHACON holds `nvm` (nullptr: none, so NVM reads stop the IOP). `nvm`
@@ -403,6 +416,14 @@ private:
         std::uint32_t prescale{1}, phase{};
     };
     void step();
+    // RUNTIME_HELPERS_BEGIN
+    bool begin_instruction();
+    template<std::int64_t Word> void execute_instruction(std::uint32_t dynamic_word);
+    bool iop_aot_required_{};
+    bool iop_aot_enabled_{true};
+    std::uint64_t native_instructions_{},interpreted_instructions_{};
+    InstructionObserver instruction_observer_;
+    // RUNTIME_HELPERS_END
     // RUNTIME_HELPERS_BEGIN
     bool advance_idle_loop(std::uint64_t target);
     // RUNTIME_HELPERS_END

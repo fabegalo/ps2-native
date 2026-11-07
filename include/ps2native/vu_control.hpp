@@ -23,7 +23,7 @@ public:
     VuControl() { reset(); }
     void reset() {
     // HOST_INPUT_BEGIN
-        invalidate_vu1_aot();vu1_aot_stats_={};
+        invalidate_vu1_aot();vu1_aot_stats_={};vu0_aot_stats_={};
     // HOST_INPUT_END
         diagnostic_power_two_carry_=false;
         micro_={};
@@ -111,7 +111,10 @@ public:
         registers_[29] = (micro_[0].running ? 1u : 0u)|(micro_[1].running ? 256u : 0u);
     }
     // HOST_INPUT_BEGIN
-    template<std::uint32_t Low,std::uint32_t Upper> void execute_micro_native(Gif* gif,GsRegisters* gs);
+    template<std::uint32_t Low,std::uint32_t Upper,unsigned Unit=1> void execute_micro_native(Gif* gif,GsRegisters* gs);
+    [[nodiscard]] VuAotImage capture_micro(unsigned unit) const;
+    void enable_vu0_aot(bool enabled) noexcept {vu0_aot_enabled_=enabled;}
+    [[nodiscard]] const VuAotStats& vu0_aot_stats() const noexcept {return vu0_aot_stats_;}
     void enable_vu1_aot(bool enabled) noexcept {vu1_aot_enabled_=enabled;}
     [[nodiscard]] const VuAotStats& vu1_aot_stats() const noexcept {return vu1_aot_stats_;}
     [[nodiscard]] VuAotFallback vu1_aot_fallback() const noexcept {return vu1_aot_fallback_;}
@@ -417,7 +420,7 @@ public:
         for(std::size_t byte=0;byte<bytes;++byte) {
             const auto address=physical+static_cast<std::uint32_t>(byte);
     // HOST_INPUT_BEGIN
-            if(address>=0x11008000u && address<0x1100C000u)invalidate_vu1_aot();
+            if((address>=0x11008000u && address<0x1100C000u) || (address>=0x11000000u && address<0x11001000u))invalidate_vu1_aot();
     // HOST_INPUT_END
             if(address>=0x11004000u && address<0x11005000u)data_bounds_[(address-0x11004000u)/4u].reset();
             if(address>=0x1100C000u && address<0x11010000u)data1_bounds_[(address-0x1100C000u)/4u].reset();
@@ -464,7 +467,11 @@ private:
     // HOST_INPUT_BEGIN
     template<int Unit,std::int64_t Instruction> [[nodiscard]] MicroFmac evaluate_micro_upper_shared(unsigned unit,std::uint32_t instruction) const;
     template<int Unit,std::int64_t Low,std::int64_t Upper> void issue_micro_shared(unsigned unit,std::uint32_t low,std::uint32_t upper,Gif* gif,GsRegisters* gs);
-    bool try_vu1_aot(Gif* gif,GsRegisters* gs);
+    bool try_vu_aot(unsigned unit,Gif* gif,GsRegisters* gs);
+    bool vu0_aot_enabled_{true},vu0_aot_checked_{};
+    const VuAotModule* vu0_aot_selected_{};
+    VuAotStats vu0_aot_stats_{};
+    VuAotFallback vu0_aot_fallback_{VuAotFallback::None};
     bool vu1_aot_enabled_{true},vu1_aot_checked_{},vu1_capture_dirty_{true};
     const VuAotModule* vu1_aot_selected_{};
     VuAotStats vu1_aot_stats_{};

@@ -142,7 +142,7 @@ std::string generate(const VuAotImage& image,const VuAotOptions& options,std::ve
     if(partitions && (partition_bytes<8u || (partition_bytes&(partition_bytes-1u))))
         throw std::runtime_error("VU1 AOT partition size must be a power of two >= 8");
     const auto graph=analyze_vu1_aot(image,options);
-    const auto identity=vu1_aot_identity(image,options.diagnostic_power_two_carry);
+    const auto identity=vu_aot_identity(image,options.unit,options.diagnostic_power_two_carry);
     std::string key=module_key+identity;
     for(const auto pc:options.entries)key+=":"+std::to_string(pc);
     const auto scope="vu1_aot_"+digest(key);
@@ -154,9 +154,9 @@ std::string generate(const VuAotImage& image,const VuAotOptions& options,std::ve
     for(const auto& boundary:graph.boundaries)out<<"// Interpreter boundary "<<hex(boundary.pc)<<": "<<boundary.reason<<"\n";
     out<<includes<<"namespace ps2native::"<<scope<<" {\n";
     const auto emit=[&](std::ostringstream& unit,const auto& pairs) {
-        unit<<"    switch(vu.diagnostic_micro_pc(1)) {\n";
+        unit<<"    switch(vu.diagnostic_micro_pc("<<options.unit<<")) {\n";
         for(const auto& [pc,instruction]:pairs) {
-            unit<<"    case "<<hex(pc)<<": vu.execute_micro_native<"<<hex(instruction.lower)<<","<<hex(instruction.upper)<<">(gif,gs); return true;\n";
+            unit<<"    case "<<hex(pc)<<": vu.execute_micro_native<"<<hex(instruction.lower)<<","<<hex(instruction.upper)<<","<<options.unit<<">(gif,gs); return true;\n";
         }
         unit<<"    default:return false;\n    }\n";
     };
@@ -173,14 +173,14 @@ std::string generate(const VuAotImage& image,const VuAotOptions& options,std::ve
             emit(unit,pairs);unit<<"}\n}\n";
             auto text=unit.str();partitions->push_back({"ps2n_aot_"+digest(text)+".cpp",std::move(text)});
         }
-        out<<"static bool step(VuControl& vu,Gif* gif,GsRegisters* gs) {\n    switch(vu.diagnostic_micro_pc(1)/"<<partition_bytes<<"u) {\n";
+        out<<"static bool step(VuControl& vu,Gif* gif,GsRegisters* gs) {\n    switch(vu.diagnostic_micro_pc("<<options.unit<<")/"<<partition_bytes<<"u) {\n";
         for(const auto& [bucket,pairs]:buckets){(void)pairs;out<<"    case "<<bucket<<"u:return part_"<<bucket<<"(vu,gif,gs);\n";}
         out<<"    default:return false;\n    }\n}\n";
     }
     out<<"static const VuAotImage image{{{\n";
     for(const auto& word:image.words)out<<"    {"<<hex(word.value)<<","<<hex(word.unknown)<<"},\n";
     out<<"}}};\nstatic const VuAotModule module{\""<<identity<<"\",&image,"
-       <<(options.diagnostic_power_two_carry ? "true" : "false")<<",&step};\n"
+       <<(options.diagnostic_power_two_carry ? "true" : "false")<<",&step,"<<options.unit<<"u};\n"
        <<"static const VuAotRegistration registration{module};\n}\n";
     return out.str();
 }
@@ -212,7 +212,17 @@ std::string vu1_aot_identity(const VuAotImage& image,bool diagnostic_power_two_c
     append_u32(bytes,kVuAotAbi);bytes.push_back(diagnostic_power_two_carry ? 1u : 0u);
     return sha256_hex(bytes);
 }
+std::string vu_aot_identity(const VuAotImage& image,unsigned unit,bool carry) {
+    if(unit>1u)throw std::runtime_error("VU AOT unit must be 0 or 1");
+    if(unit)return vu1_aot_identity(image,carry);
+    for(unsigned n=1024;n<4096;++n)if(image.words[n].value || image.words[n].unknown!=~0u)
+        throw std::runtime_error("VU0 AOT requires unknown padding beyond its 4 KiB micro memory");
+    auto bytes=encode_vu1_aot_image(image);append_u32(bytes,kVuAotAbi);bytes.push_back(carry ? 1u : 0u);bytes.push_back(0);
+    return sha256_hex(bytes);
+}
 VuAotAnalysis analyze_vu1_aot(const VuAotImage& image,const VuAotOptions& options) {
+    if(options.unit>1u)throw std::runtime_error("VU AOT unit must be 0 or 1");
+    const unsigned memory_bytes=options.unit ? 16384u : 4096u;
     VuAotAnalysis graph;
     // Delay contexts are distinct: following an E slot must not accidentally
     // discover the next memory contents as a continuation of that program.
@@ -220,7 +230,7 @@ VuAotAnalysis analyze_vu1_aot(const VuAotImage& image,const VuAotOptions& option
     std::set<std::pair<std::uint32_t,bool>> visited;
     std::set<std::pair<std::uint32_t,std::string>> boundaries;
     for(const auto pc:options.entries) {
-        if(pc>=16384u || (pc&7u))throw std::runtime_error("VU1 AOT entry must be an aligned byte PC within 16 KiB");
+        if(pc>=memory_bytes || (pc&7u))throw std::runtime_error("VU1 AOT entry must be an aligned byte PC within 16 KiB");
         work.emplace_back(pc,false);
     }
     if(work.empty())throw std::runtime_error("VU1 AOT requires at least one entry root");
@@ -236,16 +246,16 @@ VuAotAnalysis analyze_vu1_aot(const VuAotImage& image,const VuAotOptions& option
         if(!boundary.empty()){boundaries.emplace(pc,boundary);continue;}
         graph.instructions.emplace(pc,dependencies(lower.value,upper.value));
         if(delay)continue;
-        const auto next=(pc+8u)&16383u;
+        const auto next=(pc+8u)&(memory_bytes-1u);
         if(upper.value&0x40000000u)work.emplace_back(next,true);
         else if(!(upper.value&0x80000000u) && direct_branch(lower.value)) {
             work.emplace_back(next,true);
             const auto bits=lower.value&0x7FFu;
             const auto offset=static_cast<std::int32_t>(bits)-((bits&0x400u) ? 2048 : 0);
-            const auto target=((pc/8u+1u+static_cast<std::uint32_t>(offset))&2047u)*8u;
+            const auto target=((pc/8u+1u+static_cast<std::uint32_t>(offset))&(memory_bytes/8u-1u))*8u;
             work.emplace_back(target,false);
             const auto op=lower.value>>25u;
-            if(op!=0x20u && op!=0x21u)work.emplace_back((pc+16u)&16383u,false);
+            if(op!=0x20u && op!=0x21u)work.emplace_back((pc+16u)&(memory_bytes-1u),false);
         } else work.emplace_back(next,false);
     }
     // A PC reachable in incompatible contexts remains an explicit boundary.

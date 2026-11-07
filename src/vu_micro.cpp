@@ -18,52 +18,61 @@ std::string hexword(std::uint32_t value,unsigned width=8) {
 }
 }
 VuAotRegistration::VuAotRegistration(const VuAotModule& module) {
-    if(!module.image || !module.step || module.identity!=vu1_aot_identity(*module.image,module.diagnostic_power_two_carry))
+    if(!module.image || !module.step || module.identity!=vu_aot_identity(*module.image,module.unit,module.diagnostic_power_two_carry))
         throw DeviceRefusal("VU1 AOT registration identity mismatch");
     auto& registry=vu_registry();std::lock_guard lock(registry.mutex);
     registry.modules.push_back(&module);
 }
-VuAotImage VuControl::capture_vu1_micro() const {
+VuAotImage VuControl::capture_vu1_micro() const {return capture_micro(1);}
+VuAotImage VuControl::capture_micro(unsigned unit) const {
+    if(unit>1u)throw DeviceRefusal("VU unit must be 0 or 1");
     VuAotImage result;
-    std::copy(micro1_.begin(),micro1_.end(),result.words.begin());
+    for(auto& word:result.words)word={0,~0u};
+    if(unit)std::copy(micro1_.begin(),micro1_.end(),result.words.begin());
+    else std::copy(micro0_.begin(),micro0_.end(),result.words.begin());
     return result;
 }
-bool VuControl::try_vu1_aot(Gif* gif,GsRegisters* gs) {
-    if(!vu1_aot_enabled_){vu1_aot_fallback_=VuAotFallback::Disabled;return false;}
-    if(!vu1_aot_checked_) {
-        vu1_aot_selected_=nullptr;
+bool VuControl::try_vu_aot(unsigned unit,Gif* gif,GsRegisters* gs) {
+    auto& enabled=unit ? vu1_aot_enabled_ : vu0_aot_enabled_;
+    auto& checked=unit ? vu1_aot_checked_ : vu0_aot_checked_;
+    auto& selected=unit ? vu1_aot_selected_ : vu0_aot_selected_;
+    auto& stats=unit ? vu1_aot_stats_ : vu0_aot_stats_;
+    auto& fallback=unit ? vu1_aot_fallback_ : vu0_aot_fallback_;
+    if(!enabled){fallback=VuAotFallback::Disabled;return false;}
+    if(!checked) {
+        selected=nullptr;
         auto& registry=vu_registry();std::lock_guard lock(registry.mutex);
         // No artifact linked: avoid hashing or allocating during gameplay.
         if(!registry.modules.empty()) {
-            ++vu1_aot_stats_.identity_checks;
-            const auto image=capture_vu1_micro();
-            const auto identity=vu1_aot_identity(image,diagnostic_power_two_carry_);
+            ++stats.identity_checks;
+            const auto image=capture_micro(unit);
+            const auto identity=vu_aot_identity(image,unit,diagnostic_power_two_carry_);
             for(const auto* candidate:registry.modules) {
-                if(candidate->identity!=identity || candidate->diagnostic_power_two_carry!=diagnostic_power_two_carry_)continue;
+                if(candidate->unit!=unit || candidate->identity!=identity || candidate->diagnostic_power_two_carry!=diagnostic_power_two_carry_)continue;
                 bool equal=true;
                 for(unsigned n=0;n<image.words.size();++n)
                     if(image.words[n].value!=candidate->image->words[n].value || image.words[n].unknown!=candidate->image->words[n].unknown){equal=false;break;}
-                if(equal){vu1_aot_selected_=candidate;break;}
+                if(equal){selected=candidate;break;}
             }
         }
-        vu1_aot_checked_=true;
+        checked=true;
     }
-    if(!vu1_aot_selected_) {
-        vu1_aot_fallback_=VuAotFallback::MissingProgram;++vu1_aot_stats_.missing_program;return false;
+    if(!selected) {
+        fallback=VuAotFallback::MissingProgram;++stats.missing_program;return false;
     }
-    if(!vu1_aot_selected_->step(*this,gif,gs)) {
+    if(!selected->step(*this,gif,gs)) {
         // Multiple offline units may prove different roots of one image.
         // Their identity includes all words/masks and the semantic mode.
         auto& registry=vu_registry();std::lock_guard lock(registry.mutex);
         bool found=false;
         for(const auto* candidate:registry.modules)
-            if(candidate!=vu1_aot_selected_ && candidate->identity==vu1_aot_selected_->identity &&
+            if(candidate->unit==unit && candidate!=selected && candidate->identity==selected->identity &&
                candidate->diagnostic_power_two_carry==diagnostic_power_two_carry_ && candidate->step(*this,gif,gs)) {
-                vu1_aot_selected_=candidate;found=true;break;
+                selected=candidate;found=true;break;
             }
-        if(!found){vu1_aot_fallback_=VuAotFallback::UntranslatedPc;++vu1_aot_stats_.untranslated_pc;return false;}
+        if(!found){fallback=VuAotFallback::UntranslatedPc;++stats.untranslated_pc;return false;}
     }
-    vu1_aot_fallback_=VuAotFallback::None;return true;
+    fallback=VuAotFallback::None;return true;
 }
 void VuControl::reset_micro(unsigned unit) {
     if(unit && path1_)throw DeviceRefusal("VU1 reset during an active PATH1 transfer is not modeled");
@@ -156,12 +165,14 @@ void VuControl::retire_micro_integers(unsigned unit) {
     }
     state.store_writes=kept;
 }
+#ifndef PS2N_NATIVE_ONLY
 VuControl::MicroFmac VuControl::evaluate_micro_upper(unsigned unit,std::uint32_t instruction) const {
     return evaluate_micro_upper_shared<-1,-1>(unit,instruction);
 }
 void VuControl::step_micro(unsigned unit,Gif* gif,GsRegisters* gs) {
     issue_micro_shared<-1,-1,-1>(unit,0,0,gif,gs);
 }
+#endif
 void VuControl::step_path1(Gif* gif,GsRegisters* gs) {
     auto& transfer=*path1_;
     if(transfer.failure)throw DeviceRefusal(*transfer.failure);
@@ -227,9 +238,24 @@ void VuControl::advance_micro(std::uint64_t cycle,Gif* gif,GsRegisters* gs) {
             }
             const auto before=state.instructions;
             // Idle/drain/interlock cycles remain in the common scheduler.
-            const bool native=unit && !state.drain && !queued_path1_ && try_vu1_aot(gif,gs);
-            if(!native)step_micro(unit,gif,gs);
-            if(unit)(native ? vu1_aot_stats_.native_instructions : vu1_aot_stats_.interpreted_instructions)+=state.instructions-before;
+            if(state.drain || (unit && queued_path1_)) {
+                // Pipeline retirement/drain has no instruction to decode.
+                if(unit)issue_micro_shared<1,0,0>(1,0,0,gif,gs);
+                else issue_micro_shared<0,0,0>(0,0,0,gif,gs);
+                continue;
+            }
+            const bool native=try_vu_aot(unit,gif,gs);
+            if(!native) {
+#ifdef PS2N_NATIVE_ONLY
+                const auto identity=vu_aot_identity(capture_micro(unit),unit,diagnostic_power_two_carry_);
+                throw DeviceRefusal("missing VU"+std::to_string(unit)+" AOT identity="+identity+" pc="+hexword(state.pc)+
+                    "; prepare ps2n-aot <micro-image> <output.cpp> --vu"+std::to_string(unit)+" --entry="+hexword(state.pc));
+#else
+                step_micro(unit,gif,gs);
+#endif
+            }
+            auto& stats=unit ? vu1_aot_stats_ : vu0_aot_stats_;
+            (native ? stats.native_instructions : stats.interpreted_instructions)+=state.instructions-before;
         }
         catch(const MicroPipelineStall&) {++state.next;}
         catch(const DeviceRefusal& error) {

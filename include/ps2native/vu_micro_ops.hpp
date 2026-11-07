@@ -446,13 +446,15 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
     state.end_delay=ending;
     ++state.next;
 }
-template<std::uint32_t Low,std::uint32_t Upper>
+template<std::uint32_t Low,std::uint32_t Upper,unsigned Unit>
 void VuControl::execute_micro_native(Gif* gif,GsRegisters* gs) {
     // Protect direct callers too; stale bytes never execute a translation.
-    const auto pc=micro_[1].pc;
-    const auto low=micro1_.at(pc/4u),upper=micro1_.at(pc/4u+1u);
+    static_assert(Unit<2);
+    const auto pc=micro_[Unit].pc;
+    const auto& image=Unit ? micro1_ : micro0_;
+    const auto low=image.at(pc/4u),upper=image.at(pc/4u+1u);
     if(low.unknown || upper.unknown || low.value!=Low || upper.value!=Upper)
         throw DeviceRefusal("VU1 native instruction identity mismatch");
-    issue_micro_shared<1,Low,Upper>(1,Low,Upper,gif,gs);
+    issue_micro_shared<Unit,Low,Upper>(Unit,Low,Upper,gif,gs);
 }
 } // namespace ps2native
