@@ -226,7 +226,7 @@ void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHar
     error_level_ = true;
     privilege_ = Privilege::Kernel;
     registers_.reset(hardware, rom_, nvm, assumptions, rom1_);
-    registers_.attach_ee_ram(ram_, &unknown_words_, scratchpad_);
+    registers_.attach_ee_ram(ram_, &unknown_words_, scratchpad_, &fpu_relations_);
 }
 
 void Memory::load_direct_elf(const ElfImage& elf) {
@@ -237,7 +237,7 @@ void Memory::load_direct_elf(const ElfImage& elf) {
     asid_ = 0;
     error_level_ = false;
     registers_.reset(); // No firmware, NVM, kernel services or running IOP.
-    registers_.attach_ee_ram(ram_, &unknown_words_, scratchpad_);
+    registers_.attach_ee_ram(ram_, &unknown_words_, scratchpad_, &fpu_relations_);
 }
 
 void Memory::load_iop_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry) {
@@ -639,7 +639,7 @@ FpuAffine Memory::fpu_relation(std::uint32_t address,ObservedWord word) const {
     if(found==fpu_relations_.end())return {};
     const auto& stored=found->second;
     if(stored.word.value!=word.value || stored.word.unknown!=word.unknown ||
-       (!cached && stored.dma_generation!=registers_.iop().ee_ram_write_generation()))return {};
+       (!cached && target.region!=BusRegion::Scratchpad && stored.dma_generation!=kExactFpuDmaGeneration && stored.dma_generation!=registers_.iop().ee_ram_write_generation()))return {};
     return stored.relation;
 }
 void Memory::remember_fpu_relation(std::uint32_t address,ObservedWord word,FpuAffine relation) {
@@ -647,7 +647,7 @@ void Memory::remember_fpu_relation(std::uint32_t address,ObservedWord word,FpuAf
     const auto target=resolve(address,4,true,"FPU relation");
     if(target.region!=BusRegion::MainRam && target.region!=BusRegion::Scratchpad)return;
     const auto key=static_cast<std::uint32_t>(target.offset)|(target.region==BusRegion::Scratchpad ? 0x80000000u : uses_data_cache(target) ? 0x40000000u : 0u);
-    fpu_relations_[key]={word,relation,registers_.iop().ee_ram_write_generation()};
+    fpu_relations_[key]={word,relation,kExactFpuDmaGeneration};
 }
 void Memory::store32_observed(std::uint32_t address, ObservedWord word) {
     write_le(address, 4, word.value, "SW", word.unknown);

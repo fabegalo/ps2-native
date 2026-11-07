@@ -193,8 +193,9 @@ public:
     [[nodiscard]] bool dma_writes_ram() const noexcept { return iop_.writes_ee_ram(); }
     void attach_ee_ram(std::span<std::uint8_t> ram,
                        std::unordered_map<std::uint32_t,std::uint32_t>* unknown = nullptr,
-                       std::span<std::uint8_t> scratchpad = {}) {
-        iop_.attach_ee_ram(ram, unknown, scratchpad);
+                       std::span<std::uint8_t> scratchpad = {},
+                       std::unordered_map<std::uint32_t,StoredFpuRelation>* metadata = nullptr) {
+        iop_.attach_ee_ram(ram, unknown, scratchpad,metadata);
     }
     void load_iop_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry) {
         iop_.load_program(bytes, address, entry);

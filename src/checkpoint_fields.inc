@@ -40,6 +40,11 @@ template<class A> static void fields(A& a,Vif& v){a(v.unit_,v.direct_left_,v.dir
         if(tag!=0x31304B4E55464956ull || count!=v.fifo_.size())throw std::runtime_error("checkpoint VIF uncertainty extension differs");
         a(v.input_.unknown,v.unpack_unknown_);for(auto& input:v.fifo_)a(input.unknown);
     }else if constexpr(A::reading){v.input_.unknown={};v.unpack_unknown_={};for(auto& input:v.fifo_)input.unknown={};}
+    if(!a.legacy_transfer_bounds) {
+        std::uint64_t tag=0x3130444E42464956ull,count=v.fifo_.size();a(tag,count);
+        if(tag!=0x3130444E42464956ull || count!=v.fifo_.size())throw std::runtime_error("checkpoint VIF numeric certificate extension differs");
+        a(v.input_.bounds,v.unpack_bounds_);for(auto& input:v.fifo_)a(input.bounds);
+    }else if constexpr(A::reading){v.input_.bounds={};v.unpack_bounds_={};for(auto& input:v.fifo_)input.bounds={};}
 }
 template<class A> static void fields(A& a,VuControl::MicroVectorWrite& v){a(v.index,v.mask,v.words,v.ready);}
 template<class A> static void fields(A& a,VuControl& v){a(v.micro_,v.path1_,v.queued_path1_,v.pending_q_,v.pending_q1_,v.registers_,v.diagnostic_power_two_carry_,v.unknown_,v.vu1_integers_,v.vu1_controls_,v.data_,v.vectors_,v.vector_bounds_,v.accumulator_bounds_,v.q_bounds_,v.accumulator_,v.accumulator1_,v.vu1_vectors_,v.micro0_,v.micro1_,v.data1_);
@@ -58,6 +63,11 @@ template<class A> static void fields(A& a,VuControl& v){a(v.micro_,v.path1_,v.qu
             for(auto& write:unit.stores)write.bounds={};
         }
     }
+    if(!a.legacy_transfer_bounds) {
+        std::uint64_t tag=0x3130444E42445556ull;a(tag,v.data_bounds_,v.data1_bounds_);
+        if(tag!=0x3130444E42445556ull)throw std::runtime_error("checkpoint VU data certificate tag differs");
+    }else if constexpr(A::reading){v.data_bounds_.assign(v.data_.size(),std::nullopt);v.data1_bounds_.assign(v.data1_.size(),std::nullopt);}
+
 }
 
 template<class A> static void fields(A& a,IpuRegisters& v){a(v.control_,v.bit_position_,v.input_,v.pending_,v.thresholds_,v.iq_,v.vq_);}

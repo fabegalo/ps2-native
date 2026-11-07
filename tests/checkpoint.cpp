@@ -22,6 +22,18 @@ void finish_transfer(Memory& memory) {
 std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const std::uint8_t> payload,
     const char* schema="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88") {
     std::vector<std::uint8_t> old_payload(payload.begin(),payload.end());
+    const auto u64=[&](std::size_t& pos){require(pos+8<=old_payload.size(),"legacy extension count is bounded");std::uint64_t value=0;for(unsigned b=0;b<8;++b)value|=std::uint64_t{old_payload[pos++]}<<(8u*b);return value;};
+    const auto absent=[&](std::size_t& pos,std::uint64_t count){require(count<=65536,"legacy certificate count is bounded");while(count--){require(pos<old_payload.size() && old_payload[pos]==0,"legacy fixture has no newly introduced numeric certificates");++pos;}};
+    const std::array<std::uint8_t,8> vif_bounds{'V','I','F','B','N','D','0','1'},vu_data{'V','U','D','B','N','D','0','1'};
+    for(unsigned unit=0;unit<2;++unit) {
+        const auto at=std::search(old_payload.begin(),old_payload.end(),vif_bounds.begin(),vif_bounds.end());require(at!=old_payload.end(),"current VIF bounds extension exists");
+        const auto begin=static_cast<std::size_t>(at-old_payload.begin());auto pos=begin+8;const auto count=u64(pos);absent(pos,8u+4u*count);old_payload.erase(old_payload.begin()+begin,old_payload.begin()+pos);
+    }
+    const auto at=std::search(old_payload.begin(),old_payload.end(),vu_data.begin(),vu_data.end());require(at!=old_payload.end(),"current VU data bounds extension exists");
+    const auto begin=static_cast<std::size_t>(at-old_payload.begin());auto pos=begin+8;
+    for(unsigned unit=0;unit<2;++unit){const auto count=u64(pos);absent(pos,count);}old_payload.erase(old_payload.begin()+begin,old_payload.begin()+pos);
+    if(std::string_view(schema)!="b36ce4ca5c0bf510d302b10b002b27d736cb1fbc4e258e8a2b8961950e2d18e3") {
+
     const std::array<std::uint8_t,8> bounds_tag{'V','U','M','B','N','D','0','1'};
     auto bounds_at=std::search(old_payload.begin(),old_payload.end(),bounds_tag.begin(),bounds_tag.end());
     require(bounds_at!=old_payload.end(),"current checkpoint has tagged VU numeric bounds");
@@ -44,7 +56,8 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
         std::uint64_t count=0;for(unsigned b=0;b<8;++b)count|=std::uint64_t{at[8+b]}<<(8u*b);
         require(count<=16,"synthetic VIF FIFO count is bounded");
         old_payload.erase(at,at+48+count*16);
-    }payload=old_payload;
+    }}
+    payload=old_payload;
     std::vector<std::uint8_t> bytes{'P','S','2','N','C','P','0','1'};
     const auto integer=[&](std::uint64_t value,unsigned size){for(unsigned i=0;i<size;++i)bytes.push_back(static_cast<std::uint8_t>(value>>(8u*i)));};
     info.schema_sha256=schema;
@@ -97,7 +110,11 @@ int main(int argc,char** argv)try {
             std::array<std::uint32_t,8>{0x01000101u,0x05000000u,0x6C020003u,0x447FFE00u,2,3,4,0x447FFE00u};
         for(unsigned n=0;n<8;++n)memory.write32(0x80002000u+n*4u,words[n]);
         memory.store32_observed(queued ? 0x80002010u : 0x8000200Cu,{0x447FFE00u,0x1FFu});
+        memory.remember_fpu_relation(queued ? 0x80002010u : 0x8000200Cu,{0x447FFE00u,0x1FFu},
+            {memory.allocate_fpu_origin(),0,136,false,0x447FFE00u,0x1FFu,0x447FFEFFu,0x447FFF00u});
         if(!queued)memory.store32_observed(0x8000201Cu,{0x447FFE00u,0x100u});
+        if(!queued)memory.remember_fpu_relation(0x8000201Cu,{0x447FFE00u,0x100u},
+            {memory.allocate_fpu_origin(),0,136,false,0x447FFE00u,0x100u,0x447FFE00u,0x447FFF00u});
         memory.write32(0xB000E000u,1);memory.write32(0xB0009010u,0x2000u);memory.write32(0xB0009020u,2);
         memory.write32(0xB0009000u,0x101u);
         BootOptions options;options.max_instructions=4;const auto prefix=run_ee_boot(state,memory,nullptr,options);
@@ -261,6 +278,11 @@ int main(int argc,char** argv)try {
     (void)load_checkpoint(current_file,state,memory,context);
     const auto exact=checkpoint_state_sha256(state,memory);
     auto reviewed=context;reviewed.allow_runtime_change=true;
+    const auto transfer_file=directory/"legacy-transfer-bounds.ps2ncp";
+    write_file_atomically(transfer_file,legacy_envelope(current_info,current_payload,"b36ce4ca5c0bf510d302b10b002b27d736cb1fbc4e258e8a2b8961950e2d18e3"));
+    rejects([&]{(void)load_checkpoint(transfer_file,resumed,restored,context);},"schema");
+    (void)load_checkpoint(transfer_file,resumed,restored,reviewed);
+    require(checkpoint_state_sha256(resumed,restored)==exact,"older byte-preserving DMA checkpoints migrate without adding numeric certainty");
     const auto vif_file=directory/"legacy-vif-payload.ps2ncp";
     write_file_atomically(vif_file,legacy_envelope(current_info,current_payload,"fe6e8c07cc00203aa30906e155d9511c731237aa3919857a36a7098ea4409051"));
     rejects([&]{(void)load_checkpoint(vif_file,resumed,restored,context);},"schema");

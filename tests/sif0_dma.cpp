@@ -21,7 +21,10 @@ void transfer() {
     std::vector<std::uint8_t> ram(0x20000,0xAA);
     std::unordered_map<std::uint32_t,std::uint32_t> unknown{{0x10000u,0xFFFFFFFFu},{0x10100u,1u}};
     Iop iop;iop.reset({},nullptr);iop.load_program(sender(),0x1000,0x1000);iop.attach_ee_ram(ram);
-    iop.attach_ee_ram(ram,&unknown);
+    std::unordered_map<std::uint32_t,StoredFpuRelation> metadata;
+    metadata[0x10000u]={{0xAAAAAAAAu,~0u},{1,0,0,false,0xAAAAAAAAu,~0u,0xAAAAAA00u,0xAAAAAAAAu},kExactFpuDmaGeneration};
+    metadata[0x10100u]={{0xAAAAAAAAu,1},{2,0,0,false,0xAAAAAAAAu,1,0xAAAAAAAAu,0xAAAAAAABu},kExactFpuDmaGeneration};
+    iop.attach_ee_ram(ram,&unknown,{},&metadata);
     const auto write_generation=iop.ee_ram_write_generation();
     arm(iop);require(iop.ee_ram_write_generation()==write_generation,"arming a DMA cannot fabricate an EE memory write generation");
     iop.run_until(1800);
@@ -36,6 +39,7 @@ void transfer() {
     }
     require(ram[0xFFFF]==0xAA && ram[0x10100]==0xAA,"destination bounds preserved");
     require(!unknown.contains(0x10000u) && unknown.contains(0x10100u),"DMA defines only the overwritten words in symbolic RAM");
+    require(!metadata.contains(0x10000u) && metadata.contains(0x10100u),"SIF0 invalidates numeric proofs only for actual destination writes");
     require(!(iop.ee_dma_read(0x1000C000u)&0x100u) && iop.ee_dma_read(0x1000C010u)==0x10100,
             "MADR/QWC advance and chain completion clears STR");
     require((iop.ee_dma_read(0x1000E010u)&0x20u) && !iop.ee_dma_interrupt_pending(),"status independent of interrupt mask");

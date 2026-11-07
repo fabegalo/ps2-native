@@ -65,7 +65,7 @@ void Memory::writeback_data_cache(DataCacheLine& line,unsigned index) const {
         const auto found=fpu_relations_.find(0x40000000u|(physical+offset));
         const auto word=cached_word(line,offset);
         if(found!=fpu_relations_.end() && found->second.word.value==word.value && found->second.word.unknown==word.unknown) {
-            auto stored=found->second;stored.dma_generation=registers_.iop().ee_ram_write_generation();
+            auto stored=found->second;stored.dma_generation=kExactFpuDmaGeneration;
             fpu_relations_[physical+offset]=std::move(stored);
         }
     }
@@ -108,7 +108,7 @@ Memory::DataCacheLine& Memory::data_cache_line(std::uint32_t address,const Targe
         fpu_relations_.erase(key);
         const auto found=fpu_relations_.find(static_cast<std::uint32_t>(offset+i));
         const auto word=cached_word(line,i);
-        if(found!=fpu_relations_.end() && found->second.dma_generation==registers_.iop().ee_ram_write_generation() &&
+        if(found!=fpu_relations_.end() && (found->second.dma_generation==kExactFpuDmaGeneration || found->second.dma_generation==registers_.iop().ee_ram_write_generation()) &&
            found->second.word.value==word.value && found->second.word.unknown==word.unknown) {
             const auto stored=found->second;fpu_relations_[key]=stored;
         }

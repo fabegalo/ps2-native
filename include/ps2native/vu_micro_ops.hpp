@@ -283,7 +283,7 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
                 if(address>=(unit ? 1024u : 256u))
                     throw DeviceRefusal("LQ/LQI address outside direct VU data RAM; mirrors/register windows are not modeled");
                 const auto& memory=unit ? data1_ : data_;
-                for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane))load.words[lane]=memory[address*4u+lane];
+                for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane)){load.words[lane]=memory[address*4u+lane];load.bounds[lane]=(unit ? data1_bounds_ : data_bounds_)[address*4u+lane];}
             }
             vector_result=load;
             if(increment)result=std::pair{is,(address+1u)&0xFFFFu};
@@ -303,6 +303,7 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
                 for(unsigned n=0;n<state.vector_writes;++n)
                     if(is && state.vectors[n].index==is && (state.vectors[n].mask&mask)) {++state.next;return;}
                 store_result=MicroVectorWrite{address,mask,unit ? vu1_vectors_[is] : vectors_[is],state.next+4u};
+                store_result->bounds=unit ? vu1_vector_bounds_[is] : vector_bounds_[is];
             }
             if(increment)result=std::pair{it,(address+1u)&0xFFFFu};
         }

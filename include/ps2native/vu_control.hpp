@@ -44,13 +44,13 @@ public:
         vu1_integers_.fill({0,0xFFFFu}); vu1_integers_[0]={};
         vu1_controls_.fill({0,~0u});
         for(unsigned index=0;index<3;++index) vu1_controls_[index]={};
-        data_.assign(1024u,{0,~0u});
+        data_.assign(1024u,{0,~0u});data_bounds_.assign(1024u,std::nullopt);
         for(auto& vector : vectors_) vector.fill({0,~0u});
         vectors_[0]={ObservedWord{},ObservedWord{},ObservedWord{},ObservedWord{0x3F800000u,0}};
         vu1_vectors_=vectors_;
         accumulator_.fill({0,~0u});
         accumulator1_=accumulator_;
-        micro0_.assign(1024u,{0,~0u}); micro1_.assign(4096u,{0,~0u}); data1_.assign(4096u,{0,~0u});
+        micro0_.assign(1024u,{0,~0u}); micro1_.assign(4096u,{0,~0u}); data1_.assign(4096u,{0,~0u});data1_bounds_.assign(4096u,std::nullopt);
     }
     [[nodiscard]] std::uint32_t read(unsigned index) const {
         const auto word=observe(index);
@@ -383,6 +383,12 @@ public:
         }
         return result;
     }
+    void restore_data_bounds(std::uint32_t physical,FloatBounds bounds) {
+        if((physical&3u) || !word_bounds_match(memory_word(physical),bounds))throw DeviceRefusal("VU data certificate differs from the stored word");
+        if(physical>=0x11004000u && physical<0x11005000u)data_bounds_[(physical-0x11004000u)/4u]=bounds;
+        else if(physical>=0x1100C000u && physical<0x11010000u)data1_bounds_[(physical-0x1100C000u)/4u]=bounds;
+        else throw DeviceRefusal("VU data certificate is outside data RAM");
+    }
     void write_memory(std::uint32_t physical,std::size_t bytes,ObservedDoubleword value) {
         for(std::size_t byte=0;byte<bytes;++byte)
             (void)memory_word((physical+static_cast<std::uint32_t>(byte))&~3u);
@@ -391,6 +397,8 @@ public:
     // HOST_INPUT_BEGIN
             if(address>=0x11008000u && address<0x1100C000u)invalidate_vu1_aot();
     // HOST_INPUT_END
+            if(address>=0x11004000u && address<0x11005000u)data_bounds_[(address-0x11004000u)/4u].reset();
+            if(address>=0x1100C000u && address<0x11010000u)data1_bounds_[(address-0x1100C000u)/4u].reset();
             auto& word=memory_word(address&~3u);
             const auto shift=(address&3u)*8u,mask=0xFFu<<shift;
             word.value=(word.value&~mask)|(static_cast<std::uint32_t>((value.value&~value.unknown)>>(byte*8u))<<shift&mask);
@@ -469,7 +477,7 @@ private:
             throw DeviceRefusal("VU store to read-only VU1 control register is not modeled");
     }
     void store_data(std::uint32_t address,ObservedWord word) {
-        if(address<0x1000u) {data_[address/4u]=word;return;}
+        if(address<0x1000u) {data_[address/4u]=word;data_bounds_[address/4u].reset();return;}
         const auto lane=(address&15u)/4u;
         if(address<0x4200u) {
             const auto index=(address-0x4000u)/16u;
@@ -491,6 +499,7 @@ private:
     std::array<ObservedWord,16> vu1_integers_{};
     std::array<ObservedWord,16> vu1_controls_{};
     std::vector<ObservedWord> data_;
+    std::vector<std::optional<FloatBounds>> data_bounds_,data1_bounds_;
     std::array<std::array<ObservedWord,4>,32> vectors_{};
     // Certificates belong to the current value, never to a matching bit hull.
     static std::optional<FloatBounds> signed_bounds(std::optional<FloatBounds> bounds,bool negate) {

@@ -66,7 +66,8 @@ void Vif::start_unpack(std::uint32_t command,VuControl* vu) {
     unpack_mask_=command&0x10000000u ? *programmed_[7] : 0u;
     unpack_index_=unpack_cycle_=0;
 }
-void Vif::unpack_word(ObservedWord word,VuControl& vu) {
+void Vif::unpack_word(ObservedWord word,VuControl& vu,std::optional<FloatBounds> bounds) {
+    unpack_bounds_[unpack_index_]=bounds;
     unpack_data_[unpack_index_]=word.value;unpack_unknown_[unpack_index_++]=word.unknown;
     if(unpack_index_!=unpack_components_)return;
     const auto base=unit_==Unit::Vu0 ? 0x11004000u : 0x1100C000u;
@@ -75,22 +76,24 @@ void Vif::unpack_word(ObservedWord word,VuControl& vu) {
     for(unsigned lane=0;lane<4u;++lane) {
         const auto select=(unpack_mask_>>(row*8u+lane*2u))&3u;
         if(select==3u)continue; // write protect retains the actual old bits
-        ObservedWord data{0,~0u};
+        ObservedWord data{0,~0u};std::optional<FloatBounds> certificate;
         if(select==1u || select==2u) {
             const auto& reg=programmed_[(select==1u ? 16u+lane : 20u+row)];
             if(reg)data={*reg,0};
         } else {
             // EE manual 6.3.4: S is broadcast. V2 Z/W and V3 W are
             // indeterminate, not duplicated input or an invented zero.
-            if(unpack_components_==1u)data={unpack_data_[0],unpack_unknown_[0]};
-            else if(lane<unpack_components_)data={unpack_data_[lane],unpack_unknown_[lane]};
+            if(unpack_components_==1u){data={unpack_data_[0],unpack_unknown_[0]};certificate=unpack_bounds_[0];}
+            else if(lane<unpack_components_){data={unpack_data_[lane],unpack_unknown_[lane]};certificate=unpack_bounds_[lane];}
             if(unpack_mode_) {
+                certificate.reset();
                 auto& reg=programmed_[16u+lane];
                 data=reg && !data.unknown ? ObservedWord{data.value+*reg,0} : ObservedWord{0,~0u};
                 if(unpack_mode_==2u)reg=data.unknown ? std::nullopt : std::optional<std::uint32_t>{data.value};
             }
         }
         vu.write_memory(base+address+lane*4u,4,{data.value,data.unknown});
+        if(certificate)vu.restore_data_bounds(base+address+lane*4u,*certificate);
     }
     unpack_index_=0;--unpack_left_;++unpack_address_;
     if(++unpack_cycle_==unpack_wl_){unpack_address_+=unpack_cl_-unpack_wl_;unpack_cycle_=0;}
@@ -104,15 +107,15 @@ void Vif::write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs,VuControl* v
     const std::array<std::uint32_t,2> words{static_cast<std::uint32_t>(data),static_cast<std::uint32_t>(data>>32)};
     write_words(words,2,gif,gs,vu,cycle);
 }
-void Vif::write_fifo_observed(ObservedQuadword data,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
+void Vif::write_fifo_observed(ObservedQuadword data,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle,std::span<const std::optional<FloatBounds>> bounds) {
     const std::array<std::uint32_t,4> words{static_cast<std::uint32_t>(data.low.value),static_cast<std::uint32_t>(data.low.value>>32u),static_cast<std::uint32_t>(data.high.value),static_cast<std::uint32_t>(data.high.value>>32u)};
     const std::array<std::uint32_t,4> unknown{static_cast<std::uint32_t>(data.low.unknown),static_cast<std::uint32_t>(data.low.unknown>>32u),static_cast<std::uint32_t>(data.high.unknown),static_cast<std::uint32_t>(data.high.unknown>>32u)};
-    write_words(words,0,gif,gs,vu,cycle,unknown);
+    write_words(words,0,gif,gs,vu,cycle,unknown,bounds);
 }
-void Vif::write_dma_tag_observed(ObservedDoubleword data,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
+void Vif::write_dma_tag_observed(ObservedDoubleword data,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle,std::span<const std::optional<FloatBounds>> bounds) {
     const std::array<std::uint32_t,2> words{static_cast<std::uint32_t>(data.value),static_cast<std::uint32_t>(data.value>>32u)};
     const std::array<std::uint32_t,2> unknown{static_cast<std::uint32_t>(data.unknown),static_cast<std::uint32_t>(data.unknown>>32u)};
-    write_words(words,2,gif,gs,vu,cycle,unknown);
+    write_words(words,2,gif,gs,vu,cycle,unknown,bounds);
 }
 void advance_vpus(std::uint64_t cycle,Vif* vif0,Vif* vif1,VuControl* vu,Gif& gif,GsRegisters& gs) {
     const auto drain=[&](std::uint64_t at) {
@@ -135,13 +138,16 @@ void advance_vpus(std::uint64_t cycle,Vif* vif0,Vif* vif1,VuControl* vu,Gif& gif
     }
     drain(cycle);
 }
-void Vif::write_words(std::span<const std::uint32_t> words,unsigned first_lane,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle,std::span<const std::uint32_t> unknown) {
+void Vif::write_words(std::span<const std::uint32_t> words,unsigned first_lane,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle,std::span<const std::uint32_t> unknown,std::span<const std::optional<FloatBounds>> bounds) {
     if(!unknown.empty() && unknown.size()!=words.size())refuse(" source uncertainty count differs");
+    if(!bounds.empty() && bounds.size()!=words.size())refuse(" source certificate count differs");
+    for(unsigned n=0;n<bounds.size();++n)if(bounds[n] && !word_bounds_match({words[n],unknown.empty()?0u:unknown[n]},*bounds[n]))refuse(" source certificate differs from its word");
     advance_vpus(cycle,this,nullptr,vu,gif,gs);
     if(!can_accept_dma())refuse(" FIFO full: CPU store backpressure is not modeled");
     Input incoming;incoming.first=first_lane;incoming.count=static_cast<unsigned>(words.size());
     std::copy(words.begin(),words.end(),incoming.words.begin());
     if(!unknown.empty())std::copy(unknown.begin(),unknown.end(),incoming.unknown.begin());
+    if(!bounds.empty())std::copy(bounds.begin(),bounds.end(),incoming.bounds.begin());
     fifo_.push_back(incoming);
     drain(cycle,vu,gif,gs);
 }
@@ -168,6 +174,7 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
         if(!payload && op==0x13u && unit_==Unit::Vu1 && (gif.read_stat()&0xFC0u)) {
             code_=command;waiting_=gif_waiting_=true;return;
         }
+        const auto certificate=input_.bounds[input_index_];
         ++input_index_;
         if(direct_left_) {
             direct_buffer_[direct_words_]=command;
@@ -191,7 +198,7 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
         }
         if(unpack_left_) {
             if(!vu)refuse(" UNPACK requires the shared VU data memory");
-            unpack_word({command,unknown},*vu);continue;
+            unpack_word({command,unknown},*vu,certificate);continue;
         }
         if(pending_!=Pending::None) {
             const auto base=pending_==Pending::Mask ? 7u : pending_==Pending::Row ? 16u : 20u;

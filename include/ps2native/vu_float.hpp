@@ -4,6 +4,10 @@
 #include <array>
 namespace ps2native {
 using FloatBounds=std::array<std::uint32_t,2>; // raw endpoints; inputs have one sign/exponent class
+inline bool word_bounds_match(ObservedWord word,FloatBounds bounds) noexcept {
+    return bounds[0]<=bounds[1] && bounds[0]>=(word.value&~word.unknown) && bounds[1]<=(word.value|word.unknown) &&
+        !((bounds[0]^word.value)&~word.unknown) && !((bounds[1]^word.value)&~word.unknown);
+}
 struct VuFloatResult {
     ObservedWord word;std::uint32_t flags{};
     FloatBounds bounds{};bool bounded{};

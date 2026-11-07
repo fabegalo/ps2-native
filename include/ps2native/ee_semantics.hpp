@@ -211,6 +211,25 @@ inline FpuAffine finite_word_relation(Memory& memory,ObservedWord word,const std
     return {memory.allocate_fpu_origin(),0,0,false,word.value,word.unknown,values.front(),values.back(),
         std::make_shared<const std::vector<std::uint32_t>>(std::move(values))};
 }
+inline std::optional<std::vector<std::uint32_t>> stored_word_candidates(Memory& memory,std::uint32_t address,ObservedWord word) {
+    if(!word.unknown)return std::vector<std::uint32_t>{word.value};
+    const auto relation=memory.fpu_relation(address,word);
+    if(!relation.origin)return {};
+    if(relation.candidates) {
+        if(relation.candidates->empty() || relation.candidates->size()>512u ||
+           std::any_of(relation.candidates->begin(),relation.candidates->end(),[&](auto value){return ((value^word.value)&~word.unknown)!=0;}))
+            throw DeviceRefusal("stored word candidates differ from their observed bits");
+        return *relation.candidates;
+    }
+    if(relation.minimum>relation.maximum || std::uint64_t{relation.maximum}-relation.minimum>=512u)return {};
+    std::vector<std::uint32_t> values;
+    for(auto value=relation.minimum;;++value) {
+        if(!((value^word.value)&~word.unknown))values.push_back(value);
+        if(value==relation.maximum)break;
+    }
+    if(values.empty())return {};
+    return values;
+}
 inline ObservedDoubleword add_observed(std::uint64_t a,std::uint64_t ua,std::uint64_t b,std::uint64_t ub,
                                       unsigned width,bool subtract) {
     a&=~ua;b=(subtract ? ~b : b)&~ub;
@@ -619,6 +638,8 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
     } else if constexpr (Op == O::Qfsrv) {
         if(s.shift_amount>127u || (s.shift_amount&7u))
             throw std::runtime_error("EE QFSRV requires an established byte/halfword shift amount");
+        std::optional<std::vector<std::uint64_t>> domain;
+        if(!s.shift_amount)if(const auto candidates=s.reg64_candidates(t_))domain=*candidates;
         const auto a=s_ ? s.gpr[s_] : Register128{},b=t_ ? s.gpr[t_] : Register128{};
         const std::array<std::uint64_t,4> values{b.low,b.high,a.low,a.high};
         const std::array<std::uint64_t,4> unknown{
@@ -629,6 +650,7 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
             return (limbs[at]>>bits)|(bits ? limbs[at+1u]<<(64u-bits) : 0u);
         };
         write_gpr128_observed(s,d_,extract(values,0),extract(values,1),extract(unknown,0),extract(unknown,1));
+        if(domain)s.set_reg64_candidates(d_,std::move(*domain));
     } else if constexpr (Op == O::Pmfhi) {
         write_gpr128(s,d_,s.hi,s.hi1);
     } else if constexpr (Op == O::Pmflo) {
@@ -811,6 +833,16 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         const auto quad = effective_address(s, w) & ~15u;
         const auto low = m.load64_observed(quad),high=m.load64_observed(quad+8u);
         write_gpr128_observed(s,t_,low.value,high.value,low.unknown,high.unknown);
+        // GPR finite domains cover the low 64 bits; upper lanes retain their raw masks.
+        if(t_ && low.unknown) {
+            const auto a=stored_word_candidates(m,quad,{static_cast<std::uint32_t>(low.value),static_cast<std::uint32_t>(low.unknown)});
+            const auto b=stored_word_candidates(m,quad+4u,{static_cast<std::uint32_t>(low.value>>32u),static_cast<std::uint32_t>(low.unknown>>32u)});
+            if(a && b && a->size()*b->size()<=512u) {
+                std::vector<std::uint64_t> values;
+                for(auto x:*a)for(auto y:*b)values.push_back(x|(std::uint64_t{y}<<32u));
+                s.set_reg64_candidates(t_,std::move(values));
+            }
+        }
     } else if constexpr (Op == O::Sb) {
         m.store8_observed(effective_address(s,w),{static_cast<std::uint32_t>(raw_gpr64(s,t_)),static_cast<std::uint32_t>(s.unknown_gpr_bits[t_])});
     } else if constexpr (Op == O::Sh) {
@@ -834,6 +866,13 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         if (unknown_low|unknown_high) {
             const auto value=t_ ? s.gpr[t_] : Register128{};
             m.store128_observed(quad,{{value.low,unknown_low},{value.high,unknown_high}});
+            if(const auto candidates=s.reg64_candidates(t_))for(unsigned lane=0;lane<2;++lane) {
+                const auto shift=lane*32u;const ObservedWord word{static_cast<std::uint32_t>(value.low>>shift),static_cast<std::uint32_t>(unknown_low>>shift)};
+                if(!word.unknown)continue;
+                std::vector<std::uint64_t> projected;projected.reserve(candidates->size());
+                for(const auto item:*candidates)projected.push_back(item>>shift);
+                m.remember_fpu_relation(quad+lane*4u,word,finite_word_relation(m,word,projected));
+            }
         } else {
             const auto value=read_gpr128(s,t_);
             m.write128(quad,value.low,value.high);

@@ -314,7 +314,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     ee_ram_ = {};
     ++ee_ram_write_generation_;
     ee_scratchpad_ = {};
-    ee_ram_unknown_ = nullptr;
+    ee_ram_unknown_ = nullptr;ee_ram_metadata_=nullptr;
     ee_dctrl_ = ee_dstat_ = ee_sif1_chcr_ = ee_sif1_madr_ = ee_sif1_qwc_ = 0;
     ee_dma_setup_ = {}; ee_dma_global_ = {};
     // EE User's Manual v6 p.66: PCE resets to zero; CDE/CPC reset
@@ -341,12 +341,12 @@ void Iop::load_program(std::span<const std::uint8_t> bytes, std::uint32_t addres
     const auto ee_ram = ee_ram_;
     const auto ee_write_generation=ee_ram_write_generation_;
     const auto ee_scratchpad = ee_scratchpad_;
-    auto* ee_ram_unknown = ee_ram_unknown_;
+    auto* ee_ram_unknown = ee_ram_unknown_;auto* ee_ram_metadata=ee_ram_metadata_;
     reset({}, nullptr);
     ee_ram_ = ee_ram;
     ee_ram_write_generation_=ee_write_generation;
     ee_scratchpad_ = ee_scratchpad;
-    ee_ram_unknown_ = ee_ram_unknown;
+    ee_ram_unknown_ = ee_ram_unknown;ee_ram_metadata_=ee_ram_metadata;
     std::copy(bytes.begin(), bytes.end(), ram_.begin() + address);
     std::fill_n(ram_known_.begin() + address, bytes.size(), std::uint8_t{0xFF});
     pc_ = entry;
@@ -627,6 +627,17 @@ void Iop::advance_graphics_due(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& g
                 if(unknown)(*ee_ram_unknown_)[at+4u*w]=unknown;
                 else ee_ram_unknown_->erase(at+4u*w);
             }
+            if(ee_ram_metadata_ && !ee_ram_metadata_->empty())for(unsigned w=0;w<4;++w) {
+                ee_ram_metadata_->erase(at+4u*w);
+                const auto source=ee_ram_metadata_->find(0x80000000u|(from+4u*w));
+                if(source==ee_ram_metadata_->end())continue;
+                std::uint32_t value=0;for(unsigned b=0;b<4;++b)value|=std::uint32_t{ee_scratchpad_[from+w*4u+b]}<<(b*8u);
+                std::uint32_t mask=0;
+                if(ee_ram_unknown_)if(const auto unknown=ee_ram_unknown_->find(0x80000000u|(from+4u*w));unknown!=ee_ram_unknown_->end())mask=unknown->second;
+                if(source->second.word.value!=value || source->second.word.unknown!=mask)continue;
+                auto certificate=source->second;certificate.dma_generation=kExactFpuDmaGeneration;
+                (*ee_ram_metadata_)[at+4u*w]=std::move(certificate);
+            }
             ++ee_ram_write_generation_;
             *spr[8]=(from+16u)&0x3FF0u;
             *spr[1]+=16u;
@@ -668,7 +679,7 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
     const auto ring_base=mfifo ? ee_dma_read(0x1000E050u) : 0u;
     const auto ring_mask=mfifo ? ee_dma_read(0x1000E040u) : 0u;
     const auto wrap=[&](std::uint32_t at){return ring_base|(at&ring_mask);};
-    const auto read=[&](std::uint32_t at,unsigned words,std::array<std::uint32_t,4>* unknown=nullptr) {
+    const auto read=[&](std::uint32_t at,unsigned words,std::array<std::uint32_t,4>* unknown=nullptr,std::array<std::optional<FloatBounds>,4>* bounds=nullptr) {
         if(!graphics_source_fits(at,words*4u,ee_ram_,ee_scratchpad_))
             throw DeviceRefusal("EE graphics DMA source outside aligned main RAM or modeled scratchpad range");
         const auto storage=(at&0x80000000u) ? ee_scratchpad_ : ee_ram_;
@@ -680,6 +691,14 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
                 else throw DeviceRefusal("EE graphics DMA consumes unknown source bits (unknown RAM bits): channel="+std::to_string(channel)+" address="+hex(at+4u*w)+" mask="+hex(ee_ram_unknown_->at(at+4u*w)));
             }
             for(unsigned b=0;b<4;++b) data[w]|=std::uint32_t{storage[offset+w*4u+b]}<<(8u*b);
+            if(bounds && unknown && (*unknown)[w] && ee_ram_metadata_) {
+                const auto found=ee_ram_metadata_->find(at+4u*w);
+                if(found!=ee_ram_metadata_->end()) {
+                    const auto& item=found->second;const FloatBounds range{item.relation.minimum,item.relation.maximum};
+                    if(item.relation.origin && item.word.value==data[w] && item.word.unknown==(*unknown)[w] &&
+                       ((at&0x80000000u) || item.dma_generation==kExactFpuDmaGeneration || item.dma_generation==ee_ram_write_generation_) && word_bounds_match(item.word,range))(*bounds)[w]=range;
+                }
+            }
         }
         return data;
     };
@@ -701,8 +720,8 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
                 transfer.cycle+=kEeCyclesPerBusCycle;continue;
             }
             if(!*qwc && !transfer.end) {
-                std::array<std::uint32_t,4> unknown{};
-                const auto tag=read(*tadr,(*chcr&0x40u) ? 4u : 2u,(*chcr&0x40u) ? &unknown : nullptr);
+                std::array<std::uint32_t,4> unknown{};std::array<std::optional<FloatBounds>,4> bounds{};
+                const auto tag=read(*tadr,(*chcr&0x40u) ? 4u : 2u,(*chcr&0x40u) ? &unknown : nullptr,&bounds);
                 if(unknown[0] || unknown[1])throw DeviceRefusal("EE graphics DMA tag consumes unknown source bits");
                 const auto id=(tag[0]>>28u)&7u, count=tag[0]&0xFFFFu;
                 if(mfifo && (id==2u || id==5u || id==6u))
@@ -730,7 +749,7 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
                     if(!graphics_source_fits(next,16u,ee_ram_,ee_scratchpad_))
                         throw DeviceRefusal("EE graphics DMA RET target outside aligned main RAM or modeled scratchpad range");
                 }
-                if(*chcr&0x40u) vif->write_dma_tag_observed({std::uint64_t{tag[2]}|(std::uint64_t{tag[3]}<<32),std::uint64_t{unknown[2]}|(std::uint64_t{unknown[3]}<<32)},gif,gs,vu,transfer.cycle+kEeCyclesPerBusCycle);
+                if(*chcr&0x40u) vif->write_dma_tag_observed({std::uint64_t{tag[2]}|(std::uint64_t{tag[3]}<<32),std::uint64_t{unknown[2]}|(std::uint64_t{unknown[3]}<<32)},gif,gs,vu,transfer.cycle+kEeCyclesPerBusCycle,std::array{bounds[2],bounds[3]});
                 // EE source-chain stack is two existing MMIO registers, not
                 // a host recursion stack. CALL saves the end of its inline
                 // payload; RET pops before its own payload is transferred.
@@ -741,11 +760,11 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
                 *chcr=(*chcr&0xFFCFu)|(stack<<4u)|(tag[0]&0xFFFF0000u);
                 madr=source;qwc=count;tadr=next;
             } else if(*qwc) {
-                std::array<std::uint32_t,4> unknown{};
-                const auto data=read(*madr,4,vif ? &unknown : nullptr);
+                std::array<std::uint32_t,4> unknown{};std::array<std::optional<FloatBounds>,4> bounds{};
+                const auto data=read(*madr,4,vif ? &unknown : nullptr,&bounds);
                 const auto low=std::uint64_t{data[0]}|(std::uint64_t{data[1]}<<32);
                 const auto high=std::uint64_t{data[2]}|(std::uint64_t{data[3]}<<32);
-                if(vif) vif->write_fifo_observed({{low,std::uint64_t{unknown[0]}|(std::uint64_t{unknown[1]}<<32)}, {high,std::uint64_t{unknown[2]}|(std::uint64_t{unknown[3]}<<32)}},gif,gs,vu,transfer.cycle+kEeCyclesPerBusCycle);
+                if(vif) vif->write_fifo_observed({{low,std::uint64_t{unknown[0]}|(std::uint64_t{unknown[1]}<<32)}, {high,std::uint64_t{unknown[2]}|(std::uint64_t{unknown[3]}<<32)}},gif,gs,vu,transfer.cycle+kEeCyclesPerBusCycle,bounds);
                 else gif.write_fifo(low,high,gs);
                 *madr=mfifo && transfer.inline_data ? wrap(*madr+16u) : *madr+16u;--*qwc;
                 if(transfer.inline_data) *tadr=*madr;
@@ -1034,6 +1053,7 @@ void Iop::pump_sif0() {
             const auto word=sif0_fifo_.front();sif0_fifo_.pop_front();
             for(unsigned b=0;b<4;++b)ee_ram_[*madr+w*4u+b]=static_cast<std::uint8_t>(word.value>>(b*8u));
             ++ee_ram_write_generation_;
+            if(ee_ram_metadata_ && !ee_ram_metadata_->empty())ee_ram_metadata_->erase(*madr+w*4u);
             if(ee_ram_unknown_) {
                 if(word.unknown)(*ee_ram_unknown_)[*madr+w*4u]=word.unknown;
                 else ee_ram_unknown_->erase(*madr+w*4u);

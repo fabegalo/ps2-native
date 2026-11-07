@@ -86,7 +86,7 @@ struct CheckpointAccess {
         v.locations_={};v.pending_pages_={};v.knowledge_cached_={};v.fallback_reasons_={};
     }
     static void prepare_read(VuControl& v){v.invalidate_vu1_aot();v.vu1_aot_stats_={};v.vu1_capture_={};}
-    static void prepare_read(Iop& i){i.pad_poll_source_={};}
+    static void prepare_read(Iop& i){i.pad_poll_source_={};i.ee_ram_metadata_=nullptr;}
     template<class T> static void prepare_read(DiagnosticHistory<T>& history){history.sink_=nullptr;}
     template<class T> static void validate(const T&){}
     static void demand(bool condition){if(!condition)throw std::runtime_error("checkpoint modeled state has invalid storage or queue bounds");}
@@ -96,12 +96,25 @@ struct CheckpointAccess {
     static void validate(const GsVram& v){demand(v.words_.size()==GsVram::kBytes/4 && v.known_.size()==v.words_.size());}
     static void validate(const GsRegisters& g){demand(g.triangle_vertices_count_<=g.triangle_vertices_.size());}
     static void validate(const Gif& g){demand(g.path_>=1 && g.path_<=3 && g.nreg_<=16 && g.format_<=3 && (!g.in_packet_ || (g.nreg_ && (g.loops_left_ ? g.reg_index_<g.nreg_ : (!g.end_of_packet_ && g.reg_index_==0u)))));}
-    static void validate(const Vif& v){demand(v.direct_words_<=4 && v.input_count_<=4 && v.input_index_<=v.input_count_ && v.fifo_.size()<=(v.unit_==Vif::Unit::Vu1?16u:8u));}
-    static void validate(const VuControl& v){demand(v.data_.size()==1024 && v.micro0_.size()==1024 && v.micro1_.size()==4096 && v.data1_.size()==4096);for(const auto& m:v.micro_)demand(m.writes<=m.pending.size() && m.vector_writes<=m.vectors.size() && m.flag_writes<=m.flags.size() && m.store_writes<=m.stores.size());}
+    static void validate(const Vif& v){const auto input=[](const Vif::Input& in){for(unsigned n=0;n<4;++n)if(in.bounds[n])demand(word_bounds_match({in.words[n],in.unknown[n]},*in.bounds[n]));};input(v.input_);for(const auto& queued:v.fifo_)input(queued);
+        for(unsigned n=0;n<4;++n)if(v.unpack_bounds_[n])demand(word_bounds_match({v.unpack_data_[n],v.unpack_unknown_[n]},*v.unpack_bounds_[n]));
+        demand(v.direct_words_<=4 && v.input_count_<=4 && v.input_index_<=v.input_count_ && v.fifo_.size()<=(v.unit_==Vif::Unit::Vu1?16u:8u));}
+    static void validate(const VuControl& v){demand(v.data_bounds_.size()==v.data_.size() && v.data1_bounds_.size()==v.data1_.size());
+        for(unsigned unit=0;unit<2;++unit){const auto& words=unit?v.data1_:v.data_;const auto& bounds=unit?v.data1_bounds_:v.data_bounds_;for(unsigned n=0;n<words.size();++n)if(bounds[n])demand(word_bounds_match(words[n],*bounds[n]));}
+        demand(v.data_.size()==1024 && v.micro0_.size()==1024 && v.micro1_.size()==4096 && v.data1_.size()==4096);for(const auto& m:v.micro_)demand(m.writes<=m.pending.size() && m.vector_writes<=m.vectors.size() && m.flag_writes<=m.flags.size() && m.store_writes<=m.stores.size());}
     static void bind(Memory& memory,EEState& state,bool clock,bool stalls) {
         memory.set_clock(clock ? &state.retired_instructions : nullptr,stalls ? &state.stall_cycles : nullptr);
-        memory.registers_.attach_ee_ram(memory.ram_,&memory.unknown_words_,memory.scratchpad_);
+        memory.registers_.attach_ee_ram(memory.ram_,&memory.unknown_words_,memory.scratchpad_,&memory.fpu_relations_);
         memory.observer_=nullptr;
+    }
+    static void migrate_fpu_dma_metadata(Memory& memory) {
+        const auto generation=memory.iop().ee_ram_write_generation();
+        for(auto at=memory.fpu_relations_.begin();at!=memory.fpu_relations_.end();) {
+            // Cached and scratchpad words retain their own CPU provenance.
+            // Old physical RAM certificates required the old global token.
+            if(!(at->first&0xC0000000u) && at->second.dma_generation!=generation)at=memory.fpu_relations_.erase(at);
+            else {at->second.dma_generation=kExactFpuDmaGeneration;++at;}
+        }
     }
     static bool clock(const Memory& m){return m.cache_clock_!=nullptr;}
     static bool stalls(const Memory& m){return m.registers_.stall_clock_!=nullptr;}
@@ -125,6 +138,7 @@ public:
     bool legacy_voice_readback{};
     bool legacy_vif_payload{};
     bool legacy_micro_bounds{};
+    bool legacy_transfer_bounds{};
     explicit Archive(std::span<const std::uint8_t> input={}):input_(input){}
     std::vector<std::uint8_t> output;
     std::vector<std::shared_ptr<const std::string>> strings;
@@ -348,7 +362,7 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
          std::string_view(PS2N_CHECKPOINT_SCHEMA)=="5662ca9c89ac26516224d7aa8f3e777e8d72ec24255364cfedd3481e13db1882" ||
          std::string_view(PS2N_CHECKPOINT_SCHEMA)=="fe6e8c07cc00203aa30906e155d9511c731237aa3919857a36a7098ea4409051" ||
          std::string_view(PS2N_CHECKPOINT_SCHEMA)=="85deaf45287f093ffa1045d13df0e972f5a47193781fadac5e1b73d8b2936111" ||
-         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="b36ce4ca5c0bf510d302b10b002b27d736cb1fbc4e258e8a2b8961950e2d18e3");
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="b36ce4ca5c0bf510d302b10b002b27d736cb1fbc4e258e8a2b8961950e2d18e3" || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="fa9cf50ce0d0fade6cc76b98bd076cdc6fad4e6bd5db34d76b2dfbe586011827");
     const bool legacy_scalar_flags=reviewed_scalar_transition &&
         (info.schema_sha256=="9199cae351d7ea3f43526fa1dd800d9f6810d80f6c0370974f190695aee3e2cc" ||
          info.schema_sha256=="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88");
@@ -363,7 +377,8 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
          info.schema_sha256=="06f3fe6fbdb88d6864fb5e3b18139b95e13d22312976051c0cbcd9406931d695");
     // v1 has no numerical voices. Preserve its abstract zero-gain/release
     // proofs verbatim; no active decoder history is reconstructed or guessed.
-    const bool bounds_transition=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="b36ce4ca5c0bf510d302b10b002b27d736cb1fbc4e258e8a2b8961950e2d18e3";
+    const bool transfer_transition=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="fa9cf50ce0d0fade6cc76b98bd076cdc6fad4e6bd5db34d76b2dfbe586011827";
+    const bool bounds_transition=transfer_transition || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="b36ce4ca5c0bf510d302b10b002b27d736cb1fbc4e258e8a2b8961950e2d18e3";
     const bool vif_transition=bounds_transition || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="85deaf45287f093ffa1045d13df0e972f5a47193781fadac5e1b73d8b2936111";
     const bool voice_transition=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="fe6e8c07cc00203aa30906e155d9511c731237aa3919857a36a7098ea4409051" || vif_transition;
     const bool spr_transition=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="5662ca9c89ac26516224d7aa8f3e777e8d72ec24255364cfedd3481e13db1882" || voice_transition;
@@ -391,27 +406,29 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
         (info.schema_sha256=="5662ca9c89ac26516224d7aa8f3e777e8d72ec24255364cfedd3481e13db1882" || legacy_from_spr);
     const bool legacy_vif_payload=context.allow_runtime_change && vif_transition &&
         (info.schema_sha256=="fe6e8c07cc00203aa30906e155d9511c731237aa3919857a36a7098ea4409051" || legacy_voice_readback);
-    const bool same_micro_bounds=context.allow_runtime_change && bounds_transition && info.schema_sha256=="fbaf0fe92b5a983a351765c0af5dd263161c6e4a62fa18eae651d1f365c16460";
+    const bool same_micro_bounds=context.allow_runtime_change && bounds_transition && (info.schema_sha256=="fbaf0fe92b5a983a351765c0af5dd263161c6e4a62fa18eae651d1f365c16460" || (transfer_transition && info.schema_sha256=="b36ce4ca5c0bf510d302b10b002b27d736cb1fbc4e258e8a2b8961950e2d18e3"));
     const bool legacy_micro_bounds=context.allow_runtime_change && bounds_transition &&
         (info.schema_sha256=="85deaf45287f093ffa1045d13df0e972f5a47193781fadac5e1b73d8b2936111" || legacy_vif_payload);
-    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields && !legacy_spu2 && !same_spu2_fields && !legacy_vertex_st && !legacy_from_spr && !legacy_voice_readback && !legacy_vif_payload && !legacy_micro_bounds && !same_micro_bounds)
+    const bool legacy_transfer_bounds=context.allow_runtime_change && transfer_transition && (same_micro_bounds || legacy_micro_bounds);
+    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields && !legacy_spu2 && !same_spu2_fields && !legacy_vertex_st && !legacy_from_spr && !legacy_voice_readback && !legacy_vif_payload && !legacy_micro_bounds && !same_micro_bounds && !legacy_transfer_bounds)
         throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
     if(info.runtime_sha256!=PS2N_CHECKPOINT_RUNTIME && !context.allow_runtime_change)throw std::runtime_error("checkpoint runtime changed; explicit reviewed allow-runtime-change is required");
     if(info.scenario_sha256!=context.scenario_sha256)throw std::runtime_error("checkpoint scenario identity differs");
     if(info.bindings_sha256!=CheckpointAccess::bindings(memory,context.expected_disc_sha256))throw std::runtime_error("checkpoint firmware/profile/NVM/disc identity differs");
     EEState staged_state;Memory staged_memory=memory;
     Reader a(std::span<const std::uint8_t>(parsed.file).subspan(parsed.payload));a.legacy_scalar_flags=legacy_scalar_flags;a.legacy_spu2=legacy_spu2;a.legacy_vertex_st=legacy_vertex_st;
-    a.legacy_from_spr=legacy_from_spr;a.legacy_voice_readback=legacy_voice_readback;a.legacy_vif_payload=legacy_vif_payload;a.legacy_micro_bounds=legacy_micro_bounds;
+    a.legacy_from_spr=legacy_from_spr;a.legacy_voice_readback=legacy_voice_readback;a.legacy_vif_payload=legacy_vif_payload;a.legacy_micro_bounds=legacy_micro_bounds;a.legacy_transfer_bounds=legacy_transfer_bounds;
     bool clock{},stalls{};a(clock,stalls,staged_state,staged_memory);
     if(a.remaining() || staged_state.retired_instructions!=info.retired || staged_state.pc!=info.pc || staged_state.cycles()!=info.cycles)
         throw std::runtime_error("checkpoint state/envelope disagree");
     if(CheckpointAccess::bindings(staged_memory,context.expected_disc_sha256)!=info.bindings_sha256)throw std::runtime_error("checkpoint changed immutable firmware bindings");
     if(iop_execution_refused(staged_memory))
         throw std::runtime_error("checkpoint contains an IOP refusal; inspect it without resuming partial execution: "+*staged_memory.iop().stop_reason());
-    if(legacy_scalar_flags || legacy_spu2 || legacy_vertex_st || legacy_from_spr || legacy_voice_readback || legacy_vif_payload || legacy_micro_bounds) {
-        Writer original;original.legacy_scalar_flags=legacy_scalar_flags;original.legacy_spu2=legacy_spu2;original.legacy_vertex_st=legacy_vertex_st;original.legacy_from_spr=legacy_from_spr;original.legacy_voice_readback=legacy_voice_readback;original.legacy_vif_payload=legacy_vif_payload;original.legacy_micro_bounds=legacy_micro_bounds;original(clock,stalls,staged_state,staged_memory);
+    if(legacy_scalar_flags || legacy_spu2 || legacy_vertex_st || legacy_from_spr || legacy_voice_readback || legacy_vif_payload || legacy_micro_bounds || legacy_transfer_bounds) {
+        Writer original;original.legacy_scalar_flags=legacy_scalar_flags;original.legacy_spu2=legacy_spu2;original.legacy_vertex_st=legacy_vertex_st;original.legacy_from_spr=legacy_from_spr;original.legacy_voice_readback=legacy_voice_readback;original.legacy_vif_payload=legacy_vif_payload;original.legacy_micro_bounds=legacy_micro_bounds;original.legacy_transfer_bounds=legacy_transfer_bounds;original(clock,stalls,staged_state,staged_memory);
         if(sha256_hex(original.output)!=info.payload_sha256)throw std::runtime_error("checkpoint scalar migration changed legacy fields");
     }
+    if(legacy_transfer_bounds)CheckpointAccess::migrate_fpu_dma_metadata(staged_memory);
     CheckpointAccess::own_strings(staged_memory,std::move(a.strings));
     state=std::move(staged_state);memory=std::move(staged_memory);CheckpointAccess::bind(memory,state,clock,stalls);
     return info;

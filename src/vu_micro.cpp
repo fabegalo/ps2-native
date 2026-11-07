@@ -152,7 +152,7 @@ void VuControl::retire_micro_integers(unsigned unit) {
         const auto write=state.stores[n];
         if(write.ready>state.next){state.stores[kept++]=write;continue;}
         auto& memory=unit ? data1_ : data_;
-        for(unsigned lane=0;lane<4u;++lane)if(write.mask&(8u>>lane))memory[write.index*4u+lane]=write.words[lane];
+        for(unsigned lane=0;lane<4u;++lane)if(write.mask&(8u>>lane)){memory[write.index*4u+lane]=write.words[lane];(unit ? data1_bounds_ : data_bounds_)[write.index*4u+lane]=write.bounds[lane];}
     }
     state.store_writes=kept;
 }

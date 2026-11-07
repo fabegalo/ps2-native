@@ -1,4 +1,5 @@
 #pragma once
+#include "ps2native/fpu_affine.hpp"
 // The IOP (I/O processor): an R3000A-compatible core that starts at the same
 // reset vector as the EE (ps2tek: "Upon reset, both the EE and IOP begin
 // executing at BFC00000h") and takes the PRId < 0x59 branch of the shared ROM0
@@ -147,8 +148,9 @@ public:
     void load_program(std::span<const std::uint8_t> bytes, std::uint32_t address, std::uint32_t entry);
     void attach_ee_ram(std::span<std::uint8_t> ram,
                        std::unordered_map<std::uint32_t,std::uint32_t>* unknown = nullptr,
-                       std::span<std::uint8_t> scratchpad = {}) {
-        ee_ram_ = ram; ee_ram_unknown_ = unknown; ee_scratchpad_ = scratchpad;
+                       std::span<std::uint8_t> scratchpad = {},
+                       std::unordered_map<std::uint32_t,StoredFpuRelation>* metadata = nullptr) {
+        ee_ram_ = ram; ee_ram_unknown_ = unknown; ee_scratchpad_ = scratchpad;ee_ram_metadata_=metadata;
     }
     [[nodiscard]] std::uint32_t ee_dma_read(std::uint32_t address) const;
     void ee_dma_write(std::uint32_t address, std::uint32_t value);
@@ -340,6 +342,9 @@ private:
     std::uint64_t ee_ram_write_generation_{};
     std::span<std::uint8_t> ee_scratchpad_;
     std::unordered_map<std::uint32_t,std::uint32_t>* ee_ram_unknown_{};
+    // HOST_INPUT_BEGIN
+    std::unordered_map<std::uint32_t,StoredFpuRelation>* ee_ram_metadata_{};
+    // HOST_INPUT_END
     std::uint32_t ee_dctrl_{}, ee_dstat_{}, ee_sif1_chcr_{}, ee_sif1_madr_{}, ee_sif1_qwc_{};
     std::array<std::array<std::optional<std::uint32_t>, 9>, 10> ee_dma_setup_{};
     std::array<std::optional<std::uint32_t>, 4> ee_dma_global_{};

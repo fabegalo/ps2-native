@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include "ps2native/device_timing.hpp"
 #include <array>
 #include <memory>
 #include <vector>
@@ -21,4 +22,8 @@ struct FpuAffine {
     // class. This bounds storage when exact finite sets grow too large.
     std::shared_ptr<const std::vector<std::array<std::uint32_t,2>>> ranges{};
 };
+// Exact invalidation follows each DMA destination word; older snapshots retain
+// their generation token until the loader validates/migrates that provenance.
+inline constexpr std::uint64_t kExactFpuDmaGeneration=~std::uint64_t{0};
+struct StoredFpuRelation {ObservedWord word;FpuAffine relation;std::uint64_t dma_generation;};
 }

@@ -316,7 +316,6 @@ private:
     // Physical aligned word -> symbolic bits. Scratchpad keys have bit 31 set;
     // aliases share metadata, ordinary known RAM pays no per-byte allocation.
     mutable std::unordered_map<std::uint32_t, std::uint32_t> unknown_words_;
-    struct StoredFpuRelation {ObservedWord word;FpuAffine relation;std::uint64_t dma_generation;};
     mutable std::unordered_map<std::uint32_t,StoredFpuRelation> fpu_relations_;
     std::uint64_t fpu_origin_{};
     bool diagnostic_ee_early_digit_carry_{},fpu_arithmetic_started_{};

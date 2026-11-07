@@ -1,6 +1,7 @@
 // Synthetic DMA sources exercise the shared RAM/SPR bytes, never firmware.
 #include "boot_checks.hpp"
 #include "ps2native/iop.hpp"
+#include "ps2native/interpreter.hpp"
 #include <iostream>
 using namespace ps2native;
 using namespace boot_checks;
@@ -169,7 +170,59 @@ void mfifo_transport() {
     rejects([&]{strict.dma.ee_dma_write(0x1000A000u,0x105);},"QWC is unknown");
     require(!(strict.dma.ee_dma_observe(0x1000A000u).value&0x100u),"unknown initial QWC cannot arm GIF");
 }
+void numeric_packet_transport() {
+    for(const bool interpreted:{false,true})for(const bool certified:{false,true}) {
+        Memory memory;std::vector<std::uint8_t> rom(4u*1024u*1024u);memory.reset_for_boot(rom);
+        std::uint64_t clock=0;memory.set_clock(&clock);memory.tlb_write(0,{0,0x70000000u,0x80000007u,7u});memory.set_translation_context(0,false);
+        const ObservedWord scale{0x447FFE00u,0x1FFu};
+        memory.store128_observed(0x70003A00u,{{scale.value,scale.unknown},{0x3F80000000000000ull,0}});
+        if(certified)memory.remember_fpu_relation(0x70003A00u,scale,
+            {memory.allocate_fpu_origin(),0,136,false,scale.value,scale.unknown,0x447FFEFFu,0x447FFF00u});
+        EEState state;state.set_reg32(1,0x70003A00u);state.set_reg32(3,0x70000110u);
+        const auto instruction=[&](std::uint32_t word) {
+            state.pc=0x80001000u;memory.write32(state.pc,word);std::uint64_t retired=0;
+            if(interpreted){ExecutionContext ctx{state,memory,retired,100,0xFFFFFFFFu};interpret_instruction(ctx);}
+            else if(word==0x78220000u)ee::exec<MipsOpcode::Lq>(state,memory,state.pc,word);
+            else ee::exec<MipsOpcode::Sq>(state,memory,state.pc,word);
+        };
+        instruction(0x78220000u);instruction(0x7C620000u);
+        require(state.gpr[2].high==0x3F80000000000000ull && state.unknown_gpr_bits[2]==0x1FFu,
+            "LQ/SQ preserve all raw lanes and their uncertain bits");
+        const auto copied=memory.fpu_relation(0x70000110u,scale);
+        require(certified ? copied.origin && copied.minimum==0x447FFEFFu && copied.maximum==0x447FFF00u : !copied.origin,
+            "native helper and reference LQ/SQ copy only proven numeric domains");
+        memory.write128(0x700000F0u,0x70000003u,0);
+        memory.write128(0x70000100u,0x0500000001000101ull,0x6C01000000000000ull);
+        memory.write128(0x70000120u,0x14000000u,0);
+        memory.write128(0xB100C010u,0xC0400000u,0); // -3.0
+        memory.write128(0xB100C020u,0x45000000u,0); // +2048.0
+        constexpr auto nop=0x8000033Cu,unop=0x2FFu;
+        const std::uint32_t lower[]{0x01E10001u,0x01E20000u,0x01E40002u,nop,nop,nop,0x03002803u,nop,nop};
+        const std::uint32_t upper[]{unop,unop,unop,0x010208EAu,0x010418E8u,0x0105197Du,unop,unop|0x40000000u,unop};
+        for(unsigned n=0;n<9;++n)memory.write64(0xB1008000u+n*8u,lower[n]|(std::uint64_t{upper[n]}<<32u));
+        memory.write32(0xB000E040u,0x70);memory.write32(0xB000E050u,0x2000);memory.write32(0xB000E000u,9);
+        memory.write32(0xB000D010u,0x2000);memory.write32(0xB000D020u,4);memory.write32(0xB000D080u,0xF0);
+        memory.write32(0xB0009020u,0);memory.write32(0xB0009030u,0x2000);memory.write32(0xB0009000u,0x105);memory.write32(0xB000D000u,0x100);
+        clock=200;require(memory.read32(0xB0009020u)==0 && !(memory.read32(0xB0009000u)&0x100u),"real fromSPR/MFIFO/VIF transfers finish");
+        const auto raw=memory.load32_observed(0xB100C000u),fixed=memory.load32_observed(0xB100C030u);
+        require(raw.value==scale.value && raw.unknown==scale.unknown,"UNPACK retains uncertain source bits instead of choosing a float");
+        require(certified ? fixed.value==0xFFFFC001u && !fixed.unknown : fixed.unknown!=0,
+            "only the transported proof makes both possible inputs produce the same independently expected fixed coordinate");
+        if(certified) {
+            const ObservedWord other{0x3F800000u,1};memory.store32_observed(0xA0002100u,other);
+            memory.remember_fpu_relation(0xA0002100u,other,{memory.allocate_fpu_origin(),0,127,false,other.value,other.unknown,other.value,other.value+1u});
+            memory.store128_observed(0x70000200u,{{scale.value,scale.unknown},{0,0}});
+            memory.write32(0xB000D010u,0x2020);memory.write32(0xB000D020u,1);memory.write32(0xB000D080u,0x200);memory.write32(0xB000D000u,0x100);
+            clock=204;(void)memory.read32(0xB000D020u);
+            require(!memory.fpu_relation(0xA0002020u,scale).origin && memory.fpu_relation(0xA0002100u,other).origin,
+                "DMA invalidates a replaced word even for an identical bit hull while preserving unrelated RAM provenance");
+            memory.store32_observed(0x70000110u,scale);
+            require(!memory.fpu_relation(0x70000110u,scale).origin,"CPU replacement also invalidates matching-byte scratchpad provenance");
+        }
+    }
 }
-int main() try {source_selection();gif_and_boundaries();memory_attachment();mfifo_transport();
+
+}
+int main() try {source_selection();gif_and_boundaries();memory_attachment();mfifo_transport();numeric_packet_transport();
     std::cout<<"Graphics DMA transfers shared SPR/RAM bytes, tags, TTE, boundaries and unknown data\n";
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

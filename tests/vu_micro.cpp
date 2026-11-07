@@ -48,6 +48,21 @@ int main() try {
             "a certified numeric range can prove fixed coordinates without choosing uncertain fraction bits");
         rejects([&]{(void)vu_float_to_fixed(word,4,FloatBounds{0x44E58000u,0x44E60000u});},"certificate differs");
     }
+
+    for(unsigned unit=0;unit<2u;++unit) {
+        VuControl vu;const auto data=unit?0x1100C000u:0x11004000u;
+        const ObservedWord word{0x44E58000u,0x3FFFu};
+        vu.write_memory(data,4,{word.value,word.unknown});vu.restore_data_bounds(data,{0x44E59100u,0x44E59101u});
+        instruction(vu,unit,0,0x01010000u);
+        instruction(vu,unit,1,nop,(8u<<21u)|(3u<<16u)|(1u<<11u)|0x17Du);
+        instruction(vu,unit,2,nop,upper_nop|0x40000000u);instruction(vu,unit,3,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(20);
+        require(vector_lane(vu,unit,3,0).value==0x72C8u && !vector_lane(vu,unit,3,0).unknown,
+            "a real LQ carries its data certificate through the four-cycle FTOI pipeline");
+        vu.write_memory(data,4,{word.value,word.unknown});vu.start_micro(unit,0,40);vu.advance_micro(60);
+        require(vector_lane(vu,unit,3,0).unknown!=0,"raw VU data replacement invalidates a prior matching-byte numeric certificate");
+        rejects([&]{vu.restore_data_bounds(data,{0x44E58000u,0x44E60000u});},"certificate differs");
+    }
     for(unsigned unit=0;unit<2u;++unit) {
         VuControl vu;instruction(vu,unit,0,addiu(1,0,5));instruction(vu,unit,1,addiu(2,1,1));
         instruction(vu,unit,2,nop,upper_nop|0x40000000u);instruction(vu,unit,3,nop);
