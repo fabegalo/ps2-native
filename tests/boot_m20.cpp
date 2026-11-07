@@ -290,17 +290,14 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
     require(std::string(module.source_kind) == "bios-rom0" && bios.sha256 == module.source_sha256,
             "AOT module provenance");
     require(find_aot_block(module, fw.at("sum_loop")) != nullptr, "checksum loop translated");
-    require(find_aot_block(module, m20::kResetVector) == nullptr, "MFC0 at the reset vector stays interpreted");
+    require(find_aot_block(module, m20::kResetVector) != nullptr, "MFC0 at the reset vector is compiled AOT");
     require(find_aot_block(module, fw.at("after_eret")) == nullptr, "ERET target is not statically known");
 
     const auto graph = analyze_control_flow(bios_code_image(bios), {}, {}, true);
-    auto boundary = [&](std::uint32_t address, const std::string& reason) {
-        return std::any_of(graph.interpreter_boundaries.begin(), graph.interpreter_boundaries.end(),
-                           [&](const AotInterpreterBoundary& b) { return b.address == address && b.reason == reason; });
-    };
-    require(boundary(m20::kResetVector, "system instruction Mfc0"), "boundary at the reset vector");
-    require(boundary(fw.at("iop_path"), "system instruction Break"), "boundary at BREAK");
-    rejects([&] { (void)generate_aot_cpp(bios_code_image(bios)); }, "AOT unsupported R5900 instruction");
+    require(graph.instructions.at(m20::kResetVector).opcode==MipsOpcode::Mfc0 &&
+        graph.instructions.at(fw.at("iop_path")).opcode==MipsOpcode::Break,"COP0 and exception encodings are native AOT");
+    require(generate_aot_cpp(bios_code_image(bios)).find("execute_ee_system<MipsOpcode::Mfc0")!=std::string::npos,
+        "strict offline generation emits a statically selected system operation");
 
     BootOptions options;
     options.trace = TraceLevel::Full;
@@ -338,11 +335,13 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
     check_final_state(hybrid_state, hybrid_memory, fw, "hybrid");
     require(interpreted.aot_instructions == 0u && interpreted.interpreted_instructions == interpreted.retired,
             "interpreter-only coverage excludes the unretired faulting instruction");
-    require(hybrid.aot_instructions > 0u && hybrid.interpreted_instructions > 0u && hybrid.engine_switches > 2u,
-            "hybrid run used both engines");
+    require(hybrid.aot_instructions == 562u && hybrid.interpreted_instructions == 20u && hybrid.engine_switches == 1u,
+            "native firmware followed by the untranslated ERET continuation uses exactly two engine runs; AOT="+
+            std::to_string(hybrid.aot_instructions)+" reference="+std::to_string(hybrid.interpreted_instructions)+
+            " switches="+std::to_string(hybrid.engine_switches));
     require(hybrid.retired == interpreted.retired, "same retired instruction count");
     require(contains(hybrid.trace, "E aot (host-compiled block) at ") &&
-            contains(hybrid.trace, "E interpreter (no AOT block) at BFC00000"), "engine changes traced");
+            !contains(hybrid.trace, "E interpreter (no AOT block) at BFC00000"), "engine changes traced");
     require(normalized(hybrid.trace) == normalized(interpreted.trace), "hybrid and interpreter traces agree");
     for (unsigned n = 0; n < 32; ++n)
         require(hybrid_state.gpr[n].low == interpreted_state.gpr[n].low &&

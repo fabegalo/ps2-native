@@ -8,7 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(ps2n_core STATIC
     src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/memory_cache.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
-    src/interpreter.cpp src/boot.cpp src/diagnostics.cpp src/analysis.cpp src/ee_registers.cpp
+    src/interpreter.cpp src/ee_system.cpp src/boot.cpp src/diagnostics.cpp src/analysis.cpp src/ee_registers.cpp
     src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp src/nvm.cpp
     src/video_encoder.cpp src/gif.cpp src/gs_vram.cpp src/gs_renderer.cpp src/framebuffer.cpp src/vu_micro.cpp src/vu_aot.cpp
     src/iop_spu2.cpp src/audio.cpp)

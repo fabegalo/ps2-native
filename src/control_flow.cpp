@@ -344,7 +344,7 @@ AotControlFlow analyze_control_flow(
             if (is_delay_slot && decoded.has_delay_slot())
                 throw std::runtime_error("Control transfer in branch delay slot is unsupported by M1");
             graph.instructions.emplace(pc, decoded);
-            if (is_delay_slot) continue;
+            if (is_delay_slot || decoded.opcode==MipsOpcode::Eret || decoded.opcode==MipsOpcode::Break) continue;
             if (!decoded.has_delay_slot()) {
                 pending.emplace(pc + 4u, false);
                 continue;
