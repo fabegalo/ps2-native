@@ -1,5 +1,6 @@
 #include "bios_program.hpp"
 #include "boot_checks.hpp"
+#include "checkpoint_fixture.hpp"
 #include "ps2native/checkpoint.hpp"
 #include "ps2native/io.hpp"
 #include <iostream>
@@ -70,15 +71,8 @@ int main(int argc,char** argv)try {
     require(static_cast<std::size_t>(payload.end()-audio_at)>=audio_bytes,"complete reset SPU2 extension");
     payload.erase(audio_at,audio_at+audio_bytes);
     const std::string old_schema="3d2c143346ea6328bb9cb49c48abfc09bfe426f4cabb88a2051625384ed54b1f";
-    info.schema_sha256=old_schema;info.payload_sha256=sha256_hex(payload);info.payload_bytes=payload.size();
-    std::vector<std::uint8_t> prior{'P','S','2','N','C','P','0','1'};
-    const auto integer=[&](std::uint64_t value,unsigned size){for(unsigned i=0;i<size;++i)prior.push_back(static_cast<std::uint8_t>(value>>(8u*i)));};
-    for(const auto* value:{&info.schema_sha256,&info.runtime_sha256,&info.bindings_sha256,&info.scenario_sha256,&info.host_metadata,&info.payload_sha256}) {
-        integer(value->size(),8);prior.insert(prior.end(),value->begin(),value->end());
-    }
-    integer(info.retired,8);integer(info.cycles,8);integer(info.payload_bytes,8);integer(info.pc,4);
-    prior.insert(prior.end(),payload.begin(),payload.end());
-    const auto old_file=file.parent_path()/"rtc-prior-header.ps2ncp";write_file_atomically(old_file,prior);
+    const auto old_file=file.parent_path()/"rtc-prior-header.ps2ncp";
+    write_file_atomically(old_file,checkpoint_fixture::legacy_envelope(info,payload,old_schema.c_str()));
     rejects([&]{(void)load_checkpoint(old_file,resumed,restored,context);},"schema");
     auto reviewed=context;reviewed.allow_runtime_change=true;(void)load_checkpoint(old_file,resumed,restored,reviewed);
     require(checkpoint_state_sha256(state,memory)==checkpoint_state_sha256(resumed,restored),"audited RTC header transition preserves every wire field");

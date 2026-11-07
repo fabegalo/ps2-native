@@ -467,8 +467,16 @@ void check_drawing_scanout() {
     require(gs.vram().read(0,64,0,2,2)==0x80554433u,"PACKED ADC suppresses kick");
     gs.general_write(0,6); gs.general_write(5,32u|(32ull<<16)); gs.general_write(0x0D,64u|(64ull<<16));
     require(gs.vram().read(0,64,0,2,2)==0x80554433u,"XYZ3 suppresses kick");
-    gs.general_write(0,1);gs.general_write(5,0);
-    rejects([&]{gs.general_write(5,16u);},"line rasterization");
+    const auto before_clipped_line=gs.vram().pixel_writes();
+    gs.general_write(0,1);gs.general_write(5,0);gs.general_write(5,16u);
+    require(gs.vram().pixel_writes()==before_clipped_line,"scissor excludes a supported line outside the drawing area");
+    {
+        GsRegisters line;line.reset(0);configure_draw(line);line.general_write(0,1);
+        line.general_write(5,0);line.general_write(5,16u);
+        require(line.vram().pixel_writes()==1u && line.vram().read(0,64,0,0,0)==0x80402010u,
+            "one-pixel line writes its starting pixel");
+        rejects([&]{(void)line.vram().read(0,64,0,1,0);},"unwritten bits");
+    }
     gs.general_write(0,6u|16u);
     const auto before_stq_vertex=gs.vram().revision();
     gs.general_write(5,0);

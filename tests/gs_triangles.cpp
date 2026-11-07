@@ -81,11 +81,14 @@ int main() try {
         rejects([&]{vertex(gs,5,6);},"10.4 coordinates (48,64) -> (80,96)");
         require(gs.vram().pixel_writes()==before,"unsupported line rasterization still refuses before a fragment is written");
         gs.general_write(0,1);vertex(gs,1,2,0,false);vertex(gs,3,4,0,false);
-        vertex(gs,5,6);rejects([&]{vertex(gs,6,6);},"10.4 coordinates (80,96) -> (96,96)");
-        require(gs.vram().pixel_writes()==before,"independent lines consume pairs; a suppressed pair cannot leak into the next line");
+        vertex(gs,5,6);vertex(gs,6,6);
+        require(gs.vram().pixel_writes()==before+1u && gs.vram().read(0,64,0,5,6)==0x80201008u &&
+            gs.vram().read(0,64,0,3,4)==0x80000000u && gs.vram().read(0,64,0,6,6)==0x80000000u,
+            "independent lines consume pairs, exclude the final endpoint and cannot reuse a suppressed pair");
+        const auto after_line=gs.vram().pixel_writes();
         gs.general_write(0,0x11); // Textured independent line, UV is unwritten.
         vertex(gs,0,0,0,false);vertex(gs,1,1,0,false);
-        require(gs.vram().pixel_writes()==before,"suppressed line kicks do not consume unused texture coordinates or shader state");
+        require(gs.vram().pixel_writes()==after_line,"suppressed line kicks do not consume unused texture coordinates or shader state");
         gs.general_write(0,6);vertex(gs,2,2);vertex(gs,4,4);
         require(gs.vram().read(0,64,0,2,2)==0x80201008u && gs.vram().read(0,64,0,0,0)==0x80000000u,
             "PRIM restarts vertex assembly when a sprite follows suppressed lines");

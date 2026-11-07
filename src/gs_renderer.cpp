@@ -319,9 +319,11 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         throw DeviceRefusal("GS shading, fog or antialiasing is not modeled; primitive="+std::to_string(type)+
             " mode="+std::to_string(mode)+" FGE="+std::to_string((mode>>5u)&1u)+
             " AA1="+std::to_string((mode>>7u)&1u)+" IIP="+std::to_string((mode>>3u)&1u)+
-            " xy16=("+std::to_string(vertices[0].x)+","+std::to_string(vertices[0].y)+") ("+
-            std::to_string(vertices[1].x)+","+std::to_string(vertices[1].y)+") ("+
-            std::to_string(v.x)+","+std::to_string(v.y)+") z="+std::to_string(v.z));
+            (line ? " 10.4 coordinates ("+std::to_string(first_vertex_->x)+","+std::to_string(first_vertex_->y)+
+                ") -> ("+std::to_string(v.x)+","+std::to_string(v.y)+")" :
+                " xy16=("+std::to_string(vertices[0].x)+","+std::to_string(vertices[0].y)+") ("+
+                std::to_string(vertices[1].x)+","+std::to_string(vertices[1].y)+") ("+
+                std::to_string(v.x)+","+std::to_string(v.y)+")")+" z="+std::to_string(v.z));
 
     const auto frame = required(static_cast<std::uint8_t>(0x4Cu + context));
     const auto scissor = required(static_cast<std::uint8_t>(0x40u + context));
@@ -1121,7 +1123,9 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     GsVram::validate_format(psm);
     const auto x0 = static_cast<unsigned>((fb >> 32) & 2047u), y0 = static_cast<unsigned>((fb >> 43) & 2047u);
     const unsigned row_stride = (interlaced && !(*mode_[1] & 2u)) ? 2u : 1u;
-    const unsigned field_offset = (interlaced && !(*mode_[1] & 2u) && field_.value_or(false)) ? 1u : 0u;
+    if(row_stride==2u && !field_)
+        throw DeviceRefusal("GS scanout: interlaced field parity is unknown");
+    const unsigned field_offset = row_stride==2u ? static_cast<unsigned>(*field_) : 0u;
     const auto max_y = y0 + (f.height > 0u ? (f.height - 1u) * row_stride + field_offset : 0u);
     if (x0 + f.width > 2048u || max_y >= 2048u)
         throw DeviceRefusal("GS scanout: wrapping display rectangle is not modeled");
