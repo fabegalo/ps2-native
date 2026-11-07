@@ -668,15 +668,17 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
     const auto ring_base=mfifo ? ee_dma_read(0x1000E050u) : 0u;
     const auto ring_mask=mfifo ? ee_dma_read(0x1000E040u) : 0u;
     const auto wrap=[&](std::uint32_t at){return ring_base|(at&ring_mask);};
-    const auto read=[&](std::uint32_t at,unsigned words) {
+    const auto read=[&](std::uint32_t at,unsigned words,std::array<std::uint32_t,4>* unknown=nullptr) {
         if(!graphics_source_fits(at,words*4u,ee_ram_,ee_scratchpad_))
             throw DeviceRefusal("EE graphics DMA source outside aligned main RAM or modeled scratchpad range");
         const auto storage=(at&0x80000000u) ? ee_scratchpad_ : ee_ram_;
         const auto offset=at&0x7FFFFFFFu;
         std::array<std::uint32_t,4> data{};
         for(unsigned w=0;w<words;++w) {
-            if(ee_ram_unknown_ && ee_ram_unknown_->contains(at+4u*w))
-                throw DeviceRefusal("EE graphics DMA consumes unknown source bits (unknown RAM bits): channel="+std::to_string(channel)+" address="+hex(at+4u*w)+" mask="+hex(ee_ram_unknown_->at(at+4u*w)));
+            if(ee_ram_unknown_ && ee_ram_unknown_->contains(at+4u*w)) {
+                if(unknown)(*unknown)[w]=ee_ram_unknown_->at(at+4u*w);
+                else throw DeviceRefusal("EE graphics DMA consumes unknown source bits (unknown RAM bits): channel="+std::to_string(channel)+" address="+hex(at+4u*w)+" mask="+hex(ee_ram_unknown_->at(at+4u*w)));
+            }
             for(unsigned b=0;b<4;++b) data[w]|=std::uint32_t{storage[offset+w*4u+b]}<<(8u*b);
         }
         return data;
@@ -699,7 +701,9 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
                 transfer.cycle+=kEeCyclesPerBusCycle;continue;
             }
             if(!*qwc && !transfer.end) {
-                const auto tag=read(*tadr,(*chcr&0x40u) ? 4u : 2u);
+                std::array<std::uint32_t,4> unknown{};
+                const auto tag=read(*tadr,(*chcr&0x40u) ? 4u : 2u,(*chcr&0x40u) ? &unknown : nullptr);
+                if(unknown[0] || unknown[1])throw DeviceRefusal("EE graphics DMA tag consumes unknown source bits");
                 const auto id=(tag[0]>>28u)&7u, count=tag[0]&0xFFFFu;
                 if(mfifo && (id==2u || id==5u || id==6u))
                     throw DeviceRefusal("EE MFIFO drain tag must be CNT/REF/REFS/REFE/END");
@@ -726,7 +730,7 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
                     if(!graphics_source_fits(next,16u,ee_ram_,ee_scratchpad_))
                         throw DeviceRefusal("EE graphics DMA RET target outside aligned main RAM or modeled scratchpad range");
                 }
-                if(*chcr&0x40u) vif->write_dma_tag(std::uint64_t{tag[2]}|(std::uint64_t{tag[3]}<<32),gif,gs,vu,transfer.cycle+kEeCyclesPerBusCycle);
+                if(*chcr&0x40u) vif->write_dma_tag_observed({std::uint64_t{tag[2]}|(std::uint64_t{tag[3]}<<32),std::uint64_t{unknown[2]}|(std::uint64_t{unknown[3]}<<32)},gif,gs,vu,transfer.cycle+kEeCyclesPerBusCycle);
                 // EE source-chain stack is two existing MMIO registers, not
                 // a host recursion stack. CALL saves the end of its inline
                 // payload; RET pops before its own payload is transferred.
@@ -737,10 +741,11 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
                 *chcr=(*chcr&0xFFCFu)|(stack<<4u)|(tag[0]&0xFFFF0000u);
                 madr=source;qwc=count;tadr=next;
             } else if(*qwc) {
-                const auto data=read(*madr,4);
+                std::array<std::uint32_t,4> unknown{};
+                const auto data=read(*madr,4,vif ? &unknown : nullptr);
                 const auto low=std::uint64_t{data[0]}|(std::uint64_t{data[1]}<<32);
                 const auto high=std::uint64_t{data[2]}|(std::uint64_t{data[3]}<<32);
-                if(vif) vif->write_fifo(low,high,gif,gs,vu,transfer.cycle+kEeCyclesPerBusCycle);
+                if(vif) vif->write_fifo_observed({{low,std::uint64_t{unknown[0]}|(std::uint64_t{unknown[1]}<<32)}, {high,std::uint64_t{unknown[2]}|(std::uint64_t{unknown[3]}<<32)}},gif,gs,vu,transfer.cycle+kEeCyclesPerBusCycle);
                 else gif.write_fifo(low,high,gs);
                 *madr=mfifo && transfer.inline_data ? wrap(*madr+16u) : *madr+16u;--*qwc;
                 if(transfer.inline_data) *tadr=*madr;

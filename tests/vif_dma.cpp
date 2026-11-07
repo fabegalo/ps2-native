@@ -1,5 +1,6 @@
 #include "boot_checks.hpp"
 #include "ps2native/iop.hpp"
+#include "ps2native/vu_control.hpp"
 #include <iostream>
 using namespace ps2native;
 using namespace boot_checks;
@@ -20,6 +21,24 @@ struct Fixture {
     }
     void advance(unsigned cycles) {dma.advance_vif_dma(cycles,v0,v1,gif,gs);}
 };
+void observed_unpack_dma() {
+    for(unsigned unit=0;unit<2;++unit) {
+        Fixture f;VuControl vu;vu.reset();
+        std::unordered_map<std::uint32_t,std::uint32_t> masks{{0x310,0x1FFu}};
+        f.dma.attach_ee_ram(f.ram,&masks);
+        f.word(0x300,0x01000101u);f.word(0x304,0x05000000u);f.word(0x308,0);f.word(0x30C,0x6C010003u);
+        for(unsigned n=0;n<4;++n)f.word(0x310+4u*n,0x447FFFFFu+n);
+        f.start(unit,0x101u,2);
+        f.dma.advance_graphics(2,f.v0,f.v1,f.gif,f.gs,vu);
+        const auto address=(unit ? 0x1100C000u : 0x11004000u)+48u;
+        require(vu.read_memory(address,4).unknown==0xFFFFFFFFu,"UNPACK cannot publish before its real DMA payload beat");
+        f.dma.advance_graphics(4,f.v0,f.v1,f.gif,f.gs,vu);
+        const auto data=vu.read_memory(address,4);
+        require(data.value==0x447FFE00u && data.unknown==0x1FFu && vu.read_memory(address+4,4).unknown==0 &&
+                !(f.dma.ee_dma_read(unit ? 0x10009000u : 0x10008000u)&0x100u),
+                "real VIF DMA carries each source knowledge mask through UNPACK and completes on both channels");
+    }
+}
 void empty_and_timing() {
     for(unsigned channel=0;channel<2;++channel) {
         Fixture f;f.tag(0x100,0x70000000u,0);f.start(channel);
@@ -150,6 +169,6 @@ void idle_flush_and_directhl() {
     rejects([&]{paths.v0.write_dma_tag(0x51000001u,paths.gif,paths.gs);},"VIF1-only");
 }
 }
-int main() try {empty_and_timing();tags_and_payload();direct_and_failures();idle_flush_and_directhl();
+int main() try {observed_unpack_dma();empty_and_timing();tags_and_payload();direct_and_failures();idle_flush_and_directhl();
     std::cout<<"VIF DMA normal/chain/TTE, source bytes, timing, IRQ and fail-closed paths passed\n";
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

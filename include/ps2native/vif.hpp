@@ -22,7 +22,7 @@ public:
         programmed_={}; pending_=Pending::None; pending_index_=0; mark_detected_=false;
         direct_words_=0;direct_buffer_={};
         mpg_left_=mpg_address_=0;mpg_low_.reset();
-        unpack_left_=unpack_address_=unpack_index_=unpack_cycle_=0;
+        unpack_left_=unpack_address_=unpack_index_=unpack_cycle_=0;unpack_unknown_={};
         dbf_.reset();
         fifo_.clear();input_={};input_index_=input_count_=0;waiting_=padding_=gif_waiting_=false;
     }
@@ -34,6 +34,8 @@ public:
     }
     void write_register(std::uint32_t offset,std::uint32_t value,Gif& gif);
     void write_fifo(std::uint64_t low, std::uint64_t high, Gif& gif, GsRegisters& gs,VuControl* vu=nullptr,std::uint64_t cycle=0);
+    void write_fifo_observed(ObservedQuadword data,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr,std::uint64_t cycle=0);
+    void write_dma_tag_observed(ObservedDoubleword data,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr,std::uint64_t cycle=0);
     // TTE sends only the upper 64 bits, in lanes 2/3 of a DMA tag.
     void write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr,std::uint64_t cycle=0);
     [[nodiscard]] std::uint32_t direct_remaining() const noexcept { return direct_left_; }
@@ -48,10 +50,10 @@ public:
     // RUNTIME_HELPERS_END
 private:
     friend void advance_vpus(std::uint64_t,Vif*,Vif*,VuControl*,Gif&,GsRegisters&);
-    void write_words(std::span<const std::uint32_t> words,unsigned first_lane,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle);
+    void write_words(std::span<const std::uint32_t> words,unsigned first_lane,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle,std::span<const std::uint32_t> unknown={});
     void drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs);
     void start_unpack(std::uint32_t command,VuControl* vu);
-    void unpack_word(std::uint32_t word,VuControl& vu);
+    void unpack_word(ObservedWord word,VuControl& vu);
     [[noreturn]] void refuse(const std::string& reason) const {
         throw DeviceRefusal(std::string(unit_==Unit::Vu0 ? "VIF0" : "VIF1")+reason);
     }
@@ -65,13 +67,14 @@ private:
     unsigned unpack_components_{},unpack_cl_{},unpack_wl_{},unpack_mode_{};
     std::uint32_t unpack_mask_{};
     std::array<std::uint32_t,4> unpack_data_{};
+    std::array<std::uint32_t,4> unpack_unknown_{};
     std::optional<std::uint32_t> error_mask_,mark_,code_;
     enum class Pending { None, Mask, Row, Col };
     Pending pending_{Pending::None};
     unsigned pending_index_{};
     bool mark_detected_{};
     std::optional<bool> dbf_;
-    struct Input {std::array<std::uint32_t,4> words{};unsigned first{},count{};};
+    struct Input {std::array<std::uint32_t,4> words{};unsigned first{},count{};std::array<std::uint32_t,4> unknown{};};
     std::deque<Input> fifo_;
     Input input_{};
     unsigned input_index_{},input_count_{};

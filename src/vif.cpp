@@ -66,8 +66,8 @@ void Vif::start_unpack(std::uint32_t command,VuControl* vu) {
     unpack_mask_=command&0x10000000u ? *programmed_[7] : 0u;
     unpack_index_=unpack_cycle_=0;
 }
-void Vif::unpack_word(std::uint32_t word,VuControl& vu) {
-    unpack_data_[unpack_index_++]=word;
+void Vif::unpack_word(ObservedWord word,VuControl& vu) {
+    unpack_data_[unpack_index_]=word.value;unpack_unknown_[unpack_index_++]=word.unknown;
     if(unpack_index_!=unpack_components_)return;
     const auto base=unit_==Unit::Vu0 ? 0x11004000u : 0x1100C000u;
     const auto address=(unpack_address_&(unit_==Unit::Vu0 ? 255u : 1023u))*16u;
@@ -82,8 +82,8 @@ void Vif::unpack_word(std::uint32_t word,VuControl& vu) {
         } else {
             // EE manual 6.3.4: S is broadcast. V2 Z/W and V3 W are
             // indeterminate, not duplicated input or an invented zero.
-            if(unpack_components_==1u)data={unpack_data_[0],0};
-            else if(lane<unpack_components_)data={unpack_data_[lane],0};
+            if(unpack_components_==1u)data={unpack_data_[0],unpack_unknown_[0]};
+            else if(lane<unpack_components_)data={unpack_data_[lane],unpack_unknown_[lane]};
             if(unpack_mode_) {
                 auto& reg=programmed_[16u+lane];
                 data=reg && !data.unknown ? ObservedWord{data.value+*reg,0} : ObservedWord{0,~0u};
@@ -103,6 +103,16 @@ void Vif::write_fifo(std::uint64_t low, std::uint64_t high, Gif& gif, GsRegister
 void Vif::write_dma_tag(std::uint64_t data,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
     const std::array<std::uint32_t,2> words{static_cast<std::uint32_t>(data),static_cast<std::uint32_t>(data>>32)};
     write_words(words,2,gif,gs,vu,cycle);
+}
+void Vif::write_fifo_observed(ObservedQuadword data,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
+    const std::array<std::uint32_t,4> words{static_cast<std::uint32_t>(data.low.value),static_cast<std::uint32_t>(data.low.value>>32u),static_cast<std::uint32_t>(data.high.value),static_cast<std::uint32_t>(data.high.value>>32u)};
+    const std::array<std::uint32_t,4> unknown{static_cast<std::uint32_t>(data.low.unknown),static_cast<std::uint32_t>(data.low.unknown>>32u),static_cast<std::uint32_t>(data.high.unknown),static_cast<std::uint32_t>(data.high.unknown>>32u)};
+    write_words(words,0,gif,gs,vu,cycle,unknown);
+}
+void Vif::write_dma_tag_observed(ObservedDoubleword data,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
+    const std::array<std::uint32_t,2> words{static_cast<std::uint32_t>(data.value),static_cast<std::uint32_t>(data.value>>32u)};
+    const std::array<std::uint32_t,2> unknown{static_cast<std::uint32_t>(data.unknown),static_cast<std::uint32_t>(data.unknown>>32u)};
+    write_words(words,2,gif,gs,vu,cycle,unknown);
 }
 void advance_vpus(std::uint64_t cycle,Vif* vif0,Vif* vif1,VuControl* vu,Gif& gif,GsRegisters& gs) {
     const auto drain=[&](std::uint64_t at) {
@@ -125,11 +135,14 @@ void advance_vpus(std::uint64_t cycle,Vif* vif0,Vif* vif1,VuControl* vu,Gif& gif
     }
     drain(cycle);
 }
-void Vif::write_words(std::span<const std::uint32_t> words,unsigned first_lane,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle) {
+void Vif::write_words(std::span<const std::uint32_t> words,unsigned first_lane,Gif& gif,GsRegisters& gs,VuControl* vu,std::uint64_t cycle,std::span<const std::uint32_t> unknown) {
+    if(!unknown.empty() && unknown.size()!=words.size())refuse(" source uncertainty count differs");
     advance_vpus(cycle,this,nullptr,vu,gif,gs);
     if(!can_accept_dma())refuse(" FIFO full: CPU store backpressure is not modeled");
     Input incoming;incoming.first=first_lane;incoming.count=static_cast<unsigned>(words.size());
-    std::copy(words.begin(),words.end(),incoming.words.begin());fifo_.push_back(incoming);
+    std::copy(words.begin(),words.end(),incoming.words.begin());
+    if(!unknown.empty())std::copy(unknown.begin(),unknown.end(),incoming.unknown.begin());
+    fifo_.push_back(incoming);
     drain(cycle,vu,gif,gs);
 }
 void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
@@ -139,8 +152,9 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
             if(fifo_.empty())return;
             input_=fifo_.front();fifo_.pop_front();input_index_=0;input_count_=input_.count;
         }
-        const auto lane=input_.first+input_index_,command=input_.words[input_index_];
+        const auto lane=input_.first+input_index_,command=input_.words[input_index_],unknown=input_.unknown[input_index_];
         if(padding_) {if(++input_index_==input_count_)padding_=false;continue;}
+        if(unknown && !unpack_left_)refuse(" command/non-UNPACK payload consumes unknown source bits");
         const bool payload=direct_left_ || mpg_left_ || unpack_left_ || pending_!=Pending::None;
         const auto op=command>>24u;
         if(!payload && !(command&0x80000000u) && vu && vu->micro_running(unit_==Unit::Vu1) &&
@@ -177,7 +191,7 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
         }
         if(unpack_left_) {
             if(!vu)refuse(" UNPACK requires the shared VU data memory");
-            unpack_word(command,*vu);continue;
+            unpack_word({command,unknown},*vu);continue;
         }
         if(pending_!=Pending::None) {
             const auto base=pending_==Pending::Mask ? 7u : pending_==Pending::Row ? 16u : 20u;

@@ -25,11 +25,19 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
     const std::array<std::uint8_t,8> spr_tag{0x5F,0x53,0x50,0x52,0x44,0x4D,0x41,0x31};
     const auto spr_at=std::search(old_payload.begin(),old_payload.end(),spr_tag.begin(),spr_tag.end());
     require(spr_at!=old_payload.end(),"current checkpoint has a tagged fromSPR clock extension");
-    if(std::string_view(schema)!="5662ca9c89ac26516224d7aa8f3e777e8d72ec24255364cfedd3481e13db1882")old_payload.erase(spr_at,spr_at+16);
+    if(std::string_view(schema)!="5662ca9c89ac26516224d7aa8f3e777e8d72ec24255364cfedd3481e13db1882" && std::string_view(schema)!="fe6e8c07cc00203aa30906e155d9511c731237aa3919857a36a7098ea4409051")old_payload.erase(spr_at,spr_at+16);
     const std::array<std::uint8_t,8> voice_tag{0x53,0x50,0x32,0x4E,0x41,0x58,0x41,0x31};
     const auto voice_at=std::search(old_payload.begin(),old_payload.end(),voice_tag.begin(),voice_tag.end());
     require(voice_at!=old_payload.end(),"current checkpoint has a tagged voice readback policy");
-    old_payload.erase(voice_at,voice_at+9);payload=old_payload;
+    if(std::string_view(schema)!="fe6e8c07cc00203aa30906e155d9511c731237aa3919857a36a7098ea4409051")old_payload.erase(voice_at,voice_at+9);
+    const std::array<std::uint8_t,8> vif_tag{'V','I','F','U','N','K','0','1'};
+    for(unsigned unit=0;unit<2;++unit) {
+        const auto at=std::search(old_payload.begin(),old_payload.end(),vif_tag.begin(),vif_tag.end());
+        require(at!=old_payload.end(),"current checkpoint has tagged VIF uncertainty");
+        std::uint64_t count=0;for(unsigned b=0;b<8;++b)count|=std::uint64_t{at[8+b]}<<(8u*b);
+        require(count<=16,"synthetic VIF FIFO count is bounded");
+        old_payload.erase(at,at+48+count*16);
+    }payload=old_payload;
     std::vector<std::uint8_t> bytes{'P','S','2','N','C','P','0','1'};
     const auto integer=[&](std::uint64_t value,unsigned size){for(unsigned i=0;i<size;++i)bytes.push_back(static_cast<std::uint8_t>(value>>(8u*i)));};
     info.schema_sha256=schema;
@@ -42,6 +50,42 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
 }
 int main(int argc,char** argv)try {
     if(argc!=2)return 2;const auto directory=std::filesystem::path(argv[1]);ps2native::create_directories(directory);
+    for(const bool queued:{false,true}) {
+        auto image=program();EEState state;Memory memory;prepare_direct_elf(image,nullptr,state,memory);
+        memory.set_clock(&state.retired_instructions,&state.stall_cycles);
+        if(queued){
+            memory.write64(0xB1008000u,0x000002FF8000033Cull);
+            memory.write64(0xB1008008u,0x400002FF8000033Cull);
+            memory.write64(0xB1008010u,0x000002FF8000033Cull);
+            memory.write128(0xB0005000u,0x0500000001000101ull,0x1000000014000000ull);
+        }
+        const std::array<std::uint32_t,8> words=queued ?
+            std::array<std::uint32_t,8>{0,0,0,0x6C010003u,0x447FFE00u,2,3,4} :
+            std::array<std::uint32_t,8>{0x01000101u,0x05000000u,0x6C020003u,0x447FFE00u,2,3,4,0x447FFE00u};
+        for(unsigned n=0;n<8;++n)memory.write32(0x80002000u+n*4u,words[n]);
+        memory.store32_observed(queued ? 0x80002010u : 0x8000200Cu,{0x447FFE00u,0x1FFu});
+        if(!queued)memory.store32_observed(0x8000201Cu,{0x447FFE00u,0x100u});
+        memory.write32(0xB000E000u,1);memory.write32(0xB0009010u,0x2000u);memory.write32(0xB0009020u,2);
+        memory.write32(0xB0009000u,0x101u);
+        BootOptions options;options.max_instructions=4;const auto prefix=run_ee_boot(state,memory,nullptr,options);
+        require(prefix.outcome==BootOutcome::BudgetExhausted,"observed VIF fixture reaches a successful DMA boundary");
+        const auto path=directory/(queued ? "vif-queued-unknown.ps2ncp" : "vif-partial-unknown.ps2ncp");
+        CheckpointContext context{sha256_hex(image.bytes),"vif-observed"};
+        save_checkpoint(path,state,memory,prefix,context);const auto saved=checkpoint_state_sha256(state,memory);
+        const auto finish=[&](EEState& s,Memory& m){
+            if(!queued)m.write128(0xB0005000u,0x0000000600000005ull,7);
+            options.max_instructions=8;const auto report=run_ee_boot(s,m,nullptr,options);
+            require(report.outcome==BootOutcome::BudgetExhausted,"restored VIF data drains through the real scheduler");
+            const auto value=m.load32_observed(queued ? 0xB100C030u : 0xB100C040u);
+            require(value.unknown==(queued ? 0x1FFu : 0x100u),"VIF retains queued and partial UNPACK uncertainty after continuation");
+        };
+        finish(state,memory);const auto expected=checkpoint_state_sha256(state,memory);
+        EEState resumed;Memory restored;prepare_direct_elf(image,nullptr,resumed,restored);
+        (void)load_checkpoint(path,resumed,restored,context);
+        require(checkpoint_state_sha256(resumed,restored)==saved,"VIF input queue and partial data masks round-trip");
+        finish(resumed,restored);
+        require(checkpoint_state_sha256(resumed,restored)==expected,"continuous/restored VIF guest data, clocks and all devices match");
+    }
     for(const unsigned loops:{0u,1u}) {
         auto gap_image=program();Memory gap;EEState gap_state;prepare_direct_elf(gap_image,nullptr,gap_state,gap);
         BootOptions gap_options;gap_options.max_instructions=1;
@@ -184,6 +228,11 @@ int main(int argc,char** argv)try {
     (void)load_checkpoint(current_file,state,memory,context);
     const auto exact=checkpoint_state_sha256(state,memory);
     auto reviewed=context;reviewed.allow_runtime_change=true;
+    const auto vif_file=directory/"legacy-vif-payload.ps2ncp";
+    write_file_atomically(vif_file,legacy_envelope(current_info,current_payload,"fe6e8c07cc00203aa30906e155d9511c731237aa3919857a36a7098ea4409051"));
+    rejects([&]{(void)load_checkpoint(vif_file,resumed,restored,context);},"schema");
+    (void)load_checkpoint(vif_file,resumed,restored,reviewed);
+    require(checkpoint_state_sha256(resumed,restored)==exact,"older known VIF words migrate without inventing or discarding data");
     const auto voice_file=directory/"legacy-voice-readback.ps2ncp";
     write_file_atomically(voice_file,legacy_envelope(current_info,current_payload,"5662ca9c89ac26516224d7aa8f3e777e8d72ec24255364cfedd3481e13db1882"));
     rejects([&]{(void)load_checkpoint(voice_file,resumed,restored,context);},"schema");

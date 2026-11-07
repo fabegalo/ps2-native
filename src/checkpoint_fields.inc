@@ -32,7 +32,15 @@ template<class A> static void fields(A& a,GsRegisters& v){a(v.mode_,v.diagnostic
 }
 template<class A> static void fields(A& a,GsVram& v){a(v.words_,v.known_,v.revision_,v.pixel_writes_);}
 template<class A> static void fields(A& a,Gif& v){a(v.path_,v.ctrl_,v.mode_,v.vif_path3_mask_,v.path1_requested_,v.in_packet_,v.end_of_packet_,v.loops_left_,v.nreg_,v.regs_,v.reg_index_,v.written_,v.format_,v.q_,v.packets_);}
-template<class A> static void fields(A& a,Vif& v){a(v.unit_,v.direct_left_,v.direct_buffer_,v.direct_words_,v.mpg_left_,v.mpg_address_,v.mpg_low_,v.unpack_left_,v.unpack_address_,v.unpack_index_,v.unpack_cycle_,v.unpack_components_,v.unpack_cl_,v.unpack_wl_,v.unpack_mode_,v.unpack_mask_,v.unpack_data_,v.error_mask_,v.mark_,v.code_,v.pending_,v.pending_index_,v.mark_detected_,v.dbf_,v.fifo_,v.input_,v.input_index_,v.input_count_,v.waiting_,v.padding_,v.gif_waiting_,v.programmed_);}
+template<class A> static void fields(A& a,Vif::Input& v){a(v.words,v.first,v.count);}
+template<class A> static void fields(A& a,Vif& v){a(v.unit_,v.direct_left_,v.direct_buffer_,v.direct_words_,v.mpg_left_,v.mpg_address_,v.mpg_low_,v.unpack_left_,v.unpack_address_,v.unpack_index_,v.unpack_cycle_,v.unpack_components_,v.unpack_cl_,v.unpack_wl_,v.unpack_mode_,v.unpack_mask_,v.unpack_data_,v.error_mask_,v.mark_,v.code_,v.pending_,v.pending_index_,v.mark_detected_,v.dbf_,v.fifo_,v.input_,v.input_index_,v.input_count_,v.waiting_,v.padding_,v.gif_waiting_,v.programmed_);
+    if(!a.legacy_vif_payload) {
+        std::uint64_t tag=0x31304B4E55464956ull,count=v.fifo_.size();
+        a(tag,count);
+        if(tag!=0x31304B4E55464956ull || count!=v.fifo_.size())throw std::runtime_error("checkpoint VIF uncertainty extension differs");
+        a(v.input_.unknown,v.unpack_unknown_);for(auto& input:v.fifo_)a(input.unknown);
+    }else if constexpr(A::reading){v.input_.unknown={};v.unpack_unknown_={};for(auto& input:v.fifo_)input.unknown={};}
+}
 template<class A> static void fields(A& a,VuControl& v){a(v.micro_,v.path1_,v.queued_path1_,v.pending_q_,v.pending_q1_,v.registers_,v.diagnostic_power_two_carry_,v.unknown_,v.vu1_integers_,v.vu1_controls_,v.data_,v.vectors_,v.vector_bounds_,v.accumulator_bounds_,v.q_bounds_,v.accumulator_,v.accumulator1_,v.vu1_vectors_,v.micro0_,v.micro1_,v.data1_);}
 template<class A> static void fields(A& a,IpuRegisters& v){a(v.control_,v.bit_position_,v.input_,v.pending_,v.thresholds_,v.iq_,v.vq_);}
 template<class A> static void fields(A& a,MchRegisters& v){a(v.chain_,v.pending_,v.pending_read_,v.ricm_,v.busy_until_,v.write_data_,v.read_data_,v.setr_done_,v.control_,v.control_busy_until_);}
