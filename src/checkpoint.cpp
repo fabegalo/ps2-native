@@ -448,7 +448,8 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
     if(info.runtime_sha256!=PS2N_CHECKPOINT_RUNTIME && !context.allow_runtime_change)throw std::runtime_error("checkpoint runtime changed; explicit reviewed allow-runtime-change is required");
     if(info.scenario_sha256!=context.scenario_sha256)throw std::runtime_error("checkpoint scenario identity differs");
     if(info.bindings_sha256!=CheckpointAccess::bindings(memory,context.expected_disc_sha256))throw std::runtime_error("checkpoint firmware/profile/NVM/disc identity differs");
-    const bool legacy_gpr_bounds=info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA;
+    // Reviewed helper-only aliases retain the tagged CPU lane certificates.
+    const bool legacy_gpr_bounds=info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !same_ipu_fields;
     EEState staged_state;Memory staged_memory=memory;
     Reader a(std::span<const std::uint8_t>(parsed.file).subspan(parsed.payload));a.legacy_scalar_flags=legacy_scalar_flags;a.legacy_spu2=legacy_spu2;a.legacy_vertex_st=legacy_vertex_st;
     a.legacy_from_spr=legacy_from_spr;a.legacy_voice_readback=legacy_voice_readback;a.legacy_vif_payload=legacy_vif_payload;a.legacy_micro_bounds=legacy_micro_bounds;a.legacy_transfer_bounds=legacy_transfer_bounds;a.legacy_vif_interrupt=legacy_vif_interrupt;a.legacy_graphics_bus=legacy_graphics_bus;a.legacy_gpr_bounds=legacy_gpr_bounds;

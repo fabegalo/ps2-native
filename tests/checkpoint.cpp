@@ -21,10 +21,10 @@ void finish_transfer(Memory& memory) {
     require(gs.vram().read(0,64,0,7,0)==0x88888888u,"restored partial IMAGE transfer finishes at the correct pixel");
 }
 std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const std::uint8_t> payload,
-    const char* schema="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88",bool current_layout=false) {
+    const char* schema="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88",bool current_layout=false,bool keep_cpu_bounds=false) {
     std::vector<std::uint8_t> old_payload(payload.begin(),payload.end());
     const std::array<std::uint8_t,8> cpu_tag{'G','P','R','B','N','D','0','1'};
-    for(unsigned reg=0;reg<32;++reg) {
+    for(unsigned reg=0;!keep_cpu_bounds && reg<32;++reg) {
         const auto at=std::search(old_payload.begin(),old_payload.end(),cpu_tag.begin(),cpu_tag.end());
         require(at!=old_payload.end() && at+12<=old_payload.end() && std::all_of(at+8,at+12,[](auto b){return b==0;}),"legacy CPU fixture has no new lane certificates");
         old_payload.erase(at,at+12);
@@ -143,6 +143,17 @@ int main(int argc,char** argv)try {
         save_checkpoint(file,state,memory,boundary,context);const auto expected=checkpoint_state_sha256(state,memory);
         auto restoredStateOwner=std::make_unique<EEState>();auto& restored=*restoredStateOwner;auto restoredOwner=std::make_unique<Memory>();auto& resumed=*restoredOwner;prepare_direct_elf(image,nullptr,restored,resumed);(void)load_checkpoint(file,restored,resumed,context);
         require(checkpoint_state_sha256(restored,resumed)==expected && restored.gpr_candidates[9].bounds==state.gpr_candidates[9].bounds,"checkpoint retains all CPU lane certificates");
+        const auto info=inspect_checkpoint(file);const auto bytes=read_file(file);
+        const auto payload=std::span<const std::uint8_t>(bytes).last(static_cast<std::size_t>(info.payload_bytes));
+        auto reviewed=context;reviewed.allow_runtime_change=true;
+        for(const auto* schema:{"11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b",
+                               "db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1"}) {
+            const auto alias=directory/"gpr-lane-helper-alias.ps2ncp";
+            write_file_atomically(alias,legacy_envelope(info,payload,schema,true,true));
+            (void)load_checkpoint(alias,restored,resumed,reviewed);
+            require(checkpoint_state_sha256(restored,resumed)==expected && restored.gpr_candidates[9].bounds==state.gpr_candidates[9].bounds,
+                "helper-only schema aliases preserve populated CPU lane certificates and shared domains");
+        }
     }
     {
         auto image=program();EEState state;auto storage=std::make_unique<Memory>();auto& memory=*storage;prepare_direct_elf(image,nullptr,state,memory);
@@ -386,7 +397,7 @@ int main(int argc,char** argv)try {
     for(const auto* schema:{"11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b",
                            "db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1"}) {
         const auto previous=directory/"before-ipu-bit-reader.ps2ncp";
-        write_file_atomically(previous,legacy_envelope(current_info,current_payload,schema,true));
+        write_file_atomically(previous,legacy_envelope(current_info,current_payload,schema,true,true));
         rejects([&]{(void)load_checkpoint(previous,resumed,restored,context);},"schema");
         (void)load_checkpoint(previous,resumed,restored,reviewed);
         require(checkpoint_state_sha256(resumed,restored)==exact,"audited IPU helper transition preserves every checkpoint byte");
