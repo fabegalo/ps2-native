@@ -3798,21 +3798,27 @@ std::optional<bool> Iop::interrupt_line() const {
     if ((**ctrl & 1u) == 0u) return false;
     const auto* mask = latch(kIMask);
     if (mask == nullptr || !*mask) return std::nullopt;
-    if ((istat_ & **mask & modeled_irqs()) != 0u) return true;
-    if ((**mask & ~modeled_irqs()) != 0u) return std::nullopt;
+    const auto modeled = modeled_irqs(**mask);
+    if ((istat_ & **mask & modeled) != 0u) return true;
+    if ((**mask & ~modeled) != 0u) return std::nullopt;
     return false;
 }
 
 std::uint32_t Iop::modeled_irqs() const noexcept {
+    return modeled_irqs(~0u);
+}
+
+std::uint32_t Iop::modeled_irqs(std::uint32_t relevant) const noexcept {
     // Cold SIO2 has no in-flight command. Every path that could start one
     // (CTRL.0, FIFO, DMA) refuses before changing state, so IRQ17 cannot rise.
     // This proves the idle source only, not peripheral responses or timing.
     // The opt-in cold-state experiment has no active voices or inputs. Only
     // quiet clocks with effects/IRQ disabled are accepted; no IRQ9 is created.
-    return (dev9_irq_acknowledged_ && dev9_irq_masked() ? (1u<<13u) : 0u) |
+    // Masked sources cannot affect this decision; full I_STAT reads use ~0u.
+    return ((relevant&(1u<<13u)) && dev9_irq_acknowledged_ && dev9_irq_masked() ? (1u<<13u) : 0u) |
            kTimerIrqs | kDmaIrq | (1u<<2u) | (sio2_irq_acknowledged_ ? (1u<<17u) : 0u) |
            (diagnostic_spu2_quiescent_ ? (1u<<9u) : 0u) |
-           (latch(0x1F801610u) ? (1u<<22u) : 0u) |
+           ((relevant&(1u<<22u)) && latch(0x1F801610u) ? (1u<<22u) : 0u) |
            (video_.state != GsRegisters::VerticalClock::State::Unknown ? kVblankStartIrq | kVblankEndIrq : 0u);
 }
 

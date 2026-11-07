@@ -240,6 +240,25 @@ void check_vblank_polling() {
     }
 }
 
+void check_interrupt_source_masks() {
+    constexpr auto known = (1u<<2u)|(1u<<3u)|(1u<<4u)|(1u<<5u)|(1u<<6u)|
+                           (1u<<14u)|(1u<<15u)|(1u<<16u);
+    for(unsigned bit=0;bit<32u;++bit) {
+        Assembler a(0xBFC00000u);
+        a.la(t1,0xBF800000u);a.la(t0,1u<<bit);a.sw(t0,0x1074,t1);
+        a.ori(t0,zero,1u);a.sw(t0,0x1078,t1);
+        a.la(t0,0x00400401u);a.mtc0(t0,Status);
+        a.label("spin");a.beq(zero,zero,"spin");a.nop();
+        const auto rom=rom_of(a);Iop iop;iop.reset(rom,&kProfile);iop.run_until(40);
+        if(known&(1u<<bit))require(!iop.stopped(),"known masked IRQ source "+std::to_string(bit));
+        else {
+            require(iop.stopped(),"unknown enabled IRQ source "+std::to_string(bit));
+            require(iop.stop_reason()->find("interrupts enabled while the interrupt line depends on")!=std::string::npos,
+                "IRQ source "+std::to_string(bit)+": "+*iop.stop_reason());
+        }
+    }
+}
+
 void check_vblank_interrupts() {
     // Handler at 0xBFC00180 (SR.BEV): records EPC, Cause and the VBLANK/DMA
     // bits of I_STAT, acknowledges them and returns to EPC with RFE.
@@ -664,6 +683,7 @@ int main() {
         check_vertical_clock();
         check_vblank_polling();
         check_vblank_interrupts();
+        check_interrupt_source_masks();
         check_partial_values();
         check_sif();
         check_ee_devices();

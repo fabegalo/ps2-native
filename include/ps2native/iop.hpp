@@ -415,6 +415,9 @@ private:
     // I_STAT bits whose state is modeled: the timers, and VBLANK once the GS
     // vertical clock is known.
     [[nodiscard]] std::uint32_t modeled_irqs() const noexcept;
+    // RUNTIME_HELPERS_BEGIN
+    [[nodiscard]] std::uint32_t modeled_irqs(std::uint32_t relevant) const noexcept;
+    // RUNTIME_HELPERS_END
     [[nodiscard]] std::uint32_t timer_read(unsigned index, std::uint32_t reg, const std::string& name);
     void timer_write(unsigned index, std::uint32_t reg, std::optional<std::uint32_t> value, const std::string& name);
     [[nodiscard]] std::uint32_t reg(unsigned index) const;
