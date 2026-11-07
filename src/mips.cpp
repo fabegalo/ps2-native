@@ -334,6 +334,10 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
         if(rs==16 && rt==0 && funct==7)return make(MipsOpcode::NegS);
         if(rs==16 && funct==0x1Cu)return make(MipsOpcode::MaddS);
         if(rs==16 && funct==0x18u && sa==0)return make(MipsOpcode::AddaS);
+        if(rs==16 && funct==0x1Au && sa==0)return make(MipsOpcode::MulaS);
+        if(rs==16 && funct==0x1Fu && sa==0)return make(MipsOpcode::MsubaS);
+        if(rs==16 && funct==0x1Eu && sa==0)return make(MipsOpcode::MaddaS);
+        if(rs==16 && funct==0x1Du)return make(MipsOpcode::MsubS);
         if(word&0x7FFu)return std::nullopt;
         switch(rs) {
             case 0: return make(MipsOpcode::Mfc1);

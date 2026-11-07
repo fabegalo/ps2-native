@@ -367,7 +367,7 @@ int main() try {
         "CVT.W.S eliminates fraction uncertainty only when every allowed value truncates to the same integer");
     for(const auto word : {math(4,11,0,6),math(0x1C,11,6,2),math(0x18,0,6,2)}) {
         state.fpr[11]=0x12345678;state.unknown_fpr_bits[11]=0;state.fcr31=0x0183C079;
-        rejects([&]{step(word);},"unknown FPR bits");
+        rejects([&]{step(word);},word==math(0x1C,11,6,2) ? "not certified" : "unknown FPR bits");
         require(state.fpr[11]==0x12345678 && !state.unknown_fpr_bits[11] && state.fcr31==0x0183C079,
             "an unsupported uncertain numeric consumer refuses before altering its destination or flags");
     }

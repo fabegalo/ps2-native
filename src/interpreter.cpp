@@ -572,22 +572,57 @@ public:
             else s_.fcr31=(s_.reg32(rt)&0x0083C078u)|0x01000001u;
         }
     }
-    void madd(std::uint32_t word) {
+    void mula(std::uint32_t word) {
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
-            stop(StopKind::GuestException,"MADD.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
-        require_fpr_known(ee::rd(word),"MADD.S");require_fpr_known(ee::rt(word),"MADD.S");
-        const auto fs=s_.fpr[ee::rd(word)],ft=s_.fpr[ee::rt(word)];
-        // The documented zero-product path copies ACC without an add/round.
-        // Denormal inputs are signed zero on the EE. General nonzero products
-        // require the R5900 multiplier/accumulator rounding model, not host IEEE FMA.
-        if((fs&0x7F800000u) && (ft&0x7F800000u))
-            stop(StopKind::NotModeled,"MADD.S nonzero product: R5900 multiplier rounding not modeled");
+            stop(StopKind::GuestException,"MULA.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        require_fpr_known(ee::rd(word),"MULA.S");require_fpr_known(ee::rt(word),"MULA.S");
+        auto flags=s_.fcr31;
+        const auto product=ee_fpu_multiply(s_.fpr[ee::rd(word)],s_.fpr[ee::rt(word)],flags,
+            m_.begin_fpu_arithmetic() ? CoarseEarlyDigits : NoCarryExperiment);
+        if(!product)stop(StopKind::NotModeled,"MULA.S product is not certified; uncertain accumulator state is not modeled");
+        s_.fpu_acc=*product;s_.fcr31=flags;
+    }
+    void multiply_accumulate(MipsOpcode op,std::uint32_t word) {
+        const bool subtract=op==MipsOpcode::MsubaS || op==MipsOpcode::MsubS;
+        const char* operation=op==MipsOpcode::MsubaS ? "MSUBA.S" : op==MipsOpcode::MsubS ? "MSUB.S" :
+            op==MipsOpcode::MaddaS ? "MADDA.S" : "MADD.S";
+        if(!(s_.cp0(Cop0::Status)&kStatusCU1))
+            stop(StopKind::GuestException,std::string(operation)+" with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        const auto fs=ee::rd(word),ft=ee::rt(word);
         if((s_.fpu_acc&0x7F800000u)==0x7F800000u)
-            stop(StopKind::NotModeled,"MADD.S accumulator overflow state not modeled");
-        s_.fpr[ee::sa(word)]=s_.fpu_acc;
-        s_.unknown_fpr_bits[ee::sa(word)]=0;
-        s_.fpr_affine[ee::sa(word)]={};
-        s_.fcr31&=~0x0000C000u; // no overflow/underflow from an exact zero product
+            stop(StopKind::NotModeled,std::string(operation)+" accumulator overflow state not modeled");
+        const auto diagnostic=m_.begin_fpu_arithmetic();
+        std::shared_ptr<const std::vector<std::uint32_t>> candidates;
+        std::optional<VuFloatResult> product;
+        if(!s_.unknown_fpr_bits[fs] && !s_.unknown_fpr_bits[ft]) {
+            std::uint32_t flags=0;
+            if(const auto value=ee_fpu_multiply(s_.fpr[fs],s_.fpr[ft],flags,diagnostic ? CoarseEarlyDigits : NoCarryExperiment))
+                product=VuFloatResult{{*value,0},flags};
+        }
+        if(!product)product=finite_fpu(MipsOpcode::MulS,{s_.fpr[fs],s_.unknown_fpr_bits[fs]},
+            {s_.fpr[ft],s_.unknown_fpr_bits[ft]},fpu_relation(fs),fpu_relation(ft),fs==ft,candidates,diagnostic);
+        if(!product)stop(StopKind::NotModeled,std::string(operation)+" product is not certified");
+        if(product->flags&0xC000u)
+            stop(StopKind::NotModeled,std::string(operation)+" nonnormal intermediate state is not modeled");
+        std::optional<std::uint32_t> result,result_flags;
+        const auto consume=[&](std::uint32_t value) {
+            if((value&0x7F800000u)==0x7F800000u)
+                stop(StopKind::NotModeled,std::string(operation)+" nonnormal intermediate state is not modeled");
+            auto flags=(s_.fcr31&~0xC000u)|product->flags;
+            // Retain ADD.S's guard column and signed-zero rules, including
+            // a zero product, rather than host FMA or fused rounding.
+            const auto sum=ee_fpu_add(s_.fpu_acc,value^(subtract ? 0x80000000u : 0u),flags);
+            if((flags&0xC000u) || (sum&0x7F800000u)==0x7F800000u)
+                stop(StopKind::NotModeled,std::string(operation)+" nonnormal accumulation state is not modeled");
+            if((result && *result!=sum) || (result_flags && *result_flags!=flags))
+                stop(StopKind::NotModeled,std::string(operation)+" result is not certified across all product candidates");
+            result=sum;result_flags=flags;
+        };
+        if(candidates)for(const auto value:*candidates)consume(value);
+        else consume(product->word.value);
+        if(op==MipsOpcode::MsubaS || op==MipsOpcode::MaddaS)s_.fpu_acc=*result;
+        else {s_.fpr[ee::sa(word)]=*result;s_.unknown_fpr_bits[ee::sa(word)]=0;s_.fpr_affine[ee::sa(word)]={};}
+        s_.fcr31=*result_flags;
     }
     void adda(std::uint32_t word) {
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
@@ -816,7 +851,9 @@ void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {
             break;
         }
         case MipsOpcode::MulS: cpu.fpu_binary(instruction.opcode,word);break;
-        case MipsOpcode::MaddS: cpu.madd(word);break;
+        case MipsOpcode::MaddS: case MipsOpcode::MsubaS: case MipsOpcode::MaddaS: case MipsOpcode::MsubS:
+            cpu.multiply_accumulate(instruction.opcode,word);break;
+        case MipsOpcode::MulaS: cpu.mula(word);break;
         case MipsOpcode::AddaS: cpu.adda(word);break;
         case MipsOpcode::Addi: case MipsOpcode::Add: case MipsOpcode::Sub:
         case MipsOpcode::Daddi: case MipsOpcode::Dadd: case MipsOpcode::Dsub:
