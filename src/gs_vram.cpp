@@ -235,6 +235,11 @@ std::uint32_t GsVram::read_bits(std::uint32_t base,unsigned width,unsigned psm,u
 void GsVram::write(std::uint32_t base, unsigned width, unsigned psm, unsigned x, unsigned y,
                    std::uint32_t value, std::uint32_t preserve, std::uint32_t unknown, bool conditional) {
     const auto addr = address(base, width, psm, x, y);
+    write_addressed(addr,psm,y,value,preserve,unknown,conditional);
+}
+void GsVram::write_addressed(std::uint32_t addr, unsigned psm, unsigned y,
+                            std::uint32_t value, std::uint32_t preserve,
+                            std::uint32_t unknown, bool conditional) {
     const auto at = addr / 4u, shift = (addr & 3u) * 8u + (psm == 20u ? (y & 2u) * 2u : 0u);
     if (psm == 1u) preserve |= 0xFF000000u;
     if (psm == 19u) preserve |= 0xFFFFFF00u;

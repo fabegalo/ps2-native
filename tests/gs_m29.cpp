@@ -109,6 +109,17 @@ void setup_transfer(GsRegisters& gs, unsigned psm, unsigned w, unsigned h, unsig
     gs.general_write(0x52, w | (std::uint64_t{h}<<32)); gs.general_write(0x53,0);
 }
 void check_transfer_gif() {
+    for(unsigned psm:{0u,2u,19u}) {
+        GsRegisters packed;packed.reset(0);packed.diagnostic_texture_precision(8u);
+        setup_transfer(packed,psm,3u,1u);
+        packed.image_write(0x8877665544332211ull,0xFFEEDDCCBBAA0099ull);
+        const std::array<std::uint32_t,3> expected=psm==0u ? std::array<std::uint32_t,3>{0x44332211u,0x88776655u,0xBBAA0099u} :
+            psm==2u ? std::array<std::uint32_t,3>{0x2211u,0x4433u,0x6655u} : std::array<std::uint32_t,3>{0x11u,0x22u,0x33u};
+        for(unsigned x=0;x<3u;++x)require(packed.vram().read(0,64,psm,x,0)==expected[x],"whole-pixel HWREG packing keeps the final short group");
+        require(packed.vram().pixel_writes()==3u,"whole-pixel upload stops inside its final HWREG word");
+        rejects([&]{(void)packed.vram().read(0,64,psm,3,0);},"unwritten bits");
+    }
+
     {
         GsRegisters indexed;indexed.reset(0);indexed.diagnostic_texture_precision(8);
         indexed.general_write(0x50,(2ull<<48)|(19ull<<56));indexed.general_write(0x51,0);

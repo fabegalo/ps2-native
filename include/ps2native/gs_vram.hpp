@@ -85,6 +85,13 @@ private:
     void cache_page_knowledge(unsigned page) const;
     void execute_pending(const std::array<bool,kPages>* read_pages=nullptr,unsigned read_page=kPages) const;
     // HOST_INPUT_END
+    // RUNTIME_HELPERS_BEGIN
+    friend class GsRegisters;
+    // The caller obtained this byte address through address(), with all checks intact.
+    void write_addressed(std::uint32_t address, unsigned psm, unsigned y,
+                         std::uint32_t value, std::uint32_t preserve,
+                         std::uint32_t unknown, bool conditional);
+    // RUNTIME_HELPERS_END
     void write_word(unsigned at, std::uint32_t value, std::uint32_t mask,
                     std::uint32_t unknown, bool conditional);
     mutable std::vector<std::uint32_t> words_, known_;

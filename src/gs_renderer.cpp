@@ -119,22 +119,35 @@ void GsRegisters::transfer_data(std::uint64_t data) {
     auto& t = transfer_;
     // GS manual HWREG: outside an active host-to-local transfer, no operation.
     if (!t.active) return;
+    const auto write_pixel=[&](std::uint32_t value) {
+        const auto x=(t.x+t.pixel%t.width)&2047u,y=(t.y+t.pixel/t.width)&2047u;
+        const auto address=GsVram::address(t.base,t.bw,t.psm,x,y);
+        texture_transfer_write(address);
+        vram_.write_addressed(address,t.psm,y,value,0u,0u,false);
+    };
     if (t.psm == 20u || t.psm == 36u || t.psm == 44u) {
         for(unsigned i=0;i<16u && t.active;++i) {
-            texture_transfer_write(GsVram::address(t.base,t.bw,t.psm,(t.x+t.pixel%t.width)&2047u,(t.y+t.pixel/t.width)&2047u));
-            vram_.write(t.base,t.bw,t.psm,(t.x+t.pixel%t.width)&2047u,
-                        (t.y+t.pixel/t.width)&2047u,static_cast<std::uint32_t>((data>>(i*4u))&15u));
+            write_pixel(static_cast<std::uint32_t>((data>>(i*4u))&15u));
             if(++t.pixel==t.width*t.height) {t.active=false;finish_transfer();}
         }
         return;
     }
     const unsigned bytes = (t.psm == 19u || t.psm == 27u) ? 1u : (t.psm==2u || t.psm==10u || t.psm==50u || t.psm==58u) ? 2u : (t.psm == 1u || t.psm == 49u) ? 3u : 4u;
+    if(bytes!=3u && !t.pending_bytes && !t.pending) {
+        const auto mask=UINT32_MAX>>((4u-bytes)*8u);
+        for(unsigned offset=0;offset<8u && t.active;offset+=bytes) {
+            t.pending=static_cast<std::uint32_t>(data>>(offset*8u))&mask;
+            t.pending_bytes=bytes;
+            write_pixel(t.pending);
+            t.pending=0u;t.pending_bytes=0u;
+            if(++t.pixel==t.width*t.height) {t.active=false;finish_transfer();}
+        }
+        return;
+    }
     for (unsigned i = 0; i < 8u && t.active; ++i) {
         t.pending |= static_cast<std::uint32_t>((data >> (8u * i)) & 255u) << (8u * t.pending_bytes++);
         if (t.pending_bytes != bytes) continue;
-        texture_transfer_write(GsVram::address(t.base,t.bw,t.psm,(t.x+t.pixel%t.width)&2047u,(t.y+t.pixel/t.width)&2047u));
-        vram_.write(t.base, t.bw, t.psm, (t.x + t.pixel % t.width) & 2047u,
-                     (t.y + t.pixel / t.width) & 2047u, t.pending);
+        write_pixel(t.pending);
         t.pending = 0u; t.pending_bytes = 0u;
         if (++t.pixel == t.width * t.height) { t.active = false; finish_transfer(); }
     }
