@@ -126,6 +126,11 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
         const auto rom1=load_bios_rom1(read_file(path("rom1")),bios,*hardware,identity);
         auto memory=std::make_unique<Memory>();EEState ee;
         prepare_ee_boot(bios,nullptr,ee,*memory,hardware,&nvm,nullptr,&rom1);
+        if(config.contains("rtc_epoch_utc")) {
+            bool valid=false;const auto epoch=config.value("rtc_epoch_utc").toString().toULongLong(&valid);
+            if(!valid)throw std::runtime_error("rtc_epoch_utc must be a decimal UTC epoch string");
+            memory->configure_rtc(epoch);
+        }
         const auto medium=required(config,"disc_medium");
         if(medium!="ps2-cd" && medium!="ps2-dvd")throw std::runtime_error("disc_medium must be ps2-cd or ps2-dvd");
         memory->mount_disc(std::make_shared<DiscImage>(path("disc")),medium=="ps2-cd"?Iop::DiscMedium::Ps2Cd:Iop::DiscMedium::Ps2Dvd,true);

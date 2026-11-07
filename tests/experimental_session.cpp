@@ -39,6 +39,7 @@ struct Fixture {
     QJsonObject config;
     void prepare(EEState& ee,Memory& memory) {
         prepare_ee_boot(bios,nullptr,ee,memory,hardware,&nvm,nullptr,&rom1);
+        memory.configure_rtc(1794028522ull);
         memory.mount_disc(std::make_shared<DiscImage>(root/"disc.iso"),Iop::DiscMedium::Ps2Cd,true);
     }
     explicit Fixture(const std::filesystem::path& directory):root(directory) {
@@ -89,6 +90,7 @@ struct Fixture {
         auto memory=std::make_unique<Memory>();EEState ee;
         DiagnosticAssumptions assumptions;assumptions.spu2_quiescent_reset=true;assumptions.spu2_pio_word_cycles=1;
         prepare_ee_boot(bios,nullptr,ee,*memory,hardware,&nvm,&assumptions,&rom1);
+        memory->configure_rtc(1794028522ull);
         memory->mount_disc(std::make_shared<DiscImage>(root/"disc.iso"),Iop::DiscMedium::Ps2Cd,true);
         ee.pc=0x80010000;memory->write32(ee.pc,0x1000FFFF);memory->write32(ee.pc+4,0);
         auto& iop=const_cast<Iop&>(memory->iop());iop.diagnostic_sio2_digital_pad(0,0xFFFF,32);
@@ -102,7 +104,7 @@ struct Fixture {
         gs.write(kGsSmode1,8,2ull<<kSmode1CmodShift,0,{});
         BootReport boundary;boundary.outcome=BootOutcome::BudgetExhausted;boundary.pc=ee.pc;
         save_checkpoint(root/"start.ps2ncp",ee,*memory,boundary,context);
-        config={{"format",1},{"rom0","rom0.bin"},{"rom0_sha256",qstr(bios.sha256)},
+        config={{"rtc_epoch_utc","1794028522"},{"format",1},{"rom0","rom0.bin"},{"rom0_sha256",qstr(bios.sha256)},
             {"console","SCPH-70004:GH-032-11"},{"nvm","nvm.bin"},{"nvm_sha256",qstr(nvm.sha256)},
             {"rom1","rom1.bin"},{"rom1_identity",QJsonObject{{"rom0_sha256",qstr(bios.sha256)},{"romver",qstr(bios.version.romver)},
                 {"model",qstr(identity.model)},{"mainboard",qstr(identity.mainboard)},{"sha256",qstr(identity.sha256)},
@@ -160,6 +162,16 @@ int main(int argc,char** argv)try {
     require(frames[0]==frames[1] && !frames[0].empty(),"identical real VBLANK RGBA across slice boundaries");
     session.resume();until([&]{return !session.paused();},"resume");session.stop();
     until([&]{return !session.active();},"stop");require(session.last_error().empty(),session.last_error());
+    for(const auto rtc:{QStringLiteral("invalid"),QStringLiteral("0")}) {
+        auto invalid=fixture.config;invalid["rtc_epoch_utc"]=rtc;json(fixture.root/"bad-rtc.json",invalid);
+        session.setManifest(qpath(fixture.root/"bad-rtc.json"));session.begin(false);
+        until([&]{return !session.active();},"invalid RTC refusal");
+        require(session.last_error().find("RTC")!=std::string::npos || session.last_error().find("rtc_epoch_utc")!=std::string::npos,"invalid RTC fails visibly");
+    }
+    auto missingRtc=fixture.config;missingRtc.remove("rtc_epoch_utc");json(fixture.root/"missing-rtc.json",missingRtc);
+    session.setManifest(qpath(fixture.root/"missing-rtc.json"));session.begin(false);
+    until([&]{return !session.active();},"missing RTC refusal");
+    require(session.last_error().find("identity differs")!=std::string::npos,"checkpoint RTC binding remains required");
     auto bad=fixture.config;bad["scenario_sha256"]=QString(64,'0');json(fixture.root/"bad.json",bad);
     session.setManifest(qpath(fixture.root/"bad.json"));session.begin(false);until([&]{return !session.active();},"identity refusal");
     require(session.last_error().find("scenario identity")!=std::string::npos,"identity mismatch fails visibly");
