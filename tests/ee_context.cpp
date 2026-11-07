@@ -992,6 +992,49 @@ void vector_setup() {
     require(memory.observe_vu_vector(4).low.value==0x4000000040000000ull &&
             memory.observe_vu_vector(4).high.value==0xC0400000C0400000ull,"general vector subtraction uses actual per-lane operands");
 }
+void vector_accumulator_add() {
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    EEState s;s.pc=0x80001000;s.set_cp0(Cop0::Status,1u<<30);
+    const ObservedQuadword source{{0x400000003F800000ull,0},{0x4080000040400000ull,0}};
+    memory.write_vu_vector(1,source);
+    memory.write_vu_vector(2,{{0xBF80000000000000ull,0},{0x4080000040000000ull,0}});
+    constexpr std::uint32_t expected[4][4]{
+        {0x3F800000,0x40000000,0x40400000,0x40800000},
+        {0,0x3F800000,0x40000000,0x40400000},
+        {0x40400000,0x40800000,0x40A00000,0x40C00000},
+        {0x40A00000,0x40C00000,0x40E00000,0x41000000}};
+    constexpr std::uint32_t original[]{0x3F800000,0x40000000,0x40400000,0x40800000};
+    for(bool interpreted:{false,true})for(unsigned bc=0;bc<4;++bc)for(unsigned mask=0;mask<16;++mask) {
+        memory.vu_product(0,1,0,15,3,false,true);
+        const auto code=0x4A00003Cu|(mask<<21u)|(2u<<16u)|(1u<<11u)|bc;
+        require(decode_mips(0,code).opcode==MipsOpcode::VaddaBc,"VADDA broadcast is supported by AOT decode");
+        if(interpreted) {
+            memory.write32(s.pc,code);std::uint64_t executed=0;
+            ExecutionContext ctx{s,memory,executed,1,~0u};interpret_instruction(ctx);
+        } else ee::exec<MipsOpcode::VaddaBc>(s,memory,s.pc,code);
+        require(memory.read_vu_control(17)==((bc==1 && (mask&8u)) ? 8u : 0u),"VADDA MAC flags use selected results");
+        require(memory.observe_vu_vector(1).low.value==source.low.value &&
+                memory.observe_vu_vector(2).low.value==0xBF80000000000000ull,"VADDA does not write a vector register");
+        memory.vu_product(3,0,0,15,0,true,false);
+        const auto result=memory.observe_vu_vector(3);
+        for(unsigned lane=0;lane<4;++lane) {
+            const auto half=lane<2 ? result.low : result.high;
+            require(!half.unknown && static_cast<std::uint32_t>(half.value>>((lane&1u)*32u))==
+                ((mask&(8u>>lane)) ? expected[bc][lane] : original[lane]),"VADDA preserves masked accumulator lanes");
+        }
+    }
+    require(decode_r5900(0,0x4BE0083Cu).opcode==MipsOpcode::VaddaBc,"observed VADDAx encoding");
+    memory.vu_product(0,1,0,15,3,false,true);
+    memory.write_vu_vector(1,{{source.low.value,0},{0x40400000u,0xFFFFFFFF00000000ull}});
+    const auto status=memory.read_vu_control(16),mac=memory.read_vu_control(17);
+    rejects([&]{ee::exec<MipsOpcode::VaddaBc>(s,memory,0,0x4BE2083Cu);},"unknown operands");
+    require(memory.read_vu_control(16)==status && memory.read_vu_control(17)==mac,"refused VADDA preserves flags");
+    memory.vu_product(3,0,0,15,0,true,false);
+    require(memory.observe_vu_vector(3).low.value==source.low.value &&
+            memory.observe_vu_vector(3).high.value==source.high.value,"refused VADDA preserves ACC");
+    s.set_cp0(Cop0::Status,0);
+    rejects([&]{ee::exec<MipsOpcode::VaddaBc>(s,memory,0,0x4BE0083Cu);},"Status.CU2 = 0");
+}
 void dma_idle_knowledge() {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_reg32(8,0xB000C000u);
@@ -1134,6 +1177,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {interpreter_decode_cache();privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
+    try {interpreter_decode_cache();privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();vector_accumulator_add();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

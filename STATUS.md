@@ -1,5 +1,23 @@
 # STATUS — ps2-native
 
+## God of War: VADDA e primeira investigação local — 07/11/2026
+
+- Identificado o disco USA `SCUS-97399`, BOOT2 `SCUS_973.99;1`; ISO e ELF
+  validados por SHA-256, originais somente lidos.
+- Implementado `VADDAx/y/z/w` no caminho compartilhado EE/AOT, reutilizando
+  soma VU, flags, máscaras e certificados do acumulador. A recusa comercial
+  em `0x184430` foi superada no cenário de injeção experimental.
+- Interpretação e híbrido preservaram o mesmo estado completo após 687.182
+  instruções; a leitura seguinte em `0x17AAD8` depende de TLB em `0x4`.
+- Três regressões EE/VU/checkpoint passaram em MSVC Release. A ponte de
+  schema mantém os mesmos campos e exige opt-in; pilha ampliada só no teste.
+- Boot original continua recusando o encoder `0x7E`. No cenário diagnóstico
+  sem injeção, `0x100008` ainda contém código diferente do ELF; não vincular
+  a AOT do jogo só porque o PC coincide. Nenhum menu/gameplay demonstrado.
+- A continuação diagnóstica sem injeção atingiu 82.301.324 instruções;
+  parou no SPU2 `0x7CA` após superar SIO2 com hipótese explícita de reset.
+- Evidências e limites em [FIRST-GAME-STATUS](docs/FIRST-GAME-STATUS.md#god-of-war-primeiro-ensaio-e-vadda--07112026).
+
 ## IRQ do IOP medida no cenário reconstruído — 07/11/2026
 
 - Correção de restauração MCH e ponte de helpers auditada em `3d924d8`;

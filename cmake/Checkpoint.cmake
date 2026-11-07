@@ -120,6 +120,10 @@ endif()
 if(BUILD_TESTING)
     add_executable(ps2n-checkpoint-tests tests/checkpoint.cpp)
     target_link_libraries(ps2n-checkpoint-tests PRIVATE ps2n_core)
+    if(MSVC)
+        # The full-state fixtures exceed the default 1 MiB Windows test stack.
+        target_link_options(ps2n-checkpoint-tests PRIVATE /STACK:8388608)
+    endif()
     add_test(NAME native-complete-checkpoint COMMAND ps2n-checkpoint-tests "${CMAKE_CURRENT_BINARY_DIR}/checkpoint-test")
     set_tests_properties(native-complete-checkpoint PROPERTIES TIMEOUT 90)
     add_test(NAME native-checkpoint-cli COMMAND "${CMAKE_COMMAND}"

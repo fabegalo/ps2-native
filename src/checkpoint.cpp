@@ -347,16 +347,21 @@ CheckpointInfo inspect_checkpoint(const std::filesystem::path& path){return chec
 #ifndef PS2N_CHECKPOINT_SAVE_ONLY
 CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,Memory& memory,const CheckpointContext& context) {
     using namespace checkpoint_detail;validate_context(context);CheckpointAccess::validate_boundary(state,memory);auto parsed=parse(path);const auto& info=parsed.info;
-    // Q/RSQRT/product/PRNG helpers changed methods only, without wire fields.
+    // Q/RSQRT/product/PRNG and VADDA helpers changed methods only, without wire fields.
     const bool reviewed_vu_helper_layout=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1" ||
+        std::string_view(PS2N_CHECKPOINT_SCHEMA)=="50585f2224cd852e9ef36ef63b53e10fe41691975b7c38fe44dd5384280d08cc" ||
+        std::string_view(PS2N_CHECKPOINT_SCHEMA)=="5b6837b83bca95080309d6130db672871107ce48e7ff2b96ab113a6c77452cfd" ||
         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b" ||
         // IPU bit reader changes methods only; all serialized fields are unchanged.
         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="5a3fed18dfb483c07fddea413019e614a6ad69d786b6c191d632df37d6525bf5" ||
         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="e35e168d5df71786bca2c5a5cbe7fd657120e953659cd5163f47f1bf40db6205";
     const bool same_ipu_fields=context.allow_runtime_change &&
         (std::string_view(PS2N_CHECKPOINT_SCHEMA)=="5a3fed18dfb483c07fddea413019e614a6ad69d786b6c191d632df37d6525bf5" ||
-         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="e35e168d5df71786bca2c5a5cbe7fd657120e953659cd5163f47f1bf40db6205") &&
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="e35e168d5df71786bca2c5a5cbe7fd657120e953659cd5163f47f1bf40db6205" ||
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="50585f2224cd852e9ef36ef63b53e10fe41691975b7c38fe44dd5384280d08cc" ||
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="5b6837b83bca95080309d6130db672871107ce48e7ff2b96ab113a6c77452cfd") &&
         (info.schema_sha256=="11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b" ||
+         info.schema_sha256=="5a3fed18dfb483c07fddea413019e614a6ad69d786b6c191d632df37d6525bf5" ||
          info.schema_sha256=="db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1");
     // Audited byte-identical v1 transition: execution-only ee_semantics.hpp
     // moved from the state fingerprint to the runtime fingerprint. Pin both

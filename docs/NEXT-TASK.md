@@ -1,5 +1,29 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
+## God of War — pedido de execução, 07/11/2026
+
+Usar os artefatos novos em `out/gow/`, não os checkpoints de outros títulos.
+`VADDAx/y/z/w` já está implementado. O cenário de ELF injetado tem estado
+completo igual em interpretação/híbrido no ponto `0x17AAD8`, mas não é boot
+original: a próxima leitura usa `0x4` sem TLB. Não mapear a página zero ou
+inventar argumentos para fazer essa rota avançar.
+
+O cenário diagnóstico sem injeção chegou a `0x100008` após 47.413.743
+instruções e foi salvo em `disc-entry.ps2ncp`. A RAM contém `0x3C020016`,
+enquanto a AOT do jogo espera `0x70000C28`: primeiro acompanhar o código
+intermediário e confirmar carregamento/identidade do ELF, depois ligar sua
+tradução. Manter as hipóteses de firmware/SIO2/SPU2/GS explícitas e a rota
+original separada; o encoder ainda exige evidência externa do perfil.
+Na continuação sem AOT/injeção (`disc-loader.log`), o próximo bloqueio é
+o reset CTRL SIO2 em IOP `0x4E638` / 10.248.670 instruções; EE `0x80005F00`
+recusa SIF depois da parada do IOP. A hipótese existente exige ativação
+desde o reset, não pode ser ligada ao restaurar esse checkpoint.
+O ensaio separado `disc-sio2-cold.log` supera essa etapa e para no SPU2
+`0x7CA` em IOP `0x4E890` / 10.287.664 instruções (82.301.324 EE totais).
+Verificar a propagação do latch diagnóstico após os resets do IOP: o probe
+o solicitou no início, mas ele está desativado nessa fronteira. Preservar
+as recusas no modo original; não assumir efeitos físicos desse registrador.
+
 ## Continuar o cenário reconstruído e medido — 07/11/2026
 
 Há checkpoints novos identificados em `out/reconstruction/superbust/`; não usar

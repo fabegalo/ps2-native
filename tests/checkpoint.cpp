@@ -147,6 +147,7 @@ int main(int argc,char** argv)try {
         const auto payload=std::span<const std::uint8_t>(bytes).last(static_cast<std::size_t>(info.payload_bytes));
         auto reviewed=context;reviewed.allow_runtime_change=true;
         for(const auto* schema:{"11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b",
+                               "5a3fed18dfb483c07fddea413019e614a6ad69d786b6c191d632df37d6525bf5",
                                "db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1"}) {
             const auto alias=directory/"gpr-lane-helper-alias.ps2ncp";
             write_file_atomically(alias,legacy_envelope(info,payload,schema,true,true));

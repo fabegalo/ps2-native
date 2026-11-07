@@ -26,7 +26,7 @@ namespace ps2native {
     X(Pextlw) X(Pextuw) X(Ppacw) X(Psubb) X(Psubw) X(Pand) X(Pxor) X(Por) X(Pnor) X(Plzcw) \
     X(Vadd) X(Vmr32) X(Lqc2) X(Sqc2) \
     X(Vmul) X(VmulBc) X(Vmadd) X(VmaddBc) X(Vmula) X(VmulaBc) X(Vmadda) X(VmaddaBc) \
-    X(VaddBc) X(VsubBc) X(Vopmula) X(Vopmsub) \
+    X(VaddBc) X(VsubBc) X(VaddaBc) X(Vopmula) X(Vopmsub) \
     X(Vcallms) X(Vsqrt) X(Vdiv) X(Vwaitq) X(VaddQ) X(VmulQ) X(Vmove) X(Vnop) X(Vftoi) \
     X(CFalseS) X(CEqualS) X(CLessS) X(CLessEqualS) X(Bc1f) X(Bc1t) X(Bc1fl) X(Bc1tl) \
     X(Bc0f) X(Bc0t) X(Bc0fl) X(Bc0tl)

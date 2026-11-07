@@ -1,5 +1,101 @@
 # Primeiro jogo comercial — menu interativo, partida ainda bloqueada
 
+## God of War: primeiro ensaio e VADDA — 07/11/2026
+
+Pedido atual: fazer God of War rodar no ps2-native. **Ainda sem menu,
+imagem, áudio validado ou gameplay.** Disco USA `SCUS-97399`, volume
+`GODOFWAR`, 8.522.792.960 bytes; BOOT2 `SCUS_973.99;1`, entrada `0x100008`.
+ISO SHA-256 `0a41e19fae36ec8bd1f2a36d4ea42f120f525973d19b6d548eae792d1a15a338`;
+ELF SHA-256 `ec9397d252f14d4412daffaad6be1f1931769e56222b5dbb9b39a947fc8ad71c`.
+Não foram copiados firmware, disco ou traduções para o controle de versão.
+
+### Correção compartilhada
+
+A injeção experimental do ELF após firmware parcial chegou à instrução
+`0x4BE0083C` em `0x184430` após 674.823 instruções do título: `VADDAx`
+estava ausente. Agora o decoder e a semântica EE/AOT suportam as quatro
+variantes broadcast. A soma existente escreve somente os campos selecionados
+de ACC e seus certificados; preserva VF e campos não selecionados, atualiza
+MAC/STATUS e recusa operandos/estado excepcional de ACC não comprovados
+antes de publicar qualquer efeito. Sem regra específica de jogo.
+
+Fundamento: [VU Instruction Manual, ADDAx/y/z/w](https://lukasz.dk/files/vu-instruction-manual.pdf).
+Foi reutilizada a implementação aritmética local, sem copiar implementação
+externa. `native-ee-context` cobre as quatro componentes, 16 máscaras,
+especialização nativa e interpretação, valor de ACC observado por MADD,
+flags, CU2 desativado e recusa transacional no último campo desconhecido.
+
+### Cenários distintos e evidências locais
+
+- **Reset original com disco:** `strict.log`, 17.690.079 instruções EE,
+  recusa do encoder `0x7E` em `0x80007D20`; não entrou no jogo.
+- **ELF injetado:** `inject1.log` conserva a recusa anterior; `inject3.log`
+  supera VADDA e para na leitura `LW` em `0x17AAD8`, endereço `0x4`, por
+  TLB ausente. Nenhum pacote GIF/pixel/campo nessa janela. A injeção mantém
+  as hipóteses explícitas herdadas do probe local: encoder `7E=1C/7F=10`,
+  SYNCV/reset GS, omissão diagnóstica da escrita zero F510, latches SBUS/SPU2, temporização SIO2/SPU2, cache
+  diagnóstico, RTC externo `1793864084` e precisão GS experimental 125.
+  Não é evidência de ExecPS2 original nem autorização para inventar TLB.
+- **Equivalência:** a partir de `aot-safe.ps2ncp.start`, 687.182 instruções
+  terminam imediatamente antes da leitura recusada. Híbrido: 267.199 AOT
+  e 419.983 interpretadas; controle: 687.182 interpretadas. Checkpoints
+  `aot-boundary.ps2ncp` e `interpreter-boundary2.ps2ncp` têm payload idêntico
+  `edf8ec4ae4f8fee5e8cab9f605c6c71df4d585dea9f2b70e55622aadbe59d6ff`.
+  Os tempos incluem diagnóstico/identidade e não são benchmark pareado.
+- **VADDA em AOT real:** o gerador recompilado recebe a raiz observada
+  `0x184430`; `gow-vadda-aot.cpp` contém as especializações constantes da
+  nova operação. O executável ligado a esse módulo (`native-vadda.log`)
+  aposenta 267.217 instruções AOT e 419.965 interpretadas no mesmo trecho,
+  com o mesmo hash completo `edf8ec4a...`, PC, clocks e estado do IOP.
+  Trata-se de validação de execução nativa da extensão, não de gameplay.
+- **Disco sem injetar ELF, ainda diagnóstico:** `cold1.log` recusa a AOT
+  em `0x100008` com bytes divergentes. O controle `disc-entry.log`, somente
+  interpretado, salva `disc-entry.ps2ncp` após 47.413.743 instruções totais;
+  RAM nessa entrada `0x3C020016`, ELF esperado `0x70000C28`. O mesmo PC não
+  prova que a imagem correta está carregada. Continuar o código intermediário
+  antes de selecionar a tradução do título. Um pacote GIF, zero pixels e
+  PMODE ainda não escrito; isso não demonstra imagem do jogo.
+- **Continuação desse ponto, sem AOT/injeção:** `disc-loader.log` chega a
+  81.989.375 instruções totais. O IOP para em `0x4E638` / 10.248.670
+  instruções porque o efeito do reset CTRL SIO2 sobre a conclusão pendente
+  não está estabelecido. O EE depois recusa SIF `0x1000F230` em `0x80005F00`.
+  A tentativa de ativar a hipótese após restaurar o checkpoint também é
+  corretamente recusada (`disc-sio2.log`): requer estado de reset.
+- **Hipótese SIO2 desde reset:** `disc-sio2-cold.log`, cenário separado
+  `6070746f00000000000000000000000000000000000000000000000000000002`,
+  supera essa recusa e termina em 82.301.324 instruções EE totais; IOP
+  `0x4E890` / 10.287.664, escrita SPU2 `0x7CA` com efeitos desconhecidos e
+  hipótese de latch desativada nesse ponto. EE `0x80005F54` recusa SIF após
+  a parada do IOP. O probe solicitou o latch antes do boot; verificar sua
+  propagação após reinicializações do IOP, sem transformar a hipótese em
+  comportamento padrão. Zero campos/pixels, imagem ainda não demonstrada.
+
+Build MSVC x64/Ninja Release `/O2 /Ob2 /DNDEBUG`, profiling OFF, checkout
+atual com alterações concorrentes preservadas; ferramentas em
+`out/bios-boot/build`, probes/identidades/logs em `out/gow/`. Não houve
+Computer Use, sessão humana, benchmark, nova certificação de GPU/host ou CI.
+
+### Checkpoints e limitações da validação
+
+A extensão altera métodos, não campos. A auditoria local reproduz o schema
+anterior `5a3fed18...` retirando somente esta extensão dos três headers;
+o integrado é `50585f22...`, e HEAD mais somente esta mudança gera
+`5b6837b8...`. A ponte fixa esses destinos, exige opt-in de runtime e
+revalida a reserialização, inclusive certificados CPU preenchidos; schemas
+arbitrários permanecem recusados. Evidência em `schema-audit.log`.
+
+O teste completo inicialmente excedeu a pilha Windows padrão de 1 MiB;
+o controle com `tests/checkpoint.cpp` da HEAD também retornou stack overflow
+`0xC00000FD`. O alvo de teste agora reserva 8 MiB no MSVC. O primeiro controle
+com pilha ampliada conservou a recusa de schema, antes da ponte auditada.
+Os três testes finais passaram: `native-ee-context`, `native-vu-micro` e
+`native-complete-checkpoint` (81,38 s no conjunto, sem alegação de desempenho).
+Log: `out/gow/tests-complete.log`. A associação ROM0/ROM1 é a já revisada
+do SCPH-70004:GH-032-11; a proveniência integral do chip DVD não é autenticada.
+HEAD mais somente esta alteração também passou os três testes em fonte
+isolada (`out/gow/commit-source`, `validate-commit.log`, 66,22 s). Não é
+aprovação das demais alterações concorrentes ou da matriz de CI.
+
 Execução local atualizada em 05/11/2026. **A meta de gameplay não foi atingida.**
 O diagnóstico experimental sintetiza áudio real e alcança título/menu originais,
 com navegação visual por Start, Down e Up. Cross inicia a transição, mas AA1

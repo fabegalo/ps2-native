@@ -249,9 +249,9 @@ public:
         }
         pending_q_=PendingQ{cycle+7u,value,flags,unknown,bounds};
     }
-    void add(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast=4,bool subtract=false) {
+    void add(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast=4,bool subtract=false,bool to_accumulator=false) {
         profiling::Scope profile(profiling::Phase::Vu);
-        auto result=vectors_.at(destination);
+        auto result=to_accumulator ? accumulator_ : vectors_.at(destination);
         std::array<std::optional<FloatBounds>,4> bounds{};
         std::uint32_t mac=0,status=0;
         for(unsigned lane=0;lane<4;++lane) {
@@ -269,6 +269,7 @@ public:
                 value=sum->word;flags=sum->flags;
                 if(sum->bounded)bounds[lane]=sum->bounds;
             } else value={ee_fpu_add(a.value,b.value^(subtract ? 0x80000000u : 0u),flags),0};
+            if(to_accumulator && (flags&0xC000u))throw DeviceRefusal("VU ADD exceptional result/ACC metadata is not modeled");
             result[lane]=value;
             if(!(value.value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
             if(value.value&0x80000000u){mac|=bit<<4u;status|=2u;}
@@ -276,7 +277,10 @@ public:
             if(flags&0x8000u){mac|=bit<<12u;status|=8u;}
         }
         // Commit only after all selected operands have been validated.
-        if(destination){
+        if(to_accumulator) {
+            accumulator_=result;
+            for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane))accumulator_bounds_[lane]=bounds[lane];
+        } else if(destination){
             vectors_.at(destination)=result;
             for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane))vector_bounds_.at(destination)[lane]=bounds[lane];
         }

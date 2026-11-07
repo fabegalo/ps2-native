@@ -437,7 +437,7 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
     (void)m;
     (void)pc;
     // Host execution is sequential: guest memory accesses are already ordered (SYNC).
-    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::VaddBc || Op == O::VsubBc || Op == O::Vopmula || Op == O::Vopmsub || Op == O::Vcallms || Op == O::Vsqrt || Op == O::Vdiv || Op == O::Vwaitq || Op == O::VaddQ || Op == O::VmulQ || Op == O::Vmove || Op == O::Vnop || Op == O::Vftoi) {
+    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::VaddBc || Op == O::VsubBc || Op == O::VaddaBc || Op == O::Vopmula || Op == O::Vopmsub || Op == O::Vcallms || Op == O::Vsqrt || Op == O::Vdiv || Op == O::Vwaitq || Op == O::VaddQ || Op == O::VmulQ || Op == O::Vmove || Op == O::Vnop || Op == O::Vftoi) {
         if (!(s.cp0(Cop0::Status) & (1u<<30)))
             throw std::runtime_error("COP2 transfer with Status.CU2 = 0; coprocessor unusable vectoring is not modeled");
         constexpr bool transfer=Op==O::Cfc2 || Op==O::Ctc2 || Op==O::Qmfc2 || Op==O::Qmtc2;
@@ -547,8 +547,8 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         } else if constexpr (Op == O::Viswr) m.vu_integer_store(t_,d_,(w>>21u)&15u);
         else if constexpr (Op == O::Vsub) m.vu_subtract(a_,d_,t_,(w>>21u)&15u);
         else if constexpr (Op == O::Vadd) m.vu_add(a_,d_,t_,(w>>21u)&15u);
-        else if constexpr (Op == O::VaddBc || Op == O::VsubBc)
-            m.vu_add(a_,d_,t_,(w>>21u)&15u,w&3u,Op==O::VsubBc);
+        else if constexpr (Op == O::VaddBc || Op == O::VsubBc || Op == O::VaddaBc)
+            m.vu_add(a_,d_,t_,(w>>21u)&15u,w&3u,Op==O::VsubBc,Op==O::VaddaBc);
         else if constexpr (Op == O::Vopmula || Op == O::Vopmsub)
             m.vu_product(a_,d_,t_,14,4,Op==O::Vopmsub,Op==O::Vopmula,true);
         else if constexpr (Op == O::Vmove) {

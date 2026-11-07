@@ -251,8 +251,8 @@ public:
     void vu_subtract(unsigned destination,unsigned left,unsigned right,unsigned mask) {
         registers_.vu_subtract(destination,left,right,mask);
     }
-    void vu_add(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast=4,bool subtract=false) {
-        registers_.vu_add(destination,left,right,mask,broadcast,subtract);
+    void vu_add(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast=4,bool subtract=false,bool to_accumulator=false) {
+        registers_.vu_add(destination,left,right,mask,broadcast,subtract,to_accumulator);
     }
     void vu_rotate(unsigned destination,unsigned source,unsigned mask) {registers_.vu_rotate(destination,source,mask);}
     void vu_product(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast,bool accumulate,bool to_accumulator,bool outer=false) {
