@@ -907,6 +907,107 @@ Fontes independentes: [EE Core](https://docs.alexrp.com/mips/ee.pdf),
 [resultados medidos de FPU](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/cpu/ee_fpu/muldiv.expected).
 Nenhum código GPL, firmware, módulo ou código traduzido comercial foi integrado.
 
+### Simpsons com Ponytail full — 07/11/2026
+
+Pedido atual do mantenedor: fazer o Simpsons rodar usando Ponytail. Skill
+instalada de `DietrichGebert/ponytail`, aplicada em modo `full`. Mesmos
+hashes ISO/ELF SLUS-20624 acima, sem trocar mídia ou tradução. Firmware
+SCPH-70004:GH-032-11 v2.00 PAL, ROM0/ROM1/NVM pareados. Conteúdo original
+permaneceu somente leitura; artefatos comerciais ficaram ignorados em `out/`.
+
+Correções no núcleo compartilhado:
+
+- `d05476c`: compressor carry-save booleano equivalente; DIV.S enumera
+  produtos cartesianos limitados pelo escalar SRT existente, sem assumir
+  monotonicidade; operações por classes aceitam até 262.144 pares de
+  classes. Mantém recusa para orçamento/flags incompatíveis. Checkpoint
+  aceita o intervalo válido entre tags GIF não-EOP, com testes de continuação.
+- `c57d517`: decode MULA/MSUB/MADDA/MSUBA e execução escalar certificada;
+  acumulação aceita produto incerto somente quando todos os candidatos
+  produzem exatamente o mesmo resultado e flags. Mantém recusas para
+  intermediários não certificados, sem criar ACC aproximado. Testes incluem
+  zeros com sinal, aliases, destinos preservados e flags independentes.
+- `63740c2`: GS_CSR FIFO=01 derivado da ingestão síncrona suportada, em que
+  não há fila interna pendente; não calibra ocupação ou latência física.
+  Demais bits desconhecidos continuam desconhecidos. Regressão exercita
+  polling EE, upload parcial e FINISH somente após dados completos.
+
+Build próprio `out/simpsons-current-build`, fonte neste checkout, MSVC 19.44,
+Release `/O2 /Ob2 /DNDEBUG`, quatro jobs. **31/31 regressões passaram**:
+FPU/domínios/novas acumulações/SQRT/VU DIV, cache, boot sintético, CDVD,
+MECHACON, SPU2, GIF DMA, checkpoint completo e os 15 casos GS existentes.
+Log local `out/game-first/simpsons-current-tests13.log`. Foram verificadas
+alterações locais preexistentes/concomitantes também; elas foram preservadas
+e depois publicadas localmente em `557a805` por outro trabalho. Não atribuir
+suas mudanças de renderer/CDVD a estes três commits. CI não executada para
+os commits locais, sem publicação remota nesta tarefa.
+
+O diagnóstico usa ELF injetado após firmware parcial em `0x82000`,
+32.416.676 instruções, com hipóteses explicitamente impressas pelo harness:
+encoder 7E/7F, SYNCV/FIELD, SPU2/reset/throughput, SCANMSK e dispositivos
+de entrada. RTC fixado em `1794028522`, avançando por ciclos convidados.
+**Não é boot normal nem substituição do kernel por HLE.** O startup AOT
+contém 23 instruções estáticas/4 blocos, retirou 214.944 instruções no
+prefixo; a continuação observada após checkpoints é interpretada.
+
+Fronteiras superadas na mesma identidade: DIV.S em 162.185.728 instruções
+do jogo; ADD.S em 162.460.084; MULA em 245.382.916 e as acumulações
+seguintes; polling de FIFO. Última recusa em **260.680.634 instruções do
+jogo**, EE total **293.097.310**, PC **`0x0037DB20`**, SW de CHCR=0x105
+para D2. TADR=0x80003000 aponta para scratchpad, MADR=0, mas **QWC não
+foi programado nem tem reset conhecido**. A mensagem genérica
+`EE VIF chain requires TADR and zero QWC; resume is not modeled` também
+cobre esse caso desconhecido: não demonstra QWC não zero. Não foi
+inventado QWC=0 para ultrapassar a recusa. IOP sem recusa, 36.637.163
+instruções, PC 0x8000009C (vetor de interrupção, não reset).
+
+Checkpoint válido imediatamente anterior ao SW:
+`out/game-first/simpsons-current-before-gif.ps2ncp`, 59.206.162 bytes,
+EE 293.097.310/PC 0x37DB20, estado completo SHA-256
+`b09358fa644970d1df67e8d79d18e9a75f7dc06cf44d1b07be98367210921734`.
+Recarregá-lo e tentar uma instrução reproduziu a mesma recusa com zero
+instruções retiradas, estado pós-recusa
+`017227c6beae8f9397f093e364f36ed30eb06ebe9d1e30f562687a3b995a3be0`,
+igual ao ensaio contínuo. Log `simpsons-current-gif-repro.log`.
+Prefixos antes de ADD/MULA e de 160 milhões foram preservados separadamente.
+Schema de checkpoint permaneceu
+`c649550347ab1c003a8b8e441e3241a8917c893acb09a3a5262c2ad2a6fc2ee6`.
+
+Controle de entrada: stub convidado invocou o handler Sony ExecPS2 (syscall
+07), primeiro argc=0 e depois argc=1/argv0 obtido do BOOT2 real do disco.
+GP=0, entry=0x100008, arrays/string em RAM de usuário separada. O handler
+executou cerca de 3,2 milhões de instruções até o entry, ainda sem QWC
+conhecido. A variante argv terminou uma janela de 220 milhões adicionais
+no laço `0x81FC0..0x81FDC`, EE total 255.618.818/PC 0x81FD8, IOP
+31.952.352/PC 0xA0003140, sem recusa IOP. SIF1=5.760/SIF0=38.128 bytes
+estabilizados; PMODE não escrito. Checkpoint separado
+`simpsons-exec-argv-latest.ps2ncp`, estado
+`303b4f39c0aa8150db9e942942307ccd1e29f8ae45dd43ffa0829dca8295049a`.
+Essa janela não prova deadlock definitivo nem boot completo do disco.
+
+Controle original pelo CLI `ps2n-boot`, sem hipóteses: recusa encoder 0x7E
+não medido em EE `0x80007D20`, **17.690.079** instruções interpretadas;
+IOP também não conhece VBLANK sem SYNCV de reset. Log local
+`simpsons-original-boot.log`. Portanto os avanços de injeção/ExecPS2 não
+resolvem o boot original. Em todos os ensaios atuais: **zero pacotes GIF
+do jogo, zero pixels/frames, sem menu, sessão humana, som ou gameplay**.
+Backend CPU; não há prova de primitivas comerciais em GPU neste título.
+
+Uma comparação diagnóstica única do compressor, com hashing/saída incluídos,
+mediu 16,5266 → 2,61074 s e mesmo estado completo
+`bbae7a816b102729e1b48525724d3d0c91a5fdc0ef4d4b909ed757802ddaaa5b`.
+Não é benchmark primário, ganho de gameplay ou certificação de velocidade.
+Logs de tentativas anteriores foram preservados; um ensaio abortado antes
+de relink não foi usado como validação. Nenhuma hipótese D2_QWC=0 foi executada.
+
+Referências consultadas: [EE Instruction Set](https://docs.alexrp.com/mips/ee_insns.pdf),
+[resultados FPU em hardware](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/cpu/ee_fpu/muldiv.expected),
+[GS User's Manual](https://www.scribd.com/document/784545197/GS-Users-Manual),
+[EE User's Manual](https://studylib.net/doc/25813272/emotion-engine-user-s-manual).
+Sem implementação GPL importada. O manual DMAC consultado não estabelece
+o reset de D2_QWC; fonte primária ou medição ainda necessária.
+Todos os processos iniciados por esta tarefa foram encerrados.
+
 ### Reensaio curto de Simpsons — 05/11/2026
 
 Diagnóstico local recompilado a partir da árvore atual (`499b1b3`, com as

@@ -2,6 +2,29 @@
 
 **Registro vivo de progresso e evidências.** Atualizar este arquivo quando houver avanço **verificado**; não reescrever os READMEs, `AGENTS.md` ou `CLAUDE.md` a cada marco. Relatórios detalhados continuam em `docs/M*-STATUS.md`; o trabalho seguinte fica em `docs/NEXT-TASK.md`.
 
+## Simpsons: fronteira FPU superada, ainda sem vídeo — 07/11/2026
+
+- Ponytail instalado e aplicado em modo `full`. `d05476c`, `c57d517` e
+  `63740c2` ampliam provas de domínios FPU, implementam acumulação escalar
+  certificada, preservam checkpoints entre tags GIF e expõem FIFO vazio
+  no modelo de ingestão síncrona. Não estabelecem timing físico do FIFO.
+- Diagnóstico SLUS-20624 com injeção após firmware parcial atingiu
+  **260.680.634 instruções do jogo**, EE total **293.097.310**,
+  `0x0037DB20`: início de DMA GIF com **D2_QWC desconhecido**, TADR
+  `0x80003000`. Não foi presumido QWC=0. Checkpoint válido anterior
+  preservado em `out/game-first/simpsons-current-before-gif.ps2ncp`.
+- Variante com syscall ExecPS2 original e argv0 de BOOT2 terminou após
+  220 milhões de instruções adicionais no laço `0x81FC0..0x81FDC`, sem
+  recusa IOP, sem PMODE e sem vídeo. Não demonstra deadlock definitivo.
+- Controle sem hipóteses pelo `ps2n-boot` continua recusando encoder
+  `0x7E` não medido em `0x80007D20`, após 17.690.079 instruções.
+  Nenhum dos diagnósticos equivale a boot normal do disco.
+- **31/31 testes focados passaram**, MSVC Release `/O2`, árvore local.
+  Zero pixels/frames do jogo; sem sessão humana, áudio, gameplay,
+  aceleração GPU comercial ou velocidade original demonstrados.
+  Startup AOT limitado a 23 instruções estáticas; continuação interpretada.
+  CI dos commits locais não executada. [Evidências](docs/FIRST-GAME-STATUS.md).
+
 ## Shadow of the Colossus: primeira renderização de vídeo e 771M instruções — 07/11/2026
 
 - **Execução comprovada**: Shadow of the Colossus (USA) (`SCUS-97472`, ISO SHA-256 `d431a5b7...`) sob firmware autenticada SCPH-70004:GH-032-11 v2.00 PAL (ROM0/ROM1/NVM).

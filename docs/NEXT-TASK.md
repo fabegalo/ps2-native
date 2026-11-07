@@ -1,4 +1,25 @@
-# Próxima execução — Shadow of the Colossus & Super Bust-A-Move
+# Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
+
+## Simpsons — pedido atual, 07/11/2026
+
+As correções `d05476c`, `c57d517`, `63740c2` passaram 31 testes focados.
+Ainda não existe frame/menu jogável do SLUS-20624. Preservar as evidências
+de Shadow e Super Bust abaixo; elas não certificam o Simpsons.
+
+1. Retomar a investigação em `out/game-first/simpsons-current-before-gif.ps2ncp`
+   (EE 293.097.310, PC `0x37DB20`). O início do DMA GIF escreve CHCR=0x105,
+   TADR=0x80003000, mas D2_QWC nunca adquiriu valor conhecido. Localizar
+   evidência de reset/initialização ou uma entrada completa que o programe;
+   não substituir o estado desconhecido por zero no núcleo compartilhado.
+2. Comparar com `simpsons-exec-argv-latest.ps2ncp`: o handler Sony ExecPS2
+   e argv0 de BOOT2 foram exercitados, mas a execução ficou no laço do
+   kernel após 220 milhões de instruções. Investigar SIF/estado de threads
+   antes de atribuir essa fronteira ao DMA observado na injeção direta.
+3. Boot original continua dependendo de evidência do encoder 0x7E e
+   SYNCV de reset. Validar imagem, entrada e som reais antes de declarar
+   jogabilidade; AOT startup, teste sintético e contagem EE não bastam.
+
+Método, hipóteses e limites em [FIRST-GAME-STATUS](FIRST-GAME-STATUS.md).
 
 ## Shadow of the Colossus — após a primeira saída de vídeo (771M instruções) — 07/11/2026
 
