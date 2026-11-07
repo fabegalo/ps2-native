@@ -393,17 +393,27 @@ public:
         };
         const auto ac=fpu_candidates(a,ar),bc=fpu_candidates(b,br);
         if(op==MipsOpcode::DivS) {
-            // A normalized power-of-two divisor leaves every significand bit
-            // unchanged in the 25-digit SRT circuit. All 2^23 significands
-            // were checked against that circuit; exponent adjustment, signed
-            // zero and clamps remain in the same scalar implementation.
-            if(b.unknown || (b.value&0x7FFFFFu) || !(b.value&0x7F800000u))return {};
-            const auto av=fpu_ranges(a,ar);if(av.empty())return {};
-            for(const auto& x:av) {
-                if(x[0]>x[1] || ((x[0]^x[1])&0xFF800000u))return {};
-                std::uint32_t first_flags=0,last_flags=0;
-                const auto first=ee_fpu_divide(x[0],b.value,first_flags),last=ee_fpu_divide(x[1],b.value,last_flags);
-                if(first_flags!=last_flags || !append(std::min(first,last),std::max(first,last),first_flags))return {};
+            if(b.unknown || (b.value&0x7FFFFFu) || !(b.value&0x7F800000u)) {
+                const auto av=fpu_candidates(a,ar,65536u),bv=fpu_candidates(b,br,65536u);
+                if(av.empty() || bv.empty() || std::uint64_t{av.size()}*bv.size()>67108864u)return {};
+                // SRT endpoint monotonicity is not established; fold every
+                // concrete quotient into ranges instead of storing it.
+                for(const auto x:av)for(const auto y:bv) {
+                    std::uint32_t next_flags=0;const auto value=ee_fpu_divide(x,y,next_flags);
+                    if(!append(value,value,next_flags))return {};
+                }
+            } else {
+                // A normalized power-of-two divisor leaves every significand bit
+                // unchanged in the 25-digit SRT circuit. All 2^23 significands
+                // were checked against that circuit; exponent adjustment, signed
+                // zero and clamps remain in the same scalar implementation.
+                const auto av=fpu_ranges(a,ar);if(av.empty())return {};
+                for(const auto& x:av) {
+                    if(x[0]>x[1] || ((x[0]^x[1])&0xFF800000u))return {};
+                    std::uint32_t first_flags=0,last_flags=0;
+                    const auto first=ee_fpu_divide(x[0],b.value,first_flags),last=ee_fpu_divide(x[1],b.value,last_flags);
+                    if(first_flags!=last_flags || !append(std::min(first,last),std::max(first,last),first_flags))return {};
+                }
             }
         } else if(op!=MipsOpcode::MulS && !ac.empty() && !bc.empty() && ac.size()*bc.size()<=16384u) {
             // Folding exact scalar sums directly into intervals bounds live
@@ -414,7 +424,7 @@ public:
             }
         } else {
             const auto av=fpu_ranges(a,ar),bv=fpu_ranges(b,br);
-            if(av.empty() || bv.empty() || av.size()*bv.size()>4096u)return {};
+            if(av.empty() || bv.empty() || std::uint64_t{av.size()}*bv.size()>262144u)return {};
             for(const auto& x:av)for(const auto& y:bv) {
                 if(x[0]>x[1] || y[0]>y[1] || ((x[0]^x[1])&0xFF800000u) || ((y[0]^y[1])&0xFF800000u))return {};
                 // Each input pair has fixed signs/exponents. Existing integer

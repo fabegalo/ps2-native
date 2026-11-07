@@ -263,7 +263,73 @@ void profiling_state_equivalence() {
         profile.calls[static_cast<unsigned>(profiling::Phase::Bounds)],"profiling exercises memory and numeric-proof scopes");
 }
 }
+void division_ranges() {
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    EEState state;state.set_cp0(Cop0::Status,kStatusCU1);
+    std::uint64_t executed=0;ExecutionContext context{state,memory,executed,100,0xFFFFFFFFu};
+    const auto step=[&]{state.pc=0x80001000u;memory.write32(state.pc,math(3,4,1,2));interpret_instruction(context);};
+    constexpr std::uint32_t first=0x3C05C405u,last=0x3C060536u;
+    state.fpr[1]=0x3C040000u;state.unknown_fpr_bits[1]=0x3FFFFu;
+    state.fpr_affine[1]={memory.allocate_fpu_origin(),0,120,false,state.fpr[1],state.unknown_fpr_bits[1],first,last,{}};
+    auto divisors=std::make_shared<std::vector<std::uint32_t>>();
+    for(unsigned i=0;i<17;++i)divisors->push_back(0xC005D36Eu+i*29u);
+    state.fpr[2]=0xC005D000u;state.unknown_fpr_bits[2]=0x7FFu;
+    state.fpr_affine[2]={memory.allocate_fpu_origin(),0,128,false,state.fpr[2],state.unknown_fpr_bits[2],
+        divisors->front(),divisors->back(),divisors};
+    state.fcr31=0x0183C079u;step();
+    require(state.fpr_affine[4].ranges && state.unknown_fpr_bits[4] && state.fcr31==0x0180C079u,
+        "large DIV.S domains retain quotient uncertainty and preserve unrelated FCR31 bits");
+    for(std::uint32_t x=first;x<=last;++x)for(const auto y:*divisors) {
+        std::uint32_t flags=0;const auto result=ee_fpu_divide(x,y,flags);
+        bool contained=false;for(const auto& range:*state.fpr_affine[4].ranges)contained|=result>=range[0] && result<=range[1];
+        require(contained && !flags && !((result^state.fpr[4])&~state.unknown_fpr_bits[4]),
+            "every scalar SRT quotient is inside the stored range and known-bit mask");
+    }
+    const auto value=state.fpr[4],unknown=state.unknown_fpr_bits[4],flags=state.fcr31;
+    state.fpr_affine[1].maximum=first+65536u;
+    rejects(step,"cannot certify");
+    require(state.fpr[4]==value && state.unknown_fpr_bits[4]==unknown && state.fcr31==flags,
+        "oversized division domains refuse without publishing partial values or flags");
+    state.fpr_affine[1].maximum=last;
+    state.fpr[2]=0;state.unknown_fpr_bits[2]=0x3F800000u;
+    state.fpr_affine[2]={memory.allocate_fpu_origin(),0,0,false,0,0x3F800000u,0,0x3F800000u,
+        std::make_shared<const std::vector<std::uint32_t>>(std::initializer_list<std::uint32_t>{0,0x3F800000u})};
+    rejects(step,"cannot certify");
+    require(state.fpr[4]==value && state.unknown_fpr_bits[4]==unknown && state.fcr31==flags,
+        "possible divide-by-zero flags still refuse without changing the destination");
+    for(unsigned index=1;index<=2;++index) {
+        state.fpr[index]=index==1 ? 0x3F800000u : 0x40000000u;state.unknown_fpr_bits[index]=0x3FFFu;
+        state.fpr_affine[index]={memory.allocate_fpu_origin(),0,0,false,state.fpr[index],0x3FFFu,
+            state.fpr[index],state.fpr[index]+8192u,{}};
+    }
+    rejects(step,"cannot certify");
+    require(state.fpr[4]==value && state.unknown_fpr_bits[4]==unknown && state.fcr31==flags,
+        "the pair-count limit refuses oversized Cartesian products before publishing partial results");
+}
+void addition_range_classes() {
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    EEState state;state.set_cp0(Cop0::Status,kStatusCU1);
+    auto ranges=std::make_shared<std::vector<FloatBounds>>();
+    for(unsigned exponent=100;exponent<=164;++exponent)ranges->push_back({exponent<<23u,exponent<<23u});
+    for(unsigned index=1;index<=2;++index) {
+        state.fpr[index]=0;state.unknown_fpr_bits[index]=0x7F800000u;
+        state.fpr_affine[index]={memory.allocate_fpu_origin(),0,0,false,0,0x7F800000u,
+            ranges->front()[0],ranges->back()[1],{},ranges};
+    }
+    state.pc=0x80001000u;state.fcr31=0x0183C079u;memory.write32(state.pc,math(0,3,1,2));
+    std::uint64_t executed=0;ExecutionContext context{state,memory,executed,100,0xFFFFFFFFu};interpret_instruction(context);
+    require(state.fpr_affine[3].ranges && state.fcr31==0x01830079u,
+        "more than 4096 sign/exponent class pairs retain bounded sums and common flags");
+    for(const auto& a:*ranges)for(const auto& b:*ranges) {
+        std::uint32_t flags=0;const auto value=ee_fpu_add(a[0],b[0],flags);
+        bool contained=false;for(const auto& result:*state.fpr_affine[3].ranges)contained|=value>=result[0] && value<=result[1];
+        require(contained && !flags && !((value^state.fpr[3])&~state.unknown_fpr_bits[3]),
+            "every concrete sum of the 65-by-65 exponent classes remains represented");
+    }
+}
 int main() try {
+    division_ranges();
+    addition_range_classes();
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     integer_domains(memory);
     floating_trace(memory);

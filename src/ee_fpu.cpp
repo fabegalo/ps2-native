@@ -30,14 +30,8 @@ using Rows=std::array<std::uint32_t,2>;
 // A column of three bits produces a sum bit and a carry in the next column.
 // Keep the two redundant rows: propagating carries here changes digit selection.
 Rows compress(const std::array<std::uint32_t,3>& inputs) {
-    Rows output{};
-    for(unsigned column=0;column<32;++column) {
-        unsigned count=0;
-        for(const auto row:inputs)count+=(row>>column)&1u;
-        output[0]|=(count&1u)<<column;
-        if(column<31)output[1]|=(count>>1u)<<(column+1u);
-    }
-    return output;
+    const auto a=inputs[0],b=inputs[1],c=inputs[2];
+    return {a^b^c,((a&b)|(a&c)|(b&c))<<1u};
 }
 // Prabhu/Zyner, ARITH 1995, pp.156-157, Fig.4 and Table III.
 // Four high bits add without lower carry propagation; the fifth bits detect

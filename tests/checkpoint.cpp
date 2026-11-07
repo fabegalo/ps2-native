@@ -33,6 +33,26 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
 }
 int main(int argc,char** argv)try {
     if(argc!=2)return 2;const auto directory=std::filesystem::path(argv[1]);ps2native::create_directories(directory);
+    for(const unsigned loops:{0u,1u}) {
+        auto gap_image=program();Memory gap;EEState gap_state;prepare_direct_elf(gap_image,nullptr,gap_state,gap);
+        BootOptions gap_options;gap_options.max_instructions=1;
+        const auto boundary=run_ee_boot(gap_state,gap,nullptr,gap_options);
+        auto& gap_gif=const_cast<Gif&>(gap.gif());auto& gap_gs=const_cast<GsRegisters&>(gap.gs());
+        gap_gif.write_fifo(loops|(1ull<<60u),15u,gap_gs);
+        if(loops)gap_gif.write_fifo(0,0,gap_gs);
+        const auto gap_file=directory/"between-giftags.ps2ncp";
+        CheckpointContext gap_context{sha256_hex(gap_image.bytes)};
+        const auto gap_hash=checkpoint_state_sha256(gap_state,gap);
+        save_checkpoint(gap_file,gap_state,gap,boundary,gap_context);
+        Memory loaded_gap;EEState loaded_state;prepare_direct_elf(gap_image,nullptr,loaded_state,loaded_gap);
+        (void)load_checkpoint(gap_file,loaded_state,loaded_gap,gap_context);
+        require(checkpoint_state_sha256(loaded_state,loaded_gap)==gap_hash,
+            "a non-EOP GIFtag may await the next tag with zero payload loops, including NLOOP=0");
+        gap_gif.write_fifo(1ull<<15u,0,gap_gs);
+        const_cast<Gif&>(loaded_gap.gif()).write_fifo(1ull<<15u,0,const_cast<GsRegisters&>(loaded_gap.gs()));
+        require(checkpoint_state_sha256(loaded_state,loaded_gap)==checkpoint_state_sha256(gap_state,gap),
+            "a restored GIF tag gap continues the same packet through its final EOP tag");
+    }
     auto image=program();Memory memory;EEState state;prepare_direct_elf(image,nullptr,state,memory);
     memory.diagnostic_data_cache(true);state.set_cp0(Cop0::Config,0x10003);memory.set_cache_config(0x10003);memory.write32(0x80000300u,0x12345678u);
     require(memory.diagnostic_ram(0x300,4).value==0,"checkpoint fixture has a dirty cached word absent from backing RAM");
