@@ -25,10 +25,14 @@ template<class C> int run(int argc,C** argv) try {
         (state.cp0(Cop0::Cause)&0x7Cu)==32u,"exception EPC/Cause and ERET restore original context");
     std::cout<<"EE_SYSTEM_STATE "<<checkpoint_state_sha256(state,*memory)<<'\n';
 #ifdef PS2N_NATIVE_ONLY
+    memory->load_direct_elf(image);
+    std::uint64_t clock=8;memory->set_clock(&clock);
+    memory->sync_iop();
+    require(memory->iop().cycle()==0 && memory->iop().pc()==0xBFC00000u,
+        "bare-metal EE execution leaves an omitted IOP dormant");
     const std::array<std::uint8_t,4> iop_code{};
     auto& iop=const_cast<Iop&>(memory->iop());iop.load_program(iop_code,0,0);
     iop.run_until(1);
-    std::uint64_t clock=8;memory->set_clock(&clock);
     bool refused=false;
     try {memory->sync_iop();}
     catch(const DeviceRefusal& error){refused=std::string(error.what()).find("missing IOP AOT")!=std::string::npos;}
