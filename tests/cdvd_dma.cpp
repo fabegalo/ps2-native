@@ -66,6 +66,45 @@ int main(int argc,char** argv) try {
     cav.reset(program(16),nullptr);cav.mount_disc(disc,Iop::DiscMedium::Ps2Cd,true);
     cav.run_until(100);command(cav,1,true);cav.run_until(30000);
     require(!cav.stopped() && cav.ee_read(0x10000,1)==bytes[0],"explicit timing experiment still transfers actual bytes");
+    {
+        iso_test::IsoOptions dual_options;dual_options.sectors=dual_options.written=64;
+        const auto layer=iso_test::build_iso(dual_options);
+        auto dual=layer;dual.resize(112u*2048u);
+        std::copy(layer.begin(),layer.end(),dual.begin()+48u*2048u);
+        const auto dual_path=std::filesystem::path(argv[1])/"cdvd-dual-own.iso";
+        (void)write_binary_if_changed(dual_path,dual);
+        auto layout=std::make_shared<DiscImage>(dual_path,DiscImage::DiagnosticDvdGeometry{48,true});
+        rejects([&]{DiscImage bad(dual_path,DiscImage::DiagnosticDvdGeometry{49,true});},"inconsistent");
+        std::array<std::uint8_t,2048> sector{};
+        DiscImage normal(dual_path);rejects([&]{normal.read_sector(100,sector);},"outside");
+        layout->read_sector(100,sector);
+        require(std::equal(sector.begin(),sector.end(),dual.begin()+100u*2048u),"explicit layout exposes real second-volume sectors");
+        rejects([&]{layout->read_sector(112,sector);},"outside");
+        Iop dual_toc;dual_toc.reset(program(129,true,0x84u,4u),nullptr);dual_toc.mount_disc(layout,Iop::DiscMedium::Ps2Dvd);
+        dual_toc.run_until(100);dual_toc.ee_cdvd_write(0x1F402005u,1,0);dual_toc.ee_cdvd_write(0x1F402004u,1,9);
+        dual_toc.run_until(30000);require(!dual_toc.stopped(),dual_toc.stop_reason().value_or(""));
+        require(dual_toc.ee_read(0x1000E,1)==0x31 && dual_toc.ee_read(0x1000F,1)==0x10 &&
+            dual_toc.ee_read(0x10015,1)==0xFD && dual_toc.ee_read(0x10016,1)==0 && dual_toc.ee_read(0x10017,1)==0x0F &&
+            dual_toc.ee_read(0x10019,1)==3 && dual_toc.ee_read(0x1001A,1)==0 && dual_toc.ee_read(0x1001B,1)==0x2F,
+            "explicit OTP geometry encodes independent ECMA-267 end addresses and dual-layer flags");
+        rejects([&]{(void)dual_toc.ee_read(0x10000,1);},"not been written");
+        rejects([&]{(void)dual_toc.ee_read(0x1001C,1);},"not been written");
+        for(const bool crossing:{false,true}) {
+            Iop read;read.reset(program(43,true,0x8Cu,12u),nullptr);read.mount_disc(layout,Iop::DiscMedium::Ps2Dvd);
+            read.run_until(100);
+            for(unsigned j=0;j<11;++j)read.ee_cdvd_write(0x1F402005u,1,j==0 ? (crossing?47u:16u) : j==4 ? (crossing?2u:1u) : j==9 ? 2u : 0u);
+            if(crossing) {
+                rejects([&]{read.ee_cdvd_write(0x1F402004u,1,8);},"second-layer sectors are not modeled");
+                rejects([&]{(void)read.ee_read(0x10000,1);},"not been written");
+            } else {
+                read.ee_cdvd_write(0x1F402004u,1,8);read.run_until(1200000);
+                require(!read.stopped() && read.ee_cdvd_read(0x1F402008u,1)==2,"dual-layer media completes actual first-layer DMA");
+                require(read.ee_read(0x10000,1)==0x20 && read.ee_read(0x10001,1)==3 && read.ee_read(0x10003,1)==16,"first-layer raw sector carries its physical sector ID");
+                for(unsigned n=0;n<2048;++n)require(read.ee_read(0x1000C+n,1)==dual[16u*2048u+n],"first-layer raw read contains original PVD bytes");
+                rejects([&]{(void)read.ee_read(0x10004,1);},"not been written");
+            }
+        }
+    }
     Iop toc;toc.reset(program(129,true,0x84u,4u),nullptr);toc.mount_disc(disc,Iop::DiscMedium::Ps2Dvd);
     toc.run_until(100);toc.ee_cdvd_write(0x1F402005u,1,0u);toc.ee_cdvd_write(0x1F402004u,1,9u);
     require(toc.ee_cdvd_read(0x1F402005u,1)&0x80u,"GetToc is asynchronous");

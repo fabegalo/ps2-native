@@ -45,7 +45,9 @@ bool descriptor(std::span<const std::uint8_t> b) {
     return b[0]==1 && std::memcmp(b.data()+1,"CD001",5)==0 && b[6]==1;
 }
 }
-DiscImage::DiscImage(const std::filesystem::path& path):file_(path) {
+DiscImage::DiscImage(const std::filesystem::path& path):DiscImage(path,std::nullopt) {}
+DiscImage::DiscImage(const std::filesystem::path& path,
+                     std::optional<DiagnosticDvdGeometry> diagnostic_geometry):file_(path) {
     std::array<std::uint8_t,2048> pvd{};
     bool found=file_.read_at(16u*2048,pvd)==pvd.size() && descriptor(pvd);
     if(!found) {
@@ -66,9 +68,20 @@ DiscImage::DiscImage(const std::filesystem::path& path):file_(path) {
     root_=record(std::span(pvd).subspan(156,pvd[156]));
     if(!root_.directory)throw std::runtime_error("ISO 9660 root is not a directory");
     volume_id_=trim(std::string_view(reinterpret_cast<const char*>(pvd.data()+40),32));
+    if(diagnostic_geometry) {
+        const auto layer0=diagnostic_geometry->layer0_sectors;const auto total=file_.size()/2048u;
+        if(sector_bytes_!=2048u || file_.size()%2048u || layer0<=16u || layer0>=total ||
+           layer0>2295104u || total-layer0>2295104u || sectors_!=layer0+16u)
+            throw std::runtime_error("diagnostic DVD geometry is inconsistent with the ISO volumes");
+        std::array<std::uint8_t,2048> second{};
+        if(file_.read_at((std::uint64_t{layer0}+16u)*2048u,second)!=second.size() || !descriptor(second) ||
+           both32(second,80)!=total-layer0 || second[128]!=0 || second[129]!=8 || second[130]!=8 || second[131]!=0)
+            throw std::runtime_error("diagnostic DVD geometry requires a matching second ISO volume");
+        diagnostic_geometry_=diagnostic_geometry;
+    }
 }
 void DiscImage::read_sector(std::uint32_t lba,std::span<std::uint8_t,2048> out) {
-    if(lba>=sectors_)throw std::runtime_error("disc LBA outside ISO 9660 volume");
+    if(lba>=(diagnostic_geometry_ ? file_.size()/2048u : sectors_))throw std::runtime_error("disc LBA outside ISO 9660 volume");
     if(sector_bytes_==2352) {
         std::array<std::uint8_t,2352> raw{};
         if(file_.read_at(std::uint64_t{lba}*2352u,raw)!=raw.size() || raw[0]!=0 || raw[11]!=0 ||

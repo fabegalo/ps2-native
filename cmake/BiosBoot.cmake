@@ -1,5 +1,9 @@
 # Focused original-boot hardware tests; all firmware fixtures are our own.
 if(BUILD_TESTING)
+    add_executable(ps2n-cdvd-checkpoint tests/cdvd_checkpoint.cpp)
+    target_link_libraries(ps2n-cdvd-checkpoint PRIVATE ps2n_core)
+    add_test(NAME native-cdvd-checkpoint COMMAND ps2n-cdvd-checkpoint "${CMAKE_CURRENT_BINARY_DIR}/cdvd-checkpoint-test")
+
     add_executable(ps2n-smap-reset tests/smap_reset.cpp)
     target_link_libraries(ps2n-smap-reset PRIVATE ps2n_core)
     add_test(NAME native-smap-reset COMMAND ps2n-smap-reset "${CMAKE_CURRENT_BINARY_DIR}/smap-reset-test")

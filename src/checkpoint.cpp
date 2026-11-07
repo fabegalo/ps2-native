@@ -300,6 +300,10 @@ std::string CheckpointAccess::bindings(const Memory& m,std::string_view expected
         if(!checkpoint_detail::digest_valid(expected_disc))throw std::runtime_error("checkpoint requires the pinned SHA-256 of the mounted disc");
         auto hash=sha256_file(disc->file_.path());if(hash!=expected_disc)throw std::runtime_error("checkpoint mounted disc changed from its pinned identity");
         auto size=disc->image_size();a(hash,size);
+        if(const auto& geometry=disc->diagnostic_dvd_geometry()) {
+            std::string tag="diagnostic-DVD-geometry-v1";auto layer0=geometry->layer0_sectors;
+            auto opposite=geometry->opposite_track_path;a(tag,layer0,opposite);
+        }
     }
     if(m.registers_.iop_.rtc_epoch_) {
         // Preserve prior binding hashes when no RTC input was supplied.

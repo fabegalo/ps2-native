@@ -1130,14 +1130,24 @@ void Iop::pump_cdvd() {
         if(cdvd_ncommand_==9u) {
             cdvd_sector_.fill(0);
             const auto sectors=static_cast<std::uint32_t>(disc_->image_size()/2048u);
-            const auto end_psn=0x30000u+sectors-1u;
+            const auto& geometry=disc_->diagnostic_dvd_geometry();
+            const auto layer0=geometry ? geometry->layer0_sectors : sectors;
+            const auto layer0_end=0x30000u+layer0-1u;
+            const auto end_psn=geometry && geometry->opposite_track_path ?
+                ((~layer0_end)&0xFFFFFFu)+(sectors-layer0)-1u : layer0_end;
             cdvd_sector_[0x0Cu]=0x01u;
             cdvd_sector_[0x0Du]=0x02u;
-            cdvd_sector_[0x0Eu]=0x01u;
+            cdvd_sector_[0x0Eu]=geometry ? (geometry->opposite_track_path ? 0x31u : 0x21u) : 0x01u;
+            if(geometry)cdvd_sector_[0x0Fu]=0x10u;
             cdvd_sector_[0x11u]=0x03u;
             cdvd_sector_[0x15u]=static_cast<std::uint8_t>((end_psn>>16u)&0xFFu);
             cdvd_sector_[0x16u]=static_cast<std::uint8_t>((end_psn>>8u)&0xFFu);
             cdvd_sector_[0x17u]=static_cast<std::uint8_t>(end_psn&0xFFu);
+            if(geometry && geometry->opposite_track_path) {
+                cdvd_sector_[0x19u]=static_cast<std::uint8_t>(layer0_end>>16u);
+                cdvd_sector_[0x1Au]=static_cast<std::uint8_t>(layer0_end>>8u);
+                cdvd_sector_[0x1Bu]=static_cast<std::uint8_t>(layer0_end);
+            }
         } else {
             try {disc_->read_sector(cdvd_lba_,cdvd_sector_);}
             catch(const std::exception& error){throw IopStop{std::string("CDVD sector read: ")+error.what()};}
@@ -1177,7 +1187,7 @@ void Iop::pump_cdvd() {
         for(unsigned i=0;i<bytes;++i) {
             const auto pos=cdvd_sector_offset_+i;
             if(pos==0u) {
-                ram_[*madr+i]=0x20u; // ECMA-267 single-layer DVD-ROM Data Area ID
+                ram_[*madr+i]=0x20u; // ECMA-267 DVD-ROM layer-0 Data Area ID
                 ram_known_[*madr+i]=0xFFu;
             } else if(pos>=1u && pos<=3u) {
                 ram_[*madr+i]=static_cast<std::uint8_t>((psn>>((3u-pos)*8u))&0xFFu);
@@ -3217,8 +3227,8 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
                 throw IopStop{name+": GetToc requires DVD media, HOWTO 0x84/0x8C and layer-0 parameter 00; params"+params};
             }
             const auto size=disc_->image_size();
-            if(!size || (size%2048u)!=0u || size/2048u>2295104ull)
-                throw IopStop{name+": GetToc requires a non-empty single-layer DVD-5 image with 2048-byte sectors"};
+            if(!size || (size%2048u)!=0u || (size/2048u>2295104ull && !disc_->diagnostic_dvd_geometry()))
+                throw IopStop{name+": GetToc requires DVD-5 or explicit validated diagnostic DVD geometry"};
             cdvd_sector_cycles_=static_cast<std::uint32_t>((36864000ull*2048u)/(1382400u*4u));
             cdvd_sector_at_=cycle_+cdvd_sector_cycles_;cdvd_sector_offset_=2064u;
             cdvd_lba_=0u;cdvd_sectors_=1u;cdvd_status_=6u;cdvd_sticky_|=cdvd_status_;
@@ -3230,9 +3240,9 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
             const auto size=disc_->image_size();
             if(cdvd_type_!=0x14u || cdvd_howto_!=0x8Cu || cdvd_params_.size()!=11u ||
                cdvd_params_[10]!=0u || (cdvd_params_[9]&0x7Fu)>3u ||
-               !size || (size%2048u)!=0u || size/2048u>2295104ull) {
+               !size || (size%2048u)!=0u || (size/2048u>2295104ull && !disc_->diagnostic_dvd_geometry())) {
                 std::string params;for(const auto byte:cdvd_params_)params+=" "+hex(byte,2);
-                throw IopStop{name+": ReadDvd requires single-layer DVD media, HOWTO 0x8C, 11 parameters, supported spindle speed and 2064-byte sectors; params"+params};
+                throw IopStop{name+": ReadDvd requires DVD-5 or explicit diagnostic geometry, HOWTO 0x8C, 11 parameters, supported spindle speed and 2064-byte sectors; params"+params};
             }
             const bool cav=(cdvd_params_[9]&0x80u)!=0;
             if(cav && !diagnostic_cav_nominal_timing_)
@@ -3243,6 +3253,8 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
             const auto lba=word(0),count=word(4);
             if(!count || std::uint64_t{lba}+count>size/2048u)
                 throw IopStop{name+": ReadDvd invalid sector range"};
+            if(const auto& geometry=disc_->diagnostic_dvd_geometry();geometry && std::uint64_t{lba}+count>geometry->layer0_sectors)
+                throw IopStop{name+": ReadDvd raw second-layer sectors are not modeled"};
             constexpr unsigned dvd_speed[]={4,1,2,4};
             const auto spindle=cdvd_params_[9]&0x7Fu;
             cdvd_sector_cycles_=static_cast<std::uint32_t>(
