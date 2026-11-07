@@ -1064,6 +1064,31 @@ void vector_accumulator_add() {
     s.set_cp0(Cop0::Status,0);
     rejects([&]{ee::exec<MipsOpcode::VaddaBc>(s,memory,0,0x4BE0083Cu);},"Status.CU2 = 0");
 }
+void immediate_add_knowledge() {
+    auto owner=std::make_unique<Memory>();auto& memory=*owner;memory.reset_for_boot(m20::build_firmware().rom);
+    for(const auto mask:{0xFull,0xF00ull,0x1E000000000ull,0x8000000000000000ull})
+    for(const auto raw:{0ull,0x7Full,0xFFFFFFFFFFFFFFF0ull,0x1921FA0000000000ull})
+    for(const unsigned immediate:{0u,1u,0x7Fu,0xFFFFu,0x8000u})for(const unsigned destination:{0u,5u,9u}) {
+        std::vector<unsigned> positions;for(unsigned n=0;n<64;++n)if(mask&(1ull<<n))positions.push_back(n);
+        std::uint64_t ones=~0ull,any=0;
+        for(unsigned choice=0;choice<(1u<<positions.size());++choice) {
+            auto value=raw&~mask;for(unsigned n=0;n<positions.size();++n)if(choice&(1u<<n))value|=1ull<<positions[n];
+            const auto result=value+static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<std::int16_t>(immediate)));
+            ones&=result;any|=result;
+        }
+        const auto unknown=any^ones;const auto word=0x64000000u|(5u<<21)|(destination<<16)|immediate;
+        for(const bool interpreter:{false,true}) {
+            auto state=ee_reset_state();state.pc=0x80001000u;state.set_reg128(5,0,0x123456789ABCDEFull);
+            state.set_reg64_observed(5,raw,mask);state.gpr[destination].high=destination ? 0x123456789ABCDEFull : 0;
+            if(interpreter) {memory.write32(state.pc,word);std::uint64_t count=0;ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};interpret_instruction(context);}
+            else ee::exec<MipsOpcode::Daddiu>(state,memory,state.pc,word);
+            require(state.gpr[destination].low==(destination ? ones : 0) && state.unknown_gpr_bits[destination]==(destination ? unknown : 0),
+                "DADDIU known bits match all independent concrete sums, including sign extension, wrap, aliases and zero");
+            require(state.gpr[destination].high==(destination ? 0x123456789ABCDEFull : 0),"DADDIU preserves the upper 64-bit lane");
+            if(destination && unknown)rejects([&]{(void)state.reg64(destination);},"unknown MMIO bits");
+        }
+    }
+}
 void dma_idle_knowledge() {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_reg32(8,0xB000C000u);
@@ -1206,6 +1231,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {interpreter_decode_cache();privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();vector_accumulator_add();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
+    try {interpreter_decode_cache();privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();vector_accumulator_add();immediate_add_knowledge();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

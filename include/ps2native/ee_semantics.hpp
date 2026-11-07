@@ -828,6 +828,10 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         write_gpr32_signed(s,t_, read_gpr32(s,s_) + simm32(w));
     } else if constexpr (Op == O::Daddiu) {
         if(finite_unary(s,t_,s_,[w](auto value){return value+simm64(w);}))return;
+        if(s.unknown_gpr_bits[s_]) {
+            const auto sum=add_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],simm64(w),0,64,false);
+            write_gpr64_observed(s,t_,sum.value,sum.unknown);return;
+        }
         write_gpr64(s,t_, read_gpr64(s,s_) + simm64(w));
     } else if constexpr (Op == O::Slti) {
         write_gpr64(s,t_,less_observed(raw_gpr64(s,s_),s.unknown_gpr_bits[s_],simm64(w),0,true,s.reg64_candidates(s_).get()));
