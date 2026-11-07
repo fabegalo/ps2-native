@@ -2,20 +2,39 @@
 
 ## Simpsons — pedido atual, 07/11/2026
 
-As correções `d05476c`, `c57d517`, `63740c2` passaram 31 testes focados.
-Ainda não existe frame/menu jogável do SLUS-20624. Preservar as evidências
-de Shadow e Super Bust abaixo; elas não certificam o Simpsons.
+MFIFO/fromSPR e BC0F/T/FL/TL estão implementados; 34 testes focados passaram
+também em fonte isolada. Ainda não existe frame/menu jogável do SLUS-20624.
+Preservar as evidências de Shadow e Super Bust abaixo; elas não certificam
+o Simpsons.
 
 1. Retomar a investigação em `out/game-first/simpsons-current-before-gif.ps2ncp`
    (EE 293.097.310, PC `0x37DB20`). O início do DMA GIF escreve CHCR=0x105,
    TADR=0x80003000, mas D2_QWC nunca adquiriu valor conhecido. Localizar
    evidência de reset/initialização ou uma entrada completa que o programe;
    não substituir o estado desconhecido por zero no núcleo compartilhado.
-2. Comparar com `simpsons-exec-argv-latest.ps2ncp`: o handler Sony ExecPS2
+   Um cenário separado com QWC=0 fornecido externamente processou um pacote
+   GIF/1.048.576 escritas de pixels de limpeza, sem scanout. Depois de 134.279
+   instruções, BC0F em `0x37C9F8` depende de CPC5/CPC7 desconhecidos:
+   D_PCR valor 0/máscara `0x03FF00E0`, D_STAT `0x00A84047`. Não desabilitar
+   a espera ou simular conclusão de canal.
+2. O boot convidado sem injeção do ELF tem um cenário separado, com as
+   hipóteses explícitas existentes de reset SIO2, controles/energia DEV9 e
+   wrap normal SPU2. A janela estrita dentro desse cenário parou em
+   EE `0x20A258`, 211.513.413 instruções, ao consumir o bit 7 desconhecido
+   de uma resposta em RAM; IOP sem recusa. O último SCMD foi 0x15
+   ForbidDVDP, provável produtor a confirmar; seu acknowledgement continua
+   não medido. Checkpoints válidos em
+   `out/game-first/simpsons-guest-boot5-{100000000,200000000}.ps2ncp`:
+   retomar com o contexto do cenário v5, sem repetir o prefixo. Rastrear
+   o produtor antes de fixar bits. Evidências `simpsons-dma-verified-boot-wrap.log` e
+   `simpsons-dma-boot-origin.log`; fonte e contexto em
+   `out/game-first/simpsons-guest-boot-probe.cpp`. Não misturar esse cenário
+   com o checkpoint de injeção ou o boot sem hipóteses.
+3. Comparar com `simpsons-exec-argv-latest.ps2ncp`: o handler Sony ExecPS2
    e argv0 de BOOT2 foram exercitados, mas a execução ficou no laço do
    kernel após 220 milhões de instruções. Investigar SIF/estado de threads
    antes de atribuir essa fronteira ao DMA observado na injeção direta.
-3. Boot original continua dependendo de evidência do encoder 0x7E e
+4. Boot original continua dependendo de evidência do encoder 0x7E e
    SYNCV de reset. Validar imagem, entrada e som reais antes de declarar
    jogabilidade; AOT startup, teste sintético e contagem EE não bastam.
 

@@ -21,6 +21,7 @@ bool MipsInstruction::is_conditional_branch() const noexcept {
         case MipsOpcode::Bltz: case MipsOpcode::Bgez:
         case MipsOpcode::Bltzal: case MipsOpcode::Bgezal:
         case MipsOpcode::Bc1f: case MipsOpcode::Bc1t:
+        case MipsOpcode::Bc0f: case MipsOpcode::Bc0t:
             return true;
         default:
             return is_likely_branch();
@@ -34,6 +35,7 @@ bool MipsInstruction::is_likely_branch() const noexcept {
         case MipsOpcode::Bltzl: case MipsOpcode::Bgezl:
         case MipsOpcode::Bltzall: case MipsOpcode::Bgezall:
         case MipsOpcode::Bc1fl: case MipsOpcode::Bc1tl:
+        case MipsOpcode::Bc0fl: case MipsOpcode::Bc0tl:
             return true;
         default:
             return false;
@@ -262,6 +264,10 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
         if ((word & 0x7ffu) == 0u) {
             if (rs == 0x00) return make(MipsOpcode::Mfc0);
             if (rs == 0x04) return make(MipsOpcode::Mtc0);
+        }
+        if(rs==8u && rt<4u) {
+            constexpr MipsOpcode branches[]{MipsOpcode::Bc0f,MipsOpcode::Bc0t,MipsOpcode::Bc0fl,MipsOpcode::Bc0tl};
+            return make(branches[rt]);
         }
         if (rs == 0x10 && rt == 0 && rd == 0 && sa == 0) {
             switch (funct) {

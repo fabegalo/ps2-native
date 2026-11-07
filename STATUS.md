@@ -2,7 +2,32 @@
 
 **Registro vivo de progresso e evidências.** Atualizar este arquivo quando houver avanço **verificado**; não reescrever os READMEs, `AGENTS.md` ou `CLAUDE.md` a cada marco. Relatórios detalhados continuam em `docs/M*-STATUS.md`; o trabalho seguinte fica em `docs/NEXT-TASK.md`.
 
-## Simpsons: fronteira FPU superada, ainda sem vídeo — 07/11/2026
+## Simpsons: MFIFO e BC0 implementados, ainda sem vídeo — 07/11/2026
+
+- O núcleo agora transporta fromSPR normal e MFIFO para VIF1/GIF, incluindo
+  bytes e máscaras desconhecidas, wrap do anel/scratchpad, espera por dados,
+  conclusão/IRQ e checkpoints durante origem e drenagem. `BC0F/T/FL/TL`
+  usa CPC/CIS reais, com delay slots e recusa de condição indeterminada.
+  A prioridade funcional de fromSPR e dois ciclos EE por qword permanecem
+  hipóteses de barramento, sem calibração física.
+- **34/34 regressões passaram** em MSVC Release `/O2`, inclusive numa cópia
+  isolada de `7e7ceda` mais esta alteração. Trabalho simultâneo em VU/timing
+  foi preservado. Checkpoints anteriores exigem opt-in de runtime, mantêm
+  seus campos revalidados e só migram fromSPR anteriormente inativo.
+- O controle estrito ainda recusa **D2_QWC desconhecido**, no checkpoint
+  original. Ensaio separado, com QWC=0 explicitamente fornecido, processou
+  **um pacote GIF e 1.048.576 escritas de pixels**, sem scanout: não é uma
+  imagem do jogo. Avançou 134.279 instruções até `BC0F` em `0x37C9F8`,
+  cuja condição ainda depende de CPC5/CPC7 desconhecidos. Não foram zerados.
+- Sem menu, imagem, som ou gameplay do Simpsons demonstrados. CI não
+  executada e nenhuma publicação remota. [Método e limites](docs/FIRST-GAME-STATUS.md).
+- Pelo firmware convidado sem injeção, outro cenário explícito alcançou
+  211.513.413 instruções EE, sem recusa IOP, mas recusou o bit 7 desconhecido
+  de uma resposta antes do vídeo. Último SCMD: 0x15 ForbidDVDP, provável
+  produtor ainda a confirmar. Checkpoints válidos preservam 100/200 milhões;
+  nenhum valor de sucesso foi fabricado e nenhum ensaio permanece ativo.
+
+## Simpsons: fronteira FPU superada, ainda sem vídeo — 07/11/2026 (anterior)
 
 - Ponytail instalado e aplicado em modo `full`. `d05476c`, `c57d517` e
   `63740c2` ampliam provas de domínios FPU, implementam acumulação escalar

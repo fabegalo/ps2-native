@@ -28,7 +28,8 @@ namespace ps2native {
     X(Vmul) X(VmulBc) X(Vmadd) X(VmaddBc) X(Vmula) X(VmulaBc) X(Vmadda) X(VmaddaBc) \
     X(VaddBc) X(VsubBc) X(Vopmula) X(Vopmsub) \
     X(Vsqrt) X(Vdiv) X(Vwaitq) X(VaddQ) X(VmulQ) X(Vmove) X(Vnop) X(Vftoi) \
-    X(CFalseS) X(CEqualS) X(CLessS) X(CLessEqualS) X(Bc1f) X(Bc1t) X(Bc1fl) X(Bc1tl)
+    X(CFalseS) X(CEqualS) X(CLessS) X(CLessEqualS) X(Bc1f) X(Bc1t) X(Bc1fl) X(Bc1tl) \
+    X(Bc0f) X(Bc0t) X(Bc0fl) X(Bc0tl)
 // System instructions executed only by the interpreter (boot path): COP0
 // moves, TLB maintenance, ERET, EI/DI, CACHE, PREF, the COP1 word loads and
 // stores LWC1/SWC1 (FPU arithmetic is not decoded) and the trap-style

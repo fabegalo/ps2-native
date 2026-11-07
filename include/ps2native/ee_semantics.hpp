@@ -847,6 +847,13 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
             }
         }
         s.fcr31=(s.fcr31&~(1u<<23))|(result ? 1u<<23 : 0u);
+    } else if constexpr (Op==O::Bc0f || Op==O::Bc0t || Op==O::Bc0fl || Op==O::Bc0tl) {
+        const auto status=s.cp0(Cop0::Status);
+        if(!(status&(kStatusEXL|kStatusERL|(1u<<28u))) && (status&kStatusKSU))
+            throw std::runtime_error("COP0 branch unusable in supervisor/user mode with Status.CU0 = 0");
+        const auto condition=m.dma_cop0_condition();
+        constexpr bool positive=Op==O::Bc0t || Op==O::Bc0tl;
+        branch(s,condition==positive,pc,w,Op==O::Bc0fl || Op==O::Bc0tl);
     } else if constexpr (Op==O::Bc1f || Op==O::Bc1t || Op==O::Bc1fl || Op==O::Bc1tl) {
         if(!(s.cp0(Cop0::Status)&kStatusCU1))
             throw std::runtime_error("COP1 branch with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");

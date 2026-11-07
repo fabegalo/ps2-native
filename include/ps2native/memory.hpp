@@ -257,6 +257,17 @@ public:
     void sync_iop() { registers_.sync_iop(); }
     [[nodiscard]] bool intc_interrupt_pending() const;
     [[nodiscard]] bool dmac_interrupt_pending() const { return registers_.dmac_interrupt_pending(); }
+    // RUNTIME_HELPERS_BEGIN
+    [[nodiscard]] bool dma_cop0_condition() const {
+        registers_.sync_iop();
+        const auto pcr=registers_.iop().ee_dma_observe(0x1000E020u);
+        const auto unfinished=~registers_.iop().ee_dma_read(0x1000E010u)&0x3FFu;
+        // EE User's Manual v6 p.66: CPCOND0 uses CIS, independently of STR and interrupt masks.
+        if(pcr.value&~pcr.unknown&unfinished)return false;
+        if(pcr.unknown&unfinished)throw std::runtime_error("BC0 condition consumes unknown D_PCR.CPC bits");
+        return true;
+    }
+    // RUNTIME_HELPERS_END
     [[nodiscard]] const std::string& sio_output() const noexcept { return registers_.sio_output(); }
 
 private:

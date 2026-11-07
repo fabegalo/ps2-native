@@ -95,7 +95,81 @@ void memory_attachment() {
     clock=4;
     require(memory.read32(0xB0003C30u)==0x6666,"Memory CPU stores and graphics DMA use one actual scratchpad allocation");
 }
+void mfifo_transport() {
+    for(unsigned channel:{1u,2u}) {
+        Fixture f;VuControl vu;
+        const auto drain=channel==1u ? 0x10009000u : 0x1000A000u;
+        f.dma.ee_dma_write(0x1000E040u,0x70); // eight qwords
+        f.dma.ee_dma_write(0x1000E050u,0x200);
+        f.dma.ee_dma_write(0x1000E000u,1u|((channel+1u)<<2));
+        f.dma.ee_dma_write(0x1000D010u,0x260);
+        f.dma.ee_dma_write(drain+0x20,0);f.dma.ee_dma_write(drain+0x30,0x260);
+        f.dma.ee_dma_write(drain,channel==1u ? 0x145 : 0x105);
+        f.dma.advance_graphics(2,f.v0,f.v1,f.gif,f.gs,vu);
+        require((f.dma.ee_dma_read(0x1000E010u)&0x4000u) &&
+            (f.dma.ee_dma_read(drain)&0x100u) && f.gif.packets().empty(),
+            "an empty MFIFO holds STR and raises MEIS without reading stale RAM");
+        f.dma.ee_dma_write(0x1000E010u,0x40004000u);
+        require(!f.dma.ee_dma_interrupt_pending(),"acknowledging MFIFO empty does not fabricate an interrupt");
+        if(channel==2u) {
+            f.tag(spr|0x3FF0u,0x70000002u);
+            f.tag(spr,0x8001u,0x10000000u,0xEu);
+            f.tag(spr|0x10u,0x12345678u,0xFFFFFFFFu,0x62u);
+        } else {
+            f.tag(spr|0x3FF0u,0x70000002u,0,0,0x30000000u); // TTE STROW
+            f.tag(spr,0x11111111u,0x22222222u,0x33333333u,0x44444444u);
+            f.tag(spr|0x10u,0,0,0,0);
+        }
+        f.dma.ee_dma_write(0x1000D020u,3);f.dma.ee_dma_write(0x1000D080u,0x3FF0);
+        f.dma.ee_dma_write(0x1000D000u,0x100);
+        rejects([&]{f.dma.ee_dma_write(0x1000E040u,0x30);},"ring changed");
+        f.dma.advance_graphics(8,f.v0,f.v1,f.gif,f.gs,vu);
+        require(f.dma.ee_dma_read(0x1000D010u)==0x210 && f.dma.ee_dma_read(0x1000D080u)==0x20 &&
+            !f.dma.ee_dma_read(0x1000D020u) && (f.dma.ee_dma_read(0x1000E010u)&0x100u),
+            "fromSPR copies three real qwords with independent scratchpad and ring wrapping");
+        require(f.dma.ee_dma_read(drain+0x20)==0 && f.gif.packets().empty(),
+            "producer completion does not fabricate drain progress");
+        f.dma.advance_graphics(14,f.v0,f.v1,f.gif,f.gs,vu);
+        require(!(f.dma.ee_dma_read(drain)&0x100u) && f.dma.ee_dma_read(drain+0x10)==0x210 &&
+            (f.dma.ee_dma_read(0x1000E010u)&(1u<<channel)),"MFIFO END completes only after actual wrapped payload");
+        if(channel==2u)require(f.gif.packets().size()==1 && f.gs.read(kGsSiglblid+4,4)==0x12345678u,
+            "MFIFO GIF consumes the original LABEL packet");
+        else for(unsigned w=0;w<4;++w)require(f.v1.read_register(0x100+w*16u)==0x11111111u*(w+1u),
+            "MFIFO VIF1 receives TTE and exact payload words");
+    }
+    Fixture unknown;VuControl vu;
+    unknown.tag(spr|0x3FF0u,1,2,3,4);unknown.unknown[spr|0x3FF4u]=0x80;
+    unknown.dma.ee_dma_write(0x1000E000u,1);unknown.dma.ee_dma_write(0x1000D010u,0x200);
+    unknown.dma.ee_dma_write(0x1000D020u,1);unknown.dma.ee_dma_write(0x1000D080u,0x3FF0);
+    unknown.dma.ee_dma_write(0x1000D000u,0x100);unknown.dma.set_ee_dma_suspended(true);
+    unknown.dma.advance_graphics(100,unknown.v0,unknown.v1,unknown.gif,unknown.gs,vu);
+    require(unknown.dma.ee_dma_read(0x1000D020u)==1,"CPND holds fromSPR without consuming a qword");
+    unknown.dma.set_ee_dma_suspended(false);unknown.dma.advance_graphics(102,unknown.v0,unknown.v1,unknown.gif,unknown.gs,vu);
+    require(unknown.unknown.at(0x204)==0x80 && unknown.unknown.at(spr|0x3FF4u)==0x80 &&
+        unknown.ram[0x204]==2 && unknown.dma.ee_dma_read(0x1000D080u)==0,
+        "fromSPR transports unknown masks without consuming or inventing source certainty");
+    Fixture partial;VuControl pv;
+    partial.tag(spr,0x70000002u);partial.tag(spr|0x10u,0x8001u,0x10000000u,0xEu);
+    partial.tag(spr|0x20u,0xABCDu,0xFFFFFFFFu,0x62u);
+    for(const auto [at,value]:std::initializer_list<std::pair<unsigned,unsigned>>{
+        {0x1000E040,0x70},{0x1000E050,0x200},{0x1000E000,0xD},{0x1000D010,0x200},
+        {0x1000A020,0},{0x1000A030,0x200},{0x1000A000,0x105},
+        {0x1000D020,1},{0x1000D080,0},{0x1000D000,0x100}})partial.dma.ee_dma_write(at,value);
+    partial.dma.advance_graphics(6,partial.v0,partial.v1,partial.gif,partial.gs,pv);
+    require((partial.dma.ee_dma_read(0x1000A000)&0x100u) && partial.dma.ee_dma_read(0x1000A020)==2 &&
+        (partial.dma.ee_dma_read(0x1000E010)&0x4000u) && partial.gif.packets().empty(),
+        "a published END tag cannot consume an unpublished inline payload or complete early");
+    partial.dma.ee_dma_write(0x1000E010,0x4000);
+    partial.dma.ee_dma_write(0x1000D020,2);partial.dma.ee_dma_write(0x1000D000,0x100);
+    partial.dma.advance_graphics(14,partial.v0,partial.v1,partial.gif,partial.gs,pv);
+    require(partial.gif.packets().size()==1 && partial.gs.read(kGsSiglblid+4,4)==0xABCDu &&
+        (partial.dma.ee_dma_read(0x1000E010)&4u),"publishing the remaining bytes resumes the held END payload");
+    Fixture strict;
+    strict.dma.ee_dma_write(0x1000A030u,0x100);
+    rejects([&]{strict.dma.ee_dma_write(0x1000A000u,0x105);},"QWC is unknown");
+    require(!(strict.dma.ee_dma_observe(0x1000A000u).value&0x100u),"unknown initial QWC cannot arm GIF");
 }
-int main() try {source_selection();gif_and_boundaries();memory_attachment();
+}
+int main() try {source_selection();gif_and_boundaries();memory_attachment();mfifo_transport();
     std::cout<<"Graphics DMA transfers shared SPR/RAM bytes, tags, TTE, boundaries and unknown data\n";
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

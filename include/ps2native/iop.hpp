@@ -159,6 +159,7 @@ public:
         // An armed channel retains priority/arbitration checks even before its
         // next bus beat; stored refusals always take their original priority.
         const bool enabled=!ee_dma_suspended_ && (ee_dctrl_&1u);
+        if(enabled && (ee_dma_setup_[8][0].value_or(0u)&0x100u))return true;
         for(unsigned channel=0;channel<3u;++channel)
             if(graphics_dma_[channel].stop || (enabled && (ee_dma_setup_[channel][0].value_or(0u)&0x100u)))return true;
         return vu.micro_event_due(cycle) || vif0.drain_pending() || vif1.drain_pending();
@@ -167,11 +168,12 @@ public:
     // These anchors are modeled checkpoint state, even while the bus is idle.
     void stamp_idle_graphics(std::uint64_t cycle) noexcept {
         graphics_dma_[0].cycle=graphics_dma_[1].cycle=graphics_dma_[2].cycle=cycle;
+        spr_dma_cycle_=cycle;
     }
     // RUNTIME_HELPERS_END
     void advance_graphics(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu);
     void advance_vif_dma(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr);
-    [[nodiscard]] bool writes_ee_ram() const noexcept { return (ee_dma_setup_[5][0].value_or(0u)&0x100u)!=0; }
+    [[nodiscard]] bool writes_ee_ram() const noexcept { return ((ee_dma_setup_[5][0].value_or(0u)|ee_dma_setup_[8][0].value_or(0u))&0x100u)!=0; }
     [[nodiscard]] std::uint64_t ee_ram_write_generation() const noexcept {return ee_ram_write_generation_;}
     struct SifDmaMetrics {
         std::uint64_t bytes{}, source_full_cycles{}, destination_empty_cycles{};
@@ -625,6 +627,7 @@ private:
         std::optional<std::string> stop;
     };
     std::array<GraphicsDma,3> graphics_dma_{};
+    std::uint64_t spr_dma_cycle_{};
     std::optional<std::uint8_t> cdvd_howto_;
     std::vector<std::uint8_t> cdvd_params_;
     std::uint32_t cdvd_lba_{}, cdvd_sectors_{}, cdvd_sector_cycles_{};

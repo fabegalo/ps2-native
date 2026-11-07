@@ -21,6 +21,11 @@ void finish_transfer(Memory& memory) {
 }
 std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const std::uint8_t> payload,
     const char* schema="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88") {
+    std::vector<std::uint8_t> old_payload(payload.begin(),payload.end());
+    const std::array<std::uint8_t,8> spr_tag{0x5F,0x53,0x50,0x52,0x44,0x4D,0x41,0x31};
+    const auto spr_at=std::search(old_payload.begin(),old_payload.end(),spr_tag.begin(),spr_tag.end());
+    require(spr_at!=old_payload.end(),"current checkpoint has a tagged fromSPR clock extension");
+    old_payload.erase(spr_at,spr_at+16);payload=old_payload;
     std::vector<std::uint8_t> bytes{'P','S','2','N','C','P','0','1'};
     const auto integer=[&](std::uint64_t value,unsigned size){for(unsigned i=0;i<size;++i)bytes.push_back(static_cast<std::uint8_t>(value>>(8u*i)));};
     info.schema_sha256=schema;
@@ -52,6 +57,29 @@ int main(int argc,char** argv)try {
         const_cast<Gif&>(loaded_gap.gif()).write_fifo(1ull<<15u,0,const_cast<GsRegisters&>(loaded_gap.gs()));
         require(checkpoint_state_sha256(loaded_state,loaded_gap)==checkpoint_state_sha256(gap_state,gap),
             "a restored GIF tag gap continues the same packet through its final EOP tag");
+    }
+    for(const unsigned prefix:{3u,9u}) {
+        auto mfifo_image=program();Memory mfifo;EEState ms;prepare_direct_elf(mfifo_image,nullptr,ms,mfifo);
+        mfifo.write64(0x70003FF0u,0x70000002u);mfifo.write64(0x70003FF8u,0);
+        mfifo.write64(0x70000000u,0x1000000000008001ull);mfifo.write64(0x70000008u,0xEu);
+        mfifo.write64(0x70000010u,0xFFFFFFFF12345678ull);mfifo.write64(0x70000018u,0x62);
+        for(const auto [at,value]:std::initializer_list<std::pair<unsigned,unsigned>>{
+            {0xB000E040,0x70},{0xB000E050,0x200},{0xB000E000,0xD},
+            {0xB000D010,0x260},{0xB000A020,0},{0xB000A030,0x260},{0xB000A000,0x105},
+            {0xB000D020,3},{0xB000D080,0x3FF0},{0xB000D000,0x100}})mfifo.write32(at,value);
+        BootOptions mo;mo.max_instructions=prefix;auto mb=run_ee_boot(ms,mfifo,nullptr,mo);
+        require(mb.outcome==BootOutcome::BudgetExhausted,"MFIFO reaches a valid partial-transfer boundary");
+        const auto mf=directory/("mfifo-"+std::to_string(prefix)+".ps2ncp");
+        CheckpointContext mc{sha256_hex(mfifo_image.bytes),"mfifo"};save_checkpoint(mf,ms,mfifo,mb,mc);
+        Memory restored_mfifo;EEState rs;prepare_direct_elf(mfifo_image,nullptr,rs,restored_mfifo);
+        (void)load_checkpoint(mf,rs,restored_mfifo,mc);
+        mo.max_instructions=20-prefix;
+        require(run_ee_boot(ms,mfifo,nullptr,mo).outcome==BootOutcome::BudgetExhausted &&
+            run_ee_boot(rs,restored_mfifo,nullptr,mo).outcome==BootOutcome::BudgetExhausted,
+            "continuous and restored MFIFO finish through the production EE scheduler");
+        require(checkpoint_state_sha256(ms,mfifo)==checkpoint_state_sha256(rs,restored_mfifo) &&
+            mfifo.gs().read(kGsSiglblid+4,4)==0x12345678u,
+            "mid-source and mid-drain checkpoint continuations preserve full state and actual GIF output");
     }
     auto image=program();Memory memory;EEState state;prepare_direct_elf(image,nullptr,state,memory);
     memory.diagnostic_data_cache(true);state.set_cp0(Cop0::Config,0x10003);memory.set_cache_config(0x10003);memory.write32(0x80000300u,0x12345678u);

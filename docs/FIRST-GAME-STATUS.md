@@ -907,7 +907,95 @@ Fontes independentes: [EE Core](https://docs.alexrp.com/mips/ee.pdf),
 [resultados medidos de FPU](https://github.com/unknownbrackets/ps2autotests/blob/master/tests/cpu/ee_fpu/muldiv.expected).
 Nenhum código GPL, firmware, módulo ou código traduzido comercial foi integrado.
 
-### Simpsons com Ponytail full — 07/11/2026
+### Continuação DMA/MFIFO e BC0 com Ponytail full — 07/11/2026
+
+O pedido continua sendo fazer o SLUS-20624 rodar. Esta alteração implementa
+fromSPR normal e MFIFO no núcleo compartilhado; **ainda não entrega o jogo
+rodando**. Nenhuma regra por título ou substituição de QWC desconhecido foi
+introduzida no runtime.
+
+O canal 8 copia os bytes reais do scratchpad para RAM e transporta as máscaras
+de conhecimento. Atualiza SADR/MADR/QWC, geração de escritas e CIS8 somente
+pelos qwords transferidos. O consumidor VIF1/GIF usa o anel programado por
+D_RBSR/D_RBOR, incluindo TTE, CNT/REF/REFE/END, wrap e MEIS. Dados inline ainda
+não publicados, inclusive após END, seguram o canal; não se leem bytes velhos
+para fabricar conclusão. REFS/stall, modos não suportados e reconfiguração
+ativa continuam recusados. A arbitragem funcional dá prioridade ao produtor
+fromSPR por qword; dois ciclos EE por beat e essa prioridade não são medição
+do barramento físico. O subconjunto preserva suspensão, prioridade habilitada
+por D_PCR e as recusas existentes de VIF/GIF concorrentes.
+
+BC0F, BC0T, BC0FL e BC0TL foram decodificadas e conectadas à semântica
+compartilhada AOT/interpretação. CPCOND0 depende de CPC/CIS, independentemente
+de STR e das máscaras de interrupção. Uma condição ainda indeterminada é
+recusada; um canal selecionado e comprovadamente incompleto pode provar falso
+sem consumir a incerteza dos demais. Referência primária: [EE User's Manual
+v6](https://studylib.net/doc/25813272/emotion-engine-user-s-manual), seções 5.5,
+5.8 e 5.9, páginas 57, 66, 68–69 e 75–79. Código próprio BSD, sem importação
+de implementação de outro emulador.
+
+O novo relógio de fromSPR é estado serializado, com extensão identificada.
+Schema `5662ca9c89ac26516224d7aa8f3e777e8d72ec24255364cfedd3481e13db1882`.
+Migração explícita dos formatos anteriores exige autorização de runtime,
+fromSPR inativo e reserialização/hash dos campos antigos. Testes salvam
+durante a cópia e durante a drenagem, retomam pelo scheduler EE de produção
+e comparam estado completo e o LABEL GIF independente esperado.
+
+**34/34 testes focados passaram** em `out/simpsons-dma-verify-build`, MSVC
+Release `/O2 /Ob2 /DNDEBUG`, quatro jobs, fonte isolada de `7e7ceda` mais
+`out/game-first/simpsons-dma-change.patch`. Isso evita misturar alterações
+simultâneas de timing/VU, preservadas no checkout principal. Log
+`simpsons-dma-verify2.log`; teste adicional de contexto/CU0 repetido após
+refinar sua fixture para user mode. O probe de configuração Debug falhou
+com C1902 do gerenciador PDB; o probe em Release e o build Release passaram.
+Não se usou binário de uma compilação fracassada. Duas expectativas antigas
+foram atualizadas: MADD agora exige o resultado exato de 1*2+1,25 e preservação
+do ACC; fromSPR incompleto continua recusado por falta de MADR/QWC/SADR,
+em vez de alegar que seu motor não existe.
+
+Verificações comerciais limitadas, sem Computer Use:
+
+- `simpsons-dma-verified-strict.log`: checkpoint original
+  `simpsons-current-before-gif.ps2ncp`, EE 293.097.310/PC `0x37DB20`.
+  Zero instruções retiradas e recusa específica de QWC desconhecido.
+  O ponto original e seus bytes foram preservados.
+- `simpsons-dma-verified-diagnostic.log`: cenário separado que fornece
+  D2_QWC=0 externamente, como hipótese não medida. Um pacote GIF real,
+  1.048.576 escritas de pixels de limpeza e nenhum scanout. EE avançou
+  134.279 instruções, total 293.231.589, até BC0F em `0x37C9F8`.
+  D_PCR valor 0/máscara `0x03FF00E0`, D_STAT `0x00A84047`: CPC5 e CPC7
+  impedem provar a condição. Não se desabilitou a espera nem se inventou
+  conclusão para atravessá-la. IOP sem recusa, 36.653.948 instruções.
+- O caminho convidado sem injeção também foi exercitado com o mesmo disco
+  e firmware/NVM pareados, por interpretação. O primeiro ensaio recusou
+  reset SIO2; hipóteses existentes de reset-clear, energia DEV9 inicialmente
+  desligada e seus controles latched permitiram chegar a 200 milhões EE,
+  IOP 25 milhões sem recusa, três pacotes GIF de inicialização e zero pixels.
+  Estado preservado em `simpsons-guest-boot4-200000000.ps2ncp`, cenário
+  distinto. A retomada no runtime isolado encontrou wrap normal SPU2 em
+  IOP `0x97A6C`/26.230.084; não salvou o estado recusado.
+- Novo cenário, com a hipótese existente de wrap SPU2 explicitamente
+  selecionada desde reset, atingiu **211.513.413 instruções EE** e
+  **26.439.176 IOP**, sem recusa IOP. BNE em **`0x20A258`** consome GPR3
+  com máscara `0x80`, carregado de `SP+0x174` e filtrado por ANDI 0x80.
+  O último SCMD observado é **0x15 ForbidDVDP**, seguido da resposta SIF0;
+  esse é o provável produtor, ainda não uma prova causal completa. O modelo
+  conserva seu acknowledgement como desconhecido e não foi ativada a opção
+  de assumir erro limpo. Zero pixels/scanout, PMODE ainda não escrito.
+  Logs `simpsons-dma-verified-boot-wrap.log` e `simpsons-dma-boot-origin.log`.
+  Checkpoints válidos do novo cenário em **100 e 200 milhões**, nomes
+  `simpsons-guest-boot5-100000000.ps2ncp` e
+  `simpsons-guest-boot5-200000000.ps2ncp`; o original anterior ao GIF também
+  permanece intacto. Retomar desses pontos com seu contexto próprio, sem
+  repetir o prefixo nem misturar hipóteses ou estados pós-recusa.
+
+Não há menu, imagem do jogo, áudio ouvido, entrada interativa ou gameplay
+demonstrados; a continuação é interpretada. Não é entrega de desempenho,
+validação de GPU comercial ou boot original certificado. CI não executada,
+sem push/PR/Release e sem publicar conteúdo proprietário. Todos os ensaios
+iniciados nesta tarefa foram limitados a 120 segundos host e encerrados.
+
+### Simpsons com Ponytail full — 07/11/2026 (anterior)
 
 Pedido atual do mantenedor: fazer o Simpsons rodar usando Ponytail. Skill
 instalada de `DietrichGebert/ponytail`, aplicada em modo `full`. Mesmos

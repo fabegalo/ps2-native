@@ -409,8 +409,9 @@ void register_context() {
     interpret_instruction(ctx);
     require(state.fpr[2]==state.fpu_acc && state.fpu_acc==0x3FA00000u,"zero product copies actual accumulator without changing it");
     state.pc=0x80002000u;state.fpr[0]=0x3F800000u;
-    rejects([&]{interpret_instruction(ctx);},"multiplier rounding not modeled");
-    require(state.fpr[2]==0x3FA00000u,"unsupported nonzero product cannot silently return a substitute value");
+    interpret_instruction(ctx);
+    require(state.fpr[2]==0x40500000u && state.fpu_acc==0x3FA00000u,
+        "certified MADD computes 1*2+1.25 exactly and preserves the accumulator");
     memory.write32(0x80002000u,0x46010018u); // ADDA.S f0,f1
     state.pc=0x80002000u;state.fpr[0]=0xC0200000u;state.fpr[1]=0x80000000u;
     interpret_instruction(ctx);
@@ -823,6 +824,46 @@ void dma_idle_knowledge() {
     memory.write32(0xB000C000u,0x84u);
     require(memory.read32(0xB000C000u)==0x84u,"programmed idle CHCR becomes fully known");
 }
+void dma_cop0_branches() {
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    EEState s;s.pc=0x80001000u;memory.set_clock(&s.retired_instructions);
+    rejects([&]{(void)memory.dma_cop0_condition();},"unknown D_PCR.CPC");
+    for(const bool condition:{false,true}) {
+        memory.write32(0xB000E020u,condition ? 0u : 4u);
+        for(unsigned form=0;form<4;++form) {
+            const auto word=0x41000003u|(form<<16u);
+            const auto decoded=decode_r5900(0x80001000u,word);
+            require(decoded.is_conditional_branch() && decoded.is_likely_branch()==(form>=2u),
+                "all BC0 forms retain control-flow and delay-slot classification");
+            s.pc=0x80001000u;s.delay_pending=false;
+            auto native=s;
+            switch(form) {
+                case 0:ee::exec<MipsOpcode::Bc0f>(native,memory,native.pc,word);break;
+                case 1:ee::exec<MipsOpcode::Bc0t>(native,memory,native.pc,word);break;
+                case 2:ee::exec<MipsOpcode::Bc0fl>(native,memory,native.pc,word);break;
+                case 3:ee::exec<MipsOpcode::Bc0tl>(native,memory,native.pc,word);break;
+            }
+            memory.write32(s.pc,word);
+            std::uint64_t executed=0;ExecutionContext ctx{s,memory,executed,100,0xFFFFFFFF};
+            interpret_instruction(ctx);
+            const bool taken=condition==((form&1u)!=0u);
+            require(s.delay_pending==native.delay_pending && (!s.delay_pending || s.delay_target==native.delay_target),
+                "native branch semantics and interpreter agree on the DMA condition and delay slot");
+            require(s.delay_pending==!(form>=2u && !taken) &&
+                (s.delay_pending ? s.delay_target==(taken ? 0x80001010u : 0x80001008u) : s.pc==0x80001008u),
+                "BC0F/T and likely variants follow CPCOND0 and preserve or annul the delay slot");
+        }
+    }
+    memory.write32(0xB000E020u,4u);memory.write32(0xB000E000u,1);
+    memory.write32(0xB000A010u,0);memory.write32(0xB000A020u,0);memory.write32(0xB000A000u,0x101);
+    require(!memory.dma_cop0_condition(),"idle/uncompleted status is not fabricated by STR");
+    s.retired_instructions+=2;
+    require(memory.dma_cop0_condition(),"actual GIF DMA completion establishes CPCOND0 without an interrupt mask");
+    memory.write32(0xB000E010u,4);
+    require(!memory.dma_cop0_condition(),"acknowledging CIS clears CPCOND0 even though STR remains idle");
+    s.delay_pending=false;s.set_cp0(Cop0::Status,0x10u);
+    rejects([&]{ee::exec<MipsOpcode::Bc0f>(s,memory,0,0x41000000u);},"COP0 branch unusable");
+}
 void conversions_and_partial_loads() {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_cp0(Cop0::Status,kStatusCU1);s.fcr31=0x0183C079;
@@ -914,6 +955,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_setup();dma_idle_knowledge();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_setup();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

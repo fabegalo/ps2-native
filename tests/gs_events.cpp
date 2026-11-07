@@ -223,7 +223,8 @@ void dma_setup() {
         rejects([&] { iop.ee_dma_write(base, 0x100); },
                 base==0x1000C000u ? "destination chain mode" :
                 (base==0x10008000u || base==0x10009000u) ? "normal or source chain mode" :
-                base==0x1000A000u ? "normal or source chain mode" : "transfer engine is not modeled");
+                base==0x1000A000u ? "normal or source chain mode" :
+                base==0x1000D000u ? "requires programmed MADR/QWC/SADR" : "transfer engine is not modeled");
         require(iop.ee_dma_read(base)==0, "refused start does not create a running/completed transfer");
     }
     iop.ee_dma_write(0x10008080u, 0);
