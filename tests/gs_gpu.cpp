@@ -169,7 +169,7 @@ void check_fused_scanout(std::shared_ptr<GsGpu> backend) {
     Stream cpu,accelerated(backend);cpu.setup();accelerated.setup();
     for(auto* s:{&cpu,&accelerated}) {
         s->gs.write(kGsSyncv,8,2u|(2ull<<42u),0,{});
-        s->sprite(0,0,width,height,0x80402010u);
+        s->sprite(0,0,width,height,0x80402010u,0,14u); // IIP is ignored for sprites.
     }
     const auto before=backend->stats();
     const auto expected=cpu.gs.scanout(1234),actual=accelerated.gs.scanout(1234);

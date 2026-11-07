@@ -279,8 +279,10 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     profiling::Scope profile(profiling::Phase::Gs);
     const auto prim = required(0x00);
     const auto control = required(0x1A);
-    const auto mode = (control & 1u) ? prim : required(0x1B);
+    auto mode = (control & 1u) ? prim : required(0x1B);
     const auto type = static_cast<unsigned>(prim & 7u);
+    // GS manual 3.2.2: points and sprites always use flat shading.
+    if(type==0u || type==6u)mode&=~8ull;
     const bool triangle=type>=3u && type<=5u;
     const bool line=type==1u || type==2u;
     if(type==7u)throw DeviceRefusal("GS reserved primitive type 7");

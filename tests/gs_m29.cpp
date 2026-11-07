@@ -381,6 +381,21 @@ void check_symbolic_blending() {
     }
 }
 void check_drawing_scanout() {
+    for(bool prmode:{false,true}) {
+        GsRegisters flat;flat.reset(0);configure_draw(flat);
+        flat.general_write(0,prmode ? 6u : 14u);
+        flat.general_write(0x1A,prmode ? 0u : 1u);flat.general_write(0x1B,8u);
+        flat.general_write(1,0x80112233u);flat.general_write(5,0);
+        flat.general_write(1,0x80776655u);flat.general_write(5,32u|(32ull<<16));
+        for(unsigned y=0;y<2;++y)for(unsigned x=0;x<2;++x)
+            require(flat.vram().read(0,64,0,x,y)==0x80776655u,
+                "sprite ignores IIP and uses the last vertex color without interpolation");
+        require(flat.general(0)==(prmode ? 6u : 14u) && flat.general(0x1B)==8u,
+            "effective flat shading preserves guest PRIM and PRMODE bits");
+        flat.general_write(0,prmode ? 0u : 8u);flat.general_write(1,0x80665544u);
+        flat.general_write(5,48u);
+        require(flat.vram().read(0,64,0,3,0)==0x80665544u,"point also ignores IIP from either attribute source");
+    }
     // Truth table around AREF, independently of blending/frame masks.
     constexpr bool comparison[8][3]={{false,false,false},{true,true,true},
         {true,false,false},{true,true,false},{false,true,false},
