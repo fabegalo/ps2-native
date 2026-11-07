@@ -114,12 +114,14 @@ void EeRegisters::sync_iop() {
         // These predicates inspect live device state, so same-cycle register
         // writes, GS generations, and restored state need no cached deadline.
         iop_.stamp_idle_graphics(stamp);
+        advance_vif_interrupts();
         return;
     }
     profiling::Scope profile(profiling::Phase::Sync);
     if (iop_due)
         iop_.run_until(iop_cycle, &gs_);
     iop_.advance_graphics(stamp,vif0_,vif1_,gif_,gs_,vu_control_);
+    advance_vif_interrupts();
 }
 
 std::uint64_t EeRegisters::now() const {
@@ -180,7 +182,12 @@ void EeRegisters::advance_vertical() {
     }
     vertical_generation_=gs_.timing_generation();vertical_sample_=stamp;
 }
+void EeRegisters::advance_vif_interrupts() {
+    if(vif0_.take_interrupt())intc_stat_|=1u<<4u;
+    if(vif1_.take_interrupt())intc_stat_|=1u<<5u;
+}
 ObservedWord EeRegisters::observe_intc(std::uint32_t needed) {
+    advance_vif_interrupts();
     for(unsigned i=0;i<4;++i)advance_timer(i);
     if (needed & 1u) {
         advance_gs_interrupts();
@@ -188,7 +195,7 @@ ObservedWord EeRegisters::observe_intc(std::uint32_t needed) {
     if(needed&0xCu) {
         advance_vertical();
     }
-    // Unsupported VIF IRQ, VU, IPU and SBUS commands fail before producing
+    // Unsupported VU, IPU and SBUS commands fail before producing
     // effects. Their reset-zero INTC latches cannot receive a modeled edge yet.
     return {intc_stat_, intc_unknown_ & ~intc_stat_ & needed};
 }
@@ -422,6 +429,7 @@ void EeRegisters::write128(std::uint32_t physical, std::uint64_t low, std::uint6
         auto& vif=(physical&0x1000u) ? vif1_ : vif0_;
         if(clock_)sync_iop();
         vif.write_fifo(low, high, gif_, gs_,&vu_control_,clock_ ? now() : 0);
+        advance_vif_interrupts();
         return;
     }
     if (physical == kGifFifo) return gif_.write_fifo(low, high, gs_);
@@ -456,6 +464,7 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
     if((physical>=0x10003800u && physical<0x10003A00u) || (physical>=0x10003C00u && physical<0x10003E00u)) {
         if(bytes!=4u || (physical&15u)) throw DeviceRefusal("VIF registers require aligned 32-bit accesses");
         auto& vif=(physical&0x400u) ? vif1_ : vif0_;
+        if(clock_)sync_iop();else advance_vif_interrupts();
         vif.write_register(physical&0x3FFu,static_cast<std::uint32_t>(value),gif_);return;
     }
     if (Iop::ee_dma_address(physical)) {
@@ -592,6 +601,7 @@ void EeRegisters::write(std::uint32_t physical, std::size_t bytes, std::uint64_t
     }
     if (physical == kIntcStat) {
         if (bytes != 4u) throw DeviceRefusal("I_STAT write of " + std::to_string(bytes) + " byte(s) is not modeled");
+        if(clock_)sync_iop();else advance_vif_interrupts();
         if (value & 1u) advance_gs_interrupts();
         // Sample timer edges before acknowledging their latched request.
         for(unsigned i=0;i<4;++i)advance_timer(i);

@@ -25,11 +25,12 @@ public:
         mpg_left_=mpg_address_=0;mpg_low_.reset();
         unpack_left_=unpack_address_=unpack_index_=unpack_cycle_=0;unpack_unknown_={};unpack_bounds_={};
         dbf_.reset();
+        interrupt_stall_=interrupt_edge_=command_interrupt_=false;
         fifo_.clear();input_={};input_index_=input_count_=0;waiting_=padding_=gif_waiting_=false;
     }
     [[nodiscard]] std::uint32_t read_register(std::uint32_t offset) const;
     [[nodiscard]] ObservedWord observe_status() const noexcept {
-        return {(waiting_ ? 2u|(gif_waiting_ ? 8u : 4u) : processing() ? 1u : 0u)|(mark_detected_ ? 0x40u : 0u)|
+        return {(interrupt_stall_ ? 0u : waiting_ ? 2u|(gif_waiting_ ? 8u : 4u) : processing() ? 1u : 0u)|(mark_detected_ ? 0x40u : 0u)|(interrupt_stall_ ? 0xC00u : 0u)|
             (dbf_.value_or(false) ? 0x80u : 0u)|(static_cast<std::uint32_t>(fifo_.size())<<24u),
             unit_==Unit::Vu1 && !dbf_ ? 0x80u : 0u};
     }
@@ -48,6 +49,7 @@ public:
     [[nodiscard]] bool drain_pending() const noexcept {
         return waiting_ || gif_waiting_ || !fifo_.empty() || input_index_<input_count_;
     }
+    [[nodiscard]] bool take_interrupt() noexcept {const auto edge=interrupt_edge_;interrupt_edge_=false;return edge;}
     // RUNTIME_HELPERS_END
 private:
     friend void advance_vpus(std::uint64_t,Vif*,Vif*,VuControl*,Gif&,GsRegisters&);
@@ -81,6 +83,7 @@ private:
     Input input_{};
     unsigned input_index_{},input_count_{};
     bool waiting_{},padding_{},gif_waiting_{};
+    bool interrupt_stall_{},interrupt_edge_{},command_interrupt_{};
     std::array<std::optional<std::uint32_t>,32> programmed_{};
 };
 // Shared VIF/VU event ordering, including a queued call starting on the exact

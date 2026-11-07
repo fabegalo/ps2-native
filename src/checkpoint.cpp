@@ -139,6 +139,7 @@ public:
     bool legacy_vif_payload{};
     bool legacy_micro_bounds{};
     bool legacy_transfer_bounds{};
+    bool legacy_vif_interrupt{};
     explicit Archive(std::span<const std::uint8_t> input={}):input_(input){}
     std::vector<std::uint8_t> output;
     std::vector<std::shared_ptr<const std::string>> strings;
@@ -362,7 +363,7 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
          std::string_view(PS2N_CHECKPOINT_SCHEMA)=="5662ca9c89ac26516224d7aa8f3e777e8d72ec24255364cfedd3481e13db1882" ||
          std::string_view(PS2N_CHECKPOINT_SCHEMA)=="fe6e8c07cc00203aa30906e155d9511c731237aa3919857a36a7098ea4409051" ||
          std::string_view(PS2N_CHECKPOINT_SCHEMA)=="85deaf45287f093ffa1045d13df0e972f5a47193781fadac5e1b73d8b2936111" ||
-         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="b36ce4ca5c0bf510d302b10b002b27d736cb1fbc4e258e8a2b8961950e2d18e3" || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="fa9cf50ce0d0fade6cc76b98bd076cdc6fad4e6bd5db34d76b2dfbe586011827");
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="b36ce4ca5c0bf510d302b10b002b27d736cb1fbc4e258e8a2b8961950e2d18e3" || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="fa9cf50ce0d0fade6cc76b98bd076cdc6fad4e6bd5db34d76b2dfbe586011827" || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="25e615e5098e581ee91b9dd84ffe9782be7b73f47ebfa76e377caa06fa871ffd");
     const bool legacy_scalar_flags=reviewed_scalar_transition &&
         (info.schema_sha256=="9199cae351d7ea3f43526fa1dd800d9f6810d80f6c0370974f190695aee3e2cc" ||
          info.schema_sha256=="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88");
@@ -377,7 +378,8 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
          info.schema_sha256=="06f3fe6fbdb88d6864fb5e3b18139b95e13d22312976051c0cbcd9406931d695");
     // v1 has no numerical voices. Preserve its abstract zero-gain/release
     // proofs verbatim; no active decoder history is reconstructed or guessed.
-    const bool transfer_transition=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="fa9cf50ce0d0fade6cc76b98bd076cdc6fad4e6bd5db34d76b2dfbe586011827";
+    const bool irq_transition=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="25e615e5098e581ee91b9dd84ffe9782be7b73f47ebfa76e377caa06fa871ffd";
+    const bool transfer_transition=irq_transition || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="fa9cf50ce0d0fade6cc76b98bd076cdc6fad4e6bd5db34d76b2dfbe586011827";
     const bool bounds_transition=transfer_transition || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="b36ce4ca5c0bf510d302b10b002b27d736cb1fbc4e258e8a2b8961950e2d18e3";
     const bool vif_transition=bounds_transition || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="85deaf45287f093ffa1045d13df0e972f5a47193781fadac5e1b73d8b2936111";
     const bool voice_transition=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="fe6e8c07cc00203aa30906e155d9511c731237aa3919857a36a7098ea4409051" || vif_transition;
@@ -410,22 +412,24 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
     const bool legacy_micro_bounds=context.allow_runtime_change && bounds_transition &&
         (info.schema_sha256=="85deaf45287f093ffa1045d13df0e972f5a47193781fadac5e1b73d8b2936111" || legacy_vif_payload);
     const bool legacy_transfer_bounds=context.allow_runtime_change && transfer_transition && (same_micro_bounds || legacy_micro_bounds);
-    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields && !legacy_spu2 && !same_spu2_fields && !legacy_vertex_st && !legacy_from_spr && !legacy_voice_readback && !legacy_vif_payload && !legacy_micro_bounds && !same_micro_bounds && !legacy_transfer_bounds)
+    const bool legacy_vif_interrupt=context.allow_runtime_change && irq_transition &&
+        (info.schema_sha256=="fa9cf50ce0d0fade6cc76b98bd076cdc6fad4e6bd5db34d76b2dfbe586011827" || legacy_transfer_bounds);
+    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !legacy_vif_interrupt && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields && !legacy_spu2 && !same_spu2_fields && !legacy_vertex_st && !legacy_from_spr && !legacy_voice_readback && !legacy_vif_payload && !legacy_micro_bounds && !same_micro_bounds && !legacy_transfer_bounds)
         throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
     if(info.runtime_sha256!=PS2N_CHECKPOINT_RUNTIME && !context.allow_runtime_change)throw std::runtime_error("checkpoint runtime changed; explicit reviewed allow-runtime-change is required");
     if(info.scenario_sha256!=context.scenario_sha256)throw std::runtime_error("checkpoint scenario identity differs");
     if(info.bindings_sha256!=CheckpointAccess::bindings(memory,context.expected_disc_sha256))throw std::runtime_error("checkpoint firmware/profile/NVM/disc identity differs");
     EEState staged_state;Memory staged_memory=memory;
     Reader a(std::span<const std::uint8_t>(parsed.file).subspan(parsed.payload));a.legacy_scalar_flags=legacy_scalar_flags;a.legacy_spu2=legacy_spu2;a.legacy_vertex_st=legacy_vertex_st;
-    a.legacy_from_spr=legacy_from_spr;a.legacy_voice_readback=legacy_voice_readback;a.legacy_vif_payload=legacy_vif_payload;a.legacy_micro_bounds=legacy_micro_bounds;a.legacy_transfer_bounds=legacy_transfer_bounds;
+    a.legacy_from_spr=legacy_from_spr;a.legacy_voice_readback=legacy_voice_readback;a.legacy_vif_payload=legacy_vif_payload;a.legacy_micro_bounds=legacy_micro_bounds;a.legacy_transfer_bounds=legacy_transfer_bounds;a.legacy_vif_interrupt=legacy_vif_interrupt;
     bool clock{},stalls{};a(clock,stalls,staged_state,staged_memory);
     if(a.remaining() || staged_state.retired_instructions!=info.retired || staged_state.pc!=info.pc || staged_state.cycles()!=info.cycles)
         throw std::runtime_error("checkpoint state/envelope disagree");
     if(CheckpointAccess::bindings(staged_memory,context.expected_disc_sha256)!=info.bindings_sha256)throw std::runtime_error("checkpoint changed immutable firmware bindings");
     if(iop_execution_refused(staged_memory))
         throw std::runtime_error("checkpoint contains an IOP refusal; inspect it without resuming partial execution: "+*staged_memory.iop().stop_reason());
-    if(legacy_scalar_flags || legacy_spu2 || legacy_vertex_st || legacy_from_spr || legacy_voice_readback || legacy_vif_payload || legacy_micro_bounds || legacy_transfer_bounds) {
-        Writer original;original.legacy_scalar_flags=legacy_scalar_flags;original.legacy_spu2=legacy_spu2;original.legacy_vertex_st=legacy_vertex_st;original.legacy_from_spr=legacy_from_spr;original.legacy_voice_readback=legacy_voice_readback;original.legacy_vif_payload=legacy_vif_payload;original.legacy_micro_bounds=legacy_micro_bounds;original.legacy_transfer_bounds=legacy_transfer_bounds;original(clock,stalls,staged_state,staged_memory);
+    if(legacy_scalar_flags || legacy_spu2 || legacy_vertex_st || legacy_from_spr || legacy_voice_readback || legacy_vif_payload || legacy_micro_bounds || legacy_transfer_bounds || legacy_vif_interrupt) {
+        Writer original;original.legacy_scalar_flags=legacy_scalar_flags;original.legacy_spu2=legacy_spu2;original.legacy_vertex_st=legacy_vertex_st;original.legacy_from_spr=legacy_from_spr;original.legacy_voice_readback=legacy_voice_readback;original.legacy_vif_payload=legacy_vif_payload;original.legacy_micro_bounds=legacy_micro_bounds;original.legacy_transfer_bounds=legacy_transfer_bounds;original.legacy_vif_interrupt=legacy_vif_interrupt;original(clock,stalls,staged_state,staged_memory);
         if(sha256_hex(original.output)!=info.payload_sha256)throw std::runtime_error("checkpoint scalar migration changed legacy fields");
     }
     if(legacy_transfer_bounds)CheckpointAccess::migrate_fpu_dma_metadata(staged_memory);

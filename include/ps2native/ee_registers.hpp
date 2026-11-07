@@ -217,6 +217,7 @@ private:
     void advance_timer(unsigned index);
     void advance_vertical();
     void advance_gs_interrupts();
+    void advance_vif_interrupts();
     [[nodiscard]] std::uint32_t intc_status(std::uint32_t needed);
     void write_timer(unsigned index, unsigned reg, std::uint32_t value);
     [[nodiscard]] std::uint32_t read_timer(unsigned index, unsigned reg);

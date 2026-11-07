@@ -45,6 +45,11 @@ template<class A> static void fields(A& a,Vif& v){a(v.unit_,v.direct_left_,v.dir
         if(tag!=0x3130444E42464956ull || count!=v.fifo_.size())throw std::runtime_error("checkpoint VIF numeric certificate extension differs");
         a(v.input_.bounds,v.unpack_bounds_);for(auto& input:v.fifo_)a(input.bounds);
     }else if constexpr(A::reading){v.input_.bounds={};v.unpack_bounds_={};for(auto& input:v.fifo_)input.bounds={};}
+    if(!a.legacy_vif_interrupt) {
+        std::uint64_t tag=0x3130515249464956ull;a(tag);
+        if(tag!=0x3130515249464956ull)throw std::runtime_error("checkpoint VIF interrupt extension differs");
+        a(v.interrupt_stall_,v.interrupt_edge_,v.command_interrupt_);
+    }else if constexpr(A::reading){v.interrupt_stall_=v.interrupt_edge_=v.command_interrupt_=false;}
 }
 template<class A> static void fields(A& a,VuControl::MicroVectorWrite& v){a(v.index,v.mask,v.words,v.ready);}
 template<class A> static void fields(A& a,VuControl& v){a(v.micro_,v.path1_,v.queued_path1_,v.pending_q_,v.pending_q1_,v.registers_,v.diagnostic_power_two_carry_,v.unknown_,v.vu1_integers_,v.vu1_controls_,v.data_,v.vectors_,v.vector_bounds_,v.accumulator_bounds_,v.q_bounds_,v.accumulator_,v.accumulator1_,v.vu1_vectors_,v.micro0_,v.micro1_,v.data1_);

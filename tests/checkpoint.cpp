@@ -22,6 +22,13 @@ void finish_transfer(Memory& memory) {
 std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const std::uint8_t> payload,
     const char* schema="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88") {
     std::vector<std::uint8_t> old_payload(payload.begin(),payload.end());
+    const std::array<std::uint8_t,8> irq_tag{'V','I','F','I','R','Q','0','1'};
+    for(unsigned unit=0;unit<2;++unit) {
+        const auto at=std::search(old_payload.begin(),old_payload.end(),irq_tag.begin(),irq_tag.end());
+        require(at!=old_payload.end() && at[8]==0 && at[9]==0 && at[10]==0,"legacy VIF has no interrupt state");
+        old_payload.erase(at,at+11);
+    }
+    if(std::string_view(schema)!="fa9cf50ce0d0fade6cc76b98bd076cdc6fad4e6bd5db34d76b2dfbe586011827") {
     const auto u64=[&](std::size_t& pos){require(pos+8<=old_payload.size(),"legacy extension count is bounded");std::uint64_t value=0;for(unsigned b=0;b<8;++b)value|=std::uint64_t{old_payload[pos++]}<<(8u*b);return value;};
     const auto absent=[&](std::size_t& pos,std::uint64_t count){require(count<=65536,"legacy certificate count is bounded");while(count--){require(pos<old_payload.size() && old_payload[pos]==0,"legacy fixture has no newly introduced numeric certificates");++pos;}};
     const std::array<std::uint8_t,8> vif_bounds{'V','I','F','B','N','D','0','1'},vu_data{'V','U','D','B','N','D','0','1'};
@@ -57,6 +64,7 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
         require(count<=16,"synthetic VIF FIFO count is bounded");
         old_payload.erase(at,at+48+count*16);
     }}
+    }
     payload=old_payload;
     std::vector<std::uint8_t> bytes{'P','S','2','N','C','P','0','1'};
     const auto integer=[&](std::uint64_t value,unsigned size){for(unsigned i=0;i<size;++i)bytes.push_back(static_cast<std::uint8_t>(value>>(8u*i)));};
@@ -70,6 +78,23 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
 }
 int main(int argc,char** argv)try {
     if(argc!=2)return 2;const auto directory=std::filesystem::path(argv[1]);ps2native::create_directories(directory);
+    for(const bool partial:{false,true}) {
+        auto image=program();EEState state;Memory memory;prepare_direct_elf(image,nullptr,state,memory);
+        memory.write32(0xB0003C20u,2u);
+        if(partial)memory.write128(0xB0005000u,0,0xA000000000000000ull);
+        else memory.write128(0xB0005000u,0x80000000u,0);
+        BootReport boundary;boundary.outcome=BootOutcome::BudgetExhausted;boundary.pc=state.pc;
+        const auto file=directory/(partial ? "vif-irq-payload.ps2ncp" : "vif-irq-stall.ps2ncp");
+        CheckpointContext context{sha256_hex(image.bytes),"VIF interrupt"};save_checkpoint(file,state,memory,boundary,context);
+        EEState rs;Memory restored;prepare_direct_elf(image,nullptr,rs,restored);(void)load_checkpoint(file,rs,restored,context);
+        require(checkpoint_state_sha256(state,memory)==checkpoint_state_sha256(rs,restored),"active I-bit payload and INT/VIS round-trip");
+        for(auto* m:{&memory,&restored}) {
+            if(partial)m->write128(0xB0005000u,0x1234u,0);
+            require((m->load32_observed(0xB0003C00u).value&0xC00u)==0xC00u,"restored completion retains INT/VIS");
+            m->write32(0xB0003C10u,8u);m->write128(0xB0005000u,0,0);
+        }
+        require(checkpoint_state_sha256(state,memory)==checkpoint_state_sha256(rs,restored),"restored VIF IRQ continuation remains exact");
+    }
     for(unsigned prefix:{7u,11u}) {
         auto micro_image=program();Memory micro;EEState ms;prepare_direct_elf(micro_image,nullptr,ms,micro);
         constexpr std::uint32_t nop=0x8000033Cu,unop=0x2FFu;
@@ -278,6 +303,11 @@ int main(int argc,char** argv)try {
     (void)load_checkpoint(current_file,state,memory,context);
     const auto exact=checkpoint_state_sha256(state,memory);
     auto reviewed=context;reviewed.allow_runtime_change=true;
+    const auto irq_file=directory/"legacy-vif-irq.ps2ncp";
+    write_file_atomically(irq_file,legacy_envelope(current_info,current_payload,"fa9cf50ce0d0fade6cc76b98bd076cdc6fad4e6bd5db34d76b2dfbe586011827"));
+    rejects([&]{(void)load_checkpoint(irq_file,resumed,restored,context);},"schema");
+    (void)load_checkpoint(irq_file,resumed,restored,reviewed);
+    require(checkpoint_state_sha256(resumed,restored)==exact,"pre-IRQ checkpoints preserve existing DMA numeric metadata and every guest field");
     const auto transfer_file=directory/"legacy-transfer-bounds.ps2ncp";
     write_file_atomically(transfer_file,legacy_envelope(current_info,current_payload,"b36ce4ca5c0bf510d302b10b002b27d736cb1fbc4e258e8a2b8961950e2d18e3"));
     rejects([&]{(void)load_checkpoint(transfer_file,resumed,restored,context);},"schema");

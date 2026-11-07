@@ -32,8 +32,7 @@ void Vif::write_register(std::uint32_t offset,std::uint32_t value,Gif& gif) {
             reset();
             if(unit_==Unit::Vu1) gif.set_vif_path3_mask(false);
         } // Clear only this VIF, preserving GIF packets and GS.
-        // STC clears stall/IRQ/error flags. None can be raised by the currently
-        // accepted command subset; interrupt-bearing commands remain refused.
+        if(value&8u)interrupt_stall_=false; // STC clears INT/VIS; INTC owns its latched edge.
         return;
     }
     if(offset==0) {
@@ -154,6 +153,11 @@ void Vif::write_words(std::span<const std::uint32_t> words,unsigned first_lane,G
 void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
     waiting_=gif_waiting_=false;
     for(;;) {
+        if(command_interrupt_ && !direct_left_ && !mpg_left_ && !unpack_left_ && pending_==Pending::None) {
+            command_interrupt_=false;
+            if(!interrupt_stall_)interrupt_edge_=true;
+            interrupt_stall_=true;
+        }
         if(input_index_==input_count_) {
             if(fifo_.empty())return;
             input_=fifo_.front();fifo_.pop_front();input_index_=0;input_count_=input_.count;
@@ -162,8 +166,13 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
         if(padding_) {if(++input_index_==input_count_)padding_=false;continue;}
         if(unknown && !unpack_left_)refuse(" command/non-UNPACK payload consumes unknown source bits");
         const bool payload=direct_left_ || mpg_left_ || unpack_left_ || pending_!=Pending::None;
-        const auto op=command>>24u;
-        if(!payload && !(command&0x80000000u) && vu && vu->micro_running(unit_==Unit::Vu1) &&
+        const auto op=(command>>24u)&0x7Fu;
+        if(!payload && interrupt_stall_ && op!=7u)return; // MARK remains executable during VIS.
+        if(!payload && (command&0x80000000u)) {
+            if(!error_mask_)refuse(" interrupt-bearing command has unknown ERR.MII (word="+std::to_string(command)+")");
+
+        }
+        if(!payload && vu && vu->micro_running(unit_==Unit::Vu1) &&
             (op==0x10u || ((op==0x11u || op==0x13u) && unit_==Unit::Vu1) || op==0x14u || op==0x17u || op==0x4Au)) {
             code_=command;waiting_=true;return;
         }
@@ -206,9 +215,9 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
             if(++pending_index_==(pending_==Pending::Mask ? 1u : 4u)) {pending_=Pending::None;pending_index_=0;}
             continue;
         }
-        const auto opcode=command>>24u,immediate=command&0xFFFFu;
-        if(command&0x80000000u) refuse(" interrupt-bearing command is not modeled");
-        if((opcode&0x60u)==0x60u){start_unpack(command,vu);code_=command;continue;}
+        const auto opcode=(command>>24u)&0x7Fu,immediate=command&0xFFFFu;
+        const bool interrupt=(command&0x80000000u) && !(*error_mask_&1u);
+        if((opcode&0x60u)==0x60u){start_unpack(command,vu);code_=command;command_interrupt_=interrupt;continue;}
         if(unit_==Unit::Vu0 && (opcode==2u || opcode==3u || opcode==6u || opcode==0x11u || opcode==0x13u || opcode==0x50u || opcode==0x51u))
             refuse(" received a VIF1-only command: "+std::to_string(opcode));
         switch(opcode) {
@@ -278,7 +287,7 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
                 refuse(reason+" (immediate="+std::to_string(immediate)+")");
             }
         }
-        code_=command;
+        code_=command;command_interrupt_=interrupt;
     }
 }
 } // namespace ps2native

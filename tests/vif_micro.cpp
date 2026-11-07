@@ -13,6 +13,49 @@ void program(VuControl& vu,unsigned unit) {
 }
 }
 int main() try {
+    for(unsigned unit=0;unit<2;++unit) {
+        VuControl vu;Vif vif(unit?Vif::Unit::Vu1:Vif::Unit::Vu0);Gif gif;GsRegisters gs;gs.reset(0);program(vu,unit);
+        vif.write_register(0x20,1,gif);
+        vif.write_fifo(0x07001234u,0x8000000000000000ull,gif,gs,&vu,0);
+        require(vif.read_register(0x30)==0x1234 && vif.read_register(0x80)==0x80000000u && !(vif.observe_status().value&0xC00u),
+            "MII masks the I-bit effect while retaining the complete original CODE");
+        vu.start_micro(unit,0,100);
+        const auto flush=unit?0x93000000u:0x90000000u;
+        vif.write_fifo(flush|(std::uint64_t{0x07005678u}<<32u),0,gif,gs,&vu,100);
+        advance_vpus(106,unit?nullptr:&vif,unit?&vif:nullptr,&vu,gif,gs);
+        require(vu.micro_running(unit) && vif.processing() && vif.read_register(0x30)==0x1234,
+            "a masked I-bit FLUSH still waits for the real VU E drain");
+        advance_vpus(107,unit?nullptr:&vif,unit?&vif:nullptr,&vu,gif,gs);
+        require(!vif.processing() && vif.read_register(0x30)==0x5678,"the dependent command resumes only at Ready");
+        vif.reset();vif.write_register(0x20,0,gif);
+        vif.write_fifo(0x80000000u|(std::uint64_t{0x0700ABCDu}<<32u),0,gif,gs,&vu,107);
+        require(vif.read_register(0x30)==0xABCD && (vif.observe_status().value&0xC00u)==0xC00u && vif.processing(),"I-bit NOP raises INT/VIS, permits MARK and stalls following commands");
+        require(vif.take_interrupt() && !vif.take_interrupt(),"a held interrupt produces exactly one INTC edge");
+        vif.write_register(0x10,8,gif);advance_vpus(107,unit?nullptr:&vif,unit?&vif:nullptr,&vu,gif,gs);
+        require(!vif.processing() && !(vif.observe_status().value&0xC00u),"STC releases the retained FIFO");
+        vif.write_fifo(0xA0000000u,0,gif,gs,&vu,108); // I-bit STMASK followed by its one-word payload.
+        require(vif.take_interrupt() && (vif.observe_status().value&0xC00u),"payload completion raises the rearmed interrupt");
+        vif.write_register(0x10,8,gif);advance_vpus(108,unit?nullptr:&vif,unit?&vif:nullptr,&vu,gif,gs);
+        vif.write_fifo(0,0xA000000000000000ull,gif,gs,&vu,109);
+        require(!vif.take_interrupt() && !(vif.observe_status().value&0xC00u),"I-bit STMASK does not interrupt before its payload");
+        vif.write_fifo(0x1234,0,gif,gs,&vu,110);
+        require(vif.take_interrupt() && vif.read_register(0x70)==0x1234,"the final payload word commits before the interrupt");
+    }
+    for(unsigned unit=0;unit<2;++unit) {
+        EeRegisters regs;regs.reset();std::uint64_t cycle=0;regs.set_clock(&cycle);
+        const auto control=unit ? 0x10003C00u : 0x10003800u,fifo=unit ? 0x10005000u : 0x10004000u,bit=1u<<(4u+unit);
+        regs.write(control+0x20u,4,2u);
+        if(unit)regs.write128(fifo,0x02000000u,0);
+        regs.write128(fifo,0x80000000u,0);
+        require((regs.observe_intc(bit).value&bit) && (regs.read(control,4)&0xC00u)==0xC00u,"VIF completion latches the real INTC source even while masked");
+        regs.write(kIntcStat,4,bit);
+        require(!(regs.observe_intc(bit).value&bit) && (regs.read(control,4)&0xC00u),"INTC acknowledgment cannot re-latch a held VIF interrupt or clear VIS");
+        regs.write(control+0x10u,4,8u);cycle=1;
+        regs.write128(fifo,0x8000000000000000ull,0);
+        require(regs.observe_intc(bit).value&bit,"STC rearms the next VIF interrupt edge");
+        regs.write(kIntcMask,4,bit);
+        require(regs.intc_interrupt_pending(),"the unmasked VIF source reaches the production EE interrupt input");
+    }
     {
         VuControl vu;Vif vif;Gif gif;GsRegisters gs;gs.reset(0);program(vu,1);
         vif.write_fifo(0x0200000003000000ull,0,gif,gs,&vu,90);
