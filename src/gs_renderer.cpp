@@ -1122,9 +1122,15 @@ Framebuffer GsRegisters::scanout(std::uint64_t cycle) const {
     // counts the two interlaced rasters; expose native field pixels without
     // fabricating the other field, doubling rows or applying a deinterlacer.
     const auto vertical_divisor = magv * (interlaced ? 2u : 1u);
-    if (dw % magh || dh % vertical_divisor) throw DeviceRefusal("GS scanout: fractional display magnification is not modeled");
+    const bool cropped_field = interlaced && magv == 1u && (dh & 1u);
+    if (dw % magh || (dh % vertical_divisor && !cropped_field)) throw DeviceRefusal("GS scanout: fractional display magnification is not modeled");
+    if (cropped_field && !field_)
+        throw DeviceRefusal("GS scanout: interlaced field parity is unknown");
     Framebuffer f;
     f.width = dw / magh; f.height = dh / vertical_divisor; f.stride = f.width * 4u;
+    // DISPLAY.DY/DH delimit raster lines, so an odd interlaced window
+    // contributes one extra line to the field containing its first line.
+    if (cropped_field && static_cast<unsigned>(*field_) == ((display >> 12u) & 1u)) ++f.height;
     f.ee_cycle = cycle;
     const auto clock = vertical_clock();
     if (clock.state == VerticalClock::State::Running)
