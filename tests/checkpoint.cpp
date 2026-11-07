@@ -99,6 +99,27 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
 int main(int argc,char** argv)try {
     if(argc!=2)return 2;const auto directory=std::filesystem::path(argv[1]);ps2native::create_directories(directory);
     {
+        const auto image=program();auto source=std::make_unique<Memory>();auto destination=std::make_unique<Memory>();
+        EEState original,restored;prepare_direct_elf(image,nullptr,original,*source);prepare_direct_elf(image,nullptr,restored,*destination);
+        const auto write_latch=[](Memory& memory,unsigned offset){
+            const std::array<std::uint32_t,5> words{0x3C01BF80u,0x34021234u,0xAC220000u|offset,0x08000003u,0u};
+            std::vector<std::uint8_t> bytes(words.size()*4u);
+            for(unsigned n=0;n<words.size();++n)for(unsigned b=0;b<4;++b)bytes[n*4u+b]=static_cast<std::uint8_t>(words[n]>>(b*8u));
+            memory.load_iop_program(bytes,0u,0u);auto& iop=const_cast<Iop&>(memory.iop());iop.run_until(3u);
+            require(!iop.stopped(),"latch restore fixture writes one register");
+        };
+        write_latch(*source,0x1074u);write_latch(*destination,0x1000u);
+        require(!destination->iop().diagnostic_latch(0x1F801074u),"destination warms a missing latch at equal vector size");
+        require(destination->iop().diagnostic_latch(0x1F801000u)==0x1234u,"destination warms a present latch");
+        BootReport boundary;boundary.outcome=BootOutcome::BudgetExhausted;boundary.pc=original.pc;
+        const CheckpointContext context{sha256_hex(image.bytes),"latch lookup restore"};const auto path=directory/"latch-lookup.ps2ncp";
+        save_checkpoint(path,original,*source,boundary,context);(void)load_checkpoint(path,restored,*destination,context);
+        require(destination->iop().diagnostic_latch(0x1F801074u)==0x1234u,"restore invalidates a cached absent address");
+        require(!destination->iop().diagnostic_latch(0x1F801000u),"restore invalidates a cached present address");
+    }
+
+
+    {
         const auto image=program();auto memoryOwner=std::make_unique<Memory>();auto& memory=*memoryOwner;
         auto stateOwner=std::make_unique<EEState>();auto& state=*stateOwner;prepare_direct_elf(image,nullptr,state,memory);
         memory.write32(0xB0002000u,127u);

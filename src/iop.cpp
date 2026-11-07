@@ -293,6 +293,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     video_ = {};
     gpr_known_ = {};
     latches_.clear();
+    latch_lookup_size_=static_cast<std::size_t>(-1);
     sio2_irq_output_=false;diagnostic_sio2_reset_completion_=false;
     sio2_pending_reply_.clear();diagnostic_sio2_unplugged_ports_=0;diagnostic_sio2_infrared_absent_=false;
     sio2_dma_={};diagnostic_sio2_dma_cycles_=0;sio2_dma_next_=0;sio2_dma_turn_=0;
@@ -3804,8 +3805,22 @@ void Iop::enter_exception(std::uint32_t code, std::uint32_t pc, bool delay_slot)
 }
 
 const std::optional<std::uint32_t>* Iop::latch(std::uint32_t physical) const {
-    for (const auto& [address, value] : latches_)
-        if (address == physical) return &value;
+    const auto slot=[](std::uint32_t address){return (address>>2u)&4095u;};
+    if(latch_lookup_size_!=latches_.size()) {
+        if(latches_.size()>65535u) {
+            for(const auto& [address,value]:latches_)if(address==physical)return &value;
+            return nullptr;
+        }
+        latch_lookup_.fill(0u);
+        for(std::size_t i=0;i<latches_.size();++i)
+            latch_lookup_[slot(latches_[i].first)]=static_cast<std::uint16_t>(i+1u);
+        latch_lookup_size_=latches_.size();
+    }
+    const auto index=latch_lookup_[slot(physical)];
+    if(!index)return nullptr;
+    if(latches_[index-1u].first==physical)return &latches_[index-1u].second;
+    // Collisions retain the general lookup; cached indices never cache values.
+    for(const auto& [address,value]:latches_)if(address==physical)return &value;
     return nullptr;
 }
 

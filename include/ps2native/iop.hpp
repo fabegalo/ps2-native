@@ -536,6 +536,10 @@ private:
     // Bus configuration as written; empty value: unknown (reset value never
     // established, or an unknown value written back).
     std::vector<std::pair<std::uint32_t, std::optional<std::uint32_t>>> latches_;
+    // RUNTIME_HELPERS_BEGIN
+    mutable std::array<std::uint16_t,4096> latch_lookup_{};
+    mutable std::size_t latch_lookup_size_{static_cast<std::size_t>(-1)};
+    // RUNTIME_HELPERS_END
     // MECHACON S command interface: parameters written so far, the last
     // command and its pending result bytes.
     std::vector<std::uint8_t> s_params_;

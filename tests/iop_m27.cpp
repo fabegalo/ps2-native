@@ -259,6 +259,28 @@ void check_interrupt_source_masks() {
     }
 }
 
+void check_latch_lookup() {
+    Assembler a(0xBFC00000u);a.la(t1,0xBF800000u);a.ori(t0,zero,0x1234u);
+    a.sw(t0,0x1074,t1);a.label("warm");
+    for(unsigned offset=0;offset<=0x20u;offset+=4u)a.sw(t0,0x1000+offset,t1);
+    a.la(t2,0xBF808000u);
+    for(unsigned offset=0;offset<=0x1Cu;offset+=4u)a.sw(t0,0x240+offset,t2);
+    a.ori(t0,zero,0x5678u);a.sw(t0,0x1074,t1);a.label("done");a.nop();
+    const auto rom=rom_of(a);Iop iop;iop.reset(rom,&kProfile);
+    require(!iop.diagnostic_latch(0x1F801074u),"unwritten latch remains unknown");
+    iop.run_until(index_of(a,"warm"));
+    require(iop.diagnostic_latch(0x1F801074u)==0x1234u,"warm latch lookup");
+    iop.run_until(index_of(a,"done"));require(!iop.stopped(),"latch growth program completes");
+    for(unsigned repeat=0;repeat<3u;++repeat) {
+        for(unsigned offset=0;offset<=0x1Cu;offset+=4u)
+            require(iop.diagnostic_latch(0x1F808240u+offset)==0x1234u,"indexed latch lookups retain values");
+        require(!iop.diagnostic_latch(0x1F805074u),"lookup hash collision cannot alias a different address");
+        require(iop.diagnostic_latch(0x1F801074u)==0x5678u,"lookup observes writes after vector growth");
+    }
+    iop.reset(rom,&kProfile);
+    require(!iop.diagnostic_latch(0x1F801074u),"reset cannot reuse a cached value");
+}
+
 void check_vblank_interrupts() {
     // Handler at 0xBFC00180 (SR.BEV): records EPC, Cause and the VBLANK/DMA
     // bits of I_STAT, acknowledges them and returns to EPC with RFE.
@@ -684,6 +706,7 @@ int main() {
         check_vblank_polling();
         check_vblank_interrupts();
         check_interrupt_source_masks();
+        check_latch_lookup();
         check_partial_values();
         check_sif();
         check_ee_devices();

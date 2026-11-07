@@ -113,6 +113,7 @@ struct CheckpointAccess {
         memory.set_clock(clock ? &state.retired_instructions : nullptr,stalls ? &state.stall_cycles : nullptr);
         memory.registers_.attach_ee_ram(memory.ram_,&memory.unknown_words_,memory.scratchpad_,&memory.fpu_relations_);
         memory.observer_=nullptr;
+        memory.registers_.iop_.latch_lookup_size_=static_cast<std::size_t>(-1);
     }
     static void migrate_fpu_dma_metadata(Memory& memory) {
         const auto generation=memory.iop().ee_ram_write_generation();
