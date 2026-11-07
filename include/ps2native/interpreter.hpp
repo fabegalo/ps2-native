@@ -23,6 +23,10 @@ public:
 class SystemEventObserver {
 public:
     virtual ~SystemEventObserver() = default;
+    // RUNTIME_HELPERS_BEGIN
+    // A bounded observer may decline formatting after its trace is full.
+    virtual bool wants_system_events() const noexcept { return true; }
+    // RUNTIME_HELPERS_END
     // COP0 writes, TLB maintenance, CACHE operations, ERET, EI/DI.
     virtual void on_system_event(std::string_view event) = 0;
 };

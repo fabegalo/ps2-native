@@ -31,6 +31,13 @@ struct AotModule {
 // false to leave the block (PC elsewhere, budget, stop address) and throws when
 // the guest code word in memory no longer matches the translated one.
 bool aot_enter(ExecutionContext& ctx, std::uint32_t pc, std::uint32_t word, bool has_delay_slot);
+    // RUNTIME_HELPERS_BEGIN
+
+// CACHE shares the interpreter's device semantics. Privilege is checked before
+// beginning the instruction, so a refusal retains the original fault state.
+void check_cache_privilege(ExecutionContext& ctx);
+void execute_cache_instruction(ExecutionContext& ctx, std::uint32_t word);
+    // RUNTIME_HELPERS_END
 
 // Pure AOT dispatcher (no interpreter): JR/JALR may only reach verified entries;
 // stops only at stop_pc; missing static targets and budget exhaustion throw.

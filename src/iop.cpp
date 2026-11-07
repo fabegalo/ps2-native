@@ -1252,6 +1252,7 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
                 events_.push_back({cycle_,"CDVD N command completion"});
             }
             if(cdvd_irq_) istat_|=1u<<2u;
+            if(cycle-cycle_>=16u && advance_idle_loop(cycle))continue;
             step();
             ++cycle_;
             if (timers_running_) tick_timers();
@@ -1271,6 +1272,118 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
             stop_cycle_=cycle_;events_.push_back({cycle_,"stop: "+*stop_});
         }
     }
+}
+
+std::optional<std::uint64_t> Iop::idle_loop_horizon() const {
+    if(stop_ || pending_load_ || write_ || undefined_load_ || !cop0_[Sr])return std::nullopt;
+    const auto start=in_delay_slot_ ? pc_-4u : pc_;
+    try {
+        const auto word=fetch(start);
+        const bool self_jump=(word>>26u)==2u && (((start+4u)&0xF0000000u)|((word&0x3FFFFFFu)<<2u))==start;
+        if((!self_jump && word!=0x1000FFFFu) ||
+           fetch(start+4u)!=0u || (in_delay_slot_ && branch_target_!=start))return std::nullopt;
+    } catch(const IopStop&) {return std::nullopt;}
+    if((*cop0_[Sr]&kSrIec) && (*cop0_[Sr]&(1u<<10u))) {
+        const auto line=interrupt_line();
+        if(!line || *line)return std::nullopt;
+    }
+    if(!ee_memory_quiescent())return std::nullopt;
+    const auto sector_bytes=(cdvd_ncommand_==8u || cdvd_ncommand_==9u) ? 2064u : 2048u;
+    const bool sector_wait=cdvd_sectors_ && cdvd_sector_offset_==sector_bytes && cycle_<cdvd_sector_at_;
+    if(iop_sif0_[2]&kChcrStart)return std::nullopt;
+    const auto enabled=[&](std::uint32_t address,std::uint32_t mask) {
+        const auto* value=latch(address);return value && *value && ((**value&mask)==mask);
+    };
+    if((iop_sif1_[2]&kChcrStart) && enabled(0x1F801578u,1u) && enabled(0x1F801570u,0x8000u) &&
+       (sif1_fifo_.size()>=4u || (sif1_have_tag_ && !sif1_words_)))return std::nullopt;
+    for(const auto& channel:sio2_dma_)if(channel.registers[2]&kChcrStart)return std::nullopt;
+    for(unsigned channel=0;channel<13u;++channel) {
+        if(channel==10u)continue;
+        const auto address=channel<7u ? 0x1F801088u+channel*16u : 0x1F801508u+(channel-7u)*16u;
+        const auto* control=latch(address);
+        if(channel==3u && sector_wait)continue;
+        if(control && *control && (**control&0x01000000u))return std::nullopt;
+    }
+    if((spu2_irq_pending_[0] || spu2_irq_pending_[1]) && !(istat_&(1u<<9u)))return std::nullopt;
+    auto horizon=std::numeric_limits<std::uint64_t>::max();
+    const auto before=[&](std::uint64_t edge){horizon=std::min(horizon,edge);};
+    if(sio2_complete_at_)before(*sio2_complete_at_);
+    if(cdvd_complete_at_)before(*cdvd_complete_at_);
+    if(cdvd_sectors_ && cdvd_sector_offset_==sector_bytes)before(cdvd_sector_at_);
+    if(dev9_power_ready_at_ && *dev9_power_ready_at_>cycle_)before(*dev9_power_ready_at_);
+    for(unsigned core=0;core<2u;++core) {
+        if(spu2_next_sample_[core])before(*spu2_next_sample_[core]);
+        if(spu2_transfer_[core].next)before(*spu2_transfer_[core].next);
+        if(spu2_adma_[core].next)return std::nullopt;
+    }
+    if(video_.state==GsRegisters::VerticalClock::State::Running) {
+        before((next_vblank_start_+kEeCyclesPerIopCycle-1u)/kEeCyclesPerIopCycle);
+        before((next_vblank_end_+kEeCyclesPerIopCycle-1u)/kEeCyclesPerIopCycle);
+    }
+    if(hblank_timer_mask_) {
+        if(!hblank_clock_ && !hblank_held_)return std::nullopt;
+        if(hblank_clock_)before(next_hblank_iop_);
+    }
+    for(unsigned index=0;index<timers_.size();++index) {
+        const auto& timer=timers_[index];
+        if(!timer.configured || timer.hblank)continue;
+        if(!timer.count || !timer.prescale || timer.phase>=timer.prescale)return std::nullopt;
+        const auto modulus=index<3u ? 65536ull : (1ull<<32u);
+        const auto count=std::uint64_t{*timer.count};
+        if(count>=modulus)return std::nullopt;
+        const bool zero_return=(timer.mode&kModeZeroReturn)!=0u;
+        if(zero_return && (!timer.target || count>*timer.target))return std::nullopt;
+        const auto at=[&](std::uint64_t ticks){before(cycle_+ticks*timer.prescale-timer.phase);};
+        if(timer.mode&kModeCompareIrq) {
+            if(!timer.target)return std::nullopt;
+            auto distance=(std::uint64_t{*timer.target}+modulus-count)%modulus;
+            if(!distance)distance=zero_return ? std::uint64_t{*timer.target}+1u : modulus;
+            at(distance);
+        }
+        if((timer.mode&kModeOverflowIrq) && !zero_return)at(modulus-count);
+    }
+    return horizon;
+}
+
+bool Iop::advance_idle_loop(std::uint64_t target) {
+    if(in_delay_slot_)return false;
+    const auto horizon=idle_loop_horizon();
+    if(!horizon || *horizon<=cycle_+2u)return false;
+    const auto end=std::min(target,*horizon-1u);
+    const auto count=std::min<std::uint64_t>(end-cycle_,UINT32_MAX)&~1ull;
+    if(count<2u)return false;
+    const auto enabled=[&](std::uint32_t address,std::uint32_t mask) {
+        const auto* value=latch(address);return value && *value && ((**value&mask)==mask);
+    };
+    // run_until already pumped the first summarized instruction.
+    if((iop_sif1_[2]&kChcrStart) && enabled(0x1F801578u,1u) && enabled(0x1F801570u,0x8000u))
+        sif1_metrics_.destination_empty_cycles+=count-1u;
+    if(!ee_dma_suspended_ && (ee_dctrl_&1u) && (ee_dma_setup_[5][0].value_or(0u)&0x100u))
+        sif0_metrics_.destination_empty_cycles+=count-1u;
+    // No device/IRQ/callback edge is crossed. Only free-running counters change.
+    for(unsigned index=0;index<timers_.size();++index) {
+        auto& timer=timers_[index];
+        if(!timer.configured || timer.hblank)continue;
+        const auto total=std::uint64_t{timer.phase}+count;
+        const auto ticks=total/timer.prescale;
+        timer.phase=static_cast<std::uint32_t>(total%timer.prescale);
+        if(!ticks)continue;
+        const auto modulus=index<3u ? 65536ull : (1ull<<32u);
+        const auto old=std::uint64_t{*timer.count};
+        const bool zero_return=(timer.mode&kModeZeroReturn)!=0u;
+        if(timer.target) {
+            auto distance=(std::uint64_t{*timer.target}+modulus-old)%modulus;
+            if(!distance)distance=zero_return ? std::uint64_t{*timer.target}+1u : modulus;
+            if(ticks>=distance)timer.mode|=kModeCompareFlag;
+        }
+        if(zero_return)timer.count=static_cast<std::uint32_t>((old+ticks)%(std::uint64_t{*timer.target}+1u));
+        else {
+            if(ticks>=modulus-old)timer.mode|=kModeOverflowFlag;
+            timer.count=static_cast<std::uint32_t>((old+ticks)&(modulus-1u));
+        }
+    }
+    cycle_+=count;
+    return true;
 }
 
 std::uint32_t Iop::ee_cdvd_read(std::uint32_t physical,std::size_t bytes) {

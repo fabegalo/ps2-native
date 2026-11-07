@@ -74,6 +74,7 @@ void timing() {
         field.write(kGsSmode1,8,std::uint64_t{cmod}<<kSmode1CmodShift,0,{});
         const auto clock=field.vertical_clock();const auto period=clock.half_line*clock.field;
         const auto edge=clock.half_line*(cmod==2u ? 7u : 6u);
+        require(field.idle_event_horizon(edge-1u)==edge,"idle execution stops before the delayed GS VSINT edge");
         const auto polarity=[&]{const auto value=field.observe_csr();
             require(!(value.unknown&(1ull<<13u)),"explicit FIELD polarity stays known under modeled sync");
             require(value.unknown&(1ull<<12u),"NFIELD remains unverified");
@@ -107,6 +108,7 @@ void timing() {
     rejects([&] { gs.write(kGsCsr, 8, kCsrReset, line, [] { throw DeviceRefusal("guard refuses"); }); }, "guard refuses");
     require(gs.read(kGsCsr, 1) == 0, "refused reset also rolls back lazy event sampling");
     gs.advance(line - 1);
+    require(gs.idle_event_horizon(line-1u)==line,"idle execution stops before HSINT even without an IOP HBLANK timer");
     require(gs.read(kGsCsr, 1) == 0, "no H/V event before first line");
     gs.advance(line);
     require(gs.read(kGsCsr, 1) == kCsrHsint, "HSync edge at first line");

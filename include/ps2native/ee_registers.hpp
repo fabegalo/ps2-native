@@ -189,6 +189,11 @@ public:
     void write_dma_word(std::uint32_t physical, ObservedWord word);
     // Runs the IOP up to the current EE time.
     void sync_iop();
+    // RUNTIME_HELPERS_BEGIN
+    [[nodiscard]] std::optional<std::uint64_t> idle_poll_horizon() const;
+    [[nodiscard]] std::uint32_t settle_interrupt_sample(std::uint64_t stamp,std::uint32_t status);
+    void settle_idle_timers();
+    // RUNTIME_HELPERS_END
     [[nodiscard]] bool dma_reads_ram() const noexcept { return iop_.reads_ee_ram(); }
     [[nodiscard]] bool dma_writes_ram() const noexcept { return iop_.writes_ee_ram(); }
     void attach_ee_ram(std::span<std::uint8_t> ram,
@@ -215,6 +220,9 @@ private:
     [[nodiscard]] std::uint64_t now() const;
     [[nodiscard]] std::uint16_t timer_count(const Timer& timer) const;
     void advance_timer(unsigned index);
+    // RUNTIME_HELPERS_BEGIN
+    void advance_timer_at(unsigned index,std::uint64_t stamp);
+    // RUNTIME_HELPERS_END
     void advance_vertical();
     void advance_gs_interrupts();
     void advance_vif_interrupts();

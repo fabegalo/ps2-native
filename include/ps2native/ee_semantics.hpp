@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <bit>
 #include <tuple>
+#include <span>
 
 // Real translations can exceed a compiler's global heuristic inline budget.
 // These small execution boundaries must still expose constants to codegen.
@@ -32,8 +33,15 @@ public:
     virtual ~InstructionObserver() = default;
     // Called once per instruction about to execute, after its checks passed.
     virtual void on_instruction(std::uint32_t pc, std::uint32_t word, ExecutionEngine engine) = 0;
+    virtual std::uint64_t idle_deadline() const {return 0;}
+    virtual void on_idle_instructions(std::uint32_t, std::span<const std::uint32_t>, std::uint64_t) {}
 };
 
+struct InterruptSampleCache {
+    std::uint64_t deadline{}, sample_cycle{}, retry_after{}, count_anchor{};
+    std::uint32_t status{}, cause{}, count{}, compare{};
+    bool compare_written{}, pending{};
+};
 struct ExecutionContext {
     EEState& state;
     Memory& memory;
@@ -44,7 +52,51 @@ struct ExecutionContext {
     // The dispatcher already sampled interrupts at this instruction boundary.
     // Consumed once by the selected engine; later instructions still sample.
     bool interrupts_sampled{};
+    InterruptSampleCache interrupt_cache{};
 };
+void flush_interrupt_cache(ExecutionContext& ctx);
+void prime_interrupt_cache(ExecutionContext& ctx);
+bool poll_ee_interrupts_cached_slow(ExecutionContext& ctx);
+PS2N_EE_INLINE bool poll_ee_interrupts_cached(ExecutionContext& ctx) {
+    auto& cache=ctx.interrupt_cache;const auto& state=ctx.state;
+    if(cache.deadline && state.cycles()<cache.deadline && cache.status==state.cp0(Cop0::Status) &&
+       cache.cause==state.cp0(Cop0::Cause) && cache.count==state.cp0(Cop0::Count) &&
+       cache.count_anchor==state.count_anchor && cache.compare==state.cp0(Cop0::Compare) &&
+       cache.compare_written==state.compare_written) {
+        cache.sample_cycle=state.cycles();cache.pending=true;return false;
+    }
+    return poll_ee_interrupts_cached_slow(ctx);
+}
+PS2N_EE_INLINE bool interrupt_inert_instruction(ExecutionContext& ctx,std::uint32_t word) {
+    const auto op=word>>26u;
+    // Index writeback only publishes RAM; the enclosing proof excludes DMA.
+    if(op==0x2Fu && ((word>>16u)&31u)==0x14u)return true;
+    if(op==0x10u || op==0x12u || op==0x2Fu || (!op && ((word&63u)==12u || (word&63u)==13u)))return false;
+    unsigned bytes=0;bool write=false,align=false;
+    switch(op) {
+        case 0x20:case 0x24:bytes=1;break;
+        case 0x28:bytes=1;write=true;break;
+        case 0x21:case 0x25:bytes=2;break;
+        case 0x29:bytes=2;write=true;break;
+        case 0x23:case 0x27:case 0x31:bytes=4;break;
+        case 0x2B:case 0x39:bytes=4;write=true;break;
+        case 0x37:bytes=8;break;
+        case 0x3F:bytes=8;write=true;break;
+        case 0x22:case 0x26:bytes=4;align=true;break;
+        case 0x2A:case 0x2E:bytes=4;align=true;write=true;break;
+        case 0x1A:case 0x1B:bytes=8;align=true;break;
+        case 0x2C:case 0x2D:bytes=8;align=true;write=true;break;
+        case 0x1E:bytes=16;align=true;break;
+        case 0x1F:bytes=16;align=true;write=true;break;
+        default:return op<0x20u;
+    }
+    const auto base=(word>>21u)&31u;
+    if(base && (ctx.state.unknown_gpr_bits[base]&0xFFFFFFFFull))return false;
+    auto address=static_cast<std::uint32_t>(base ? ctx.state.gpr[base].low : 0u)+
+        static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(word)));
+    if(align)address&=~(bytes-1u);
+    return ctx.memory.interrupt_inert_address(address,bytes,write);
+}
 
 struct AotBlock;
 struct AotModule;
@@ -60,6 +112,8 @@ private:
 
 [[noreturn]] void aot_code_modified(std::uint32_t pc);
 [[noreturn]] void aot_delay_transfer_refused();
+void check_cache_privilege(ExecutionContext& ctx);
+bool aot_polling_loop(ExecutionContext& ctx,std::uint32_t start,std::span<const std::uint32_t> words);
 
 // Visible to the host compiler so constant PCs, words and delay-slot flags
 // specialize the guard together with the instruction. Fetch and interrupt
@@ -71,13 +125,18 @@ PS2N_EE_INLINE bool aot_enter_checked(ExecutionContext& ctx, std::uint32_t pc, s
     state.instruction_pc=pc;
     state.instruction_in_delay_slot=state.delay_pending;
     const auto sampled=ctx.interrupts_sampled;ctx.interrupts_sampled=false;
-    if (!sampled && poll_ee_interrupts(state,ctx.memory)) return false;
+    if (!sampled && poll_ee_interrupts_cached(ctx)) return false;
+    if(ctx.interrupt_cache.deadline || state.cycles()>=ctx.interrupt_cache.retry_after) {
+        if(!interrupt_inert_instruction(ctx,word))flush_interrupt_cache(ctx);
+        else if(!ctx.interrupt_cache.deadline)prime_interrupt_cache(ctx);
+    }
     if (has_delay_slot && state.delay_pending)
         aot_delay_transfer_refused();
     {
         profiling::Scope profile(profiling::Phase::CodeChecks);
-        if (ctx.memory.fetch32(pc) != word) aot_code_modified(pc);
+        if (!ctx.memory.code_matches(pc,word)) aot_code_modified(pc);
     }
+    if ((word >> 26u) == 0x2Fu) check_cache_privilege(ctx);
     if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Aot);
     return true;
 }

@@ -30,8 +30,10 @@ namespace ps2native {
     X(Vcallms) X(Vsqrt) X(Vdiv) X(Vwaitq) X(VaddQ) X(VmulQ) X(Vmove) X(Vnop) X(Vftoi) \
     X(CFalseS) X(CEqualS) X(CLessS) X(CLessEqualS) X(Bc1f) X(Bc1t) X(Bc1fl) X(Bc1tl) \
     X(Bc0f) X(Bc0t) X(Bc0fl) X(Bc0tl)
-// System instructions executed only by the interpreter (boot path): COP0
-// moves, TLB maintenance, ERET, EI/DI, CACHE, PREF, the COP1 word loads and
+// System encodings retain stable enum values. CACHE can be emitted by AOT
+// through the shared system helper; the remaining instructions execute in
+// the interpreter (boot path): COP0 moves, TLB maintenance, ERET, EI/DI,
+// PREF, the COP1 word loads and
 // stores LWC1/SWC1 (FPU arithmetic is not decoded) and the trap-style
 // exceptions and signed arithmetic with overflow, which enter the guest's
 // level-1 handler. Signed arithmetic remains an explicit AOT boundary.

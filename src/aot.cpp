@@ -4,6 +4,7 @@
 #include "ps2native/io.hpp"
 
 #include <cstdint>
+#include <algorithm>
 #include <iomanip>
 #include <map>
 #include <sstream>
@@ -55,10 +56,32 @@ std::map<std::uint32_t, BlockSource> make_blocks(const AotControlFlow& graph) {
 
 // Every instruction is a call into the shared semantics (ee_semantics.hpp)
 // with its constant pc and word; the host compiler inlines and folds it.
-void emit_block(std::ostringstream& out, const BlockSource& block, bool compiled_delay_slot, bool local = true) {
+void emit_block(std::ostringstream& out, const BlockSource& block, bool compiled_delay_slot,
+                const AotControlFlow& graph, bool local = true) {
     out << (local ? "static " : "") << "void block_" << address_label(block.start) << "(ExecutionContext& ctx) {\n"
         << "    auto& state = ctx.state;\n"
         << "    auto& memory = ctx.memory;\n";
+    const auto& first=block.instructions.front();
+    if((first.opcode==MipsOpcode::Lw && first.rt && first.rs!=first.rt) || first.opcode==MipsOpcode::Nop) {
+        std::vector<std::uint32_t> words{first.word};
+        for(unsigned offset=1;offset<15u;++offset) {
+            const auto found=graph.instructions.find(first.pc+offset*4u);
+            if(found==graph.instructions.end())break;
+            const auto& next=found->second;
+            if(!next.word){words.push_back(0u);continue;}
+            const auto slot=graph.instructions.find(next.pc+4u);
+            if((next.opcode==MipsOpcode::Beq || next.opcode==MipsOpcode::Bne) &&
+               (first.opcode!=MipsOpcode::Nop || next.opcode==MipsOpcode::Beq) &&
+               next.rs==first.rt && !next.rt && mips_branch_target(next.pc,next.word)==first.pc &&
+               slot!=graph.instructions.end() && !slot->second.word) {
+                words.push_back(next.word);words.push_back(0u);
+                out<<"    static constexpr std::array<std::uint32_t, "<<words.size()<<"> idle_words{{";
+                for(const auto word:words)out<<hex32(word)<<", ";
+                out<<"}};\n    if (aot_polling_loop(ctx, "<<hex32(first.pc)<<", idle_words)) return;\n";
+            }
+            break;
+        }
+    }
     // Every proven instruction can resume natively. All entry labels share
     // this one body; no suffix function or duplicate translation is emitted.
     out << "    switch (state.pc) {\n";
@@ -73,10 +96,13 @@ void emit_block(std::ostringstream& out, const BlockSource& block, bool compiled
             << "    if (!aot_enter_checked(ctx, " << pc << ", " << word << ", "
             << (instruction.has_delay_slot() ? "true" : "false") << ")) return;\n"
             << "    {\n"
-            << "        const auto frame = ee::begin(state, " << pc << ");\n"
-            << "        ee::exec<MipsOpcode::" << mips_opcode_name(instruction.opcode)
-            << ", " << word << ">(state, memory, " << pc << ", " << word << ");\n"
-            << "        if (ee::retire(ctx, frame)) return;\n"
+            << "        const auto frame = ee::begin(state, " << pc << ");\n";
+        if (instruction.opcode == MipsOpcode::Cache)
+            out << "        execute_cache_instruction(ctx, " << word << ");\n";
+        else
+            out << "        ee::exec<MipsOpcode::" << mips_opcode_name(instruction.opcode)
+                << ", " << word << ">(state, memory, " << pc << ", " << word << ");\n";
+        out << "        if (ee::retire(ctx, frame)) return;\n"
             << "    }\n";
     }
     if (compiled_delay_slot) {
@@ -159,7 +185,7 @@ std::string generate(const ElfImage& image, const AotOptions& options,
         for (const auto& [start, block] : blocks) {
             (void)start;
             const auto& last=block.instructions.back();
-            emit_block(out,block,last.has_delay_slot() && blocks.contains(last.pc+4u));
+            emit_block(out,block,last.has_delay_slot() && blocks.contains(last.pc+4u),graph);
         }
     } else {
         std::map<std::uint32_t,std::vector<const BlockSource*>> buckets;
@@ -181,7 +207,7 @@ std::string generate(const ElfImage& image, const AotOptions& options,
                 unit << "void block_" << address_label(start) << "(ExecutionContext&);\n";
             for (const auto* block : group) {
                 const auto& last=block->instructions.back();
-                emit_block(unit,*block,last.has_delay_slot() && blocks.contains(last.pc+4u),false);
+                emit_block(unit,*block,last.has_delay_slot() && blocks.contains(last.pc+4u),graph,false);
             }
             unit << "}\n";
             auto text=unit.str();

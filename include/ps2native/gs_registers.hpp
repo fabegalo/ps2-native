@@ -122,6 +122,9 @@ public:
     void advance(std::uint64_t now);
     struct InterruptRequest { bool pending{}, unknown{}; };
     [[nodiscard]] InterruptRequest take_interrupt_request(std::uint64_t now);
+    // RUNTIME_HELPERS_BEGIN
+    [[nodiscard]] std::optional<std::uint64_t> idle_event_horizon(std::uint64_t now) const;
+    // RUNTIME_HELPERS_END
     // GS general register writes from GIF. Unsupported effects fail at use.
     void general_write(std::uint8_t index, std::uint64_t value);
     void general_write_observed(std::uint8_t index,ObservedDoubleword word);

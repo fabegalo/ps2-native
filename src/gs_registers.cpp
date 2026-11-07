@@ -178,6 +178,25 @@ GsRegisters::InterruptRequest GsRegisters::take_interrupt_request(std::uint64_t 
     irq_pending_ = irq_unknown_ = false;
     return result;
 }
+std::optional<std::uint64_t> GsRegisters::idle_event_horizon(std::uint64_t now) const {
+    auto next=UINT64_MAX;
+    if(!hblank_held()) {
+        LineClock clock;
+        try {clock=line_clock();}catch(const DeviceRefusal&){return std::nullopt;}
+        if(!clock.period || now<clock.epoch)return std::nullopt;
+        next=clock.epoch+((now-clock.epoch)/clock.period+1u)*clock.period;
+    }
+    const auto video=vertical_clock();
+    if(video.state==VerticalClock::State::Unknown)return std::nullopt;
+    if(video.state==VerticalClock::State::Running) {
+        const auto delay=diagnostic_reset_field_ ? video.half_line*(line_.cmod==2u ? 7u : 6u) : 0u;
+        const auto period=video.half_line*video.field;
+        if(delay>=period)return std::nullopt;
+        const auto first=video.epoch+delay;
+        next=std::min(next,now<first ? first : first+((now-first)/period+1u)*period);
+    }
+    return next;
+}
 
 void GsRegisters::finish_transfer() {
     if (finish_pending_) {

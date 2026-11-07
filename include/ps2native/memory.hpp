@@ -264,6 +264,18 @@ public:
     void vu_add_integer(unsigned destination,unsigned left,unsigned right) {registers_.vu_add_integer(destination,left,right);}
     // Runs the IOP up to the current EE time (boot mapping, clock attached).
     void sync_iop() { registers_.sync_iop(); }
+    // RUNTIME_HELPERS_BEGIN
+    [[nodiscard]] std::optional<std::uint64_t> idle_ram_horizon(std::uint32_t address) const;
+    [[nodiscard]] std::optional<std::uint64_t> idle_execution_horizon() const {return registers_.idle_poll_horizon();}
+    [[nodiscard]] bool interrupt_inert_address(std::uint32_t address,unsigned bytes,bool write) const;
+    [[nodiscard]] std::uint32_t settle_interrupt_sample(std::uint64_t stamp,std::uint32_t status) const {
+        return registers_.settle_interrupt_sample(stamp,status);
+    }
+    void set_idle_dma_window(const std::uint64_t* clock,const std::uint64_t* stalls,std::uint64_t end) const noexcept {
+        idle_dma_clock_=clock;idle_dma_stalls_=stalls;idle_dma_until_=end;
+    }
+    void settle_idle_timers() {registers_.settle_idle_timers();}
+    // RUNTIME_HELPERS_END
     [[nodiscard]] bool intc_interrupt_pending() const;
     [[nodiscard]] bool dmac_interrupt_pending() const { return registers_.dmac_interrupt_pending(); }
     // RUNTIME_HELPERS_BEGIN
@@ -344,9 +356,29 @@ private:
         Target base{};
     };
     mutable std::array<FetchPage,16> fetch_pages_{};
+    mutable const std::uint64_t* idle_dma_clock_{};
+    mutable const std::uint64_t* idle_dma_stalls_{};
+    mutable std::uint64_t idle_dma_until_{};
+    [[nodiscard]] bool idle_dma_window() const noexcept {
+        return idle_dma_until_ && idle_dma_clock_ &&
+            *idle_dma_clock_+(idle_dma_stalls_ ? *idle_dma_stalls_ : 0u)<idle_dma_until_;
+    }
+public:
+    [[nodiscard]] bool code_matches(std::uint32_t address,std::uint32_t word) const;
+private:
+    struct CodeCheck {
+        std::uint64_t key{UINT64_MAX}, version{}, dma_generation{};
+        std::uint32_t word{}, page{};
+    };
+    static constexpr unsigned code_pages=kMainRamBytes/4096u+kScratchpadBytes/4096u+1u;
+    mutable std::vector<CodeCheck> code_checks_=std::vector<CodeCheck>(4096u);
+    mutable std::vector<std::uint64_t> code_versions_=std::vector<std::uint64_t>(code_pages);
+    void invalidate_code(const Target& target,std::size_t size) const noexcept;
     void reset_tlb_cache() noexcept {
+        set_idle_dma_window(nullptr,nullptr,0u);
         for(auto& entry:tlb_match_cache_)entry.key=UINT32_MAX;
         for(auto& entry:fetch_pages_)entry.key=UINT64_MAX;
+        for(auto& entry:code_checks_)entry.key=UINT64_MAX;
     }
     // RUNTIME_HELPERS_END
     Mapping mapping_{Mapping::ElfProgram};

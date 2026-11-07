@@ -210,7 +210,8 @@ public:
                 s_.set_cp0(Cop0::TagLo,result.value);
                 s_.taglo_unknown=result.unknown;
             }
-            event("CACHE data operation "+hex32(op)+" "+hex32(address));
+            if (events_ && events_->wants_system_events())
+                event("CACHE data operation "+hex32(op)+" "+hex32(address));
             return;
         }
         const char* name = nullptr;
@@ -235,7 +236,8 @@ public:
         // Only hit operations use the address's translation/tag. Index
         // operations select a cache set/way directly, including unmapped VA 0.
         if (op == 0x18 || op == 0x1A || op == 0x1C) (void)m_.translate(address, false);
-        event(std::string("CACHE ") + name + " " + hex32(address) + " (no cache model: memory coherent)");
+        if (events_ && events_->wants_system_events())
+            event(std::string("CACHE ") + name + " " + hex32(address) + " (no cache model: memory coherent)");
     }
 
     // LWC1/SWC1 move a raw 32-bit word between memory and an FPU register.
@@ -650,6 +652,19 @@ const char* stop_kind_name(StopKind kind) noexcept {
         case StopKind::Undefined: return "architecturally undefined";
     }
     return "?";
+}
+
+void check_cache_privilege(ExecutionContext& ctx) {
+    const auto status = ctx.state.cp0(Cop0::Status);
+    if (!(status & (kStatusEXL | kStatusERL | (1u << 28u))) && (status & kStatusKSU)) {
+        Interpreter cpu(ctx, nullptr);
+        cpu.stop(StopKind::GuestException, "COP0 unusable in supervisor/user mode with Status.CU0 = 0; vectoring is not modeled");
+    }
+}
+
+void execute_cache_instruction(ExecutionContext& ctx, std::uint32_t word) {
+    Interpreter cpu(ctx, dynamic_cast<SystemEventObserver*>(ctx.observer));
+    cpu.cache(word);
 }
 
 void interpret_instruction(ExecutionContext& ctx, SystemEventObserver* events) {

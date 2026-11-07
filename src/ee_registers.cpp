@@ -1,4 +1,5 @@
 #include "ps2native/ee_registers.hpp"
+#include "ps2native/ee.hpp"
 
 #include <iomanip>
 #include <sstream>
@@ -140,8 +141,10 @@ std::uint16_t EeRegisters::timer_count(const Timer& timer) const {
 }
 
 void EeRegisters::advance_timer(unsigned index) {
+    advance_timer_at(index,now());
+}
+void EeRegisters::advance_timer_at(unsigned index,std::uint64_t stamp) {
     auto& timer=timers_[index];
-    const auto stamp=now();
     if (!(timer.mode & kModeEnable)) {timer.anchor_cycle=stamp;return;}
     const auto clock=timer_clock(timer.mode,gs_);
     if (!clock.period) { timer.anchor_cycle=stamp; return; }
@@ -168,6 +171,66 @@ void EeRegisters::advance_timer(unsigned index) {
     timer.mode|=flags;
     timer.count_at_anchor=static_cast<std::uint16_t>(count);
     timer.anchor_cycle=stamp;
+}
+
+std::optional<std::uint64_t> EeRegisters::idle_poll_horizon() const {
+    if(!clock_ || !iop_.ee_memory_quiescent() || vu_control_.micro_running(0) || vu_control_.micro_running(1) ||
+       vu_control_.path1_transfer_pending() || vif0_.processing() || vif1_.processing() ||
+       iop_.graphics_sync_needed(now(),vif0_,vif1_,vu_control_))return std::nullopt;
+    const auto iop_edge=iop_.idle_loop_horizon();
+    if(!iop_edge)return std::nullopt;
+    const auto stamp=now();
+    auto horizon=*iop_edge>UINT64_MAX/kEeCyclesPerIopCycle ? UINT64_MAX : *iop_edge*kEeCyclesPerIopCycle;
+    const auto gs_edge=gs_.idle_event_horizon(stamp);
+    if(!gs_edge)return std::nullopt;
+    horizon=std::min(horizon,*gs_edge);
+    const auto video=gs_.vertical_clock();
+    if(video.state==GsRegisters::VerticalClock::State::Unknown)return std::nullopt;
+    if(video.state==GsRegisters::VerticalClock::State::Running) {
+        horizon=std::min({horizon,video.next_edge(stamp,false),video.next_edge(stamp,true)});
+    }
+    for(const auto& timer:timers_) {
+        if(!(timer.mode&kModeEnable))continue;
+        const auto clock=timer_clock(timer.mode,gs_);
+        if(!clock.period)continue;
+        const auto edge=[&](std::uint64_t ticks){return clock.epoch+
+            ((timer.anchor_cycle-clock.epoch)/clock.period+ticks)*clock.period;};
+        if((timer.mode&(kModeClearOnCompare|kModeCompareIrq)) && !timer.compare) {
+            horizon=std::min(horizon,edge(1u));continue;
+        }
+        if((timer.mode&kModeCompareIrq) && !(timer.mode&kModeCompareFlag)) {
+            auto distance=(std::uint64_t{*timer.compare}+65536u-timer.count_at_anchor)&0xFFFFu;
+            if(!distance)distance=65536u;
+            horizon=std::min(horizon,edge(distance));
+        }
+        if((timer.mode&kModeOverflowIrq) && !(timer.mode&kModeOverflowFlag))
+            horizon=std::min(horizon,edge(65536u-timer.count_at_anchor));
+    }
+    return horizon;
+}
+
+void EeRegisters::settle_idle_timers() {
+    if(!intc_mask_)return;
+    const auto stamp=now();
+    for(unsigned index=0;index<timers_.size();++index) {
+        const auto& timer=timers_[index];
+        if(!(timer.mode&kModeEnable))continue;
+        const auto clock=timer_clock(timer.mode,gs_);
+        if(!clock.period)continue;
+        const auto last=clock.epoch+((stamp-clock.epoch)/clock.period)*clock.period;
+        if(last>timer.anchor_cycle)advance_timer_at(index,last);
+    }
+}
+std::uint32_t EeRegisters::settle_interrupt_sample(std::uint64_t stamp,std::uint32_t status) {
+    const auto* saved_clock=clock_;const auto* saved_stalls=stall_clock_;
+    clock_=&stamp;stall_clock_=nullptr;
+    try {
+        std::uint32_t lines=0;
+        if(status&kStatusIM2)settle_idle_timers();
+        if((status&kStatusIM2) && intc_interrupt_pending())lines|=kStatusIM2;
+        if((status&kStatusIM3) && dmac_interrupt_pending())lines|=kStatusIM3;
+        clock_=saved_clock;stall_clock_=saved_stalls;return lines;
+    } catch(...) {clock_=saved_clock;stall_clock_=saved_stalls;throw;}
 }
 
 void EeRegisters::advance_vertical() {

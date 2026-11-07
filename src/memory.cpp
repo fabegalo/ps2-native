@@ -251,6 +251,17 @@ bool Memory::intc_interrupt_pending() const {
                              "interrupt sample",error.what());
     }
 }
+std::optional<std::uint64_t> Memory::idle_ram_horizon(std::uint32_t address) const {
+    const auto target=resolve(address,4,false,"idle LW");
+    if(target.region!=BusRegion::MainRam && target.region!=BusRegion::Scratchpad)return std::nullopt;
+    return registers_.idle_poll_horizon();
+}
+bool Memory::interrupt_inert_address(std::uint32_t address,unsigned bytes,bool write) const {
+    try {
+        const auto target=resolve(address,bytes,write,"interrupt scheduling proof");
+        return target.region==BusRegion::MainRam || target.region==BusRegion::Scratchpad;
+    } catch(const BusError&) {return false;}
+}
 
 void Memory::set_translation_context(std::uint8_t asid, bool error_level, Privilege privilege) noexcept {
     asid_ = asid;
@@ -427,6 +438,7 @@ std::uint64_t Memory::storage_unknown(const Target& target, std::size_t size) co
     return unknown;
 }
 void Memory::set_storage_unknown(const Target& target, std::size_t size, std::uint64_t unknown) const {
+    invalidate_code(target,size);
     if (!unknown && unknown_words_.empty()) return;
     const auto base = target.offset | (target.region == BusRegion::Scratchpad ? 0x80000000u : 0u);
     for (std::size_t i = 0; i < size;) {
@@ -446,7 +458,7 @@ std::uint64_t Memory::read_le(std::uint32_t address, std::size_t size, const cha
                               std::uint64_t* unknown) const {
     profiling::Scope profile(profiling::Phase::Memory);
     const auto target = resolve(address, size, false, what);
-    if(registers_.dma_writes_ram())registers_.sync_iop();
+    if(!idle_dma_window() && registers_.dma_writes_ram())registers_.sync_iop();
     if (unknown) *unknown = 0;
     std::uint64_t value = 0;
     try {
@@ -518,7 +530,7 @@ void Memory::write_le(std::uint32_t address, std::size_t size, std::uint64_t val
                        std::uint64_t unknown) {
     profiling::Scope profile(profiling::Phase::Memory);
     // The lazy IOP must consume old EE source bytes before this CPU store.
-    if (registers_.dma_reads_ram() || registers_.dma_writes_ram()) registers_.sync_iop();
+    if (!idle_dma_window() && (registers_.dma_reads_ram() || registers_.dma_writes_ram())) registers_.sync_iop();
     const auto target = resolve(address, size, true, what);
     if(!fpu_relations_.empty() && (target.region==BusRegion::MainRam || target.region==BusRegion::Scratchpad)) {
         const auto prefix=target.region==BusRegion::Scratchpad ? 0x80000000u : uses_data_cache(target) ? 0x40000000u : 0u;
@@ -724,7 +736,7 @@ std::uint32_t Memory::fetch32(std::uint32_t address) const {
     if(target.region!=BusRegion::MainRam && target.region!=BusRegion::Scratchpad &&
        target.region!=BusRegion::BiosRom && target.region!=BusRegion::Rom1)
         return static_cast<std::uint32_t>(read_le(address,4,"instruction fetch",false));
-    if(registers_.dma_writes_ram())registers_.sync_iop();
+    if(!idle_dma_window() && registers_.dma_writes_ram())registers_.sync_iop();
     if(storage_unknown(target,4))
         throw device_refusal(BusFault::Device,false,4,address,target.physical,target.region,
                              "instruction fetch","read consumes unknown RAM bits");
@@ -732,5 +744,37 @@ std::uint32_t Memory::fetch32(std::uint32_t address) const {
                        : target.region==BusRegion::Scratchpad ? scratchpad_
                        : target.region==BusRegion::BiosRom ? rom_ : rom1_;
     return static_cast<std::uint32_t>(load_little(storage.data()+target.offset,4));
+}
+void Memory::invalidate_code(const Target& target,std::size_t size) const noexcept {
+    if(target.region!=BusRegion::MainRam && target.region!=BusRegion::Scratchpad)return;
+    const auto base=target.region==BusRegion::Scratchpad ? kMainRamBytes/4096u : 0u;
+    for(auto page=base+target.offset/4096u;page<=base+(target.offset+size-1u)/4096u;++page) {
+        auto& version=code_versions_[page];
+        if(version && !++version) {
+            for(auto& entry:code_checks_)entry.key=UINT64_MAX;
+            version=1u;
+        }
+    }
+}
+bool Memory::code_matches(std::uint32_t address,std::uint32_t word) const {
+    // DMA may change bytes and knowledge at this exact instruction boundary.
+    if(!idle_dma_window() && registers_.dma_writes_ram())registers_.sync_iop();
+    const auto key=std::uint64_t{address>>2u} | (std::uint64_t{asid_}<<30u) |
+        (static_cast<std::uint64_t>(privilege_)<<38u) | (std::uint64_t{error_level_}<<40u) |
+        (static_cast<std::uint64_t>(mapping_)<<41u);
+    auto& checked=code_checks_[((address>>2u)^(address>>12u))&(code_checks_.size()-1u)];
+    const auto dma=registers_.iop().ee_ram_write_generation();
+    if(!(address&3u) && checked.key==key && checked.word==word &&
+       checked.version==code_versions_[checked.page] && checked.dma_generation==dma)return true;
+    if(fetch32(address)!=word)return false;
+    const auto target=resolve(address,4,false,"instruction fetch");
+    unsigned page;
+    if(target.region==BusRegion::MainRam)page=target.offset/4096u;
+    else if(target.region==BusRegion::Scratchpad)page=kMainRamBytes/4096u+target.offset/4096u;
+    else if(target.region==BusRegion::BiosRom || target.region==BusRegion::Rom1)page=code_pages-1u;
+    else return true;
+    auto& version=code_versions_[page];if(!version)version=1u;
+    checked={key,version,registers_.iop().ee_ram_write_generation(),word,page};
+    return true;
 }
 }  // namespace ps2native

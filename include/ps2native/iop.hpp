@@ -80,6 +80,17 @@ public:
     // IOP runs (the EE syncs the IOP before every GS write).
     void run_until(std::uint64_t cycle, const GsRegisters* video = nullptr);
     // RUNTIME_HELPERS_BEGIN
+    [[nodiscard]] std::optional<std::uint64_t> idle_loop_horizon() const;
+    [[nodiscard]] bool ee_memory_quiescent() const noexcept {
+        if(reads_ee_ram())return false;
+        for(unsigned channel=0;channel<ee_dma_setup_.size();++channel)if(ee_dma_setup_[channel][0].value_or(0u)&0x100u) {
+            if(channel==5u && sif0_fifo_.empty() && !(iop_sif0_[2]&0x01000000u))continue;
+            return false;
+        }
+        return true;
+    }
+    // RUNTIME_HELPERS_END
+    // RUNTIME_HELPERS_BEGIN
     [[nodiscard]] bool synchronization_due(std::uint64_t target,const GsRegisters* video=nullptr) const noexcept {
         return (!stop_ && cycle_<target) ||
             (video ? video_generation_!=video->timing_generation() : video_generation_.has_value());
@@ -387,6 +398,9 @@ private:
         std::uint32_t prescale{1}, phase{};
     };
     void step();
+    // RUNTIME_HELPERS_BEGIN
+    bool advance_idle_loop(std::uint64_t target);
+    // RUNTIME_HELPERS_END
     void commit(const PendingLoad& load);
     // R3000A exception entry: EPC, Cause.ExcCode/BD, SR mode stack, vector.
     void enter_exception(std::uint32_t code, std::uint32_t pc, bool delay_slot);

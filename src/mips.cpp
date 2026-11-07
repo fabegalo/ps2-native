@@ -128,6 +128,7 @@ const char* mips_opcode_name(MipsOpcode opcode) noexcept {
 }
 
 bool mips_aot_supported(MipsOpcode opcode) noexcept {
+    if (opcode == MipsOpcode::Cache) return true;
     switch (opcode) {
 #define PS2N_OPCODE_AOT(name) case MipsOpcode::name: return true;
         PS2N_R5900_AOT_OPCODES(PS2N_OPCODE_AOT)

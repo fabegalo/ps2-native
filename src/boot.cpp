@@ -55,7 +55,7 @@ public:
         if (!engine_ || *engine_ != engine) {
             if (engine_) ++report_.engine_switches;
             engine_ = engine;
-            trace(std::string("E ") + (engine == ExecutionEngine::Aot
+            if (wants_system_events()) trace(std::string("E ") + (engine == ExecutionEngine::Aot
                 ? "aot (host-compiled block) at " : "interpreter (no AOT block) at ") + hex32(pc));
         }
         if (options_.trace == TraceLevel::Full) {
@@ -88,7 +88,27 @@ public:
         if (access.unknown_bits) line << " unknown-bits=" << hex64(access.unknown_bits, access.bytes * 2u);
         trace(line.str());
     }
+    std::uint64_t idle_deadline() const override {
+        if(options_.trace==TraceLevel::Full || options_.diagnostics || !engine_ || *engine_!=ExecutionEngine::Aot)return 0;
+        if(options_.on_frame && generation_!=memory_.gs().timing_generation())return 0;
+        return options_.on_frame ? next_frame_.value_or(UINT64_MAX) : UINT64_MAX;
+    }
+    void on_idle_instructions(std::uint32_t start,std::span<const std::uint32_t> words,std::uint64_t count) override {
+        const auto first=sequence_;
+        sequence_+=count;report_.aot_instructions+=count;report_.batched_instructions+=count;
+        const auto keep=std::min<std::uint64_t>(count,options_.tail_instructions);
+        for(auto index=count-keep;index<count;++index) {
+            const auto position=static_cast<unsigned>(index%words.size());
+            const RetiredInstruction record{first+index+1u,start+position*4u,words[position],ExecutionEngine::Aot};
+            if(tail_.size()<options_.tail_instructions)tail_.push_back(record);
+            else {tail_[tail_next_]=record;if(++tail_next_==tail_.size())tail_next_=0;}
+        }
+    }
+    bool wants_system_events() const noexcept override {
+        return options_.diagnostics || !options_.max_trace_events || report_.trace.size() < options_.max_trace_events;
+    }
     void on_system_event(std::string_view event) override {
+        if (!wants_system_events()) return;
         if (options_.diagnostics) options_.diagnostics->system(state_, event);
         trace("  S " + std::string(event));
     }
@@ -249,7 +269,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                 }
                 state.instruction_pc=state.pc;
                 state.instruction_in_delay_slot=state.delay_pending;
-                (void)poll_ee_interrupts(state,memory);
+                (void)poll_ee_interrupts_cached(ctx);
                 ctx.interrupts_sampled=true;
                 memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi)); memory.set_cache_config(state.cp0(Cop0::Config));
                 // Hybrid mode: every address may continue in the interpreter, so
@@ -274,6 +294,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                         !(options.stop_at && state.pc == *options.stop_at))
                         throw std::runtime_error("AOT block at " + hex32(state.pc) + " made no progress");
                 } else {
+                    flush_interrupt_cache(ctx);
                     interpret_instruction(ctx, &tracer);
                 }
             }
@@ -295,6 +316,11 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
             // Raised before the instruction started (decode, delay-slot or code checks).
             report.pc = state.pc;
         }
+    }
+    try {flush_interrupt_cache(ctx);}
+    catch(const std::exception& error) {
+        if(report.outcome==BootOutcome::BlockPoint)report.reason+="; interrupt finalization: "+std::string(error.what());
+        else {report.outcome=BootOutcome::BlockPoint;report.category="unsupported";report.reason=error.what();report.pc=state.pc;}
     }
     if (report.outcome == BootOutcome::BlockPoint) {
         report.in_delay_slot = report.pc == state.instruction_pc ? state.instruction_in_delay_slot
