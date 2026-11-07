@@ -786,6 +786,26 @@ void knowledge() {
     prepare_ee_boot(load_bios_rom0(fixture.rom),nullptr,state,memory);
     require((memory.load64_observed(kGsCsr).unknown&0xFFFF0000ull)==0xFFFF0000ull,
             "no profile means no invented GS identity or inherited prior profile");
+    const auto csr=memory.load64_observed(kGsCsr);
+    require((csr.value&0xC000u)==0x4000u && !(csr.unknown&0xC000u) && (csr.unknown&(1u<<12u)),
+            "CSR exposes only the empty synchronous input FIFO while NFIELD remains opaque");
+    state.set_reg64(8,kGsCsr);
+    ee::exec<MipsOpcode::Ld>(state,memory,0,(0x37u<<26)|(8u<<21)|(9u<<16));
+    ee::exec<MipsOpcode::Andi>(state,memory,0,(0xCu<<26)|(9u<<21)|(9u<<16)|0xC000u);
+    require(state.reg64(9)==0x4000u && !state.unknown_gpr_bits[9],
+            "guest LD/ANDI can poll the proven FIFO bits without consuming other unknown CSR fields");
+    const auto send=[&](unsigned index,std::uint64_t data) {
+        memory.write128(kGifFifo,1u|(1ull<<15u)|(1ull<<60u),0xEu);
+        memory.write128(kGifFifo,data,index);
+    };
+    send(0x50,1ull<<48u);send(0x51,0);send(0x52,2u|(2ull<<32u));send(0x53,0);
+    send(0x61,0);send(0x54,0x2222222211111111ull);
+    const auto pending=memory.load64_observed(kGsCsr);
+    require((pending.value&0xC002u)==0x4000u && !(pending.unknown&0xC002u),
+            "consumed FIFO data stays empty while FINISH waits for future upload words");
+    send(0x54,0x4444444433333333ull);
+    require((memory.load64_observed(kGsCsr).value&0xC002u)==0x4002u,
+            "the final actual upload raises FINISH independently of the empty input FIFO");
 }
 } // namespace
 #endif

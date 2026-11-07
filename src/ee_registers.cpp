@@ -225,6 +225,9 @@ void EeRegisters::write_dma_word(std::uint32_t physical, ObservedWord word) {
 ObservedDoubleword EeRegisters::observe_gs_csr() {
     advance_gs_interrupts();
     auto result=gs_.observe_csr();
+    // The supported GIF->GS path consumes input synchronously (FQC=0).
+    // Report FIFO empty (01); physical occupancy timing remains uncalibrated.
+    result.value|=0x4000u;result.unknown&=~std::uint64_t{0xC000u};
     if(hardware_ && hardware_->gs_revision_id) {
         const auto& identity=*hardware_->gs_revision_id;
         result.value|=(std::uint64_t{identity[0]}<<16u)|(std::uint64_t{identity[1]}<<24u);
