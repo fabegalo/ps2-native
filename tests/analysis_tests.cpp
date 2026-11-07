@@ -2,6 +2,7 @@
 #include "direct_program.hpp"
 #include "m13_program.hpp"
 #include "ps2native/analysis.hpp"
+#include "../tools/ee_alias_cli.hpp"
 #include <iostream>
 
 using namespace ps2native;
@@ -10,10 +11,28 @@ int main() {
     try {
         const auto elf=parse_ee_elf(direct_test::elf(direct_test::cpu()));
         const auto report=analyze_ee_image(elf);
+        for(const auto alias:{0x80000000u,0xA0000000u}) {
+            const auto mapped=cli::ee_execution_alias(elf,alias);
+            require(mapped.entry==(elf.entry|alias) && mapped.instruction_at(mapped.entry)==elf.instruction_at(elf.entry) && mapped.bytes==elf.bytes,
+                "execution alias preserves source bytes and maps the same instruction");
+        }
+        auto symbolic=elf;symbolic.function_entries.push_back(elf.entry);
+        rejects([&]{(void)cli::ee_execution_alias(symbolic,0x80000000u);},"symbol/relocation");
+        rejects([&]{(void)cli::ee_execution_alias(elf,0x40000000u);},"invalid");
+        std::optional<std::uint32_t> alias;
+        require(cli::parse_execution_alias("--execution-alias=0x80000000",alias) && *alias==0x80000000u,"execution alias option");
+        rejects([&]{(void)cli::parse_execution_alias("--execution-alias=0",alias);},"duplicate");
+        alias.reset();rejects([&]{(void)cli::parse_execution_alias("--execution-alias=0x180000000",alias);},"must be");
         require(report.json.find("\"call_edges\":[{")!=std::string::npos,"direct or proven constant calls exported");
         require(report.json.find("\"interpreter_boundaries\":[{")!=std::string::npos,"system opcodes remain explicit interpreter boundaries");
         require(report.json.find("\"end\":null")!=std::string::npos,"no guessed function limits");
         require(report.dot.find("delay-slot")!=std::string::npos,"CFG retains delay-slot qualification");
+        const auto table_program=m13::build_program();
+        auto table_bytes=m13::build_elf(table_program,false);
+        m13::detail::put32(table_bytes,108,7); // The table's PT_LOAD also permits execution.
+        const auto table_report=analyze_ee_image(parse_ee_elf(table_bytes));
+        const auto table_edge="\"from_pc\":"+std::to_string(table_program.at("select_a_jr"))+",\"to\":"+std::to_string(table_program.at("a_case3"))+",\"kind\":\"proven bounded jump table\"";
+        require(table_report.json.find(table_edge)!=std::string::npos,"analysis exports the CFG's proven targets from executable table storage");
         const auto hints=parse_ghidra_csv("Name,Start,End,Size\r\nuser callback,0x00100200,0x0010020c,12\r\n");
         require(hints.size()==1 && hints[0].start==0x100200,"Ghidra CSV import");
         AnalysisOptions options;options.ghidra=hints;

@@ -1,4 +1,5 @@
 #include "dev_profile.hpp"
+#include "ee_alias_cli.hpp"
 #include "dev_process.hpp"
 #include "ps2native/bios.hpp"
 #include "ps2native/disc.hpp"
@@ -62,7 +63,7 @@ std::uint64_t disk_bytes(const fs::path& root) {
         if (e.is_regular_file() && !e.is_symlink()) n += e.file_size();
     return n;
 }
-int run(Profile p, const fs::path& replay) {
+int run(Profile p, const fs::path& replay, bool prepare_only=false) {
     const auto source=p.path("source"), build=p.path("build"), input=p.path("input"), cmake=p.path("cmake");
     const auto config=p.get("config","Release"), engine=p.get("engine","aot");
     if (engine!="aot" && engine!="interpreter") throw std::runtime_error("engine must be aot or interpreter");
@@ -79,6 +80,11 @@ int run(Profile p, const fs::path& replay) {
     std::string identities=input_hash+' '+path_utf8(input)+'\n';
     std::string map_hash;
     auto aot_args=p.aot_args;
+    std::optional<std::uint32_t> execution_alias;
+    for(const auto& arg:aot_args)(void)cli::parse_execution_alias(arg,execution_alias);
+    if(execution_alias && kind=="bios")throw std::runtime_error("execution alias applies only to physical RAM ELF inputs");
+    if(execution_alias.value_or(0) && !prepare_only)
+        throw std::runtime_error("execution alias requires prepare; link the module to the matching restored RAM execution path");
     if(!p.get("ghidra").empty()) {
         const auto map=p.path("ghidra");map_hash=sha256_file(map);identities+=map_hash+' '+path_utf8(map)+'\n';
         for(const auto& hint:parse_ghidra_csv(read_text(map)))aot_args.push_back("--entry="+std::to_string(hint.start));
@@ -87,7 +93,7 @@ int run(Profile p, const fs::path& replay) {
         const auto events=p.path("observed");
         const auto events_hash=sha256_file(events);
         const auto image=kind=="disc" ? DiscImage(input).boot_elf() : kind=="bios" ? bios_code_image(load_bios_rom0(read_file(input))) : parse_ee_elf(read_file(input));
-        for(const auto entry:discover_ee_entries(image,events))aot_args.push_back("--entry="+std::to_string(entry));
+        for(const auto entry:discover_ee_entries(cli::ee_execution_alias(image,execution_alias.value_or(0)),events))aot_args.push_back("--entry="+std::to_string(entry));
         identities+=events_hash+' '+path_utf8(events)+'\n';
     }
     for (auto& arg : p.runtime_args) {
@@ -106,7 +112,7 @@ int run(Profile p, const fs::path& replay) {
             arg.starts_with("-DBUILD_TESTING") || arg.starts_with("-DPS2N_LAUNCHER") || arg.starts_with("-DPS2N_DEV_CONTENT_TRACKING") || arg.starts_with("-DCMAKE_BUILD_TYPE"))
             throw std::runtime_error("cmake_arg must be a -D definition; runtime AOT/testing/launcher/config settings are managed");
     for (const auto& arg : p.aot_args)
-        if (!arg.starts_with("--entry=") && !arg.starts_with("--table=")) throw std::runtime_error("aot_arg accepts only --entry and --table");
+        if (!arg.starts_with("--entry=") && !arg.starts_with("--table=") && !arg.starts_with("--execution-alias=")) throw std::runtime_error("aot_arg accepts only --entry, --table and --execution-alias");
     // Refuse adoption of somebody else's build. No active game build is touched.
     const auto owner=build / ".ps2n-dev-owner";
     const auto ownership=path_utf8(source)+'\n'+path_utf8(p.origin)+'\n';
@@ -245,22 +251,27 @@ int run(Profile p, const fs::path& replay) {
             if(sha256_file(cli::utf8_path(identity_line.substr(65)))!=identity_line.substr(0,64))
                 throw std::runtime_error("input/firmware/map dependency changed during build");
         }
-        std::vector<fs::path> args{input,option("--diagnostic-dir=",directory / "diagnostic"),
-            "--diagnostic-ring="+p.get("ring","256")};
-        if(p.get("stream_bytes","0")!="0")args.emplace_back("--diagnostic-stream-bytes="+p.get("stream_bytes"));
-        if(kind=="disc")args.emplace_back("--disc");
-        for(const auto& arg:p.runtime_args)args.push_back(cli::utf8_path(arg));
-        result=stage("execute",runner,args,false);
-        status=file_exists(directory / "diagnostic" / "report.json") && file_exists(directory / "diagnostic" / "complete") ? "diagnosed" : "execution-error";
-        if(status!="diagnosed")throw std::runtime_error("runner failed without diagnostic report; see execute.log");
-        if(!replay.empty() && file_exists(replay / "diagnostic" / "events.ndjson")) {
-            std::string comparison;
-            try { (void)compare_diagnostics(replay / "diagnostic" / "events.ndjson",directory / "diagnostic" / "events.ndjson",comparison); }
-            catch(const std::exception& e) {comparison=e.what();}
-            save_text(directory / "comparison.txt",comparison+'\n');
-            std::cout << comparison << '\n';
+        if(prepare_only) {
+            status="prepared";result=0;
+            save_text(build / "ps2n-dev" / "last-prepared.txt",path_utf8(directory));
+        } else {
+            std::vector<fs::path> args{input,option("--diagnostic-dir=",directory / "diagnostic"),
+                "--diagnostic-ring="+p.get("ring","256")};
+            if(p.get("stream_bytes","0")!="0")args.emplace_back("--diagnostic-stream-bytes="+p.get("stream_bytes"));
+            if(kind=="disc")args.emplace_back("--disc");
+            for(const auto& arg:p.runtime_args)args.push_back(cli::utf8_path(arg));
+            result=stage("execute",runner,args,false);
+            status=file_exists(directory / "diagnostic" / "report.json") && file_exists(directory / "diagnostic" / "complete") ? "diagnosed" : "execution-error";
+            if(status!="diagnosed")throw std::runtime_error("runner failed without diagnostic report; see execute.log");
+            if(!replay.empty() && file_exists(replay / "diagnostic" / "events.ndjson")) {
+                std::string comparison;
+                try { (void)compare_diagnostics(replay / "diagnostic" / "events.ndjson",directory / "diagnostic" / "events.ndjson",comparison); }
+                catch(const std::exception& e) {comparison=e.what();}
+                save_text(directory / "comparison.txt",comparison+'\n');
+                std::cout << comparison << '\n';
+            }
+            save_text(build / "ps2n-dev" / "last.txt",path_utf8(directory));
         }
-        save_text(build / "ps2n-dev" / "last.txt",path_utf8(directory));
     } catch(const std::exception& e) { error=e.what();std::cerr << error << '\n'; result=2; }
     const auto manifest="{\"schema\":\"ps2n-dev-run-v1\",\"status\":"+json_string(status)+",\"error\":"+json_string(error)+
         ",\"profile\":"+json_string(p.serialize())+",\"source_sha256\":"+json_string(source_hash)+",\"input_sha256\":"+json_string(input_hash)+
@@ -277,6 +288,7 @@ template<class C> int dev_main(int argc,C** argv) {
     try {
         if(argc<3) {
             std::cout << "Usage: ps2n-dev init <input> <local-profile.ps2n> [--kind=auto|elf|bios|disc]\n"
+                         "       ps2n-dev prepare <profile.ps2n>\n"
                          "       ps2n-dev run <profile.ps2n>\n       ps2n-dev replay <profile.ps2n|run-directory>\n";
             return 2;
         }
@@ -295,6 +307,7 @@ template<class C> int dev_main(int argc,C** argv) {
             save_text(file,p.serialize());std::cout << path_utf8(file) << '\n';return 0;
         }
         if(command=="run" && argc==3)return run(Profile::load(fs::path(argv[2])),{});
+        if(command=="prepare" && argc==3)return run(Profile::load(fs::path(argv[2])),{},true);
         if(command=="replay" && argc==3) {
             auto directory=fs::absolute(fs::path(argv[2]));
             if(fs::is_regular_file(native_io_path(directory))) {

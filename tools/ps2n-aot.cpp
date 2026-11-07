@@ -2,6 +2,7 @@
 #include "ps2native/aot_sources.hpp"
 #include "ps2native/disc.hpp"
 #include "ps2native/vu_aot.hpp"
+#include "ee_alias_cli.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -15,6 +16,7 @@ template <typename Character>
 int aot_main(int argc, Character** argv) {
     if (argc < 3) {
         std::cerr << "Usage: ps2n-aot <owned-mips-elf|disc.iso> <output.cpp> [--split] [--disc] [--hybrid] [--entry=0xADDRESS ...] [--table=0xADDRESS:COUNT ...]\n"
+                     "       [--execution-alias=0x80000000|0xA0000000] (stripped physical-RAM ELF only)\n"
                      "       ps2n-aot <your-rom0.bin> <output.cpp> --bios [--expect-sha256=HEX] [--entry=0xADDRESS ...]\n"
                      "       ps2n-aot <vu1-image.bin|capture.vu1> <output.cpp> --vu1 [--entry=BYTE_PC ...] [--split[=BUCKET_BYTES]]\n";
         return 2;
@@ -28,6 +30,7 @@ int aot_main(int argc, Character** argv) {
         bool vu1_input = false;
         bool vu1_carry = false;
         std::optional<std::string> expected_sha256;
+        std::optional<std::uint32_t> execution_alias;
         auto parse_u32 = [](const std::string& value, const std::string& label) {
             if (value.empty() || value[0] == '-')
                 throw std::runtime_error("Invalid " + label);
@@ -41,7 +44,8 @@ int aot_main(int argc, Character** argv) {
         };
         for (int i = 3; i < argc; ++i) {
             const auto flag = ps2native::path_utf8(std::filesystem::path(argv[i]));
-            if (flag.starts_with("--entry=")) {
+            if (ps2native::cli::parse_execution_alias(flag,execution_alias)) {
+            } else if (flag.starts_with("--entry=")) {
                 options.additional_function_entries.push_back(
                     parse_u32(flag.substr(8), "--entry address"));
             } else if (flag.starts_with("--table=")) {
@@ -71,12 +75,13 @@ int aot_main(int argc, Character** argv) {
             } else if (flag.starts_with("--expect-sha256=")) {
                 expected_sha256 = flag.substr(16);
             } else {
-                throw std::runtime_error("Unrecognized argument; expected --entry, --table, --split, --hybrid, --disc, --bios, --vu1, --vu1-diagnostic-power-two-carry or --expect-sha256");
+                throw std::runtime_error("Unrecognized argument; expected --entry, --table, --execution-alias, --split, --hybrid, --disc, --bios, --vu1, --vu1-diagnostic-power-two-carry or --expect-sha256");
             }
         }
         if (unsigned(bios_input)+unsigned(disc_input)+unsigned(vu1_input)>1u)
             throw std::runtime_error("--bios, --disc and --vu1 are mutually exclusive");
         if (vu1_carry && !vu1_input)throw std::runtime_error("--vu1-diagnostic-power-two-carry requires --vu1");
+        if(execution_alias && (bios_input || vu1_input))throw std::runtime_error("execution alias applies only to physical RAM ELF inputs");
         if (ps2native::file_exists(std::filesystem::path(argv[2])) &&
             ps2native::files_equivalent(std::filesystem::path(argv[1]),std::filesystem::path(argv[2])))
             throw std::runtime_error("AOT output must not overwrite its input");
@@ -145,7 +150,7 @@ int aot_main(int argc, Character** argv) {
             return 0;
         }
         if (expected_sha256) throw std::runtime_error("--expect-sha256 applies to --bios inputs");
-        const auto elf = ps2native::parse_ee_elf(input);
+        const auto elf = ps2native::cli::ee_execution_alias(ps2native::parse_ee_elf(input),execution_alias.value_or(0));
         const bool updated = generate(elf);
         std::cout << (updated ? "AOT source generated" : "AOT unchanged; reused")
                   << "; ELF entry: 0x" << std::hex << elf.entry

@@ -114,6 +114,17 @@ template<class C> int test_main(int argc,C** argv) {
     require(read_text(second / "manifest.json").find("\"aot_reused\":true")!=std::string::npos,"warm replay verifies/reuses AOT");
     require(read_text(second / "analysis-reused.txt")=="true","warm replay verifies/reuses static analysis");
     require(read_text(second / "build-runtime.log").find("Building CXX")==std::string::npos,"warm build does not recompile runtime");
+    invoke("prepare",{"prepare",file},0);
+    const auto prepared=cli::utf8_path(read_text(profile.path("build") / "ps2n-dev/last-prepared.txt"));
+    require(read_text(prepared / "manifest.json").find("\"status\":\"prepared\"")!=std::string::npos &&
+        !file_exists(prepared / "execute.log") && !file_exists(prepared / "diagnostic"),"prepare validates/builds artifacts without executing the guest");
+    require(read_text(prepared / "runtime.sha256")==runtime &&
+        read_text(profile.path("build") / "ps2n-dev/last.txt")==path_utf8(second),"prepare preserves exact runtime and the last execution reference");
+    profile.aot_args.push_back("--execution-alias=0x80000000");save_text(file,profile.serialize());
+    invoke("alias-needs-restore",{"run",file},2);
+    require(read_text(root / "alias-needs-restore.log").find("execution alias requires prepare")!=std::string::npos,
+        "physical ELF runner cannot silently execute a differently aliased module");
+    profile.aot_args.pop_back();save_text(file,profile.serialize());
     const auto compare=process(debug,{"compare",first / "diagnostic/full-events.ndjson",second / "diagnostic/full-events.ndjson"},root / "compare.log",15);
     require(compare.exit_code==0,"complete event streams match across replay");
     require(sha256_file(elf)==hash,"input is never modified");

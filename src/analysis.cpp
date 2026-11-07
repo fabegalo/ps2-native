@@ -160,8 +160,12 @@ AnalysisReport analyze_ee_image(const ElfImage& elf,const AnalysisOptions& optio
         edges.push_back({target.jump_site,target.target,"proven constant indirect"});
         if(graph.instructions.at(target.jump_site).links())calls.push_back({target.jump_site,target.target,"proven indirect call"});
     }
+    // Reuse the CFG's checked targets: guarded tables may share a PF_X segment.
+    std::map<std::uint32_t,std::uint32_t> table_targets;
+    for(const auto& target:graph.resolved_indirect_targets)
+        if(target.evidence=="SLTIU-bounded jump table")table_targets.emplace(target.source,target.target);
     for(const auto& table:graph.jump_tables)
-        for(std::uint32_t i=0;i<table.entries;++i)edges.push_back({table.jump_site,elf.data_word_at(table.table_address+i*4u),"proven bounded jump table"});
+        for(std::uint32_t i=0;i<table.entries;++i)edges.push_back({table.jump_site,table_targets.at(table.table_address+i*4u),"proven bounded jump table"});
     auto output_edges=[&](std::string_view key,const std::vector<Edge>& items) {
         json<<"],\""<<key<<"\":[";bool separate=false;
         for(const auto& e:items) {

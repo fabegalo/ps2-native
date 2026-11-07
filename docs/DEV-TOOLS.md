@@ -1,5 +1,26 @@
 # Ferramentas de desenvolvimento
 
+## Preparação sem execução e aliases EE — 07/11/2026
+
+`ps2n-dev prepare perfil.ps2n` identifica, analisa, gera e compila pelos mesmos
+estágios de `run`, mas não inicia o convidado. Publica um manifesto `prepared`
+e `ps2n-dev/last-prepared.txt`; conserva `last.txt` como a última execução real.
+O teste de integração confere a reutilização do executável e a ausência de
+`execute.log` e diagnóstico nessa operação.
+
+`ps2n-analyze` e `ps2n-aot` aceitam `--execution-alias=0x80000000` ou
+`0xA0000000` para uma imagem ELF física de RAM sem símbolos/relocações.
+Mudam apenas a visão dos endereços de execução, preservando bytes, ponteiros
+e hash de origem. O perfil aceita a mesma opção em `aot_arg=` durante
+`prepare`; `run` recusa esse alias, pois seu loader ELF comum inicia no
+endereço original. O módulo precisa ser vinculado ao caminho que realmente
+executa a RAM restaurada correspondente. Nenhuma BIOS é embutida ou relocada.
+
+O analisador também reutiliza os alvos já provados pelo CFG para tabelas
+guardadas armazenadas em segmentos executáveis, sem afrouxar a leitura de
+dados ou inventar novos alvos. As regressões cobrem aliases inválidos,
+duplicados, overflow, evidência simbólica e a tabela em `PT_LOAD` executável.
+
 ## Incremento validado — 07/11/2026
 
 `observed=` integra a descoberta offline ao perfil, analisador e AOT existentes.
