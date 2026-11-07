@@ -26,15 +26,16 @@ inline std::vector<std::uint8_t> micro_image() {
     for(unsigned at=0;at<2048u;++at)pair(at,nop);
     pair(0,addiu(1,0,1),upper(0x1BCu,0,1,2)); // MULAx ACC,VF1,VF2x
     pair(1,addiu(2,1,2),upper(0xBDu,0,1,2));  // MADDAy, accumulator bypass
-    pair(2,nop,upper(0x29u,3,1,2));
+    pair(2,0x22ABCDEFu,upper(0x29u,3,1,2)); // FCSET shares the FMAC issue without changing MAC/STATUS.
     pair(3,0x800003BCu|(2u<<16u)|(1u<<11u)); // DIV Q,VF1x,VF2x
     pair(4,0x800003BFu,upper(0x1Cu,4,1,0));   // WAITQ paired with MULq
     pair(5,(15u<<21u)|(5u<<16u)|1u,upper(0x17Du,0,3,6)); // LQ/FTOI4
     pair(6,(1u<<25u)|(15u<<21u)|(6u<<11u)|2u); // SQ VF6,2(VI0)
     pair(7,(0x1Au<<25u)|(7u<<16u),upper(0x28u,7,1,2));
     pair(8,(0x29u<<25u)|(2u<<16u)|(1u<<11u)|2u);
-    pair(9,addiu(8,0,7));pair(10,addiu(8,0,99));
-    pair(11,nop,upper(0x2Fu,8,1,2)|0x40000000u);pair(12,nop);
+    pair(9,addiu(8,0,7),upper(0x1FFu,0,1,2,14));pair(10,addiu(8,0,99));
+    pair(11,(5u<<25u)|(1u<<21u)|(1u<<16u)|3u,upper(0x2Fu,8,1,2));
+    pair(12,0x24FFFFFFu,upper_nop|0x40000000u);pair(13,nop);
 
     // FTOI computes a real sprite's opposite corner and SQ writes the
     // original PACKED XYZ2 packet before the independent XGKICK transfer.

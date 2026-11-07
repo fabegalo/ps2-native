@@ -30,6 +30,7 @@ bool upper_supported(std::uint32_t word) {
     if(word&0xB8000000u)return false;
     const auto code=word&0x07FFFFFFu,function=code&63u,extended=code&0x7FFu;
     if(code==0x2FFu)return true;
+    if(extended==0x1FFu)return !(word&0x06000000u) && ((word>>21u)&15u)==14u;
     if((extended&~3u)==0x17Cu || (extended&~3u)==0x1BCu || (extended&~3u)==0xBCu ||
        extended==0x2BEu || extended==0x2BFu)return true;
     if((function&~3u)==0u || (function&~3u)==4u || (function&~3u)==0x10u ||
@@ -46,8 +47,10 @@ bool lower_supported(std::uint32_t word) {
     switch(word>>25u) {
     case 0u:return is<16u;
     case 1u:return it<16u;
+    case 5u:return is<16u && it<16u;
     case 4u:return is<16u && it<16u && mask && !(mask&(mask-1u));
     case 8u:case 9u:return is<16u && it<16u;
+    case 0x11u:case 0x12u:return !(word&0x01000000u);
     case 0x18u:case 0x1Au:case 0x1Bu:return is<16u && it<16u && !(word&0x01E007FFu);
     case 0x20u:return true;
     case 0x21u:return it<16u;
@@ -59,6 +62,7 @@ bool lower_supported(std::uint32_t word) {
         case 0x37Du:return it<16u;
         case 0x3BCu:return true;
         case 0x3BFu:return word==0x800003BFu;
+        case 0x3FFu:return is<16u && it<16u;
         case 0x3FEu:return is<16u && it<16u && mask && !(mask&(mask-1u));
         case 0x6BCu:case 0x6BDu:return it<16u && !is && !(word&0x01E00000u);
         case 0x3FCu:return it<16u && !(word&0x01800000u);
@@ -87,7 +91,10 @@ VuAotInstruction dependencies(std::uint32_t low,std::uint32_t upper) {
     VuAotInstruction result;result.lower=low;result.upper=upper;
     const auto code=upper&0x07FFFFFFu,function=code&63u,extended=code&0x7FFu;
     const auto fs=(code>>11u)&31u,ft=(code>>16u)&31u,fd=(code>>6u)&31u;
-    if(code!=0x2FFu && ((code>>21u)&15u)) {
+    if(extended==0x1FFu) {
+        result.vf_reads=(std::uint32_t{1}<<fs)|(std::uint32_t{1}<<ft);
+        result.reads_flags=result.writes_flags=true;
+    }else if(code!=0x2FFu && ((code>>21u)&15u)) {
         const bool fixed=(extended&~3u)==0x17Cu;
         const bool acc=(extended&~3u)==0x1BCu || (extended&~3u)==0xBCu || extended==0x2BEu || extended==0x2BFu;
         result.reads_acc=(extended&~3u)==0xBCu || extended==0x2BFu || (function&~3u)==8u || function==0x21u || function==0x29u;
@@ -102,6 +109,8 @@ VuAotInstruction dependencies(std::uint32_t low,std::uint32_t upper) {
     const auto read_vi=[&](unsigned reg){if(reg<16u)result.vi_reads|=static_cast<std::uint16_t>(1u<<reg);};
     const auto write_vi=[&](unsigned reg){if(reg<16u)result.vi_writes|=static_cast<std::uint16_t>(1u<<reg);};
     if(op==8u || op==9u){read_vi(is);write_vi(it);}
+    else if(op==0x11u)result.writes_flags=true;
+    else if(op==0x12u){write_vi(1);result.reads_flags=true;}
     else if(op==0x18u || op==0x1Au || op==0x1Bu){read_vi(is);write_vi(it);result.reads_flags=true;}
     else if(op==0x21u)write_vi(it);
     else if(op==0x28u || op==0x29u){read_vi(is);read_vi(it);}
@@ -110,7 +119,8 @@ VuAotInstruction dependencies(std::uint32_t low,std::uint32_t upper) {
         read_vi(is);result.vf_writes|=std::uint32_t{1}<<it;if(op)write_vi(is);
     } else if(op==1u || (op==0x40u && ext==0x37Du)) {
         read_vi(it);result.vf_reads|=std::uint32_t{1}<<is;if(op!=1u)write_vi(it);
-    } else if(op==4u || (op==0x40u && ext==0x3FEu)){read_vi(is);write_vi(it);}
+    } else if(op==5u || (op==0x40u && ext==0x3FFu)){read_vi(is);read_vi(it);}
+    else if(op==4u || (op==0x40u && ext==0x3FEu)){read_vi(is);write_vi(it);}
     else if(op==0x40u) {
         if(ext==0x3BCu){result.vf_reads|=(std::uint32_t{1}<<is)|(std::uint32_t{1}<<it);result.writes_q=true;}
         else if(ext==0x3BFu)result.reads_q=true;

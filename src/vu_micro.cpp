@@ -106,8 +106,14 @@ void VuControl::retire_micro_integers(unsigned unit) {
     for(unsigned n=0;n<state.writes;++n) {
         const auto write=state.pending[n];
         if(write.ready>state.next){state.pending[kept++]=write;continue;}
-        if(unit)vu1_integers_[write.index]=write.word;
-        else {registers_[write.index]=write.word.value;unknown_[write.index]=write.word.unknown;}
+        if(write.index==18u) {
+            if(unit)vu1_controls_[2]=write.word;
+            else {registers_[18]=write.word.value;unknown_[18]=write.word.unknown;}
+        }else {
+            if(write.index>=16u)throw DeviceRefusal("VU pending integer register is outside the modeled range");
+            if(unit)vu1_integers_[write.index]=write.word;
+            else {registers_[write.index]=write.word.value;unknown_[write.index]=write.word.unknown;}
+        }
     }
     state.writes=kept;
     kept=0;

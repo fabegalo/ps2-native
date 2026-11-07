@@ -361,6 +361,75 @@ int main() try {
         rejects([&]{vu.advance_micro(1);},"contains unknown bits");require(vector_lane(vu,unit,5,0).unknown==~0u && vu.diagnostic_micro_instructions(unit)==0,
             "an unknown signed branch condition cannot fabricate a direction or commit the paired upper result");
     }
+    for(unsigned unit=0;unit<2;++unit) {
+        VuControl vu;instruction(vu,unit,0,0x22ABCDEFu);instruction(vu,unit,1,0x22000000u);
+        instruction(vu,unit,2,nop,upper_nop|0x40000000u);instruction(vu,unit,3,nop);
+        const auto clip=[&]{return unit ? vu.observe_data(0x4320u) : vu.observe(18);};
+        vu.start_micro(unit,0,0);vu.advance_micro(4);
+        require(clip().value==0 && !clip().unknown,"FCSET cannot publish before its four-stage writeback");
+        vu.advance_micro(5);require(clip().value==0xABCDEFu && !clip().unknown,"FCSET publishes all 24 immediate bits at S");
+        vu.advance_micro(6);require(clip().value==0 && !clip().unknown,"successive FCSET writes preserve pipeline ordering");
+        vu.advance_micro(8);require(!vu.micro_running(unit) && clip().value==0,"FCSET drains through a genuine E/Ready termination");
+        vu.reset();instruction(vu,unit,0,0x23000000u);vu.start_micro(unit,0,0);
+        rejects([&]{vu.advance_micro(1);},"FCSET reserved bit");
+        require(vu.diagnostic_micro_instructions(unit)==0,"invalid FCSET cannot retire or fabricate a clip flag");
+    }
+    for(unsigned unit=0;unit<2;++unit) {
+        VuControl vu;seed_vector(vu,unit,1,{0x40000000u,0xC0000000u,0x3F800000u,0});
+        seed_vector(vu,unit,2,{0,0,0,0xBF800000u});
+        const auto clip_upper=(14u<<21u)|(2u<<16u)|(1u<<11u)|0x1FFu;
+        const auto clip=[&]{return unit ? vu.observe_data(0x4320u) : vu.observe(18);};
+        instruction(vu,unit,0,0x22ABCDEFu);instruction(vu,unit,1,addiu(1,0,7),clip_upper);
+        instruction(vu,unit,2,nop,clip_upper);instruction(vu,unit,3,nop,upper_nop|0x40000000u);instruction(vu,unit,4,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(5);
+        require(clip().value==0xABCDEFu,"CLIP cannot overwrite a preceding FCSET before its S stage");
+        vu.advance_micro(6);require(clip().value==0xF37BC9u && integer(vu,unit,1).value==7,
+            "CLIP uses absolute w, strict boundaries and six-bit history alongside the independent lower integer write");
+        vu.advance_micro(7);require(clip().value==0xDEF249u,"successive CLIP operations forward the complete pending history");
+        vu.advance_micro(9);require(!vu.micro_running(unit),"clipping flag writes drain through E/Ready");
+        vu.reset();seed_vector(vu,unit,1,{0x3F800000u,0xC0000000u,0,0});seed_vector(vu,unit,2,{0,0,0,0x3F800000u});
+        const ObservedQuadword uncertain{{0xC00000003F800000ull,0xFFFFu},{0,0}};
+        if(unit){vu.write_vector(31,uncertain);vu.write(2,0x401u);vu.vector_store_increment(31,2,15);}else vu.write_vector(1,uncertain);
+        instruction(vu,unit,0,nop,clip_upper);instruction(vu,unit,1,nop,upper_nop|0x40000000u);instruction(vu,unit,2,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(7);
+        require(clip().value==8u && clip().unknown==1u,"only an unproved boundary comparison remains unknown");
+        vu.reset();seed_vector(vu,unit,1,{0x80000000u,1u,0x80000001u,0});seed_vector(vu,unit,2,{0,0,0,1u});
+        instruction(vu,unit,0,nop,clip_upper);instruction(vu,unit,1,0x22123456u,clip_upper);
+        instruction(vu,unit,2,nop,upper_nop|0x40000000u);instruction(vu,unit,3,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(5);require(clip().value==0,"signed zeros and denormals do not clip against zero");
+        vu.advance_micro(6);require(clip().value==0x123456u && !clip().unknown,"a paired FCSET overrides the upper clipping flag");
+    }
+    for(unsigned unit=0;unit<2;++unit)for(unsigned mask:{0u,1u,2u,9u}) {
+        VuControl vu;seed_vector(vu,unit,2,{0,0,0,0x3F800000u});
+        const ObservedQuadword uncertain{{0xC00000003F800000ull,0xFFFFu},{0,0}};
+        if(unit){vu.write_vector(31,uncertain);vu.write(2,0x401u);vu.vector_store_increment(31,2,15);}else vu.write_vector(1,uncertain);
+        const auto clip_upper=(14u<<21u)|(2u<<16u)|(1u<<11u)|0x1FFu;
+        instruction(vu,unit,0,nop,clip_upper);for(unsigned n=1;n<4;++n)instruction(vu,unit,n,nop);
+        instruction(vu,unit,4,0x24000000u|mask);
+        instruction(vu,unit,5,mask==9u ? addiu(2,1,5) : nop);
+        instruction(vu,unit,6,nop,upper_nop|0x40000000u);instruction(vu,unit,7,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(12);const auto predicate=integer(vu,unit,1);
+        require(predicate.value==(mask==9u ? 1u : 0u) && predicate.unknown==(mask==1u ? 1u : 0u),
+            "FCAND ignores unselected uncertainty and lets an established one prove its predicate");
+        if(mask==9u)require(integer(vu,unit,2).value==6 && !integer(vu,unit,2).unknown,
+            "a flag-check predicate uses its documented one-cycle bypass");
+    }
+    for(unsigned unit=0;unit<2;++unit)for(const bool direct:{false,true}) {
+        VuControl vu;seed_integer(vu,unit,1,{0xFEDCu,1});seed_integer(vu,unit,2,{direct ? 3u : 4u,0});
+        const auto base=(unit ? 0x1100C000u : 0x11004000u)+48u;
+        for(unsigned lane=0;lane<4;++lane)vu.write_memory(base+lane*4u,4,{0xFFFFFFFFu,0});
+        const auto store=(direct ? 0x800003FFu : (5u<<25u)|0x7FFu)|(10u<<21u)|(1u<<16u)|(2u<<11u);
+        instruction(vu,unit,0,store);instruction(vu,unit,1,nop,upper_nop|0x40000000u);instruction(vu,unit,2,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(4);
+        require(vu.read_memory(base,4).value==0xFFFFFFFFu,"ISW/ISWR cannot publish before the S stage");
+        vu.advance_micro(5);
+        for(unsigned lane=0;lane<4;++lane){const auto word=vu.read_memory(base+lane*4u,4);const bool selected=lane==0 || lane==2;
+            require(word.value==(selected ? 0xFEDCu : 0xFFFFFFFFu) && word.unknown==(selected ? 1u : 0u),
+                "integer stores sign-extend offsets, zero-extend VI data and retain unselected lanes and source uncertainty");}
+        vu.advance_micro(7);require(!vu.micro_running(unit),"integer stores drain before Ready");
+        vu.reset();instruction(vu,unit,0,nop,upper_nop|0x40000000u);instruction(vu,unit,1,store);
+        vu.start_micro(unit,0,0);rejects([&]{vu.advance_micro(2);},"store in the E delay slot");
+    }
     VuControl cold;cold.start_micro(1,0,0);rejects([&]{cold.advance_micro(1);},"unwritten micro memory");
     std::cout<<"Clocked VU integer LIW, bypass/S visibility, BAL delay, E drain, reset and refusals passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

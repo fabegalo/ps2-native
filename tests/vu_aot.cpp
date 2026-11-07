@@ -87,6 +87,9 @@ void equivalence(unsigned entry,bool dynamic=false) {
         " native="+std::to_string(stats.native_instructions)+" interpreted="+std::to_string(stats.interpreted_instructions)+
         " missing="+std::to_string(stats.missing_program)+" untranslated="+std::to_string(stats.untranslated_pc));
     if(entry==vu_aot_fixture::math_entry) {
+        require(native.vu.observe_data(0x4320u).value==0xF37BC0u && !native.vu.observe_data(0x4320u).unknown,"compiled FCSET and CLIP publish the independent 24-bit expected history");
+        require(native.vu.read_memory(0x1100C03Cu,4).value==1 && !native.vu.read_memory(0x1100C03Cu,4).unknown,"native ISW stores a real zero-extended integer through its writeback");
+        require(native.vu.observe_data(0x4210u).value==1 && !native.vu.observe_data(0x4210u).unknown,"compiled FCAND derives the real clipping predicate");
         require(native.vu.observe_data(0x4280).value==7,"taken branch executes the real delay pair and skips untaken storage");
         require(!native.vu.observe_data(0x4360).unknown && native.vu.observe_data(0x4360).value==0x3F000000u,
             "DIV, WAITQ, latency and paired upper consume the actual Q");

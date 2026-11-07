@@ -157,7 +157,39 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
             }
         }
     }
-    const auto fmac=evaluate_micro_upper_shared<Unit,Upper>(unit,hi);
+    const bool clip=(hi&0x7FFu)==0x1FFu;
+    std::optional<ObservedWord> clipping;
+    if(clip) {
+        if((hi&0x06000000u) || ((hi>>21u)&15u)!=14u)throw DeviceRefusal("CLIP reserved destination fields are invalid");
+        const auto fs=(hi>>11u)&31u,ft=(hi>>16u)&31u;
+        for(unsigned n=0;n<state.vector_writes;++n) {
+            const auto& write=state.vectors[n];
+            if((fs && write.index==fs && (write.mask&14u)) || (ft && write.index==ft && (write.mask&1u))) {
+                ++state.next;return;
+            }
+        }
+        const auto& vectors=unit ? vu1_vectors_ : vectors_;
+        const auto magnitude=[](std::uint32_t value){return value&0x7F800000u ? value&0x7FFFFFFFu : 0u;};
+        const auto w=vectors[ft][3];
+        const auto wmin=magnitude(w.value&~w.unknown),wmax=magnitude(w.value|w.unknown);
+        std::uint32_t value=0,unknown=0;
+        for(unsigned lane=0;lane<3;++lane) {
+            const auto x=vectors[fs][lane];
+            const auto xmin=magnitude(x.value&~x.unknown),xmax=magnitude(x.value|x.unknown);
+            if(xmax<=wmin)continue;
+            const auto bit=1u<<(lane*2u+((x.value>>31u)&1u));
+            if(x.unknown&0x80000000u)unknown|=3u<<(lane*2u);
+            else if(xmin>wmax)value|=bit;
+            else unknown|=bit;
+        }
+        auto previous=unit ? vu1_controls_[2] : observe(18);
+        // CLIP's history recurrence follows earlier S-stage flag writes,
+        // including a preceding FCSET that has not reached S yet.
+        for(unsigned n=0;n<state.writes;++n)if(state.pending[n].index==18u)previous=state.pending[n].word;
+        clipping=ObservedWord{((previous.value<<6u)|value)&0xFFFFFFu,((previous.unknown<<6u)|unknown)&0xFFFFFFu};
+        clipping->value&=~clipping->unknown;
+    }
+    const auto fmac=clip ? MicroFmac{} : evaluate_micro_upper_shared<Unit,Upper>(unit,hi);
     if(fmac.hazard){++state.next;return;}
     const bool ending=(hi&0x40000000u)!=0u;
     if(state.end_delay && ending)throw DeviceRefusal("E bit in the termination delay slot is not supported");
@@ -179,6 +211,15 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
         const auto imm=(lo&0x7FFu)|(((lo>>21u)&15u)<<11u);
         if(it>=16u)throw DeviceRefusal("integer destination is outside VI00..VI15");
         result=std::pair{it,(op==8u ? reg(is)+imm : reg(is)-imm)&0xFFFFu};
+    } else if(op==0x12u) { // FCAND returns the masked clipping predicate in VI01.
+        if(lo&0x01000000u)throw DeviceRefusal("FCAND reserved bit is nonzero");
+        const auto clip=unit ? vu1_controls_[2] : observe(18);
+        const auto mask=lo&0xFFFFFFu,known=clip.value&~clip.unknown&mask;
+        result=std::pair{1u,known ? 1u : 0u};
+        integer_unknown=!known && (clip.unknown&mask) ? 1u : 0u;flag_check=true;
+    } else if(op==0x11u) { // FCSET reaches the shared S stage after four cycles.
+        if(lo&0x01000000u)throw DeviceRefusal("FCSET reserved bit is nonzero");
+        result=std::pair{18u,lo&0xFFFFFFu};clipping.reset();
     } else if(op==0x18u || op==0x1Au || op==0x1Bu) { // FMEQ/FMAND/FMOR, 1/1.
         if(it>=16u || is>=16u || (lo&0x01E007FFu))throw DeviceRefusal("MAC flag check register/reserved fields are invalid");
         const auto a=unit ? vu1_controls_[1] : observe(17),b=micro_integer(unit,is,true);
@@ -261,6 +302,20 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
             }
             if(increment)result=std::pair{it,(address+1u)&0xFFFFu};
         }
+    } else if(op==5u || (op==0x40u && extended==0x3FFu)) {
+        if(state.end_delay)throw DeviceRefusal("integer memory store in the E delay slot is invalid");
+        if(is>=16u || it>=16u)throw DeviceRefusal("ISW/ISWR requires VI00..VI15 operands");
+        const auto mask=(lo>>21u)&15u;
+        if(mask) {
+            const auto bits=lo&0x7FFu;
+            const auto offset=op==5u ? static_cast<std::int32_t>(bits)-((bits&0x400u) ? 2048 : 0) : 0;
+            const auto address=(reg(is)+static_cast<std::uint32_t>(offset))&0xFFFFu;
+            if(address>=(unit ? 1024u : 256u))throw DeviceRefusal("integer store outside direct VU RAM; mirrors/register windows are not modeled");
+            const auto source=micro_integer(unit,it,true);
+            MicroVectorWrite store{address,mask,{},state.next+4u};
+            for(unsigned lane=0;lane<4;++lane)if(mask&(8u>>lane))store.words[lane]={source.value&0xFFFFu,source.unknown&0xFFFFu};
+            store_result=store;
+        }
     } else if(op==0x40u && extended==0x3BCu) {
         const auto fsf=(lo>>21u)&3u,ftf=(lo>>23u)&3u;
         const auto& vectors=unit ? vu1_vectors_ : vectors_;
@@ -340,7 +395,9 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
     if(fmac.active && fmac.output.mask && vector_result && fmac.output.index==vector_result->index)vector_result.reset();
     // No architectural effects of this pair until both decoders/operands
     // have succeeded. Integer S writeback is four cycles after T issue.
-    if(result && result->first && state.writes==state.pending.size())throw DeviceRefusal("VU integer writeback queue is full");
+    // shortcut: clipping and integer writes share the bounded pending queue; split it if a valid stream saturates it.
+    if(state.writes+static_cast<unsigned>(result && result->first)+static_cast<unsigned>(clipping.has_value())>state.pending.size())
+        throw DeviceRefusal("VU integer writeback queue is full (including clipping flags)");
     const auto lower_write=vector_result && vector_result->index && vector_result->mask;
     const auto upper_write=fmac.active && fmac.output.index && fmac.output.mask;
     if(state.vector_writes+static_cast<unsigned>(lower_write)+static_cast<unsigned>(upper_write)>state.vectors.size())
@@ -359,6 +416,7 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
     if(result && result->first) {
         state.pending[state.writes++]={result->first,{result->second,integer_unknown},state.next+4u,integer_load,flag_check};
     }
+    if(clipping)state.pending[state.writes++]={18u,*clipping,state.next+4u,false,false};
     if(lower_write)state.vectors[state.vector_writes++]=*vector_result;
     if(upper_write)state.vectors[state.vector_writes++]=fmac.output;
     if(fmac.changes_flags)state.flags[state.flag_writes++]={fmac.mac,fmac.status,state.next+4u};
