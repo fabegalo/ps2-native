@@ -110,6 +110,10 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsi
         if(const auto value=ee_fpu_multiply(a.value,b.value,flags,diagnostic))
             return VuFloatResult{{*value,0},flags};
     }
+    // A zero/denormal operand annihilates every magnitude; MAC still needs both signs.
+    if(!((a.unknown|b.unknown)&0x80000000u) &&
+       ((!((a.value|a.unknown)&0x7F800000u)) || (!((b.value|b.unknown)&0x7F800000u))))
+        return VuFloatResult{{(a.value^b.value)&0x80000000u,0},0};
     // A right-hand unit has no partial rows in discarded Booth columns.
     if(!b.unknown && (b.value&0x7FFFFFFFu)==0x3F800000u)if(auto value=normal_identity(a,a_bounds)) {
         const auto sign=b.value&0x80000000u;value->word.value^=sign;

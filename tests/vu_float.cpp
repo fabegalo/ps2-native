@@ -44,6 +44,17 @@ void rsqrt_domains() {
         "invalid RSQRT refuses before changing Q or scheduling a completion");
 }
 void ranges() {
+    for(const auto a_sign:{0u,0x80000000u})for(const auto b_sign:{0u,0x80000000u}) {
+        const ObservedWord opaque{a_sign,0x7FFFFFFFu},zero{b_sign,0x7FFFFFu};
+        for(bool swap:{false,true}) {
+            const auto product=vu_float_product(swap ? zero : opaque,swap ? opaque : zero);
+            require(product && product->word.value==(a_sign^b_sign) && !product->word.unknown && !product->flags,
+                "zero/denormal multiplication has exact XOR sign and clear exception flags for every opaque magnitude");
+        }
+    }
+    require(!vu_float_product({0,0xFFFFFFFFu},{0,0}) &&
+        !vu_float_product({0x80000000u,0},{0,0xFFFFFFFFu}),
+        "zero multiplication cannot fabricate MAC sign when an operand sign is unknown");
     const auto residual=vu_float_add({0x3F800000u,0},{0xBF7FFFF0u,3},
         {},FloatBounds{0xBF7FFFF1u,0xBF7FFFF2u});
     require(residual && residual->word.value==0x35600000u && residual->word.unknown==0x00100000u &&
@@ -172,6 +183,26 @@ void ranges() {
 }
 void pipeline() {
     VuControl vu;
+    {
+        VuControl zero;
+        zero.write_vector(1,{{0x3F000000u,0xFFFFFFu},{0,0}});
+        zero.restore_vector_bounds(1,0,{0x3F7FFFFEu,0x3F800000u});
+        zero.write_vector(2,{{0x80000000u,0},{0,0}});
+        zero.write_vector(3,{});
+        zero.product(3,1,2,8,4,false,false);
+        require(zero.observe_vector(3).low.value==0x80000000u && !zero.observe_vector(3).low.unknown &&
+            zero.read(17)==0x88u && (zero.read(16)&15u)==3u,
+            "macro zero product proves signed zero and both MAC Z/S across the input exponent boundary");
+        constexpr auto lower_nop=0x8000033Cu,upper_nop=0x2FFu;
+        const auto multiply=(8u<<21u)|(2u<<16u)|(1u<<11u)|(3u<<6u)|0x2Au;
+        zero.write_memory(0x11000000u,8,{lower_nop|(std::uint64_t{multiply}<<32u),0});
+        zero.write_memory(0x11000008u,8,{lower_nop|(std::uint64_t{upper_nop|0x40000000u}<<32u),0});
+        zero.write_memory(0x11000010u,8,{lower_nop|(std::uint64_t{upper_nop}<<32u),0});
+        zero.start_micro(0,0,0);zero.advance_micro(20);
+        require(!zero.micro_running(0) && zero.observe_vector(3).low.value==0x80000000u &&
+            !zero.observe_vector(3).low.unknown && zero.read(17)==0x88u,
+            "micro VMUL uses the same zero/sign proof and MAC flags");
+    }
     {
         // Adjacent encodings of sqrt(1/2) and sqrt(2) straddle a unit product.
         const ObservedWord a{0x3F3504F0u,7u},b{0x3FB504F0u,7u};
