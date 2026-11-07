@@ -130,6 +130,14 @@ public:
         return vu_control_.observe(index);
     }
     void write_vu_control_observed(unsigned index, ObservedWord word) {vu_control_.write_observed(index,word);}
+    // RUNTIME_HELPERS_BEGIN
+    void vu_sync_micro(std::uint64_t cycle) {
+        if(clock_)sync_iop();else advance_vpus(cycle,&vif0_,&vif1_,&vu_control_,gif_,gs_);
+    }
+    [[nodiscard]] bool vu0_micro_running() const {return vu_control_.micro_running(0);}
+    [[nodiscard]] std::uint64_t vu_next_micro_cycle() const {return vu_control_.next_micro_cycle().value();}
+    void vu0_call_micro(unsigned address,std::uint64_t cycle) {vu_control_.start_micro(0,address,cycle);}
+    // RUNTIME_HELPERS_END
     void vu_advance_q(std::uint64_t cycle) { vu_control_.advance_q(cycle); }
     [[nodiscard]] std::uint64_t vu_q_ready_cycle() const noexcept { return vu_control_.q_ready_cycle(); }
     void vu_issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,bool square_root) {

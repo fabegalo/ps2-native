@@ -676,7 +676,7 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
         std::array<std::uint32_t,4> data{};
         for(unsigned w=0;w<words;++w) {
             if(ee_ram_unknown_ && ee_ram_unknown_->contains(at+4u*w))
-                throw DeviceRefusal("EE graphics DMA consumes unknown source bits (unknown RAM bits)");
+                throw DeviceRefusal("EE graphics DMA consumes unknown source bits (unknown RAM bits): channel="+std::to_string(channel)+" address="+hex(at+4u*w)+" mask="+hex(ee_ram_unknown_->at(at+4u*w)));
             for(unsigned b=0;b<4;++b) data[w]|=std::uint32_t{storage[offset+w*4u+b]}<<(8u*b);
         }
         return data;

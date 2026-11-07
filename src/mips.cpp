@@ -82,7 +82,7 @@ std::optional<unsigned> MipsInstruction::written_gpr() const noexcept {
         case MipsOpcode::Mult1: case MipsOpcode::Multu1: case MipsOpcode::Mfhi1:
         case MipsOpcode::Mflo1: case MipsOpcode::Padduw: case MipsOpcode::Pand:
         case MipsOpcode::Pxor: case MipsOpcode::Por: case MipsOpcode::Pnor: case MipsOpcode::Pcpyh: case MipsOpcode::Pcpyld: case MipsOpcode::Pcpyud:
-        case MipsOpcode::Pextlw: case MipsOpcode::Pextuw: case MipsOpcode::Ppacw:
+        case MipsOpcode::Pextlw: case MipsOpcode::Pextuw: case MipsOpcode::Ppacw: case MipsOpcode::Qfsrv:
         case MipsOpcode::Psubb: case MipsOpcode::Psubw: case MipsOpcode::Plzcw:
             target = rd;
             break;
@@ -211,6 +211,8 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
             case 0x11: if (rs != 31) return make(MipsOpcode::Bgezal); break;
             case 0x12: if (rs != 31) return make(MipsOpcode::Bltzall); break;
             case 0x13: if (rs != 31) return make(MipsOpcode::Bgezall); break;
+            case 0x18: return make(MipsOpcode::Mtsab);
+            case 0x19: return make(MipsOpcode::Mtsah);
             default: break;
         }
     } else if (op == 0x1c) {
@@ -240,6 +242,7 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
             case 0x28:
                 if (sa == 0x10) return make(MipsOpcode::Padduw);
                 if (sa == 0x12) return make(MipsOpcode::Pextuw);
+                if (sa == 0x1B) return make(MipsOpcode::Qfsrv);
                 break;
             case 0x09:
                 if(rs==0 && rt==0 && sa==8)return make(MipsOpcode::Pmfhi);
@@ -282,6 +285,7 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
             }
         }
     } else if (op == 0x12) {
+        if (rs==16u && funct==0x38u)return make(MipsOpcode::Vcallms);
         if (word==0x4A0002FFu) return make(MipsOpcode::Vnop);
         if (rs>=16u && (word&0x7FCu)==0x17Cu) return make(MipsOpcode::Vftoi);
         if (word==0x4A0003BFu) return make(MipsOpcode::Vwaitq);

@@ -236,6 +236,79 @@ void packed_copy() {
     ee::exec<MipsOpcode::Psubw>(state,memory,0,subw&~(31u<<11));
     require(state.reg128(0).low==0 && state.reg128(0).high==0,"PSUBW preserves zero register");
 }
+void micro_subroutine() {
+    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);EEState state=ee_reset_state();
+    memory.set_clock(&state.retired_instructions,&state.stall_cycles);
+    state.set_cp0(Cop0::Status,1u<<30);
+    constexpr auto add=(8u<<21u)|(2u<<16u)|(1u<<11u)|(3u<<6u)|0x28u;
+    memory.write64(0xB1000000u,(std::uint64_t{add}<<32u)|0x8000033Cu);
+    memory.write64(0xB1000008u,0x400002FF8000033Cull);
+    memory.write64(0xB1000010u,0x000002FF8000033Cull);
+    memory.write_vu_vector(1,{{0x3F800000u,0},{0,0}});
+    memory.write_vu_vector(2,{{0x40000000u,0},{0,0}});
+    memory.write_vu_vector(3,{{0x40800000u,0},{0,0}});
+    require(decode_mips(0,0x4A000038u).opcode==MipsOpcode::Vcallms && !try_decode_r5900(0,0x4A200038u),
+            "VCALLMS accepts its immediate and rejects reserved macro fields");
+    ee::exec<MipsOpcode::Vcallms>(state,memory,0,0x4A000038u);
+    require(memory.vu0_micro_running() && state.stall_cycles==0,"VCALLMS starts real VU0 code without completing it inline");
+    constexpr auto read=0x48281800u; // QMFC2 r8,VF3
+    ee::exec<MipsOpcode::Qmfc2>(state,memory,0,read);
+    require(state.reg32(8)==0x40800000u && state.stall_cycles==0 && memory.vu0_micro_running(),
+            "NI transfer reads committed VU data without waiting for the micro subroutine");
+    ee::exec<MipsOpcode::Qmfc2>(state,memory,0,read|1u);
+    require(state.reg32(8)==0x40400000u && state.stall_cycles==7 && !memory.vu0_micro_running(),
+            "interlocked transfer waits through actual FMAC writeback and E-bit Ready");
+    ee::exec<MipsOpcode::Vcallms>(state,memory,0,0x4A000038u);
+    ee::exec<MipsOpcode::Vcallms>(state,memory,0,0x4A000038u);
+    require(state.stall_cycles==14 && memory.vu0_micro_running(),"a second call waits for the first subroutine before starting again");
+    ee::exec<MipsOpcode::Vnop>(state,memory,0,0x4A0002FFu);
+    require(!memory.vu0_micro_running() && state.stall_cycles==21,"a following macro instruction waits for Ready");
+    state.set_cp0(Cop0::Status,0);
+    rejects([&]{ee::exec<MipsOpcode::Vcallms>(state,memory,0,0x4A000038u);},"Status.CU2 = 0");
+    require(!memory.vu0_micro_running(),"disabled COP2 cannot launch microcode");
+}
+void funnel_shift() {
+    Memory memory;EEState state;
+    constexpr auto byte=0x0518FFF5u,half=0x0519FFFDu;
+    require(decode_mips(0,byte).opcode==MipsOpcode::Mtsab && !decode_mips(0,byte).written_gpr() &&
+            decode_mips(0,half).opcode==MipsOpcode::Mtsah,"SA setup decodes without a GPR destination or branch");
+    for(unsigned value=0;value<32;++value) {
+        state.set_reg64_observed(8,value,~15ull);
+        ee::exec<MipsOpcode::Mtsab>(state,memory,0,byte);
+        require(state.shift_amount==((value^5u)&15u)*8u,"MTSAB XORs only the low four bits");
+        state.set_reg64_observed(8,value,~7ull);
+        ee::exec<MipsOpcode::Mtsah>(state,memory,0,half);
+        require(state.shift_amount==((value^5u)&7u)*16u,"MTSAH XORs only the low three bits");
+    }
+    state.shift_amount=88;state.set_reg64_observed(8,0,1);
+    rejects([&]{ee::exec<MipsOpcode::Mtsab>(state,memory,0,byte);},"unknown shift count");
+    require(state.shift_amount==88,"unproved shift input cannot mutate SA");
+    constexpr auto op=0x712A5EE8u; // QFSRV r11,r9,r10
+    require(decode_mips(0,op).opcode==MipsOpcode::Qfsrv && decode_mips(0,op).written_gpr()==11,"QFSRV decode and AOT metadata");
+    for(unsigned bytes=0;bytes<16;++bytes)for(unsigned destination:{9u,10u,11u,0u}) {
+        state.set_reg128(9,0x1716151413121110ull,0x1F1E1D1C1B1A1918ull);
+        state.set_reg128(10,0x0706050403020100ull,0x0F0E0D0C0B0A0908ull);state.shift_amount=bytes*8u;
+        const auto word=(op&~(31u<<11))|(destination<<11);
+        ee::exec<MipsOpcode::Qfsrv>(state,memory,0,word);
+        std::uint64_t low=0,high=0;
+        for(unsigned n=0;n<8;++n){low|=std::uint64_t{bytes+n}<<(8u*n);high|=std::uint64_t{bytes+n+8u}<<(8u*n);}
+        require(state.reg128(destination).low==(destination ? low : 0) && state.reg128(destination).high==(destination ? high : 0),
+                "every byte alignment matches independent ordered bytes, including 64-bit edge, aliases and zero");
+    }
+    state.set_reg128(9,0,0);state.set_reg64_observed(9,0,1);
+    state.set_reg128(10,0,0);state.shift_amount=0;
+    ee::exec<MipsOpcode::Qfsrv>(state,memory,0,op);
+    require(!state.unknown_gpr_bits[11] && !state.unknown_gpr_high_bits[11],"SA zero does not consume the discarded source");
+    state.shift_amount=8;ee::exec<MipsOpcode::Qfsrv>(state,memory,0,op);
+    require(!state.unknown_gpr_bits[11] && state.unknown_gpr_high_bits[11]==(1ull<<56),"funnel shift propagates only selected unknown bits");
+    for(auto invalid:{1u,128u}){state.shift_amount=invalid;rejects([&]{ee::exec<MipsOpcode::Qfsrv>(state,memory,0,op);},"byte/halfword shift");}
+    memory.reset_for_boot(m20::build_firmware().rom);
+    memory.write32(0x80001000u,0x04180008u);memory.write32(0x80001004u,op);
+    state=ee_reset_state();state.pc=0x80001000u;state.set_reg128(9,1,2);state.set_reg128(10,3,4);
+    std::uint64_t count=0;ExecutionContext ctx{state,memory,count,2,0xFFFFFFFFu};interpret_instruction(ctx);interpret_instruction(ctx);
+    require(state.shift_amount==64 && state.reg128(11).low==4 && state.reg128(11).high==1 && state.retired_instructions==2,
+            "production interpreter dispatch uses the same SA and funnel semantics");
+}
 void leading_sign_count() {
     constexpr auto word=0x70000004u|(8u<<21)|(8u<<11);
     require(decode_mips(0,word).opcode==MipsOpcode::Plzcw && decode_mips(0,word).written_gpr()==8,
@@ -955,6 +1028,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_setup();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_setup();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

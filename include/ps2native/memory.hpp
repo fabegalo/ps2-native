@@ -209,6 +209,12 @@ public:
     void write_vu_control(unsigned index, std::uint32_t value) { registers_.write_vu_control(index,value); }
     [[nodiscard]] ObservedWord observe_vu_control(unsigned index) const {return registers_.observe_vu_control(index);}
     void write_vu_control_observed(unsigned index, ObservedWord word) {registers_.write_vu_control_observed(index,word);}
+    // RUNTIME_HELPERS_BEGIN
+    void vu_sync_micro(std::uint64_t cycle) {registers_.vu_sync_micro(cycle);}
+    [[nodiscard]] bool vu0_micro_running() const {return registers_.vu0_micro_running();}
+    [[nodiscard]] std::uint64_t vu_next_micro_cycle() const {return registers_.vu_next_micro_cycle();}
+    void vu0_call_micro(unsigned address,std::uint64_t cycle) {registers_.vu0_call_micro(address,cycle);}
+    // RUNTIME_HELPERS_END
     void vu_advance_q(std::uint64_t cycle) { registers_.vu_advance_q(cycle); }
     [[nodiscard]] std::uint64_t vu_q_ready_cycle() const noexcept { return registers_.vu_q_ready_cycle(); }
     void vu_issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,bool square_root) {

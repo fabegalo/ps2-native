@@ -323,14 +323,28 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
     (void)m;
     (void)pc;
     // Host execution is sequential: guest memory accesses are already ordered (SYNC).
-    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::VaddBc || Op == O::VsubBc || Op == O::Vopmula || Op == O::Vopmsub || Op == O::Vsqrt || Op == O::Vdiv || Op == O::Vwaitq || Op == O::VaddQ || Op == O::VmulQ || Op == O::Vmove || Op == O::Vnop || Op == O::Vftoi) {
+    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::VaddBc || Op == O::VsubBc || Op == O::Vopmula || Op == O::Vopmsub || Op == O::Vcallms || Op == O::Vsqrt || Op == O::Vdiv || Op == O::Vwaitq || Op == O::VaddQ || Op == O::VmulQ || Op == O::Vmove || Op == O::Vnop || Op == O::Vftoi) {
         if (!(s.cp0(Cop0::Status) & (1u<<30)))
             throw std::runtime_error("COP2 transfer with Status.CU2 = 0; coprocessor unusable vectoring is not modeled");
-        // Implemented ALU macros complete synchronously in the shared instruction
-        // timing model. Microprogram starts remain refused, so no pending
-        // microprogram can distinguish interlocked and NI transfers here.
+        constexpr bool transfer=Op==O::Cfc2 || Op==O::Ctc2 || Op==O::Qmfc2 || Op==O::Qmtc2;
+        constexpr bool memory_transfer=Op==O::Lqc2 || Op==O::Sqc2;
+        if constexpr(Op==O::Vcallms)m.vu_sync_micro(s.cycles());
+        if(m.vu0_micro_running()) {
+            m.vu_sync_micro(s.cycles());
+            if(!memory_transfer && (!transfer || (w&1u))) {
+                // shortcut: M-bit early transfer release remains refused by the micro engine.
+                for(unsigned events=0;m.vu0_micro_running();++events) {
+                    if(events==1000000u)throw std::runtime_error("VU0 micro interlock exceeded the bounded event limit");
+                    const auto next=m.vu_next_micro_cycle();
+                    if(next<=s.cycles())throw std::runtime_error("VU0 micro interlock has no future issue event");
+                    s.stall(next-s.cycles());m.vu_sync_micro(s.cycles());
+                }
+            }
+        }
         m.vu_advance_q(s.cycles());
-        if constexpr (Op==O::Vnop) {
+        if constexpr (Op==O::Vcallms) {
+            m.vu0_call_micro((w>>6u)&0x7FFFu,s.cycles());
+        } else if constexpr (Op==O::Vnop) {
             // VU manual v6 p.304: no operation and no status-flag changes.
             // VNOP consumes its ordinary instruction slot without waiting
             // for the independent FDIV unit or touching unknown VF/VI data.
@@ -598,6 +612,23 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         write_gpr64(s,d_,s.shift_amount);
     } else if constexpr (Op == O::Mtsa) {
         s.shift_amount=read_gpr64(s,s_);
+    } else if constexpr (Op == O::Mtsab || Op == O::Mtsah) {
+        constexpr unsigned mask=Op==O::Mtsab ? 15u : 7u;
+        if(s.unknown_gpr_bits[s_]&mask)throw std::runtime_error("EE SA setup consumes unknown shift count");
+        s.shift_amount=((raw_gpr64(s,s_)^w)&mask)*(Op==O::Mtsab ? 8u : 16u);
+    } else if constexpr (Op == O::Qfsrv) {
+        if(s.shift_amount>127u || (s.shift_amount&7u))
+            throw std::runtime_error("EE QFSRV requires an established byte/halfword shift amount");
+        const auto a=s_ ? s.gpr[s_] : Register128{},b=t_ ? s.gpr[t_] : Register128{};
+        const std::array<std::uint64_t,4> values{b.low,b.high,a.low,a.high};
+        const std::array<std::uint64_t,4> unknown{
+            s.unknown_gpr_bits[t_],s.unknown_gpr_high_bits[t_],s.unknown_gpr_bits[s_],s.unknown_gpr_high_bits[s_]};
+        const auto word=static_cast<unsigned>(s.shift_amount/64u),bits=static_cast<unsigned>(s.shift_amount%64u);
+        const auto extract=[word,bits](const auto& limbs,unsigned half) {
+            const auto at=word+half;
+            return (limbs[at]>>bits)|(bits ? limbs[at+1u]<<(64u-bits) : 0u);
+        };
+        write_gpr128_observed(s,d_,extract(values,0),extract(values,1),extract(unknown,0),extract(unknown,1));
     } else if constexpr (Op == O::Pmfhi) {
         write_gpr128(s,d_,s.hi,s.hi1);
     } else if constexpr (Op == O::Pmflo) {

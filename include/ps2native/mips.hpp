@@ -21,13 +21,13 @@ namespace ps2native {
     X(Beq) X(Bne) X(Blez) X(Bgtz) X(Bltz) X(Bgez) X(Bltzal) X(Bgezal) \
     X(Beql) X(Bnel) X(Blezl) X(Bgtzl) X(Bltzl) X(Bgezl) X(Bltzall) X(Bgezall) \
     X(J) X(Jal) X(Jr) X(Jalr) \
-    X(Mult1) X(Multu1) X(Div1) X(Divu1) X(Mfhi1) X(Mflo1) X(Mthi1) X(Mtlo1) X(Mfsa) X(Mtsa) \
+    X(Mult1) X(Multu1) X(Div1) X(Divu1) X(Mfhi1) X(Mflo1) X(Mthi1) X(Mtlo1) X(Mfsa) X(Mtsa) X(Mtsab) X(Mtsah) X(Qfsrv) \
     X(Pmfhi) X(Pmflo) X(Pmthi) X(Pmtlo) X(Padduw) X(Pcpyh) X(Pcpyld) X(Pcpyud) \
     X(Pextlw) X(Pextuw) X(Ppacw) X(Psubb) X(Psubw) X(Pand) X(Pxor) X(Por) X(Pnor) X(Plzcw) \
     X(Vadd) X(Vmr32) X(Lqc2) X(Sqc2) \
     X(Vmul) X(VmulBc) X(Vmadd) X(VmaddBc) X(Vmula) X(VmulaBc) X(Vmadda) X(VmaddaBc) \
     X(VaddBc) X(VsubBc) X(Vopmula) X(Vopmsub) \
-    X(Vsqrt) X(Vdiv) X(Vwaitq) X(VaddQ) X(VmulQ) X(Vmove) X(Vnop) X(Vftoi) \
+    X(Vcallms) X(Vsqrt) X(Vdiv) X(Vwaitq) X(VaddQ) X(VmulQ) X(Vmove) X(Vnop) X(Vftoi) \
     X(CFalseS) X(CEqualS) X(CLessS) X(CLessEqualS) X(Bc1f) X(Bc1t) X(Bc1fl) X(Bc1tl) \
     X(Bc0f) X(Bc0t) X(Bc0fl) X(Bc0tl)
 // System instructions executed only by the interpreter (boot path): COP0
