@@ -425,17 +425,25 @@ public:
             if(!range.word_count||range.first_word>=words.size()||range.word_count>words.size()-range.first_word)
                 throw std::runtime_error("GS Direct3D 12 VRAM synchronization range is out of bounds");
         for(const auto& p:primitives) {
+            if(p.triangle!=0u && p.triangle!=1u && p.triangle!=3u && p.triangle!=7u)
+                throw std::runtime_error("GS Direct3D 12 received invalid triangle flags");
             if(p.left<0||p.top<0||p.right>2048||p.bottom>2048||p.left>=p.right||p.top>=p.bottom||
                p.psm>1u||(p.zpsm>1u&&p.zpsm!=10u&&(p.depth_write||((p.test&0x10000u)&&((p.test>>17u)&3u)>=2u)))||
                p.bw>4032u||!p.bw||p.bw%64u||p.right>static_cast<int>(p.bw))
                 throw std::runtime_error("GS Direct3D 12 received an unsupported or aliased primitive packet");
             if(p.zpsm==10u&&p.z>0xffffu&&(p.depth_write||((p.test&0x10000u)&&((p.test>>17u)&3u)>=2u)))
                 throw std::runtime_error("GS Direct3D 12 received an out-of-range Z16S primitive depth");
-            if(p.texture_flags>63u || ((p.texture_flags&1u) &&
-               (p.triangle||p.tbp>=kVramBytes||p.tbp%256u||p.tbw>4032u||p.tbw%64u||
+            if((p.texture_flags&1u) && p.triangle &&
+           (p.u0<0 || p.u0>16383 || p.v0<0 || p.v0>16383 ||
+            p.u1<0 || p.u1>16383 || p.v1<0 || p.v1>16383 ||
+            p.u2<0 || p.u2>16383 || p.v2<0 || p.v2>16383 ||
+            std::int64_t{p.x1-p.x0}*(p.y2-p.y0)-std::int64_t{p.y1-p.y0}*(p.x2-p.x0)<=0))
+            throw std::runtime_error("GS compute received invalid textured triangle coordinates");
+        if(p.texture_flags>63u || ((p.texture_flags&1u) &&
+               (p.tbp>=kVramBytes||p.tbp%256u||p.tbw>4032u||p.tbw%64u||
                 (p.tpsm!=0u&&p.tpsm!=1u&&p.tpsm!=19u&&p.tpsm!=20u)||p.tw>10u||p.th>10u||
                 p.clamp_u>3u||p.clamp_v>3u||p.minu>1023u||p.maxu>1023u||p.minv>1023u||p.maxv>1023u||
-                (p.clamp_u==2u&&p.minu>p.maxu)||(p.clamp_v==2u&&p.minv>p.maxv)||p.x0==p.x1||p.y0==p.y1)))
+                (p.clamp_u==2u&&p.minu>p.maxu)||(p.clamp_v==2u&&p.minv>p.maxv)||(!p.triangle&&(p.x0==p.x1||p.y0==p.y1)))))
                 throw std::runtime_error("GS Direct3D 12 received an unsupported texture primitive packet");
         }
         if(primitives.empty()&&uploads.empty()&&readbacks.empty())return {};

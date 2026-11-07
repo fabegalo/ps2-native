@@ -301,9 +301,10 @@ void check_completion_order(std::shared_ptr<GsGpu> backend) {
         s->sprite(8,0,16,8,0x80806040u);s->ad(0x3F,0);
     }
     const auto completed=backend->stats();
-    require(completed.batches==before.batches+2u && completed.readback_bytes==before.readback_bytes,
-        "FINISH/SIGNAL/TEXFLUSH completion does not download unused framebuffer contents");
+    require(completed.batches==before.batches+1u && completed.readback_bytes==before.readback_bytes,
+        "FINISH completes and TEXFLUSH invalidates without downloading framebuffer contents");
     same(cpu,accelerated,"resident GPU completion, IDs and interrupt ordering");
+    require(backend->stats().batches==before.batches+2u,"a later reader completes the raster retained across TEXFLUSH");
 }
 void check_pending_knowledge(std::shared_ptr<GsGpu> backend) {
     paired(backend,"pending unknown FBA invalidates destination-alpha proof",[](Stream& s){
@@ -486,8 +487,8 @@ void check_texture_palette_snapshots(std::shared_ptr<GsGpu> gpu) {
         s->ad(0x42,0x44);s->ad(0,3u|128u|64u);s->ad(1,0x80402010u);
         s->vertex(26*16,3*16);s->vertex(30*16,3*16);s->vertex(26*16,7*16);
         s->sprite(32,0,40,8,0x80AABBCCu);
-        if(s->gs.gpu_backend())require(s->gs.vram().cpu_fallbacks()==fallbacks+1u &&
-            s->gs.vram().gpu_primitives()==primitives_before+1u,"CLUT reload -> textured GPU -> AA1 CPU -> GPU preserves explicit routing");
+        if(s->gs.gpu_backend())require(s->gs.vram().cpu_fallbacks()==fallbacks &&
+            s->gs.vram().gpu_primitives()==primitives_before+2u,"CLUT reload -> textured GPU -> AA1 GPU -> GPU preserves explicit routing");
         s->ad(6,texture_register(20,2));s->ad(0,0x116);s->ad(1,0x80808080u);s->ad(3,0);s->vertex(0,64);
         s->ad(3,128u|(32ull<<16u));
         const auto writes=s->gs.vram().pixel_writes();
@@ -650,6 +651,8 @@ void check_texture_residency(std::shared_ptr<GsGpu> gpu) {
         s->ad(0x4C,1u<<16u);s->ad(6,256u|(1ull<<14u)|(6ull<<26u)|(5ull<<30u)|(1ull<<34u)|(1ull<<35u));
         s->ad(8,0);s->ad(0x14,0);
     }
+    // Establish residency before measuring reuse; TEXFLUSH is not a host fence.
+    accelerated.gs.vram().submit_gpu();
     const auto before=gpu->stats();
     const auto primitives=accelerated.gs.vram().gpu_primitives();
     for(auto* s:{&cpu,&accelerated})textured_uv(*s,0,0,8,8,0,0,128,128);
@@ -785,7 +788,7 @@ void check_fallback_and_transfers(std::shared_ptr<GsGpu> gpu) {
         s.ad(0x42,0x44);s.sprite(32,8,40,16,0x40000000u,0,0x46);
         s.ad(0x61,0);s.ad(0x60,0xFFFFFFFF12345678ull);s.ad(0x62,0xFFFFFFFF89ABCDEFull);
     });
-    paired(gpu,"AA1 CPU fallback with preserved GPU dependencies",[](Stream& s){
+    paired(gpu,"AA1 GPU with preserved dependencies",[](Stream& s){
         s.ad(0x4E,32u);s.sprite(0,0,width,height,0x80000000u,7);
         s.ad(0x42,0x44);s.ad(0,3u|128u|64u);s.ad(1,0x80402010u);
         s.vertex(40,40,9);s.vertex(104,40,9);s.vertex(40,104,9);
@@ -1003,6 +1006,94 @@ void check_device_batch(GsGpuApi api) {
         "stopped device preserves the original failure and never replays a partial batch");
 }
 }
+void check_textured_triangles(std::shared_ptr<GsGpu> gpu) {
+    for(unsigned psm:{0u,1u,19u,20u})for(bool reverse:{false,true})for(bool linear:{false,true})for(bool aa:{false,true}) {
+        paired(gpu,"textured triangle affine UV, winding, filtering and AA1",[&](Stream& s) {
+            texture_source(s,psm);texture_state(s,psm);
+            s.sprite(0,0,width,height,0x80604020u);
+            // The normal sprite establishes the exact logical source pages first.
+            textured_uv(s,40,0,48,8,0,0,(psm<=1u?128u:256u)*16u,(psm<=1u?64u:psm==19u?128u:256u)*16u);
+            s.ad(0x42,0x44u);s.ad(0x14,linear?0x60u:0u);s.ad(0,0x113u|(aa?128u:0u));s.ad(1,0x80808080u);
+            const auto before=s.gs.vram().gpu_primitives();
+            s.ad(3,16u|(16ull<<16u));s.vertex(32,32);
+            s.ad(3,reverse?16u|(144ull<<16u):144u|(16ull<<16u));s.vertex(reverse?32:160,reverse?160:32);
+            s.ad(3,reverse?144u|(16ull<<16u):16u|(144ull<<16u));s.vertex(reverse?160:32,reverse?32:160);
+            if(s.gs.gpu_backend())require(s.gs.vram().gpu_primitives()==before+1u,
+                "textured triangle reaches GPU: psm="+std::to_string(psm)+" reverse="+std::to_string(reverse)+" linear="+std::to_string(linear)+" AA1="+std::to_string(aa));
+            if(!linear && !aa) {
+                const auto expected=psm>=19u?palette_color(4u):psm==1u?(texture_grid(1u,1u)&0xFFFFFFu)|0x40000000u:texture_grid(1u,1u);
+                require(s.gs.vram().read(0,64,0,2,2)==expected,"independent triangle corner texel");
+            }
+        },0,4u|2u|16u);
+    }
+    const auto draw_triangle=[](Stream& s,int x=2,unsigned uv=0u) {
+        s.ad(0,0x113u);s.ad(1,0x80808080u);
+        s.ad(3,uv|(std::uint64_t{uv}<<16u));s.vertex(x*16,32);
+        s.ad(3,(uv+128u)|(std::uint64_t{uv}<<16u));s.vertex((x+8)*16,32);
+        s.ad(3,uv|(std::uint64_t{uv+128u}<<16u));s.vertex(x*16,160);
+    };
+    for(unsigned psm:{0u,1u,19u,20u})for(bool partial:{false,true}) {
+        paired(gpu,"cold triangle exact tile and unknown unread source bits",[&](Stream& s) {
+            texture_source(s,psm);
+            if(partial)fixture_vram(s).write(texture_base,psm<=1u?128u:256u,psm,60,31,0,0,1u);
+            s.ad(0x3F,0);s.sprite(0,0,width,height,0x80604020u);texture_state(s,psm);
+            const auto primitives=s.gs.vram().gpu_primitives(),fallbacks=s.gs.vram().cpu_fallbacks();
+            draw_triangle(s,2,16u);
+            if(s.gs.gpu_backend())require(partial ? s.gs.vram().cpu_fallbacks()==fallbacks+1u :
+                s.gs.vram().gpu_primitives()==primitives+1u,"cold exact tile routes conservatively for source knowledge");
+            const auto batches=gpu->stats().batches;s.ad(0x3F,0);
+            if(s.gs.gpu_backend())require(gpu->stats().batches==batches,"TEXFLUSH retains an ordered host command queue");
+        },0,4u);
+    }
+    paired(gpu,"TEXFLUSH then overwrite waits for original texture readers",[&](Stream& s) {
+        texture_source(s,0);s.sprite(0,0,width,height,0x80604020u);texture_state(s,0);
+        draw_triangle(s);const auto batches=gpu->stats().batches;s.ad(0x3F,0);
+        if(s.gs.gpu_backend())require(gpu->stats().batches==batches,"cache invalidation does not wait for host completion");
+        s.upload(texture_base,0,8,2,0x80C0FFEE80C0FFEEull);draw_triangle(s,12);
+        require(s.gs.vram().read(0,64,0,2,2)==texture_grid(0,0) &&
+            s.gs.vram().read(0,64,0,12,2)==0x80C0FFEEu,"old and later triangles preserve source versions");
+    },0,4u);
+    paired(gpu,"queued rendered source feeds a cold triangle in one batch",[&](Stream& s) {
+        const auto batches=gpu->stats().batches,readbacks=gpu->stats().readback_bytes;
+        s.sprite(0,0,width,height,0x80402010u);
+        s.ad(0x4C,8u|(1u<<16u));s.sprite(0,0,64,32,0x80A06020u);s.ad(0x3F,0);
+        s.ad(0x4C,1u<<16u);s.ad(6,256u|(1ull<<14u)|(6ull<<26u)|(5ull<<30u)|(1ull<<34u)|(1ull<<35u));
+        s.ad(8,0);s.ad(0x14,0);draw_triangle(s);
+        if(s.gs.gpu_backend()) {
+            require(gpu->stats().batches==batches,"TEXFLUSH leaves producer and consumer queued");
+            s.gs.vram().submit_gpu();
+            require(gpu->stats().batches==batches+1u && gpu->stats().readback_bytes==readbacks,
+                "queued render-to-texture uses one physical batch and no CPU readback");
+        }
+        require(s.gs.vram().read(0,64,0,2,2)==0x80A06020u,"independent queued render-to-texture pixel");
+    },0,4u);
+    paired(gpu,"line remains on its CPU raster path",[](Stream& s) {
+        s.sprite(0,0,width,height,0x80000000u);s.ad(0,1u);s.ad(1,0x80804020u);
+        const auto before=s.gs.vram().gpu_primitives();s.vertex(32,32);s.vertex(160,160);
+        if(s.gs.gpu_backend())require(s.gs.vram().gpu_primitives()==before,"line is not a compute rectangle");
+    });
+}
+void check_antialias(std::shared_ptr<GsGpu> gpu) {
+    paired(gpu,"line retains its CPU raster path",[](Stream& s) {
+        s.sprite(0,0,width,height,0x80000000u);s.ad(0,1u);s.ad(1,0x80804020u);
+        const auto before=s.gs.vram().gpu_primitives();s.vertex(32,32);s.vertex(160,160);
+        if(s.gs.gpu_backend())require(s.gs.vram().gpu_primitives()==before,"line is not a compute rectangle");
+    });
+    for(unsigned setting=0;setting<32u;++setting)for(bool reverse:{false,true}) {
+        paired(gpu,"AA1 coverage, ABE/PABE, alpha and depth "+std::to_string(setting),[&](Stream& s) {
+            s.ad(0x4E,32u);s.sprite(0,0,width,height,0x80706050u,7u);
+            s.ad(0x42,0x44u);s.ad(0x49,(setting>>2u)&1u);s.ad(0x4A,(setting>>4u)&1u);
+            if(setting&8u)s.ad(0x47,(3u<<16u)|1u|(5u<<1u)|(80u<<4u)|(3u<<12u));
+            const auto alpha=(setting&16u) ? 192u : (setting&8u) ? 64u : 128u;
+            s.ad(0,3u|128u|((setting&2u)?64u:0u));s.ad(1,(alpha<<24u)|0x00203040u);
+            const auto before=s.gs.vram().gpu_primitives(),fallbacks=s.gs.vram().cpu_fallbacks();
+            s.vertex(37,41,9u);s.vertex(reverse?37:173,reverse?169:41,9u);
+            s.vertex(reverse?173:37,reverse?41:169,9u);
+            if(s.gs.gpu_backend())require(s.gs.vram().gpu_primitives()==before+1u && s.gs.vram().cpu_fallbacks()==fallbacks,
+                "AA1 uses the selected GPU rather than a hidden CPU fallback");
+        },setting&1u,16u);
+    }
+}
 int main(int argc,char** argv)try {
     std::string unavailable;
     const std::string selection=argc>2?argv[2]:"vulkan";
@@ -1021,7 +1112,7 @@ int main(int argc,char** argv)try {
     check_device_batch(api);check_fused_readback(gpu);check_detach_coherence(gpu);check_fused_scanout(gpu);
     check_partial_coherence(gpu);check_resident_batches(gpu);
     check_completion_order(gpu);check_pending_knowledge(gpu);
-    check_raster(gpu);check_pipeline(gpu);
+    check_raster(gpu);check_pipeline(gpu);check_antialias(gpu);check_textured_triangles(gpu);
     check_textured_nearest(gpu);check_texture_palette_snapshots(gpu);check_clut_reload_pending(gpu);check_texture_functions(gpu);
     check_texture_coordinates(gpu);check_texture_pipeline(gpu);check_texture_residency(gpu);check_depth16s(gpu);check_fallback_and_transfers(gpu);
     const auto output=argc>1?std::filesystem::path{argv[1]}:std::filesystem::path{};

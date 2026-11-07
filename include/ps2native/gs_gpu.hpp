@@ -13,6 +13,7 @@ enum class GsGpuApi { Vulkan, DirectX };
 struct GsGpuCommand {
     std::int32_t left{}, top{}, right{}, bottom{};
     std::int32_t x0{}, y0{}, x1{}, y1{}, x2{}, y2{};
+    // Triangle flags: bit 0 geometry, bit 1 experimental AA1, bit 2 guest ABE.
     std::uint32_t triangle{}, color{}, z{}, base{}, bw{}, psm{}, zbase{}, zpsm{};
     std::uint32_t test{}, frame_mask{}, alpha{}, alpha_fix{}, scanmask{};
     std::uint32_t fba{}, fba_known{}, conditional{}, saturate{}, pabe{}, blending{}, depth_write{};
@@ -20,11 +21,11 @@ struct GsGpuCommand {
     // shared setup; the host sampler never supplies GS rounding semantics.
     std::uint32_t texture_flags{}, tbp{}, tbw{}, tpsm{}, tw{}, th{};
     std::uint32_t clamp_u{}, clamp_v{}, minu{}, maxu{}, minv{}, maxv{}, texa{};
-    std::int32_t u0{}, v0{}, u1{}, v1{};
+    std::int32_t u0{}, v0{}, u1{}, v1{}, u2{}, v2{};
     std::array<std::uint32_t,256> palette{};
     std::array<std::uint32_t,8> palette_known{};
 };
-static_assert(sizeof(GsGpuCommand) == 1244u);
+static_assert(sizeof(GsGpuCommand) == 1252u);
 
 struct GsGpuResult { std::uint64_t revisions{}, pixel_writes{}; };
 // Word-aligned portions of the single logical VRAM and its known-bit mask.

@@ -16,7 +16,7 @@ struct Primitive {
     uint texture_flags; uint tbp; uint tbw; uint tpsm; uint tw; uint th;
     uint clamp_u; uint clamp_v; uint minu; uint maxu; uint minv; uint maxv;
     uint texa;
-    int u0; int v0; int u1; int v1;
+    int u0; int v0; int u1; int v1; int u2; int v2;
     uint palette[256]; uint palette_known[8];
 };
 layout(set=0,binding=3,std430) readonly buffer Primitives { Primitive command[]; } primitives;
@@ -83,6 +83,20 @@ bool sprite_coordinate(int pixel,int a,int b,int first,int last,out int coordina
     }
     coordinate=int(num/den-(num<int64_t(0)&&num%den!=int64_t(0)?int64_t(1):int64_t(0)));
     return true;
+}
+bool triangle_coordinate(int x,int y,int c0,int c1,int c2,out int coordinate) {
+    int64_t a=edge(p.x1,p.y1,p.x2,p.y2,x*16,y*16);
+    int64_t b=edge(p.x2,p.y2,p.x0,p.y0,x*16,y*16);
+    int64_t c=edge(p.x0,p.y0,p.x1,p.y1,x*16,y*16);
+    int64_t denominator=a+b+c;
+    int64_t numerator=a*int64_t(c0)+b*int64_t(c1)+c*int64_t(c2);
+    if(denominator<=int64_t(0)||numerator<int64_t(0)||
+       numerator/denominator>int64_t(2147483647)||
+       (numerator%denominator!=int64_t(0)&&(p.texture_flags&16u)==0u)) {
+        atomicOr(result.error,4u);
+        coordinate=0;return false;
+    }
+    coordinate=int(numerator/denominator);return true;
 }
 uint texture_coordinate(int coordinate,uint bits,uint mode,uint low,uint high) {
     if(mode==0u)return uint(coordinate)&((1u<<bits)-1u);
@@ -163,13 +177,33 @@ void main() {
     int x=p.left+int(gl_GlobalInvocationID.x),y=p.top+int(gl_GlobalInvocationID.y);
     if(x>=p.right||y>=p.bottom)return;
     if((p.scanmask==2u&&(y&1)==0)||(p.scanmask==3u&&(y&1)!=0))return;
-    if(p.triangle!=0u&&(!inside(p.x0,p.y0,p.x1,p.y1,x*16,y*16)||
-        !inside(p.x1,p.y1,p.x2,p.y2,x*16,y*16)||!inside(p.x2,p.y2,p.x0,p.y0,x*16,y*16)))return;
+    uint coverage=128u;
+    if(p.triangle!=0u) {
+        bool interior=true;
+        ivec2 vertices[3]=ivec2[3](ivec2(p.x0,p.y0),ivec2(p.x1,p.y1),ivec2(p.x2,p.y2));
+        for(uint i=0u;i<3u;++i) {
+            ivec2 a=vertices[i],b=vertices[(i+1u)%3u];
+            int64_t w=edge(a.x,a.y,b.x,b.y,x*16,y*16);
+            if(w<int64_t(0)||(w==int64_t(0)&&!(b.y<a.y||(b.y==a.y&&b.x>a.x))))interior=false;
+            if((p.triangle&2u)!=0u&&w<int64_t(0)) {
+                int64_t extent=int64_t(max(abs(b.x-a.x),abs(b.y-a.y)))*int64_t(16);
+                if(w<=-extent)return;
+                coverage=min(coverage,uint(((extent+w)*int64_t(4096)/extent)>>5));
+            }
+        }
+        if(!interior) {
+            if((p.triangle&2u)==0u||coverage==0u)return;
+            coverage=min(coverage,127u);
+        }
+    }
     uint color=p.color,write_mask=p.frame_mask;
     if((p.texture_flags&1u)!=0u) {
-        int u,v;uint sampled;
-        if(!sprite_coordinate(x,p.x0,p.x1,p.u0,p.u1,u)||!sprite_coordinate(y,p.y0,p.y1,p.v0,p.v1,v)||
-           !filtered_texture(u,v,sampled))return;
+        int u=0,v=0;uint sampled;
+        bool coordinates;
+        if(p.triangle!=0u)
+            coordinates=triangle_coordinate(x,y,p.u0,p.u1,p.u2,u)&&triangle_coordinate(x,y,p.v0,p.v1,p.v2,v);
+        else coordinates=sprite_coordinate(x,p.x0,p.x1,p.u0,p.u1,u)&&sprite_coordinate(y,p.y0,p.y1,p.v0,p.v1,v);
+        if(!coordinates||!filtered_texture(u,v,sampled))return;
         color=0u;
         for(uint channel=0u;channel<4u;++channel) {
             uint fragment=(p.color>>(channel*8u))&255u,texel=(sampled>>(channel*8u))&255u;
@@ -178,7 +212,9 @@ void main() {
             color|=value<<(channel*8u);
         }
     }
-    bool color_write=true,depth_write=p.depth_write!=0u;
+    if((p.triangle&2u)!=0u&&((p.triangle&4u)==0u||(color>>24u)==128u))
+        color=(color&0xffffffu)|(coverage<<24u);
+    bool color_write=true,depth_write=p.depth_write!=0u&&coverage==128u;
     if((p.test&1u)!=0u) {
         uint a=color>>24u,reference=(p.test>>4u)&255u,func=(p.test>>1u)&7u;
         bool pass=func==1u||(func==2u&&a<reference)||(func==3u&&a<=reference)||

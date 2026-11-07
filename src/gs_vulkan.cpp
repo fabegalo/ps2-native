@@ -242,6 +242,8 @@ GsGpuResult VulkanGs::execute(std::span<std::uint32_t> words,std::span<std::uint
     if(commands.empty()&&uploads.empty()&&readbacks.empty())return {};
     if(commands.size()>256u)throw DeviceRefusal("GS Vulkan batch exceeds the bounded 256 primitive limit");
     for(const auto& p:commands) {
+        if(p.triangle!=0u && p.triangle!=1u && p.triangle!=3u && p.triangle!=7u)
+            throw DeviceRefusal("GS Vulkan received invalid triangle flags");
         // The GS caller additionally proves non-aliasing framebuffer/depth
         // pages and constant triangle attributes. Defend the dispatch ABI.
         if(p.left<0||p.top<0||p.right>2048||p.bottom>2048||p.left>=p.right||p.top>=p.bottom||
@@ -249,11 +251,17 @@ GsGpuResult VulkanGs::execute(std::span<std::uint32_t> words,std::span<std::uint
            p.bw>4032u||!p.bw||p.bw%64u||p.right>static_cast<int>(p.bw))throw DeviceRefusal("GS Vulkan received an unsupported or aliased primitive packet");
         if(p.zpsm==10u&&p.z>0xffffu&&(p.depth_write||((p.test&0x10000u)&&((p.test>>17u)&3u)>=2u)))
             throw DeviceRefusal("GS Vulkan received an out-of-range Z16S primitive depth");
+        if((p.texture_flags&1u) && p.triangle &&
+           (p.u0<0 || p.u0>16383 || p.v0<0 || p.v0>16383 ||
+            p.u1<0 || p.u1>16383 || p.v1<0 || p.v1>16383 ||
+            p.u2<0 || p.u2>16383 || p.v2<0 || p.v2>16383 ||
+            std::int64_t{p.x1-p.x0}*(p.y2-p.y0)-std::int64_t{p.y1-p.y0}*(p.x2-p.x0)<=0))
+            throw std::runtime_error("GS compute received invalid textured triangle coordinates");
         if(p.texture_flags>63u || ((p.texture_flags&1u) &&
-           (p.triangle||p.tbp>=GsVram::kBytes||p.tbp%256u||p.tbw>4032u||p.tbw%64u||
+           (p.tbp>=GsVram::kBytes||p.tbp%256u||p.tbw>4032u||p.tbw%64u||
             (p.tpsm!=0u&&p.tpsm!=1u&&p.tpsm!=19u&&p.tpsm!=20u)||p.tw>10u||p.th>10u||
             p.clamp_u>3u||p.clamp_v>3u||p.minu>1023u||p.maxu>1023u||p.minv>1023u||p.maxv>1023u||
-            (p.clamp_u==2u&&p.minu>p.maxu)||(p.clamp_v==2u&&p.minv>p.maxv)||p.x0==p.x1||p.y0==p.y1)))
+            (p.clamp_u==2u&&p.minu>p.maxu)||(p.clamp_v==2u&&p.minv>p.maxv)||(!p.triangle&&(p.x0==p.x1||p.y0==p.y1)))))
             throw DeviceRefusal("GS Vulkan received an unsupported texture primitive packet");
     }
     try {

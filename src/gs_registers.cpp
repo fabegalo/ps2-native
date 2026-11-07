@@ -366,14 +366,14 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
     if(index==1u)value&=~(0xFFull<<32u);
     if(index==2u)value&=~0x000000FF000000FFull;
     if(index==1u || index==2u)general_unknown_[index]=0;
-    const auto shown = "GS general register " + hex(index, 2) + " = " + hex(value, 16);
+    const auto shown = [&] { return "GS general register " + hex(index, 2) + " = " + hex(value, 16); };
     switch (index) {
         // State registers (ps2sdk gs_gp.h addresses): PRIM, RGBAQ, ST, UV, TEX0,
         // CLAMP, FOG, TEX1, TEX2, XYOFFSET, PRMODECONT, PRMODE, TEXCLUT,
         // SCANMSK, MIPTBP1/2, TEXA, FOGCOL, TEXFLUSH, SCISSOR, ALPHA, DIMX,
         // DTHE, COLCLAMP, TEST, PABE, FBA, FRAME, ZBUF, BITBLTBUF, TRXPOS, TRXREG.
         case 0x00:
-            if (value & ~0x7FFull) throw DeviceRefusal(shown + ": PRIM reserved bits set");
+            if (value & ~0x7FFull) throw DeviceRefusal(shown() + ": PRIM reserved bits set");
             first_vertex_.reset();
             triangle_vertices_count_=0;
             general_[index] = value;
@@ -388,7 +388,6 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
             general_[index]=value;return;
         }
         case 0x3F:
-            vram_.submit_gpu();
             texture_flush_generation_=transfer_generation_;sampled_pages_={};dirty_texture_pages_={};
             general_[index]=value;return;
         case 0x01: case 0x02: case 0x03: case 0x08: case 0x09: case 0x0A:
@@ -416,7 +415,7 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
             // A second unacknowledged SIGNAL stalls the real GS. Until GIF
             // backpressure can retain/retry it, stop before changing its ID.
             if (index == 0x60 && (events_ & kCsrSignal))
-                throw DeviceRefusal(shown + ": second SIGNAL requires GIF backpressure (not modeled)");
+                throw DeviceRefusal(shown() + ": second SIGNAL requires GIF backpressure (not modeled)");
             const auto shift = index == 0x60 ? 0u : 32u;
             const auto mask = (value >> 32) << shift;
             const auto data = (value & 0xFFFFFFFFull) << shift;
@@ -433,7 +432,7 @@ void GsRegisters::general_write(std::uint8_t index, std::uint64_t value) {
             else raise_event(kCsrFinish);
             return;
         default:
-            throw DeviceRefusal(shown + ": no GS general register at this address");
+            throw DeviceRefusal(shown() + ": no GS general register at this address");
     }
 }
 
