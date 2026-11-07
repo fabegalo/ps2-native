@@ -1,5 +1,21 @@
 # STATUS — ps2-native
 
+## Preparação observada e autotests executáveis — 07/11/2026
+
+- `ps2n-dev` aceita `observed=events.ndjson`: valida sequência/bytes, acrescenta
+  raízes offline ao analisador/AOT e preserva identidade, partições e replay.
+- Callback indireto no runner real de preparação: **5 AOT + 3 interpretadas →
+  8 AOT + 0 interpretadas**, com eventos/estado inspecionado idênticos e
+  reutilização do executável no replay. Não é medição de ganho comercial.
+- **120 casos ALU de ps2autotests**, revisão fixada/ISC, conferidos com o
+  `.expected` independente em interpretação e AOT. Quatro testes focados
+  passaram em MSVC Release; evidências em [DEV-TOOLS](docs/DEV-TOOLS.md).
+- O mantenedor confirmou ter apagado `out/`. Checkpoints, manifestos e perfis
+  comerciais anteriores estão ausentes; os resultados históricos não são
+  baseline atual. Nenhum novo ganho no jogo, sampling, sessão gráfica ou CI.
+- Checkpoint completo falhou por esquema também no controle sem o incremento;
+  falha local preexistente, mantida visível e sem migração presumida.
+
 **Registro vivo de progresso e evidências.** Atualizar este arquivo quando houver avanço **verificado**; não reescrever os READMEs, `AGENTS.md` ou `CLAUDE.md` a cada marco. Relatórios detalhados continuam em `docs/M*-STATUS.md`; o trabalho seguinte fica em `docs/NEXT-TASK.md`.
 
 ## Super Bust-A-Move: resolução de instruções +6,11% — 07/11/2026

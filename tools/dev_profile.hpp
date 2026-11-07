@@ -35,7 +35,7 @@ struct Profile {
             else if (key == "aot_arg") p.aot_args.push_back(value);
             else if (key == "cmake_arg") p.cmake_args.push_back(value);
             else {
-                static const std::set<std::string> keys{"schema","name","kind","input","input_sha256","source","build","config","generator","architecture","cmake","timeout","ring","stream_bytes","engine","ghidra"};
+                static const std::set<std::string> keys{"schema","name","kind","input","input_sha256","source","build","config","generator","architecture","cmake","timeout","ring","stream_bytes","engine","ghidra","observed"};
                 if (!keys.contains(key) || !p.values.emplace(key,value).second) throw std::runtime_error("unknown or duplicate profile key: " + key);
             }
         }
@@ -45,6 +45,7 @@ struct Profile {
             p.values[key] = path_utf8(absolute(cli::utf8_path(p.get(key)),p.origin.parent_path()));
         }
         if(!p.get("ghidra").empty())p.values["ghidra"]=path_utf8(absolute(cli::utf8_path(p.get("ghidra")),p.origin.parent_path()));
+        if(!p.get("observed").empty())p.values["observed"]=path_utf8(absolute(cli::utf8_path(p.get("observed")),p.origin.parent_path()));
         return p;
     }
     std::string get(const std::string& key, std::string fallback = {}) const {

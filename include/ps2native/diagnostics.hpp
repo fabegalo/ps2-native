@@ -32,4 +32,10 @@ private:
 // equivalence of device state that was not recorded.
 int compare_diagnostics(const std::filesystem::path& first, const std::filesystem::path& second,
                         std::string& explanation);
+    // RUNTIME_HELPERS_BEGIN
+// Offline hints only: validate the stream and every attempted instruction
+// against this image before discovering previously uncovered control flow.
+[[nodiscard]] std::vector<std::uint32_t> discover_ee_entries(
+    const ElfImage& image, const std::filesystem::path& events);
+    // RUNTIME_HELPERS_END
 } // namespace ps2native

@@ -32,6 +32,28 @@ void history() {
     ring.push_back(20);require(ring.items()==std::vector<unsigned>({18,19,20}),"reading the ring preserves subsequent rotation");
     ring.configure(0,{});ring.push_back(21);require(ring.items().size()==4,"legacy history remains unlimited by default");
 }
+void discovery(const fs::path& root) {
+    const auto image=parse_ee_elf(direct_test::elf(direct_test::cpu()));
+    const auto path=root / "observed.ndjson";
+    const auto pc=direct_test::text+0x200u;
+    auto stream=[&](std::uint32_t address,std::uint32_t word) {
+        return "{\"schema\":\"ps2n-events-v1\",\"scope\":\"ring\",\"discarded\":17}\n"
+            "{\"event\":18,\"cycle\":0,\"pc\":"+std::to_string(address)+",\"kind\":\"instruction-attempt\",\"word\":"+std::to_string(word)+"}\n"
+            "{\"end\":true,\"total\":18,\"state_sha256\":\"test\"}\n";
+    };
+    save_text(path,stream(pc,image.instruction_at(pc)));
+    // This callback may already be statically proven; both cases remain safe.
+    const auto roots=discover_ee_entries(image,path);
+    for(const auto entry:roots)require(entry==pc,"only validated observed addresses become roots");
+    save_text(path,stream(pc,image.instruction_at(pc)^1u));
+    rejects([&]{(void)discover_ee_entries(image,path);},"bytes differ");
+    save_text(path,stream(pc+1,image.instruction_at(pc)));
+    rejects([&]{(void)discover_ee_entries(image,path);},"aligned");
+    save_text(path,stream(0x70000000u,0));
+    rejects([&]{(void)discover_ee_entries(image,path);},"executable");
+    save_text(path,"{\"schema\":\"ps2n-events-v1\",\"scope\":\"complete\"}\n{\"truncated\":true}\n");
+    rejects([&]{(void)discover_ee_entries(image,path);},"incomplete");
+}
 void recordings(const fs::path& root,const fs::path& rom) {
     const auto bios=load_bios_rom0(read_file(rom));
     for(unsigned engine=0;engine<2;++engine) {
@@ -69,7 +91,7 @@ void recordings(const fs::path& root,const fs::path& rom) {
 template<class C> int test_main(int argc,C** argv) {
     try {
         require(argc==3,"output root and synthetic ROM");const auto root=fs::path(argv[1]);ps2native::create_directories(root);
-        hashes(root);history();recordings(root,fs::path(argv[2]));
+        hashes(root);history();discovery(root);recordings(root,fs::path(argv[2]));
         std::cout<<"diagnostics: bounded histories, SHA, shared engine equivalence, divergence and incomplete-stream checks passed\n";return 0;
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

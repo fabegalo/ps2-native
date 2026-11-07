@@ -1,5 +1,22 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
+## Prioridade após exclusão de out — 07/11/2026
+
+O mantenedor confirmou a exclusão de `out/`: os checkpoints/manifestos e perfis
+comerciais citados abaixo são históricos e não estão disponíveis. Não iniciar
+benchmarks apontando para esses caminhos nem atribuir seus números à HEAD.
+A descoberta `observed=` está integrada a `ps2n-dev`, e 120 casos ALU do
+ps2autotests já têm comparação independente executável; não repetir esses
+itens como implementação ainda inexistente.
+
+Próxima ação: reconstruir um cenário headless válido com as CLIs existentes,
+firmware/disco identificados e hipóteses explícitas, salvando checkpoint e
+manifesto juntos. O boot original ainda tem a fronteira do encoder 0x7E;
+não inventar um estado para saltá-la. Com a cena restabelecida, congelar
+Release/AOT, validar saídas, recolher sampling separado e só então escolher
+a otimização CPU. Simpsons e Shadow também precisam de seus cenários
+restabelecidos antes de alegar avanço nas fronteiras históricas.
+
 ## Desempenho de Super Bust-A-Move, sem launcher — 07/11/2026
 
 O cache de resolução de instruções venceu cinco pares no menu headless:

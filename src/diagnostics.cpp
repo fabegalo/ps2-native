@@ -1,6 +1,7 @@
 #include "ps2native/diagnostics.hpp"
 #include "ps2native/io.hpp"
 #include "ps2native/sha256.hpp"
+#include "ps2native/control_flow.hpp"
 #include <array>
 #include <fstream>
 #include <iomanip>
@@ -291,6 +292,34 @@ void DiagnosticRecorder::write(const std::filesystem::path& directory, const Boo
         if (!impl_->output || impl_->stream_error) throw std::runtime_error("host diagnostic stream write/close failed");
     }
     atomic_text(directory / "complete",state_hash);
+}
+std::vector<std::uint32_t> discover_ee_entries(const ElfImage& image, const std::filesystem::path& events) {
+    std::string why;
+    (void)compare_diagnostics(events,events,why);
+    std::ifstream input(native_io_path(events),std::ios::binary);
+    if(!input)throw std::runtime_error("cannot read observed instructions");
+    const auto graph=analyze_control_flow(image,{}, {},true);
+    std::set<std::uint32_t> candidates;
+    std::optional<std::uint32_t> previous;
+    std::string line;
+    while(read_record(input,line)) {
+        if(line.find(",\"kind\":\"instruction-attempt\",")==std::string::npos)continue;
+        const auto field=[&](std::string_view key) {
+            const auto at=line.find(key);
+            if(at==std::string::npos || line.find(key,at+key.size())!=std::string::npos)
+                throw std::runtime_error("invalid observed instruction field");
+            const auto n=record_number(std::string_view(line).substr(at),key);
+            if(n>UINT32_MAX)throw std::runtime_error("observed instruction field exceeds 32 bits");
+            return static_cast<std::uint32_t>(n);
+        };
+        const auto pc=field(",\"pc\":"),word=field(",\"word\":");
+        if(image.instruction_at(pc)!=word)throw std::runtime_error("observed instruction bytes differ from input image");
+        if((!previous || pc!=std::uint64_t{*previous}+4u) && !graph.instructions.contains(pc))candidates.insert(pc);
+        previous=pc;
+        if(candidates.size()>65536)throw std::runtime_error("observed entry limit exceeded");
+    }
+    if(input.bad())throw std::runtime_error("observed instruction read failed");
+    return {candidates.begin(),candidates.end()};
 }
 int compare_diagnostics(const std::filesystem::path& a, const std::filesystem::path& b, std::string& why) {
     std::ifstream first(native_io_path(a), std::ios::binary), second(native_io_path(b), std::ios::binary);

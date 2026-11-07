@@ -69,9 +69,14 @@ template<class C> int test_main(int argc,C** argv) {
     require(timed.timed_out && timed.exit_code==124 && timed.milliseconds<6000,"bounded child timeout kills and reaps process");
     content_build(root,fs::path(argv[5]),fs::absolute(fs::path(argv[4])),path_utf8(fs::path(argv[6])),fs::path(argv[7]),fs::path(argv[8]),path_utf8(fs::path(argv[9])));
     const auto elf=root / fs::path(u8"fixture ação & literal.elf");
-    // Small fixture reaches a real unsupported MMI encoding after four GPR ops.
-    m20::Assembler a(direct_test::text);a.addiu(m20::t0,m20::zero,17);a.addiu(m20::t1,m20::t0,3);a.raw(0x7000003Fu);
-    direct_test::Program program{{{direct_test::text,5,m20::le_words(a.finish())}},0,{},{}};
+    // The callback address comes from data, so static CFG cannot prove it.
+    // Offline observed entry discovery must close that interpreter boundary.
+    m20::Assembler a(direct_test::text);a.la(m20::t0,direct_test::data);a.lw(m20::t0,0,m20::t0);
+    a.jalr(m20::t0);a.nop();a.raw(0x7000003Fu);
+    while(a.here()<direct_test::text+0x100u)a.nop();
+    a.addiu(m20::v0,m20::zero,42);a.jr(m20::ra);a.nop();
+    direct_test::Program program{{{direct_test::text,5,m20::le_words(a.finish())},
+        {direct_test::data,6,m20::le_words({direct_test::text+0x100u})}},0,{},{}};
     auto bytes=direct_test::elf(program);
     // Fresh, unmapped fixture padding gives each test a cold input identity
     // without deleting build artifacts or changing the guest workload.
@@ -153,6 +158,26 @@ template<class C> int test_main(int argc,C** argv) {
     require(read_text(controlled / "manifest.json").find("\"aot_reused\":true")!=std::string::npos &&
         read_text(controlled / "analysis-reused.txt")=="true" && read_text(controlled / "runtime.sha256")==repaired_runtime,
         "budget/ring/stream changes reuse analysis, AOT and runtime");
+    const auto observed=root / "observed.ndjson";
+    save_text(observed,read_text(first / "diagnostic/full-events.ndjson"));
+    profile.values["observed"]="observed.ndjson";save_text(file,profile.serialize());
+    invoke("observed",{"run",file},1);
+    const auto expanded=cli::utf8_path(read_text(profile.path("build") / "ps2n-dev/last.txt"));
+    require(read_text(expanded / "diagnostic/report.json").find("\"interpreted\":0")!=std::string::npos &&
+        read_text(first / "diagnostic/report.json").find("\"interpreted\":3")!=std::string::npos,
+        "observed callback moves all three retired instructions from interpreter to AOT");
+    require(read_text(expanded / "analysis-reused.txt")=="false","observed roots invalidate analysis cache");
+    const auto observed_compare=process(debug,{"compare",first / "diagnostic/full-events.ndjson",expanded / "diagnostic/full-events.ndjson"},root / "observed-compare.log",15);
+    require(observed_compare.exit_code==0,"observed entry expansion preserves events and inspected state");
+    invoke("observed-warm",{"replay",file},1);
+    const auto expanded_warm=cli::utf8_path(read_text(profile.path("build") / "ps2n-dev/last.txt"));
+    require(read_text(expanded_warm / "runtime.sha256")==read_text(expanded / "runtime.sha256") &&
+        read_text(expanded_warm / "manifest.json").find("\"aot_reused\":true")!=std::string::npos,
+        "unchanged observed input reuses exact runtime and verified partitions");
+    save_text(observed,read_text(observed)+"{}\n");
+    invoke("observed-invalid",{"replay",file},2);
+    save_text(observed,read_text(first / "diagnostic/full-events.ndjson"));
+    profile.values.erase("observed");
     auto isolated=profile;save_text(root / "other-profile.ps2n",isolated.serialize());
     invoke("profile-isolation",{"run",root / "other-profile.ps2n"},2);
     require(read_text(root / "profile-isolation.log").find("different profile/source")!=std::string::npos,

@@ -1,5 +1,37 @@
 # Runtime: fronteiras de evento e tradução de memória — 05/11/2026
 
+## Artefatos comerciais ausentes; incremento de preparação — 07/11/2026
+
+Nesta execução o mantenedor confirmou ter apagado `out/`. Os discos e a
+coleção local de firmware existem, mas os checkpoints do tabuleiro, manifestos
+experimentais, executáveis pareados e perfis citados nas seções históricas não
+existem neste checkout. Não há baseline comercial reproduzido nem sampling
+Release novo; não foi escolhida uma otimização do núcleo a partir de custos
+históricos. Sem sessão gráfica, push, PR ou CI remota.
+
+O incremento independente implementado é a preparação observada do AOT e o
+primeiro subconjunto executável de ps2autotests. No fluxo CMake/ps2n-dev real,
+um callback carregado de dados passa de 5/3 instruções AOT/interpretadas para
+8/0, com sequência de eventos e estado inspecionado iguais. O replay conserva
+o SHA-256 do executável e reutiliza as partições. Isso valida descoberta,
+preparação e equivalência dessa fixture; não mede FPS, áudio ou gameplay.
+Detalhes, identidade e comandos em [DEV-TOOLS](DEV-TOOLS.md).
+
+Não existem novos pares temporais comerciais nem dispersão a reportar. Os
+tempos de build/execução dos testes incluem diagnóstico e não substituem a
+janela primária. O lote ALU confere 120 resultados independentes em ambos os
+motores; não promove compatibilidade dos títulos. Super Bust-A-Move conserva
+apenas a evidência comercial histórica já descrita; Simpsons permanece sem
+vídeo jogável demonstrado, e Shadow sem cena controlável certificada. Seus
+checkpoints apagados precisam ser reconstruídos antes da próxima continuação.
+
+Verificação adicional de checkpoint completo falhou por esquema na integração
+e no controle sem este incremento, com o mesmo hash. Falha preexistente no
+conjunto local preservado; não foi admitida migração presumida. Detalhes em
+[DEV-TOOLS](DEV-TOOLS.md).
+
+## Histórico — eventos/TLB de 05/11/2026
+
 Código: `c23188e`. Implementação própria BSD; sem alteração de firmware,
 aritmética convidada, clocks, renderer ou código proprietário distribuído.
 

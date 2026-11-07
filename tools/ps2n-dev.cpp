@@ -83,6 +83,13 @@ int run(Profile p, const fs::path& replay) {
         const auto map=p.path("ghidra");map_hash=sha256_file(map);identities+=map_hash+' '+path_utf8(map)+'\n';
         for(const auto& hint:parse_ghidra_csv(read_text(map)))aot_args.push_back("--entry="+std::to_string(hint.start));
     }
+    if(!p.get("observed").empty()) {
+        const auto events=p.path("observed");
+        const auto events_hash=sha256_file(events);
+        const auto image=kind=="disc" ? DiscImage(input).boot_elf() : kind=="bios" ? bios_code_image(load_bios_rom0(read_file(input))) : parse_ee_elf(read_file(input));
+        for(const auto entry:discover_ee_entries(image,events))aot_args.push_back("--entry="+std::to_string(entry));
+        identities+=events_hash+' '+path_utf8(events)+'\n';
+    }
     for (auto& arg : p.runtime_args) {
         if ((arg.starts_with("--diagnostic-") && !arg.starts_with("--diagnostic-ram=")) || arg.starts_with("--frame") || arg.starts_with("--trace-out="))
             throw std::runtime_error("output paths are managed by ps2n-dev; use its diagnostic reports");
@@ -160,7 +167,7 @@ int run(Profile p, const fs::path& replay) {
         std::string aot_material=kind+'\n'+input_hash+'\n'+sha256_file(aot)+'\n';
         for(const auto& arg:aot_args)aot_material+=arg+'\n';
         std::string analysis_material=kind+'\n'+input_hash+'\n'+sha256_file(analyzer)+'\n'+map_hash+'\n';
-        for(const auto& arg:p.aot_args)analysis_material+=arg+'\n';
+        for(const auto& arg:aot_args)analysis_material+=arg+'\n';
         // The original profile owns this build, also during snapshot replay.
         // Execution budgets, logging and analyzer revisions do not change AOT.
         // Separate content keys still isolate every executable/firmware input.
@@ -176,7 +183,7 @@ int run(Profile p, const fs::path& replay) {
         if(!analysis_reused) {
             std::vector<fs::path> args{input,analysis};
             if(kind!="elf")args.emplace_back("--"+kind);
-            for(const auto& arg:p.aot_args)args.push_back(cli::utf8_path(arg));
+            for(const auto& arg:aot_args)args.push_back(cli::utf8_path(arg));
             if(!p.get("ghidra").empty())args.push_back(option("--ghidra=",p.path("ghidra")));
             stage("analyze",analyzer,args);save_text(analysis_proof,analysis_hash());
         }

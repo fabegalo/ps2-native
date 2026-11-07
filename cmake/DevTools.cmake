@@ -10,6 +10,21 @@ target_compile_definitions(ps2n-dev PRIVATE
 
 include(${CMAKE_CURRENT_LIST_DIR}/DevContent.cmake)
 if(BUILD_TESTING)
+    add_executable(ps2n-autotests-fixture tests/ps2autotests_fixture.cpp)
+    target_link_libraries(ps2n-autotests-fixture PRIVATE ps2n_core)
+    set(autotests_expected "${CMAKE_CURRENT_SOURCE_DIR}/tests/ps2autotests/alu.expected")
+    set(autotests_elf "${FIXTURE_DIR}/ps2autotests-alu.elf")
+    set(autotests_aot "${FIXTURE_DIR}/ps2autotests-alu.cpp")
+    add_custom_command(OUTPUT "${autotests_elf}"
+        COMMAND $<TARGET_FILE:ps2n-autotests-fixture> "${autotests_expected}" "${autotests_elf}"
+        DEPENDS ps2n-autotests-fixture "${autotests_expected}" VERBATIM)
+    add_custom_command(OUTPUT "${autotests_aot}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${autotests_elf}" "${autotests_aot}" --hybrid
+        DEPENDS ps2n-aot "${autotests_elf}" VERBATIM)
+    add_executable(ps2n-autotests-alu tests/ps2autotests_alu.cpp "${autotests_aot}")
+    target_link_libraries(ps2n-autotests-alu PRIVATE ps2n_core)
+    add_test(NAME hardware-autotests-ee-alu COMMAND ps2n-autotests-alu "${autotests_expected}" "${autotests_elf}")
+    set_tests_properties(hardware-autotests-ee-alu PROPERTIES TIMEOUT 30)
     add_executable(ps2n-analysis-tests tests/analysis_tests.cpp)
     target_link_libraries(ps2n-analysis-tests PRIVATE ps2n_core)
     add_test(NAME dev-analysis COMMAND ps2n-analysis-tests)

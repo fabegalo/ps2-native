@@ -1,5 +1,74 @@
 # Ferramentas de desenvolvimento
 
+## Incremento validado — 07/11/2026
+
+`observed=` integra a descoberta offline ao perfil, analisador e AOT existentes.
+Não adiciona execução JIT nem callbacks no caminho nativo de produção.
+A função de descoberta usa o validador de eventos existente e o CFG comum;
+seu novo protótipo é marcado como helper sem campos serializados. A identidade
+de runtime continua incluindo seu código; o formato de checkpoint não muda.
+
+Na fixture de callback indireto vindo de dados, a mesma imagem executou oito
+instruções: **5 AOT / 3 interpretadas antes, 8 AOT / 0 interpretadas depois**.
+As nove observações e o hash do estado inspecionado coincidiram
+(`32c33d200aac155173b5bd7185860d0b453d54c28496f1a9cb21f57e440cae5c`).
+A instrução não suportada seguinte continua recusada, com a mesma razão/PC.
+O replay verifica/reutiliza partições e o mesmo executável. Os testes cobrem
+também corrupção, stream truncado, bytes divergentes, endereços inválidos,
+perfil relativo com Unicode e isolamento dos builds. Não há aceleração
+comercial medida nem certificação do estado não registrado pelo diagnóstico.
+
+Fonte/diff completos e identidades ficam nos manifests do runner em
+`out/acceleration-build/dev-cli/build/ps2n-dev/runs/`:
+
+| Execução final | Antes | Após descoberta |
+|---|---|---|
+| Run | `1794068222569263` | `1794068262693404` |
+| Runtime SHA-256 | `02367055b498589707eefeff64fd7c139927f5c710c2f577a734cb817063bb77` | `7749315c374a7a9c77e59b8b77dd71000fe4dab46785dc7525f10b7a6d5ea406` |
+
+Mesmo input `acb005ef24d9916f40d15ae9614d86f2f76e9bcf2aeb37793dd7fc38036feea3`
+e fonte `c955445a0a7a9724792f0a3668d7d02611e2aa58407b1c221746399b893a1a40`.
+Essa fonte inclui as alterações concorrentes preservadas; os novos commits
+incluem somente este incremento. MSVC 19.44.35229, Ninja Release, `/O2 /Ob2
+/DNDEBUG`, profiling OFF. O build externo dos testes também usa `/Zi` e
+`/DEBUG /INCREMENTAL:NO`; o runner gerenciado usa os flags Release padrão.
+O programa
+bare-metal não usa firmware, GS, PCM ou VU1; não é o launcher nem o jogo.
+
+O teste `hardware-autotests-ee-alu` adapta 120 pares `C_*` de dez operações
+de [ps2autotests](https://github.com/unknownbrackets/ps2autotests/tree/97469ffbed8631277b94e28d01dabd702aa97ef3).
+Constantes e sequências vêm de `alu.cpp`/`shared.h`; o `.expected` e a licença
+ISC são preservados em `tests/ps2autotests/`. A comparação lê os quatro words
+esperados, sem calculá-los com a semântica em teste, e exige execução AOT de
+todas as instruções no motor nativo. O harness ps2sdk/ps2link e serviços de
+kernel ausentes não são simulados; demais programas/linhas não são aprovados.
+A primeira fixture com 600 instruções desenroladas foi interrompida por
+custo alto de compilação; a versão com laços convidados mantém os 120 casos.
+Logs anteriores foram conservados, sem alegação de speedup desse ajuste.
+
+Verificação final: **4/4** em `out/acceleration-final-tests.log`:
+`dev-analysis`, `dev-diagnostics`, `dev-cli-pipeline` e
+`hardware-autotests-ee-alu`. O pipeline completo passou também na primeira
+rodada (140,85 s); a repetição final levou 80,23 s, com cache pré-existente.
+Esses tempos não são benchmark pareado nem medida de desempenho convidado.
+
+Verificação adicional: `native-complete-checkpoint` falhou por esquema tanto
+na árvore integrada (24,04 s) quanto no controle sem este incremento
+(23,63 s), preservando as alterações concorrentes. Ambos geraram o esquema
+`11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b`.
+A falha preexiste a esta alteração; não foi contornada com hashes aceitos ou
+migração presumida. Logs `out/acceleration-checkpoint-{build,tests}.log` e
+`out/acceleration-checkpoint-control-{configure,build,tests}.log`.
+
+```sh
+cmake --build out/build --config Release --target ps2n-autotests-alu ps2n-dev-cli-tests ps2n-dev-diagnostics ps2n-analysis-tests
+ctest --test-dir out/build -C Release -R "^(hardware-autotests-ee-alu|dev-analysis|dev-diagnostics|dev-cli-pipeline)$" --output-on-failure
+```
+
+O mantenedor confirmou que apagou `out/` antes desta execução. O baseline
+comercial e seus perfis não foram recuperados. A próxima otimização CPU exige
+reconstruir primeiro um cenário headless válido e então medi-lo/sampling.
+
 As CLIs são C++20/CMake, sem Python, Qt, admin ou AVX obrigatório. Usam o
 mesmo núcleo e as mesmas semânticas de `ps2n-aot`, `ps2n-run`, `ps2n-boot`
 e `ps2n-disc`. ELF direto continua sendo um ambiente bare-metal explícito;
@@ -54,6 +123,24 @@ continuam opções explícitas; nenhuma é ativada pelo orquestrador.
 Com Ninja/MSVC, execute no ambiente de desenvolvimento do compilador.
 `engine=interpreter` permite comparar com o motor sem AOT.
 `aot_arg` aceita somente raízes `--entry` e tabelas `--table` explícitas.
+
+`observed=/caminho/diagnostic/events.ndjson` acrescenta entradas descobertas
+numa captura anterior do mesmo programa. Pode usar o anel final ou um stream
+completo; ambos precisam de sequência íntegra e marcador final. Capturas
+truncadas são recusadas. A descoberta é offline: confere **cada** PC e palavra
+observados contra os segmentos executáveis da imagem atual, e fornece ao
+analisador e ao AOT somente inícios/descontinuidades ainda não cobertos pelo
+CFG estático. Endereços fora da imagem, desalinhados ou bytes divergentes
+falham antes da geração. Use capturas restritas a essa imagem; um stream
+misturando kernel/overlays externos não é aceito automaticamente.
+
+O caminho é relativo ao perfil e vira absoluto no snapshot. O SHA-256 da
+captura participa das dependências conferidas no replay e antes da execução;
+as raízes resultantes participam das chaves de análise e AOT. A mesma captura
+reutiliza as partições verificadas; mudar apenas sua formatação/conjunto de
+eventos sem mudar raízes não invalida código. Isso fornece indicações de
+entrada validadas, não certifica toda a revisão de origem da captura, nem
+transforma observações em jump tables ou em prova de correção do jogo.
 
 O build exclusivo é travado durante a execução; um build já existente sem
 identidade do `ps2n-dev` é recusado. Núcleo, cabeçalhos, tradução e runner
