@@ -783,16 +783,21 @@ void vector_setup() {
     EEState s;s.pc=0x80001000;s.set_cp0(Cop0::Status,1u<<30);
     memory.write_vu_vector(2,{{0x2222222211111111ull,0x00000000000000FFull},{0x4444444433333333ull,0xFFFFFFFF00000000ull}});
     memory.write_vu_vector(3,{{0xBBBBBBBBAAAAAAAAull,0},{0xDDDDDDDDCCCCCCCCull,0}});
+    memory.restore_vu_vector_bounds(2,0,{0x11111180u,0x11111181u});
+    memory.restore_vu_vector_bounds(3,1,{0xBBBBBBBBu,0xBBBBBBBBu});
     const auto move_flags=memory.read_vu_control(16);
     const auto move=(0x12u<<26u)|(26u<<21u)|(3u<<16u)|(2u<<11u)|0x33Cu; // xz
     require(decode_r5900(0,move).opcode==MipsOpcode::Vmove,"VMOVE decoder");
     ee::exec<MipsOpcode::Vmove>(s,memory,0,move);
     const auto moved=memory.observe_vu_vector(3);
+    require(memory.observe_vu_vector_bounds(3,0)==FloatBounds{0x11111180u,0x11111181u} &&
+        memory.observe_vu_vector_bounds(3,1)==FloatBounds{0xBBBBBBBBu,0xBBBBBBBBu},"VMOVE transfers selected numeric bounds and preserves unselected certificates");
     require(moved.low.value==0xBBBBBBBB11111100ull && moved.low.unknown==0xFFu &&
             moved.high.value==0xDDDDDDDD33333333ull && !moved.high.unknown &&
             memory.read_vu_control(16)==move_flags,"VMOVE preserves unselected lanes, uncertainty and flags");
     ee::exec<MipsOpcode::Vmove>(s,memory,0,(move&~(31u<<11u))|(3u<<11u));
     require(memory.observe_vu_vector(3).low.value==moved.low.value,"VMOVE aliases source/destination");
+    require(memory.observe_vu_vector_bounds(3,0)==FloatBounds{0x11111180u,0x11111181u},"VMOVE aliases preserve their input certificate");
     ee::exec<MipsOpcode::Vmove>(s,memory,0,move&~(31u<<16u));
     require(memory.observe_vu_vector(0).high.value==0x3F80000000000000ull,"VMOVE preserves VF00");
     memory.write_vu_vector(1,{});

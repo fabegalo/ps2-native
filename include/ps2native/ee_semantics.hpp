@@ -469,7 +469,10 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
             destination.low.unknown=(destination.low.unknown&~low_mask)|(source.low.unknown&low_mask);
             destination.high.value=(destination.high.value&~high_mask)|(source.high.value&high_mask);
             destination.high.unknown=(destination.high.unknown&~high_mask)|(source.high.unknown&high_mask);
+            std::array<std::optional<FloatBounds>,4> bounds{};
+            for(unsigned lane=0;lane<4u;++lane)bounds[lane]=m.observe_vu_vector_bounds((mask&(8u>>lane)) ? d_ : t_,lane);
             m.write_vu_vector(t_,destination);
+            for(unsigned lane=0;lane<4u;++lane)if(bounds[lane])m.restore_vu_vector_bounds(t_,lane,*bounds[lane]);
         }
         else if constexpr (Op == O::Vmr32) m.vu_rotate(t_,d_,(w>>21u)&15u);
         else if constexpr (Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc ||

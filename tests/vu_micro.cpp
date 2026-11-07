@@ -49,6 +49,18 @@ int main() try {
         rejects([&]{(void)vu_float_to_fixed(word,4,FloatBounds{0x44E58000u,0x44E60000u});},"certificate differs");
     }
 
+    for(unsigned unit=0;unit<2u;++unit)for(bool rotate:{false,true}) {
+        VuControl vu;const auto data=unit?0x1100C000u:0x11004000u;
+        vu.write_memory(data,4,{0x44E58000u,0x3FFFu});vu.restore_data_bounds(data,{0x44E59100u,0x44E59101u});
+        instruction(vu,unit,0,0x01010000u);
+        const auto mask=rotate?1u:8u;
+        instruction(vu,unit,1,0x8000033Cu|unsigned(rotate)|(mask<<21u)|(2u<<16u)|(1u<<11u));
+        instruction(vu,unit,2,nop,(mask<<21u)|(3u<<16u)|(2u<<11u)|0x17Du);
+        instruction(vu,unit,3,nop,upper_nop|0x40000000u);instruction(vu,unit,4,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(24);
+        const auto result=vector_lane(vu,unit,3,rotate?3u:0u);
+        require(result.value==0x72C8u && !result.unknown,"VU0/VU1 MOVE and MR32 retain the numeric certificate through source stalls and delayed writeback");
+    }
     for(unsigned unit=0;unit<2u;++unit) {
         VuControl vu;seed_vector(vu,unit,1,{0x3F800000u,0x40000000u,0x40800000u,0x41000000u});
         instruction(vu,unit,0,0x40000000u,upper_nop|0x80000000u);

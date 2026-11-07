@@ -382,7 +382,11 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
                     if(is && state.vectors[n].index==is && (state.vectors[n].mask&(8u>>((lane+(rotate ? 1u : 0u))&3u)))) {++state.next;return;}
             const auto& source=(unit ? vu1_vectors_ : vectors_)[is];
             MicroVectorWrite transfer{it,mask,{},state.next+4u};
-            for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane))transfer.words[lane]=source[(lane+(rotate ? 1u : 0u))&3u];
+            for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane)) {
+                const auto from=(lane+(rotate ? 1u : 0u))&3u;
+                transfer.words[lane]=source[from];
+                transfer.bounds[lane]=unit ? vu1_vector_bounds_[is][from] : vector_bounds_[is][from];
+            }
             vector_result=transfer;
         }
     } else if(op==0x40u && (lo&0x7FFu)==0x6FCu) {
