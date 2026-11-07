@@ -186,7 +186,7 @@ void GsRegisters::texture_write_guard(unsigned address) const {
     const auto [ymin,ymax]=range(static_cast<unsigned>((tex>>30u)&15u),static_cast<unsigned>((clamp>>2u)&3u),
         static_cast<unsigned>((clamp>>24u)&1023u),static_cast<unsigned>((clamp>>34u)&1023u));
     const auto psm=static_cast<unsigned>((tex>>20u)&63u);
-    const auto pw=psm<=1u ? 64u : 128u,ph=psm<=1u ? 32u : psm==19u ? 64u : 128u;
+    const auto pw=(psm<=2u || psm==10u) ? 64u : 128u,ph=psm<=1u ? 32u : (psm==2u || psm==10u || psm==19u) ? 64u : 128u;
     const auto stride=static_cast<unsigned>((tex>>14u)&63u)*64u/pw;
     const auto base=static_cast<unsigned>(tex&0x3FFFu)*256u;
     const auto first=(ymin/ph)*stride+xmin/pw,last=(ymax/ph)*stride+xmax/pw;
@@ -205,7 +205,7 @@ void GsRegisters::texture_transfer_write(unsigned address) {
 }
 std::uint32_t GsRegisters::sample_texture(std::uint64_t tex,std::uint64_t clamp,int u,int v) {
     const auto psm=static_cast<unsigned>((tex>>20)&63u),tw=static_cast<unsigned>((tex>>26)&15u),th=static_cast<unsigned>((tex>>30)&15u);
-    if((psm!=0u && psm!=1u && psm!=19u && psm!=20u) || tw>10u || th>10u)
+    if((psm!=0u && psm!=1u && psm!=2u && psm!=10u && psm!=19u && psm!=20u) || tw>10u || th>10u)
         throw DeviceRefusal("GS texture format or dimensions are not modeled");
     if(!texture_flush_generation_)
         throw DeviceRefusal("GS sampling requires an initial TEXFLUSH; reset texture cache validity is not established");
@@ -214,7 +214,7 @@ std::uint32_t GsRegisters::sample_texture(std::uint64_t tex,std::uint64_t clamp,
     const auto base=static_cast<unsigned>(tex&0x3FFFu)*256u,bw=static_cast<unsigned>((tex>>14)&63u)*64u;
     // Conservatively protect the entire source page, including a non-page-
     // aligned TBP. Drawing into it needs a cache model, not live VRAM reads.
-    const auto pw=psm<=1u ? 64u : 128u,ph=psm<=1u ? 32u : psm==19u ? 64u : 128u;
+    const auto pw=(psm<=2u || psm==10u) ? 64u : 128u,ph=psm<=1u ? 32u : (psm==2u || psm==10u || psm==19u) ? 64u : 128u;
     const auto page=(base+((y/ph)*(bw/pw)+x/pw)*8192u)%GsVram::kBytes;
     const auto first=page/8192u,last=((page+8191u)%GsVram::kBytes)/8192u;
     // TEXFLUSH invalidates all pages. A page not fetched since then remains
@@ -223,7 +223,15 @@ std::uint32_t GsRegisters::sample_texture(std::uint64_t tex,std::uint64_t clamp,
     if(dirty_texture_pages_[first] || dirty_texture_pages_[last])
         throw DeviceRefusal("GS sampling requires TEXFLUSH after a cached texture page changed; stale texture cache is not modeled");
     sampled_pages_[first]=true;sampled_pages_[last]=true;
-    const auto raw=vram_.read(base,bw,psm,x,y);
+    const bool packed=psm==2u || psm==10u;
+    const auto raw=vram_.read_bits(base,bw,psm,x,y,packed && !(tex&(1ull<<34u)) ? 0x7FFFu : 0xFFFFFFFFu);
+    if(packed) {
+        const auto rgb=((raw&31u)<<3u)|(((raw>>5u)&31u)<<11u)|(((raw>>10u)&31u)<<19u);
+        if(!(tex&(1ull<<34u)))return rgb;
+        const auto texa=required(0x3Bu);
+        const auto alpha=(texa&(1u<<15u)) && !raw ? 0u : static_cast<std::uint32_t>(texa>>((raw&0x8000u)?32u:0u))&255u;
+        return rgb|(alpha<<24u);
+    }
     if(psm==0u)return raw;
     if(psm==1u) {
         // GS manual 3.4.6: RGB24 shares CT32 addressing but never reads its
@@ -470,9 +478,9 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         // TBP. Large nominal TW/TH need not make unused VRAM a feedback loop.
         const auto tw=static_cast<unsigned>((tex>>26)&15u),th=static_cast<unsigned>((tex>>30)&15u);
         const auto tp=static_cast<unsigned>((tex>>20)&63u);
-        if(tw>10u || th>10u || (tp!=0u && tp!=1u && tp!=19u && tp!=20u))
+        if(tw>10u || th>10u || (tp!=0u && tp!=1u && tp!=2u && tp!=10u && tp!=19u && tp!=20u))
             throw DeviceRefusal("GS texture format or dimensions are not modeled");
-        const auto pw=tp<=1u?64u:128u,ph=tp<=1u?32u:tp==19u?64u:128u;
+        const auto pw=(tp<=2u || tp==10u)?64u:128u,ph=tp<=1u?32u:(tp==2u || tp==10u || tp==19u)?64u:128u;
         const auto u0=uv_at(left,first_vertex_->x,v.x,sprite_u0,sprite_u1),u1=uv_at(right-1,first_vertex_->x,v.x,sprite_u0,sprite_u1);
         const auto v0=uv_at(top,first_vertex_->y,v.y,sprite_v0,sprite_v1),v1=uv_at(bottom-1,first_vertex_->y,v.y,sprite_v0,sprite_v1);
         const auto shift=bilinear?8:0,extra=bilinear?1:0;
@@ -566,7 +574,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     auto fallback=textured ? GsGpuFallback::Texture : antialiased ? GsGpuFallback::Antialias :
         (mode&8u) ? GsGpuFallback::Gouraud : (general_unknown_[1]&0xFFFFFFFFull) ?
         GsGpuFallback::UncertainColor : GsGpuFallback::Addressing;
-    if(vram_.gpu_backend() && (!textured || type==6u) && !antialiased && !(mode&8u) &&
+    if(vram_.gpu_backend() && (!textured || (((tex>>20u)&63u)!=2u && ((tex>>20u)&63u)!=10u)) && (!textured || type==6u) && !antialiased && !(mode&8u) &&
        !(general_unknown_[1]&0xFFFFFFFFull) && left<right && top<bottom &&
        bw && static_cast<unsigned>(right)<=bw &&
        (!(zwrite || (ztest && zfunc>=2u)) || ((zpsm<=1u || zpsm==10u) &&

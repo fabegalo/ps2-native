@@ -3,6 +3,8 @@
 #include <array>
 #include <iostream>
 #include <set>
+#include <string_view>
+#include "ps2native/gs_gpu.hpp"
 using namespace ps2native;
 using namespace boot_checks;
 namespace {
@@ -12,7 +14,10 @@ void setup(GsRegisters& gs,unsigned psm,unsigned width,unsigned height,unsigned 
     gs.general_write(0x52,width|(std::uint64_t{height}<<32));gs.general_write(0x53,0);
 }
 }
-int main() try {
+int main(int argc,char** argv) try {
+    std::shared_ptr<GsGpu> gpu;
+    if(argc>1){require(std::string_view(argv[1])=="directx","expected optional directx backend");std::string reason;gpu=create_gs_gpu(reason,GsGpuApi::DirectX);require(bool(gpu),reason);}
+
     constexpr std::array<std::array<unsigned,3>,17> common{{
         {0,0,0},{1,0,4},{2,0,16},{4,0,32},{8,0,2},{0,1,8},{0,2,64},{0,4,128},
         {16,0,512},{0,8,256},{63,63,8190},{64,0,8192},{0,64,16384},{64,64,24576},
@@ -65,6 +70,31 @@ int main() try {
         require(gs.scanout(12).rgba==expected,"CT16/16S scanout uses real swizzled RGB5, source offset and zero-bit expansion without consuming alpha");
         vram.write(0,64,psm,3,4,0x1F,0,1u);
         rejects([&]{(void)gs.scanout(12);},"unwritten bits");
+    }
+    for(unsigned psm:{2u,10u})for(const bool aem:{false,true}) {
+        GsRegisters gs;gs.reset(0);gs.set_gpu_backend(gpu);setup(gs,psm,4,2);
+        gs.image_write(0x801F001F80000000ull,0x83E07FFF7C0003E0ull);gs.general_write(0x3F,0);
+        gs.general_write(0,0x116u);gs.general_write(1,0x3F80000080808080ull);gs.general_write(0x18,0);gs.general_write(0x1A,1);
+        gs.general_write(0x4C,1u|(1u<<16u));gs.general_write(0x40,(7ull<<16u)|(7ull<<48u));gs.general_write(0x47,3u<<16u);gs.general_write(0x4E,1ull<<32u);gs.general_write(0x22,0);gs.general_write(0x4A,0);
+        gs.general_write(6,(1ull<<14u)|(std::uint64_t{psm}<<20u)|(3ull<<26u)|(3ull<<30u)|(1ull<<34u)|(1ull<<35u));gs.general_write(8,0);gs.general_write(0x14,0);
+        gs.general_write(0x3B,0x9100000023ull|(aem ? 0x8000ull : 0ull));
+        const auto draw=[&](unsigned x,unsigned y,unsigned u,unsigned v) {gs.general_write(3,u*16u|(std::uint64_t{v*16u}<<16u));gs.general_write(5,x*16u|(std::uint64_t{y*16u}<<16u));gs.general_write(5,(x+1u)*16u|(std::uint64_t{(y+1u)*16u}<<16u));};
+        const std::array<std::uint32_t,8> expected{aem?0u:0x23000000u,0x91000000u,0x230000F8u,0x910000F8u,0x2300F800u,0x23F80000u,0x23F8F8F8u,0x9100F800u};
+        for(unsigned n=0;n<8u;++n){draw(n%4u,n/4u,n%4u,n/4u);require(gs.vram().read(8192,64,0,n%4u,n/4u)==expected[n],"CT16 texture expansion uses zero-filled RGB5 and TEXA TA0/TA1, with AEM applying only to an all-zero raw texel");}
+        require(!gpu || gs.vram().cpu_fallbacks()>0u,"unsupported compute texture formats retain the real CPU sampling path");
+        gs.general_write(6,(1ull<<14u)|(std::uint64_t{psm}<<20u)|(3ull<<26u)|(3ull<<30u)|(1ull<<35u));
+        auto& vram=const_cast<GsVram&>(gs.vram());vram.write(0,64,psm,0,0,0x1Fu,0,0x8000u);gs.general_write(0x3F,0);
+        draw(4,0,0,0);require(gs.vram().read(8192,64,0,4,0)==0x800000F8u,"RGB-only CT16 sampling consumes no unknown alpha bit and retains the real fragment alpha");
+        vram.write(0,64,psm,0,0,0x1Eu,0,1u);gs.general_write(0x3F,0);rejects([&]{draw(5,0,0,0);},"unwritten bits");
+    }
+    for(unsigned psm:{2u,10u}) {
+        GsRegisters gs;gs.reset(0);gs.set_gpu_backend(gpu);setup(gs,psm,4,2,0,64);gs.image_write(0x001F001F001F001Full,0x001F001F001F001Full);gs.general_write(0x3F,0);
+        gs.general_write(0,0x116u);gs.general_write(1,0x80808080u);gs.general_write(0x18,0);gs.general_write(0x1A,1);gs.general_write(0x4C,4u|(1u<<16u));gs.general_write(0x40,(7ull<<16u)|(7ull<<48u));gs.general_write(0x47,3u<<16u);gs.general_write(0x4E,1ull<<32u);gs.general_write(0x22,0);gs.general_write(0x4A,0);
+        gs.general_write(6,(1ull<<14u)|(std::uint64_t{psm}<<20u)|(3ull<<26u)|(7ull<<30u)|(1ull<<35u));gs.general_write(8,0);gs.general_write(0x14,0);
+        const auto draw=[&]{gs.general_write(3,1024ull<<16u);gs.general_write(5,0);gs.general_write(5,16u|(16ull<<16u));};
+        draw();require(gs.vram().read(32768,64,0,0,0)==0x800000F8u,"CT16 texture row 64 addresses its actual second 64x64 page");
+        setup(gs,psm,4,2);gs.image_write(0,0);draw();require(gs.vram().read(32768,64,0,0,0)==0x800000F8u,"a cold first-page upload cannot invalidate a cached second-page CT16 texel");
+        setup(gs,psm,4,2,0,64);gs.image_write(0x001F001F001F001Full,0x001F001F001F001Full);rejects(draw,"TEXFLUSH");gs.general_write(0x3F,0);draw();
     }
     std::cout<<"PSMCT16/16S swizzle, halfword knowledge, real IMAGE packing, wrap, overlap and RGB scanout passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
