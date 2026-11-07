@@ -626,6 +626,7 @@ private:
     std::array<std::array<Spu2VoiceState,24>,2> spu2_voices_{};
     std::array<bool,2> spu2_irq_pending_{};
     Spu2SampleSink spu2_sample_sink_; // excluded from checkpoints; detached on restore
+    void advance_graphics_channels(std::uint64_t cycle,Vif* vif0,Vif* vif1,Gif& gif,GsRegisters& gs,VuControl* vu);
     void advance_graphics_dma(unsigned channel, std::uint64_t ee_cycle,Vif* vif0,Vif* vif1,Gif& gif,GsRegisters& gs,VuControl* vu=nullptr);
     // RUNTIME_HELPERS_BEGIN
     void advance_graphics_due(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu);
@@ -637,6 +638,7 @@ private:
     };
     std::array<GraphicsDma,3> graphics_dma_{};
     std::uint64_t spr_dma_cycle_{};
+    unsigned graphics_dma_turn_{1};
     bool diagnostic_spu2_voice_address_reserved_zero_{};
     std::optional<std::uint8_t> cdvd_howto_;
     std::vector<std::uint8_t> cdvd_params_;

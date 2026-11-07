@@ -3,6 +3,7 @@
 #include "ps2native/sha256.hpp"
 #include "ps2native/io.hpp"
 #include <iostream>
+#include <memory>
 using namespace ps2native;
 using namespace boot_checks;
 ElfImage program() {
@@ -22,6 +23,10 @@ void finish_transfer(Memory& memory) {
 std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const std::uint8_t> payload,
     const char* schema="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88") {
     std::vector<std::uint8_t> old_payload(payload.begin(),payload.end());
+    const std::array<std::uint8_t,8> bus_tag{'G','I','F','B','U','S','0','1'};
+    const auto bus=std::search(old_payload.begin(),old_payload.end(),bus_tag.begin(),bus_tag.end());
+    require(bus!=old_payload.end(),"current checkpoint contains the graphics arbitration cursor");old_payload.erase(bus,bus+12);
+    if(std::string_view(schema)!="25e615e5098e581ee91b9dd84ffe9782be7b73f47ebfa76e377caa06fa871ffd") {
     const std::array<std::uint8_t,8> irq_tag{'V','I','F','I','R','Q','0','1'};
     for(unsigned unit=0;unit<2;++unit) {
         const auto at=std::search(old_payload.begin(),old_payload.end(),irq_tag.begin(),irq_tag.end());
@@ -65,6 +70,7 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
         old_payload.erase(at,at+48+count*16);
     }}
     }
+    }
     payload=old_payload;
     std::vector<std::uint8_t> bytes{'P','S','2','N','C','P','0','1'};
     const auto integer=[&](std::uint64_t value,unsigned size){for(unsigned i=0;i<size;++i)bytes.push_back(static_cast<std::uint8_t>(value>>(8u*i)));};
@@ -78,6 +84,20 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
 }
 int main(int argc,char** argv)try {
     if(argc!=2)return 2;const auto directory=std::filesystem::path(argv[1]);ps2native::create_directories(directory);
+    {
+        auto image=program();EEState state;auto storage=std::make_unique<Memory>();auto& memory=*storage;prepare_direct_elf(image,nullptr,state,memory);
+        memory.write128(0xA0000200u,0x07000011u,0);memory.write128(0xA0000210u,0x07000022u,0);
+        memory.write128(0xA0000300u,0x8000u,0);memory.write128(0xA0000310u,0x8000u,0);
+        memory.write32(0xB000E000u,1u);
+        for(unsigned c=1;c<=2u;++c){const auto base=0xB0008000u+c*0x1000u;memory.write32(base+0x10u,0x100u*(c+1u));memory.write32(base+0x20u,2u);memory.write32(base,0x101u);}
+        BootOptions step;step.max_instructions=2;
+        auto boundary=run_ee_boot(state,memory,nullptr,step);(void)memory.load32_observed(0xB0009020u);
+        require(boundary.outcome==BootOutcome::BudgetExhausted && memory.iop().ee_dma_read(0x10009020u)==1u && memory.iop().ee_dma_read(0x1000A020u)==2u,"checkpoint stops after VIF1 owns the first round-robin grant");
+        const auto file=directory/"graphics-bus-turn.ps2ncp";CheckpointContext context{sha256_hex(image.bytes),"graphics bus cursor"};save_checkpoint(file,state,memory,boundary,context);
+        EEState rs;auto restored_storage=std::make_unique<Memory>();auto& restored=*restored_storage;prepare_direct_elf(image,nullptr,rs,restored);(void)load_checkpoint(file,rs,restored,context);
+        for(auto pair:{std::pair{&state,&memory},std::pair{&rs,&restored}}){require(run_ee_boot(*pair.first,*pair.second,nullptr,step).outcome==BootOutcome::BudgetExhausted,"both arbitration continuations retire");(void)pair.second->load32_observed(0xB0009020u);require(pair.second->iop().ee_dma_read(0x1000A020u)==1u && pair.second->iop().ee_dma_read(0x10009020u)==1u,"restored arbitration rotates to GIF rather than repeating VIF1");}
+        require(checkpoint_state_sha256(state,memory)==checkpoint_state_sha256(rs,restored),"pending shared graphics DMA round-trips every field");
+    }
     for(const bool partial:{false,true}) {
         auto image=program();EEState state;Memory memory;prepare_direct_elf(image,nullptr,state,memory);
         memory.write32(0xB0003C20u,2u);
@@ -303,6 +323,10 @@ int main(int argc,char** argv)try {
     (void)load_checkpoint(current_file,state,memory,context);
     const auto exact=checkpoint_state_sha256(state,memory);
     auto reviewed=context;reviewed.allow_runtime_change=true;
+    const auto bus_file=directory/"legacy-graphics-bus.ps2ncp";
+    write_file_atomically(bus_file,legacy_envelope(current_info,current_payload,"25e615e5098e581ee91b9dd84ffe9782be7b73f47ebfa76e377caa06fa871ffd"));
+    (void)load_checkpoint(bus_file,resumed,restored,reviewed);
+    require(checkpoint_state_sha256(resumed,restored)==exact,"pre-arbitration checkpoints retain all interrupt and numeric state");
     const auto irq_file=directory/"legacy-vif-irq.ps2ncp";
     write_file_atomically(irq_file,legacy_envelope(current_info,current_payload,"fa9cf50ce0d0fade6cc76b98bd076cdc6fad4e6bd5db34d76b2dfbe586011827"));
     rejects([&]{(void)load_checkpoint(irq_file,resumed,restored,context);},"schema");

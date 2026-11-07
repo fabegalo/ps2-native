@@ -38,6 +38,8 @@ public:
         if(path1_requested_)throw DeviceRefusal("GIF already has an active PATH1 request");
         path1_requested_=true;
     }
+    [[nodiscard]] bool path2_ready() const noexcept {return !(ctrl_&8u) && (!in_packet_ || path_==2u) && ((in_packet_ && path_==2u) || !path1_requested_);}
+    [[nodiscard]] bool path3_ready() const noexcept {return !(ctrl_&8u) && (!in_packet_ || path_==3u) && ((in_packet_ && path_==3u) || (!(mode_&1u) && !vif_path3_mask_ && !path1_requested_));}
     [[nodiscard]] bool path1_requested() const noexcept {return path1_requested_;}
     [[nodiscard]] bool path1_ready() const noexcept {return !(ctrl_&8u) && (!in_packet_ || path_==1u);}
     [[nodiscard]] bool path1_packet_active() const noexcept {return in_packet_ && path_==1u;}

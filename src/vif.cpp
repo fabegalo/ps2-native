@@ -183,6 +183,7 @@ void Vif::drain(std::uint64_t cycle,VuControl* vu,Gif& gif,GsRegisters& gs) {
         if(!payload && op==0x13u && unit_==Unit::Vu1 && (gif.read_stat()&0xFC0u)) {
             code_=command;waiting_=gif_waiting_=true;return;
         }
+        if(direct_left_ && direct_words_==3u && !gif.path2_ready()) {waiting_=gif_waiting_=true;return;}
         const auto certificate=input_.bounds[input_index_];
         ++input_index_;
         if(direct_left_) {

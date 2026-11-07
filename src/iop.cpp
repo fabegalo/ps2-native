@@ -266,7 +266,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     spu2_adma_={};diagnostic_spu2_adma_cycles_=0;diagnostic_spu2_dma_wrap_zero_=false;diagnostic_spu2_admas_control_latch_=false;
     spu2_adma_bus_available_=0;spu2_adma_last_grant_=1u;
     graphics_dma_={};
-    spr_dma_cycle_=0;
+    spr_dma_cycle_=0;graphics_dma_turn_=1;
     diagnostic_spu2_voice_address_reserved_zero_=false;
     dma_irq_output_=false;
     // Cold drive: no command or host tray/power event has been submitted.
@@ -593,11 +593,13 @@ void Iop::iop_sif1_write(std::uint32_t address, std::uint32_t value) {
 }
 
 void Iop::advance_vif_dma(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl* vu) {
-    advance_graphics_dma(0,ee_cycle,&vif0,&vif1,gif,gs,vu);
-    advance_graphics_dma(1,ee_cycle,&vif0,&vif1,gif,gs,vu);
+    advance_graphics_channels(ee_cycle,&vif0,&vif1,gif,gs,vu);
     advance_vpus(ee_cycle,&vif0,&vif1,vu,gif,gs);
 }
 void Iop::advance_gif_dma(std::uint64_t ee_cycle,Gif& gif,GsRegisters& gs) {
+    if((ee_dma_setup_[2][0].value_or(0u)&0x100u) &&
+       ((ee_dma_setup_[0][0].value_or(0u)|ee_dma_setup_[1][0].value_or(0u))&0x100u))
+        throw DeviceRefusal("concurrent graphics DMA requires the shared VIF context");
     advance_graphics_dma(2,ee_cycle,nullptr,nullptr,gif,gs);
 }
 void Iop::advance_graphics_due(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& gif,GsRegisters& gs,VuControl& vu) {
@@ -652,16 +654,48 @@ void Iop::advance_graphics_due(std::uint64_t ee_cycle,Vif& vif0,Vif& vif1,Gif& g
         if(!*spr[2]){*spr[0]&=~0x100u;ee_dstat_|=1u<<8u;}
     }
     if(!source_enabled || !*source_priority || !(spr[0].value_or(0u)&0x100u))spr_dma_cycle_=ee_cycle;
-    for(unsigned channel=0;channel<3;++channel) {
-        auto& transfer=graphics_dma_[channel];
-        // Inactive channels have no bus event. Preserve their timestamp and
-        // refusal ordering without entering the large transfer parser.
-        if(transfer.stop)throw DeviceRefusal(*transfer.stop);
-        if(!(ee_dma_setup_[channel][0].value_or(0u)&0x100u) || ee_dma_suspended_ || !(ee_dctrl_&1u))
-            transfer.cycle=ee_cycle;
-        else advance_graphics_dma(channel,ee_cycle,&vif0,&vif1,gif,gs,&vu);
-    }
+    advance_graphics_channels(ee_cycle,&vif0,&vif1,gif,gs,&vu);
     advance_vpus(ee_cycle,&vif0,&vif1,&vu,gif,gs);
+}
+void Iop::advance_graphics_channels(std::uint64_t cycle,Vif* vif0,Vif* vif1,Gif& gif,GsRegisters& gs,VuControl* vu) {
+    std::array<bool,3> enabled{};
+    for(unsigned channel=0;channel<3u;++channel) {
+        auto& transfer=graphics_dma_[channel];
+        if(transfer.stop)throw DeviceRefusal(*transfer.stop);
+        if(ee_dma_suspended_ || !(ee_dctrl_&1u) || !(ee_dma_setup_[channel][0].value_or(0u)&0x100u))continue;
+        const auto priority=ee_dma_priority(ee_dma_observe(0x1000E020u),channel);
+        if(!priority)throw DeviceRefusal("EE graphics DMA priority is unknown");
+        enabled[channel]=*priority;
+        if(*priority && channel<2u && !(channel ? vif1 : vif0))throw DeviceRefusal("concurrent graphics DMA requires the shared VIF context");
+    }
+    // EE manual 5.3.1: VIF0 has priority A; VIF1/GIF share round robin C.
+    // Retain the existing functional one-qword-per-bus-beat timing hypothesis.
+    for(;;) {
+        std::optional<std::uint64_t> next;
+        for(unsigned c=0;c<3u;++c)if(enabled[c] && (ee_dma_setup_[c][0].value_or(0u)&0x100u)) {
+            const auto beat=graphics_dma_[c].cycle+kEeCyclesPerBusCycle;
+            if(!next || beat<*next)next=beat;
+        }
+        if(!next || *next>cycle)break;
+        const auto beat=*next;
+        advance_vpus(beat,vif0,vif1,vu,gif,gs);
+        const auto requests=[&](unsigned c) {
+            const auto& regs=ee_dma_setup_[c];
+            if(!enabled[c] || !(regs[0].value_or(0u)&0x100u))return false;
+            const auto* vif=c==0u ? vif0 : c==1u ? vif1 : nullptr;
+            if(vif && (regs[2].value_or(0u) || (*regs[0]&0x40u)) && !vif->can_accept_dma())return false;
+            return c!=2u || !regs[2].value_or(0u) || gif.path3_ready();
+        };
+        const unsigned selected=requests(0u) ? 0u : requests(graphics_dma_turn_) ? graphics_dma_turn_ : requests(3u-graphics_dma_turn_) ? 3u-graphics_dma_turn_ : 3u;
+        if(selected<3u) {
+            graphics_dma_[selected].cycle=beat-kEeCyclesPerBusCycle;
+            advance_graphics_dma(selected,beat,vif0,vif1,gif,gs,vu);
+            if(selected)graphics_dma_turn_=3u-selected;
+        }
+        // Unused or denied requests cannot accumulate transferable bus beats.
+        for(auto& transfer:graphics_dma_)transfer.cycle=beat;
+    }
+    for(unsigned c=0;c<3u;++c)if(!enabled[c] || !(ee_dma_setup_[c][0].value_or(0u)&0x100u))graphics_dma_[c].cycle=cycle;
 }
 void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0,Vif* vif1,Gif& gif,GsRegisters& gs,VuControl* vu) {
     auto* vif=channel==0u ? vif0 : channel==1u ? vif1 : nullptr;
@@ -669,9 +703,7 @@ void Iop::advance_graphics_dma(unsigned channel,std::uint64_t ee_cycle,Vif* vif0
     auto& chcr=regs[0];auto& madr=regs[1];auto& qwc=regs[2];auto& tadr=regs[3];
     if(transfer.stop) throw DeviceRefusal(*transfer.stop);
     if(!(chcr.value_or(0)&0x100u) || ee_dma_suspended_ || !(ee_dctrl_&1u)) {transfer.cycle=ee_cycle;return;}
-    unsigned active=0;
-    for(unsigned c=0;c<3;++c) active+=(ee_dma_setup_[c][0].value_or(0u)&0x100u)!=0;
-    if(active>1u) throw DeviceRefusal("Concurrent VIF/GIF DMA bus arbitration is not modeled");
+
     const auto priority=ee_dma_priority(ee_dma_observe(0x1000E020u),channel);
     if(!priority) throw DeviceRefusal("EE graphics DMA priority is unknown");
     if(!*priority) {transfer.cycle=ee_cycle;return;}

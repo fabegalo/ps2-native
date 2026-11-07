@@ -84,7 +84,8 @@ int main() try {
             "the first real tag beat completes on its original cycle after idle synchronization");
         dma.ee_dma_write(0x10009030,0x100);dma.ee_dma_write(0x10009000,0x105);
         dma.ee_dma_write(0x10008020,0);dma.ee_dma_write(0x10008030,0x100);dma.ee_dma_write(0x10008000,0x105);
-        rejects([&]{dma.advance_graphics(102,v0,v1,gif,gs,vu);},"Concurrent VIF/GIF DMA");
+        dma.advance_graphics(102,v0,v1,gif,gs,vu);
+        require((dma.ee_dma_read(0x10008000)&0x100u) && (dma.ee_dma_read(0x10009000)&0x100u),"arming simultaneous channels does not fabricate an early beat");
         dma.set_ee_dma_suspended(true);dma.ee_dma_write(0x10008000,0);dma.set_ee_dma_suspended(false);
         ram[0x103]=0x40; // unsupported REFS tag, retained as an actual parser failure
         rejects([&]{dma.advance_graphics(104,v0,v1,gif,gs,vu);},"source chain REFS");
@@ -180,6 +181,45 @@ int main() try {
         require(upload.read_memory(base+800,8).unknown==~0ull && loader.processing(),"MPG cannot overwrite micro RAM while the target engine runs");
         advance_vpus(7,&loader,nullptr,&upload,gif,gs);
         require(upload.read_memory(base+800,8).value==0x76543210FEDCBA98ull && !loader.processing(),"MPG retains and uploads its exact queued payload after Ready");
+    }
+    {
+        Vif vif;Gif gif;GsRegisters gs;gs.reset(0);
+        gif.write_fifo(0x1000000000008001ull,0xEu,gs); // PATH3 A+D tag, one pending register.
+        vif.write_fifo(0x50000001u,0,gif,gs);
+        vif.write_fifo(0x8000u,0,gif,gs); // a complete empty EOP packet for PATH2
+        require(vif.direct_remaining()==1u && (vif.observe_status().value&8u),"DIRECT retains its complete qword while PATH3 owns the GIF");
+        gif.write_fifo(0x42u,0x62u,gs);advance_vpus(2,nullptr,&vif,nullptr,gif,gs);
+        require(!vif.processing() && gif.packets().size()==2u,"PATH3 packet completion releases the original queued PATH2 qword");
+    }
+    for(const bool fine:{false,true}) {
+        Iop dma;VuControl vu;Vif v0(Vif::Unit::Vu0),v1;Gif gif;GsRegisters gs;gs.reset(0);dma.reset({},nullptr);
+        std::vector<std::uint8_t> ram(0x400);dma.attach_ee_ram(ram);
+        const auto word=[&](unsigned at,std::uint32_t value){for(unsigned b=0;b<4u;++b)ram[at+b]=static_cast<std::uint8_t>(value>>(8u*b));};
+        word(0x100,0x07000011u);word(0x110,0x07000022u); // VIF0 MARKs
+        word(0x200,0x07000033u);word(0x210,0x07000044u); // VIF1 MARKs
+        word(0x300,0x8000u);word(0x310,0x8000u); // two valid empty EOP GIF packets
+        dma.ee_dma_write(0x1000E000u,1);
+        for(unsigned c=0;c<3u;++c) {
+            const auto base=0x10008000u+c*0x1000u;
+            dma.ee_dma_write(base+0x10u,0x100u*(c+1u));dma.ee_dma_write(base+0x20u,2u);dma.ee_dma_write(base,0x101u);
+        }
+        const auto advance=[&](unsigned from,unsigned to){if(fine)for(unsigned at=from+1u;at<=to;++at)dma.advance_graphics(at,v0,v1,gif,gs,vu);else dma.advance_graphics(to,v0,v1,gif,gs,vu);};
+        advance(0,4);
+        require(v0.read_register(0x30)==0x22u && dma.ee_dma_read(0x10009020u)==2u && dma.ee_dma_read(0x1000A020u)==2u,"priority A receives both bus beats before group C");
+        advance(4,6);
+        require(v1.read_register(0x30)==0x33u && dma.ee_dma_read(0x1000A020u)==2u,"first group-C grant consumes exactly one VIF1 qword");
+        advance(6,8);
+        require(dma.ee_dma_read(0x10009020u)==1u && dma.ee_dma_read(0x1000A020u)==1u,"the next shared beat rotates to GIF");
+        advance(8,12);
+        require(v1.read_register(0x30)==0x44u && (dma.ee_dma_read(0x1000E010u)&7u)==7u && gif.packets().size()==2u,"round robin completes every original payload with one bus owner per beat");
+        v1.write_register(0x20u,0u,gif);v1.write_fifo(0x80000000u,0,gif,gs,&vu,12);
+        for(unsigned n=0;n<16u;++n)v1.write_fifo(0,0,gif,gs,&vu,12);
+        dma.ee_dma_write(0x10009010u,0x200u);dma.ee_dma_write(0x10009020u,1u);dma.ee_dma_write(0x10009000u,0x101u);
+        dma.ee_dma_write(0x1000A010u,0x300u);dma.ee_dma_write(0x1000A020u,1u);dma.ee_dma_write(0x1000A000u,0x101u);
+        advance(12,14);
+        require(dma.ee_dma_read(0x10009020u)==1u && dma.ee_dma_read(0x1000A020u)==0u,"a full interrupt-stalled VIF relinquishes the bus to GIF without dropping its own qword");
+        v1.write_register(0x10u,8u,gif);advance(14,16);
+        require(dma.ee_dma_read(0x10009020u)==0u && v1.read_register(0x30u)==0x33u,"STC resumes the exact blocked payload on the next bus beat");
     }
     for(unsigned unit=0;unit<2u;++unit) {
         Iop dma;VuControl vu;Vif v0(Vif::Unit::Vu0),v1;auto& vif=unit ? v1 : v0;Gif gif;GsRegisters gs;gs.reset(0);dma.reset({},nullptr);
