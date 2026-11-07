@@ -355,7 +355,7 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
     using namespace checkpoint_detail;validate_context(context);CheckpointAccess::validate_boundary(state,memory);auto parsed=parse(path);const auto& info=parsed.info;
     // Q/RSQRT/product/PRNG and VADDA helpers changed methods only, without wire fields.
     // Older approved layouts predate SMAP; its new registers start unknown.
-    const bool smap_schema=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="c9e387de8c699036eef54c63147db4d348e43cf57366a2740dbaa7660de4c640" || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="c99a8d52d58c7f9121106ef35cad7d3287f90332a518e187bf394a24532e8cc2";
+    const bool smap_schema=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="dd82d588a94091b7d597e9730e3f5c62e238ed54f9d0d9fc9148a88862d97306" || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="c9e387de8c699036eef54c63147db4d348e43cf57366a2740dbaa7660de4c640" || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="c99a8d52d58c7f9121106ef35cad7d3287f90332a518e187bf394a24532e8cc2";
     const bool reviewed_vu_helper_layout=smap_schema || std::string_view(PS2N_CHECKPOINT_SCHEMA)=="db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1" ||
         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="50585f2224cd852e9ef36ef63b53e10fe41691975b7c38fe44dd5384280d08cc" ||
         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="5b6837b83bca95080309d6130db672871107ce48e7ff2b96ab113a6c77452cfd" ||

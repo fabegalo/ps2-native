@@ -25,4 +25,9 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsi
 // Enumerate at most eight opaque fraction bits, or at most 65536 encodings
 // in an independently certified numeric interval. Never assume SRT monotonicity.
 std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a,std::optional<FloatBounds> bounds={});
+    // RUNTIME_HELPERS_BEGIN
+// Enumerate the same bounded domain through SQRT and DIV, retaining Q flags.
+std::optional<VuFloatResult> vu_float_rsqrt(std::uint32_t numerator,ObservedWord denominator,
+    std::optional<FloatBounds> bounds={});
+    // RUNTIME_HELPERS_END
 }

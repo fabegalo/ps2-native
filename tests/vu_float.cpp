@@ -7,6 +7,42 @@ using namespace ps2native;
 namespace {
 void require(bool condition,const char* message) {if(!condition)throw std::runtime_error(message);}
 bool contains(ObservedWord word,std::uint32_t value) {return (value&~word.unknown)==word.value;}
+void rsqrt_domains() {
+    const ObservedWord denominator{0x3F7FFFFEu,1u};
+    const FloatBounds domain{0x3F7FFFFEu,0x3F7FFFFFu};
+    const auto result=vu_float_rsqrt(0x3F800000u,denominator,domain);
+    require(result && result->bounded && !result->flags,"RSQRT enumerates a certified near-unit denominator");
+    for(auto input=domain[0];input<=domain[1];++input) {
+        const auto root=ee_fpu_sqrt(input);std::uint32_t flags=0;
+        const auto exact=ee_fpu_divide(0x3F800000u,*root,flags);
+        require(contains(result->word,exact) && exact>=result->bounds[0] && exact<=result->bounds[1] && flags==result->flags,
+            "every admissible RSQRT result and flag remains represented");
+    }
+    const auto zero=vu_float_rsqrt(0,denominator,domain);
+    require(zero && !zero->word.value && !zero->word.unknown && !zero->flags,
+        "zero divided by every positive root is independently exact zero");
+    const auto divide_zero=vu_float_rsqrt(0x3F800000u,{0,3});
+    require(divide_zero && divide_zero->word.value==0x7FFFFFFFu && !divide_zero->word.unknown &&
+        divide_zero->flags==0x10020u,"all denormal roots preserve the established divide-by-zero value and flags");
+    require(!vu_float_rsqrt(0x3F800000u,{0xBF7FFFFEu,1}) &&
+        !vu_float_rsqrt(0x3F800000u,{0x3F000000u,0x1FF}) &&
+        !vu_float_rsqrt(0x3F800000u,denominator,FloatBounds{0x3F800000u,0x3F800001u}),
+        "RSQRT refuses negative, excessive opaque and invalid certified domains");
+    VuControl vu;vu.write(22,0x40000000u);
+    vu.write_vector(1,{{0xBF800000u,0},{0,0}});vu.add(2,1,0,8);
+    vu.write_vector(15,{{denominator.value,denominator.unknown},{0,0}});vu.restore_vector_bounds(15,0,domain);
+    vu.issue_q(10,0,15,3,0,2);vu.advance_q(22);
+    require(vu.read(22)==0x40000000u && vu.q_ready_cycle()==23u && vu.read(17)==0x80u,
+        "uncertain RSQRT preserves old Q and MAC for thirteen cycles");
+    vu.advance_q(23);
+    require(vu.observe(22).value==result->word.value && vu.observe(22).unknown==result->word.unknown &&
+        !vu.q_ready_cycle() && !(vu.read(16)&0x30u) && vu.read(17)==0x80u,
+        "RSQRT completion publishes the full uncertainty and proven I/D flags without changing MAC");
+    vu.write_vector(15,{{0xBF7FFFFEu,1},{0,0}});const auto before=vu.observe(22);bool refused=false;
+    try {vu.issue_q(24,0,15,3,0,2);}catch(const DeviceRefusal&){refused=true;}
+    require(refused && !vu.q_ready_cycle() && vu.observe(22).value==before.value && vu.observe(22).unknown==before.unknown,
+        "invalid RSQRT refuses before changing Q or scheduling a completion");
+}
 void ranges() {
     const auto residual=vu_float_add({0x3F800000u,0},{0xBF7FFFF0u,3},
         {},FloatBounds{0xBF7FFFF1u,0xBF7FFFF2u});
@@ -257,5 +293,5 @@ void pipeline() {
 
 }
 }
-int main()try {ranges();pipeline();std::puts("VU floating uncertainty remains explicit and sound");return 0;}
+int main()try {ranges();rsqrt_domains();pipeline();std::puts("VU floating uncertainty remains explicit and sound");return 0;}
 catch(const std::exception& error){std::fprintf(stderr,"%s\n",error.what());return 1;}

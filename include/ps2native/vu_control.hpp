@@ -225,11 +225,13 @@ public:
         unknown_[16]&=~(0x30u|(flags<<6u));
         pending_q_.reset();
     }
-    void issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,bool square_root) {
+    void issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,unsigned q_op) {
         profiling::Scope profile(profiling::Phase::Vu);
         if(pending_q_)throw DeviceRefusal("VU FDIV pipeline is still occupied");
         const auto a=vectors_.at(left)[left_lane],b=vectors_.at(right)[right_lane];
-        if(!square_root && (b.unknown || a.unknown))throw DeviceRefusal("VU Q consumes unknown operands");
+        const bool square_root = (q_op == 1u);
+        const bool rsqrt = (q_op == 2u);
+        if(q_op == 0u && (b.unknown || a.unknown))throw DeviceRefusal("VU Q consumes unknown operands");
         std::uint32_t value,flags=0,unknown=0;
         std::optional<FloatBounds> bounds;
         if(square_root) {
@@ -243,11 +245,27 @@ public:
                 if(!root)throw DeviceRefusal("VU SQRT negative input flags are not modeled");
                 value=*root;
             }
+        } else if(rsqrt) {
+    // RUNTIME_HELPERS_BEGIN
+            if(b.unknown && !a.unknown) {
+                const auto result=vu_float_rsqrt(a.value,b,vector_bounds_.at(right)[right_lane]);
+                if(!result)throw DeviceRefusal("VU RSQRT consumes unknown operands with unproven fraction/flags");
+                flags=((result->flags>>13u)&0x10u)|((result->flags>>11u)&0x20u);
+                pending_q_=PendingQ{cycle+13u,result->word.value,flags,result->word.unknown,
+                    result->bounded ? std::optional<FloatBounds>{result->bounds} : std::nullopt};
+                return;
+            }
+    // RUNTIME_HELPERS_END
+            if(b.unknown || a.unknown)throw DeviceRefusal("VU Q consumes unknown operands");
+            const auto root=ee_fpu_sqrt(b.value);
+            if(!root)throw DeviceRefusal("VU RSQRT negative input flags are not modeled");
+            value=ee_fpu_divide(a.value,*root,flags);
+            flags=((flags>>13u)&0x10u)|((flags>>11u)&0x20u);
         } else {
             value=ee_fpu_divide(a.value,b.value,flags);
             flags=((flags>>13u)&0x10u)|((flags>>11u)&0x20u);
         }
-        pending_q_=PendingQ{cycle+7u,value,flags,unknown,bounds};
+        pending_q_=PendingQ{cycle+(rsqrt ? 13u : 7u),value,flags,unknown,bounds};
     }
     void add(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast=4,bool subtract=false,bool to_accumulator=false) {
         profiling::Scope profile(profiling::Phase::Vu);

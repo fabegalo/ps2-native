@@ -141,8 +141,8 @@ public:
     // RUNTIME_HELPERS_END
     void vu_advance_q(std::uint64_t cycle) { vu_control_.advance_q(cycle); }
     [[nodiscard]] std::uint64_t vu_q_ready_cycle() const noexcept { return vu_control_.q_ready_cycle(); }
-    void vu_issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,bool square_root) {
-        vu_control_.issue_q(cycle,left,right,left_lane,right_lane,square_root);
+    void vu_issue_q(std::uint64_t cycle,unsigned left,unsigned right,unsigned left_lane,unsigned right_lane,unsigned q_op) {
+        vu_control_.issue_q(cycle,left,right,left_lane,right_lane,q_op);
     }
     void vu_integer_store(unsigned source,unsigned base,unsigned mask) {vu_control_.integer_store(source,base,mask);}
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return vu_control_.observe_data(address);}

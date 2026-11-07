@@ -437,7 +437,7 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
     (void)m;
     (void)pc;
     // Host execution is sequential: guest memory accesses are already ordered (SYNC).
-    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::VaddBc || Op == O::VsubBc || Op == O::VaddaBc || Op == O::Vopmula || Op == O::Vopmsub || Op == O::Vcallms || Op == O::Vsqrt || Op == O::Vdiv || Op == O::Vwaitq || Op == O::VaddQ || Op == O::VsubQ || Op == O::VmulQ || Op == O::Vmove || Op == O::Vnop || Op == O::Vftoi) {
+    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::VaddBc || Op == O::VsubBc || Op == O::VaddaBc || Op == O::Vopmula || Op == O::Vopmsub || Op == O::Vcallms || Op == O::Vsqrt || Op == O::Vrsqrt || Op == O::Vdiv || Op == O::Vwaitq || Op == O::VaddQ || Op == O::VsubQ || Op == O::VmulQ || Op == O::Vmove || Op == O::Vnop || Op == O::Vftoi) {
         if (!(s.cp0(Cop0::Status) & (1u<<30)))
             throw std::runtime_error("COP2 transfer with Status.CU2 = 0; coprocessor unusable vectoring is not modeled");
         constexpr bool transfer=Op==O::Cfc2 || Op==O::Ctc2 || Op==O::Qmfc2 || Op==O::Qmtc2;
@@ -462,12 +462,12 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
             // VU manual v6 p.304: no operation and no status-flag changes.
             // VNOP consumes its ordinary instruction slot without waiting
             // for the independent FDIV unit or touching unknown VF/VI data.
-        } else if constexpr (Op==O::Vsqrt || Op==O::Vdiv || Op==O::Vwaitq) {
+        } else if constexpr (Op==O::Vsqrt || Op==O::Vrsqrt || Op==O::Vdiv || Op==O::Vwaitq) {
             const auto ready=m.vu_q_ready_cycle();
             if(ready>s.cycles())s.stall(ready-s.cycles());
             m.vu_advance_q(s.cycles());
             if constexpr(Op!=O::Vwaitq)
-                m.vu_issue_q(s.cycles(),d_,t_,(w>>21u)&3u,(w>>23u)&3u,Op==O::Vsqrt);
+                m.vu_issue_q(s.cycles(),d_,t_,(w>>21u)&3u,(w>>23u)&3u,Op==O::Vsqrt ? 1u : (Op==O::Vrsqrt ? 2u : 0u));
         } else if constexpr (Op==O::Vftoi) {
             constexpr unsigned fractions[]{0,4,12,15};
             const auto source=m.observe_vu_vector(d_);auto result=m.observe_vu_vector(t_);

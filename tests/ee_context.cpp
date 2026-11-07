@@ -712,6 +712,18 @@ void vector_q() {
             native.low.unknown==interpreted.low.unknown && native.high.unknown==interpreted.high.unknown,
             "native VSUBq helper matches the independent interpreted result");
     }
+    {
+        constexpr auto rsqrt=0x4A6F03BEu; // Q = VF0.w / sqrt(VF15.x).
+        require(try_decode_r5900(0,rsqrt)->opcode==MipsOpcode::Vrsqrt,"VRSQRT decodes its two component selectors");
+        memory.write_vu_vector(15,{{0x40800000u,0},{0,0}});memory.write_vu_control(22,0x3E800000u);
+        memory.write32(0x80001120u,rsqrt);s.pc=0x80001120u;const auto issued=s.cycles();
+        interpret_instruction(ctx);
+        require(memory.vu_q_ready_cycle()==issued+13u && memory.read_vu_control(22)==0x3E800000u,
+            "interpreted VRSQRT selects VF0.w/VF15.x and schedules thirteen cycles without publishing early");
+        ee::exec<MipsOpcode::Vwaitq>(s,memory,0,0x4A0003BFu);
+        require(s.cycles()==issued+13u && memory.read_vu_control(22)==0x3F000000u && !memory.vu_q_ready_cycle(),
+            "VRSQRT completes exact 1/sqrt(4) through the existing Q stall pipeline");
+    }
     s.set_cp0(Cop0::Count,0xFFFFFFFEu);s.count_anchor=s.cycles();s.set_cp0(Cop0::Compare,1);s.set_cp0(Cop0::Cause,0);s.stall(4);
     require(s.count()==2 && (s.cp0(Cop0::Cause)&kStatusIM7),"Compare latches across Count wrap during stall");
     memory.write_vu_vector(5,{{0x40000000u,0},{0,0}});

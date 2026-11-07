@@ -148,34 +148,51 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsi
     }
     return result;
 }
-std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a,std::optional<FloatBounds> bounds) {
+static std::optional<VuFloatResult> root_domain(ObservedWord a,std::optional<FloatBounds> bounds,
+    std::optional<std::uint32_t> numerator) {
     profiling::Scope profile(profiling::Phase::Bounds);
     if(!fraction_only(a))return std::nullopt;
     const auto domain=input_bounds(a,bounds);
     if(!domain)return {};
+    std::uint32_t common_flags=0;bool first=true;
+    const auto evaluate=[&](std::uint32_t input)->std::optional<std::uint32_t> {
+        const auto root=ee_fpu_sqrt(input);
+        if(!root)return {};
+        std::uint32_t flags=0;
+        const auto value=numerator ? ee_fpu_divide(*numerator,*root,flags) : *root;
+        if(!first && flags!=common_flags)return {};
+        first=false;common_flags=flags;return value;
+    };
     if(std::popcount(a.unknown)>8) {
         if(!bounds || (*domain)[1]-(*domain)[0]>=65536u)return std::nullopt;
         std::uint32_t low=~0u,high=0;
         for(auto value=(*domain)[0];; ++value) {
-            const auto root=ee_fpu_sqrt(value);
+            const auto root=evaluate(value);
             if(!root)return std::nullopt;
             low=std::min(low,*root);high=std::max(high,*root);
             if(value==(*domain)[1])break;
         }
-        return hull(low,high,0);
+        return hull(low,high,common_flags,numerator.has_value());
     }
     std::uint32_t low=~0u,high=0;
     auto subset=a.unknown;
     for(;;) {
         const auto value=lower(a)|subset;
         if(value>=(*domain)[0] && value<=(*domain)[1]) {
-            const auto root=ee_fpu_sqrt(value);
+            const auto root=evaluate(value);
             if(!root)return std::nullopt;
             low=std::min(low,*root);high=std::max(high,*root);
         }
         if(!subset)break;
         subset=(subset-1u)&a.unknown;
     }
-    return low<=high ? hull(low,high,0) : std::nullopt;
+    return low<=high ? hull(low,high,common_flags,numerator.has_value()) : std::nullopt;
+}
+std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a,std::optional<FloatBounds> bounds) {
+    return root_domain(a,bounds,{});
+}
+std::optional<VuFloatResult> vu_float_rsqrt(std::uint32_t numerator,ObservedWord denominator,
+    std::optional<FloatBounds> bounds) {
+    return root_domain(denominator,bounds,numerator);
 }
 }
