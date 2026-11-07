@@ -332,10 +332,14 @@ int boot_main(int argc, Character** argv) {
             if(assumptions.mechacon_forbid_dvdp_error_bit_clear)
                 header<<"# DIAGNOSTIC MECHACON ForbidDVDP reply bit 7 clear; other reply bits and permissions remain unknown (unmeasured)\n";
         }
+#ifdef PS2N_NATIVE_ONLY
+        header << "# engine native-only: AOT blocks " << (module ? module->block_count : 0) << "; EE/IOP/VU interpreters not linked\n";
+#else
         header << "# engine " << (module != nullptr ? "hybrid: AOT blocks " + std::to_string(module->block_count) +
                                                           " + interpreter fallback"
-                                                    : std::string("interpreter only")) << "\n"
-               << "# max-instructions " << options.max_instructions << ", trace "
+                                                    : std::string("interpreter only")) << "\n";
+#endif
+        header << "# max-instructions " << options.max_instructions << ", trace "
                << (options.trace == ps2native::TraceLevel::Full ? "full" : "events") << "\n";
         std::cout << header.str();
         for (const auto& file : bios.modules) {

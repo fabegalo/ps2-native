@@ -1,5 +1,6 @@
 #include "ps2native/memory.hpp"
 #include "ps2native/ee.hpp"
+#include "ps2native/sha256.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -10,6 +11,22 @@
 #include <string>
 
 namespace ps2native {
+std::string Memory::code_identity(std::uint32_t pc) const {
+    const auto target=resolve(pc,4u,false,"fetch");
+    const auto physical=target.physical;
+    if(target.region==BusRegion::BiosRom)return "EE ROM0 sha256="+sha256_hex(rom_);
+    if(target.region==BusRegion::Rom1)return "EE ROM1 sha256="+sha256_hex(rom1_);
+    if(target.region==BusRegion::MainRam) {
+        const auto base=physical&~4095u;std::vector<std::uint8_t> bytes;
+        for(unsigned at=base;at<base+4096u;at+=4) {
+            const auto word=diagnostic_ram(at,4);
+            for(const auto value:{word.value&~word.unknown,word.unknown})
+                for(unsigned b=0;b<4;++b)bytes.push_back(static_cast<std::uint8_t>(value>>(b*8u)));
+        }
+        return "EE loaded RAM page base="+std::to_string(base)+" observed_sha256="+sha256_hex(bytes);
+    }
+    return "EE mapped code physical="+std::to_string(physical);
+}
 void Memory::configure_rtc(std::uint64_t utc_epoch_seconds) {
     if(cache_clock_ && *cache_clock_)throw DeviceRefusal("RTC input must precede EE execution");
     registers_.configure_rtc(utc_epoch_seconds);

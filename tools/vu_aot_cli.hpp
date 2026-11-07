@@ -17,7 +17,13 @@ struct VuAotOptions {
     bool capture_limit_reported{};
     static constexpr std::size_t capture_limit=256;
     template<class C> bool parse(const std::string& flag,const C* native) {
-        if(flag=="--vu1-interpreter")interpreter=true;
+        if(flag=="--vu1-interpreter") {
+#ifdef PS2N_NATIVE_ONLY
+            throw std::runtime_error("--vu1-interpreter is available only in validation executables");
+#else
+            interpreter=true;
+#endif
+        }
         else if(flag.starts_with("--vu1-capture=")) {
             directory=std::filesystem::path(native).native().substr(14);
             if(directory.empty())throw std::runtime_error("--vu1-capture requires a directory");

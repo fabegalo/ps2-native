@@ -148,6 +148,8 @@ public:
     [[nodiscard]] ObservedWord observe_vu_data(std::uint32_t address) const {return vu_control_.observe_data(address);}
     // HOST_INPUT_BEGIN
     void enable_vu1_aot(bool enabled) {vu_control_.enable_vu1_aot(enabled);}
+    [[nodiscard]] const VuAotStats& vu0_aot_stats() const {return vu_control_.vu0_aot_stats();}
+    [[nodiscard]] VuAotImage capture_vu0_micro() const {return vu_control_.capture_micro(0);}
     [[nodiscard]] const VuAotStats& vu1_aot_stats() const {return vu_control_.vu1_aot_stats();}
     [[nodiscard]] VuAotImage capture_vu1_micro() const {return vu_control_.capture_vu1_micro();}
     void set_vu1_capture(VuControl::Vu1Capture capture) {vu_control_.set_vu1_capture(std::move(capture));}

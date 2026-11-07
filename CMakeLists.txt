@@ -487,6 +487,8 @@ if(BUILD_TESTING)
     target_link_libraries(ps2n-vu-aot-bench PRIVATE ps2n_core)
 endif()
 
+include(cmake/NativeRuntime.cmake)
+
 # Desktop launcher (Qt 6 Quick). Optional: AUTO builds it only when Qt is found,
 # so headless and core-only builds never depend on a GUI toolkit.
 set(PS2N_LAUNCHER "AUTO" CACHE STRING "Build the ps2-native desktop launcher (Qt 6): AUTO, ON or OFF")

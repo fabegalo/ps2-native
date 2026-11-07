@@ -254,7 +254,9 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
     // An unaligned stop address can never match an instruction PC.
     ExecutionContext ctx{state, memory, executed, options.max_instructions, 0xFFFFFFFFu, &tracer};
     AotDispatchCache dispatch;
+#ifndef PS2N_NATIVE_ONLY
     InterpreterDecodeCache interpreter_decode;
+#endif
     const auto start_retired = state.retired_instructions;
     ObserverScope scope(memory, &tracer, options, state);
     {
@@ -273,8 +275,8 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                 (void)poll_ee_interrupts_cached(ctx);
                 ctx.interrupts_sampled=true;
                 memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi)); memory.set_cache_config(state.cp0(Cop0::Config));
-                // Hybrid mode: every address may continue in the interpreter, so
-                // the AOT-only verified-entry restriction does not apply here.
+                // System execution resolves each loaded image at its current PC;
+                // instruction guards still validate the selected artifact's bytes.
                 state.indirect_entry_pending = false;
                 const AotBlock* block;
                 {
@@ -296,7 +298,13 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                         throw std::runtime_error("AOT block at " + hex32(state.pc) + " made no progress");
                 } else {
                     flush_interrupt_cache(ctx);
+#ifdef PS2N_NATIVE_ONLY
+                    throw std::runtime_error("missing EE AOT: "+memory.code_identity(state.pc)+" pc="+hex32(state.pc)+
+                        " instruction="+hex32(memory.fetch32(state.pc))+
+                        "; prepare the matching BIOS/kernel/loaded overlay offline with ps2n-dev prepare and link its AOT artifact");
+#else
                     interpret_instruction(ctx, &tracer,interpreter_decode);
+#endif
                 }
             }
             report.pc = state.pc;

@@ -1,0 +1,65 @@
+# Same hardware/runtime sources and compiler settings, with instruction
+# interpreters omitted. Validation tools keep the separate reference archive.
+get_target_property(ps2n_native_sources ps2n_core SOURCES)
+list(FILTER ps2n_native_sources EXCLUDE REGEX "(^|/)interpreter[.]cpp$")
+add_library(ps2n_core_native STATIC ${ps2n_native_sources})
+foreach(property IN ITEMS INCLUDE_DIRECTORIES COMPILE_OPTIONS COMPILE_DEFINITIONS LINK_LIBRARIES
+                          INTERFACE_INCLUDE_DIRECTORIES INTERFACE_COMPILE_OPTIONS
+                          INTERFACE_COMPILE_DEFINITIONS INTERFACE_LINK_LIBRARIES)
+    get_target_property(value ps2n_core ${property})
+    if(value)
+        set_property(TARGET ps2n_core_native PROPERTY ${property} "${value}")
+    endif()
+endforeach()
+if(BUILD_TESTING)
+    if(MSVC)
+        get_filename_component(ps2n_linker_directory "${CMAKE_LINKER}" DIRECTORY)
+        find_program(PS2N_DUMPBIN_EXECUTABLE dumpbin HINTS "${ps2n_linker_directory}")
+        if(PS2N_DUMPBIN_EXECUTABLE)
+            add_test(NAME native-runtime-no-interpreters COMMAND "${CMAKE_COMMAND}"
+                "-DDUMPBIN=${PS2N_DUMPBIN_EXECUTABLE}" "-DNATIVE=$<TARGET_FILE:ps2n_core_native>"
+                "-DREFERENCE=$<TARGET_FILE:ps2n_core>" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_symbols.cmake")
+        endif()
+    endif()
+    add_executable(ps2n-ee-system-fixture tests/ee_system_make_fixture.cpp)
+    target_link_libraries(ps2n-ee-system-fixture PRIVATE ps2n_core)
+    set(EE_SYSTEM_IMAGE "${FIXTURE_DIR}/ee-system.elf")
+    set(EE_SYSTEM_SOURCE "${FIXTURE_DIR}/ee_system_aot.cpp")
+    add_custom_command(OUTPUT "${EE_SYSTEM_IMAGE}"
+        COMMAND $<TARGET_FILE:ps2n-ee-system-fixture> "${EE_SYSTEM_IMAGE}"
+        DEPENDS ps2n-ee-system-fixture VERBATIM)
+    add_custom_command(OUTPUT "${EE_SYSTEM_SOURCE}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${EE_SYSTEM_IMAGE}" "${EE_SYSTEM_SOURCE}" --hybrid --execution-alias=0x80000000 --entry=0x80000180
+        DEPENDS ps2n-aot "${EE_SYSTEM_IMAGE}" VERBATIM)
+    add_executable(ps2n-ee-system-native tests/ee_system_aot.cpp "${EE_SYSTEM_SOURCE}")
+    target_link_libraries(ps2n-ee-system-native PRIVATE ps2n_core_native)
+    add_executable(ps2n-ee-system-reference tests/ee_system_aot.cpp)
+    target_link_libraries(ps2n-ee-system-reference PRIVATE ps2n_core)
+    add_test(NAME native-ee-system COMMAND "${CMAKE_COMMAND}"
+        "-DNATIVE=$<TARGET_FILE:ps2n-ee-system-native>" "-DREFERENCE=$<TARGET_FILE:ps2n-ee-system-reference>"
+        "-DIMAGE=${EE_SYSTEM_IMAGE}" -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/ee_system_compare.cmake")
+endif()
+target_compile_definitions(ps2n_core_native PUBLIC PS2N_NATIVE_ONLY=1)
+string(SHA256 ps2n_native_runtime_hash "${checkpoint_runtime_hash}\nnative-only-v1\n")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/native")
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/native/checkpoint_build.hpp" CONTENT
+    "#pragma once\n#define PS2N_CHECKPOINT_SCHEMA \"${checkpoint_schema_hash}\"\n#define PS2N_CHECKPOINT_RUNTIME \"${ps2n_native_runtime_hash}\"\n")
+target_include_directories(ps2n_core_native BEFORE PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/native")
+add_library(ps2n_frontend_native STATIC src/frontend/content.cpp src/frontend/library.cpp src/frontend/runtime.cpp)
+target_link_libraries(ps2n_frontend_native PUBLIC ps2n_core_native)
+get_target_property(ps2n_frontend_options ps2n_frontend COMPILE_OPTIONS)
+target_compile_options(ps2n_frontend_native PRIVATE ${ps2n_frontend_options})
+add_executable(ps2n-native tools/ps2n-boot.cpp)
+target_link_libraries(ps2n-native PRIVATE ps2n_core_native)
+if(PS2N_BIOS_AOT_SOURCE)
+    ps2n_target_aot_source(ps2n-native "${PS2N_BIOS_AOT_SOURCE}")
+    target_compile_definitions(ps2n-native PRIVATE PS2N_BOOT_WITH_AOT=1)
+endif()
+if(PS2N_IOP_AOT_SOURCES OR PS2N_VU1_AOT_SOURCES OR PS2N_VU0_AOT_SOURCES)
+    add_library(ps2n_native_modules OBJECT)
+    target_link_libraries(ps2n_native_modules PUBLIC ps2n_core_native)
+    foreach(source IN LISTS PS2N_IOP_AOT_SOURCES PS2N_VU1_AOT_SOURCES PS2N_VU0_AOT_SOURCES)
+        ps2n_target_aot_source(ps2n_native_modules "${source}")
+    endforeach()
+    target_link_libraries(ps2n-native PRIVATE ps2n_native_modules)
+endif()
