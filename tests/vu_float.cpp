@@ -7,6 +7,36 @@ using namespace ps2native;
 namespace {
 void require(bool condition,const char* message) {if(!condition)throw std::runtime_error(message);}
 bool contains(ObservedWord word,std::uint32_t value) {return (value&~word.unknown)==word.value;}
+void mac_boundaries() {
+    const ObservedWord input{0xBF000000u,0xFFFFFFu};
+    const FloatBounds domain{0xBF7FFFFDu,0xBF800000u};
+    const auto sum=vu_float_add(input,input,domain,domain);
+    require(sum && sum->bounded && sum->word.value==0x80000000u && sum->word.unknown==0x7FFFFFFFu &&
+        sum->bounds==FloatBounds{0xBFFFFFFDu,0xC0000000u} && !sum->flags && !vu_float_zero(sum->word,sum->bounds),
+        "certified sums around minus two prove nonzero even when no magnitude bit is common");
+    require(!vu_float_add({0x3F800000u,0},{0xBF000000u,0xFFFFFFu},{},FloatBounds{0xBF7FFFFFu,0xBF800001u}),
+        "the strict near-unit cancellation still refuses because actual results cross zero and sign");
+    require(vu_float_zero({0x80000000u,0}) && !vu_float_zero({0x3F800000u,0}),"known signed zero and one classify independently");
+    bool refused=false;try {(void)vu_float_zero({0xFFFFFFFFu,0x7FFFFFFFu});}catch(const DeviceRefusal&){refused=true;}
+    require(refused,"unknown backing bits cannot fabricate zero or nonzero without numeric evidence");
+    VuControl vu;vu.write_vector(1,{{input.value,input.unknown},{0,0}});vu.restore_vector_bounds(1,0,domain);
+    vu.write_vector(2,{{input.value,input.unknown},{0,0}});vu.restore_vector_bounds(2,0,domain);
+    vu.write_vector(3,{});vu.add(3,1,2,8);
+    require(vu.observe_vector(3).low.value==sum->word.value && vu.observe_vector(3).low.unknown==sum->word.unknown &&
+        vu.read(17)==0x80u && (vu.read(16)&15u)==2u,"macro ADD derives MAC Z from the certified normal range");
+    vu.write_vector(4,{{0x3F800000u,0},{0,0}});vu.product(0,1,4,8,4,false,true);
+    vu.product(3,2,4,8,4,true,false);
+    require(vu.observe_vector_bounds(3,0)==std::optional<FloatBounds>{sum->bounds} && vu.read(17)==0x80u,
+        "macro MADD retains an exponent-crossing ACC sum and its nonzero flag");
+    constexpr auto lower_nop=0x8000033Cu,upper_nop=0x2FFu;
+    const auto add=(8u<<21u)|(2u<<16u)|(1u<<11u)|(3u<<6u)|0x28u;
+    vu.write_memory(0x11000000u,8,{lower_nop|(std::uint64_t{add}<<32u),0});
+    vu.write_memory(0x11000008u,8,{lower_nop|(std::uint64_t{upper_nop|0x40000000u}<<32u),0});
+    vu.write_memory(0x11000010u,8,{lower_nop|(std::uint64_t{upper_nop}<<32u),0});
+    vu.start_micro(0,0,0);vu.advance_micro(20);
+    require(!vu.micro_running(0) && vu.observe_vector_bounds(3,0)==std::optional<FloatBounds>{sum->bounds} &&
+        vu.read(17)==0x80u && (vu.read(16)&15u)==2u,"micro ADD publishes the same numeric certificate and MAC class");
+}
 void rsqrt_domains() {
     const ObservedWord denominator{0x3F7FFFFEu,1u};
     const FloatBounds domain{0x3F7FFFFEu,0x3F7FFFFFu};
@@ -241,8 +271,10 @@ void pipeline() {
         }
         require(!vu_float_product(product->word,{0x3F800000u,0}) && !vu_float_add(product->word,{0,0}),
             "cross-exponent identities require independent numeric certificates");
-        require(!vu_float_product({0xFFFFFFFFu,0x7FFFFFFFu},{0x3F800000u,0},0,FloatBounds{0xBF7FFFFFu,0xBF800001u}),
-            "unknown backing bits cannot manufacture a nonzero common magnitude or MAC proof");
+        const auto backing=vu_float_product({0xFFFFFFFFu,0x7FFFFFFFu},{0x3F800000u,0},0,FloatBounds{0xBF7FFFFFu,0xBF800001u});
+        require(backing && backing->word.value==0x80000000u && backing->word.unknown==0x7FFFFFFFu &&
+            !vu_float_zero(backing->word,backing->bounds),
+            "unknown backing bits remain masked; independent normal bounds prove nonzero MAC");
         vu.write_vector(1,{{a.value,a.unknown},{0,0}});vu.restore_vector_bounds(1,0,ab);
         vu.write_vector(2,{{b.value,b.unknown},{0,0}});vu.restore_vector_bounds(2,0,bb);
         vu.product(3,1,2,8,4,false,false);
@@ -340,5 +372,5 @@ void pipeline() {
 
 }
 }
-int main()try {ranges();rsqrt_domains();pipeline();std::puts("VU floating uncertainty remains explicit and sound");return 0;}
+int main()try {ranges();rsqrt_domains();mac_boundaries();pipeline();std::puts("VU floating uncertainty remains explicit and sound");return 0;}
 catch(const std::exception& error){std::fprintf(stderr,"%s\n",error.what());return 1;}

@@ -114,9 +114,9 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper_shared(unsigned dynamic_uni
             }
         }
         result.output.words[lane]=value;result.output.bounds[lane]=bounds;
-        // Shared bounds certify sign/exponent and exception classes. An
-        // uncertain normal fraction therefore cannot change Z/S/U/O flags.
-        if(!(value.value&0x7FFFFFFFu)){result.mac|=bit;result.status|=1u;}
+        // Numeric bounds can prove nonzero even across exponents whose
+        // word hull shares no magnitude bit; flags must use that proof too.
+        if(vu_float_zero(value,bounds)){result.mac|=bit;result.status|=1u;}
         if(value.value&0x80000000u){result.mac|=bit<<4u;result.status|=2u;}
         if(flags&0x4000u){result.mac|=bit<<8u;result.status|=4u;}
         if(flags&0x8000u){result.mac|=bit<<12u;result.status|=8u;}

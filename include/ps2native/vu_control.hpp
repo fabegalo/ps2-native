@@ -289,7 +289,7 @@ public:
             } else value={ee_fpu_add(a.value,b.value^(subtract ? 0x80000000u : 0u),flags),0};
             if(to_accumulator && (flags&0xC000u))throw DeviceRefusal("VU ADD exceptional result/ACC metadata is not modeled");
             result[lane]=value;
-            if(!(value.value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
+            if(vu_float_zero(value,bounds[lane])){mac|=bit;status|=1u;}
             if(value.value&0x80000000u){mac|=bit<<4u;status|=2u;}
             if(flags&0x4000u){mac|=bit<<8u;status|=4u;}
             if(flags&0x8000u){mac|=bit<<12u;status|=8u;}
@@ -347,7 +347,7 @@ public:
                 if(flags&0xC000u)throw DeviceRefusal("VU accumulation exception/ACC state is not modeled");
             }
             result[lane]=value;
-            if(!(value.value&0x7FFFFFFFu)){mac|=bit;status|=1u;}
+            if(vu_float_zero(value,bounds[lane])){mac|=bit;status|=1u;}
             if(value.value&0x80000000u){mac|=bit<<4u;status|=2u;}
             if(flags&0x4000u){mac|=bit<<8u;status|=4u;}
             if(flags&0x8000u){mac|=bit<<12u;status|=8u;}

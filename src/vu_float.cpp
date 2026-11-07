@@ -38,9 +38,35 @@ VuFloatResult packed(std::uint64_t product,int exponent,std::uint32_t sign) {
 }
 std::optional<VuFloatResult> normal_identity(ObservedWord word,std::optional<FloatBounds> bounds) {
     if(!bounds || !word_bounds_match(word,*bounds) || (word.unknown&0x80000000u) ||
-       !(word.value&~word.unknown&0x7FFFFFFFu) || (((*bounds)[0]^(*bounds)[1])&0x80000000u) ||
+       (((*bounds)[0]^(*bounds)[1])&0x80000000u) ||
        ((*bounds)[0]&0x7FFFFFFFu)<0x00800000u)return {};
     return VuFloatResult{{word.value&~word.unknown,word.unknown},0,*bounds,true};
+}
+template<typename Operation>
+std::optional<VuFloatResult> enumerate_normal_domains(ObservedWord a,ObservedWord b,
+    std::optional<FloatBounds> a_bounds,std::optional<FloatBounds> b_bounds,Operation operation) {
+    const auto certified=[](ObservedWord word,std::optional<FloatBounds> bounds)->std::optional<FloatBounds> {
+        if(!word.unknown)return FloatBounds{word.value,word.value};
+        const auto value=normal_identity(word,bounds);
+        return value ? std::optional<FloatBounds>{value->bounds} : std::nullopt;
+    };
+    const auto ar=certified(a,a_bounds),br=certified(b,b_bounds);
+    if(!ar || !br || (std::uint64_t{(*ar)[1]}-(*ar)[0]+1u)*
+        (std::uint64_t{(*br)[1]}-(*br)[0]+1u)>256u)return {};
+    std::uint32_t low=~0u,high=0,common_flags=0;bool first=true;
+    // Evaluate the existing circuit in operand order, never assuming rounded monotonicity.
+    for(auto av=(*ar)[0];; ++av) {
+        for(auto bv=(*br)[0];; ++bv) {
+            std::uint32_t flags=0;const auto value=operation(av,bv,flags);
+            if(!value || (!first && flags!=common_flags))return {};
+            first=false;common_flags=flags;low=std::min(low,*value);high=std::max(high,*value);
+            if(bv==(*br)[1])break;
+        }
+        if(av==(*ar)[1])break;
+    }
+    const auto result=hull(low,high,common_flags,true);
+    return result && (!result->word.unknown || (result->word.value&0x7FFFFFFFu) ||
+        (low&0x7FFFFFFFu)>=0x00800000u) ? result : std::nullopt;
 }
 }
 std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
@@ -52,7 +78,10 @@ std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
     if(!b.unknown && !(b.value&0x7FFFFFFFu))if(auto value=normal_identity(a,a_bounds))return value;
     if(!a.unknown && !(a.value&0x7FFFFFFFu))if(auto value=normal_identity(b,b_bounds))return value;
     profiling::Scope profile(profiling::Phase::Bounds);
-    if(!fraction_only(a) || !fraction_only(b))return std::nullopt;
+    if(!fraction_only(a) || !fraction_only(b))return enumerate_normal_domains(a,b,a_bounds,b_bounds,
+        [](std::uint32_t left,std::uint32_t right,std::uint32_t& flags)->std::optional<std::uint32_t> {
+            return ee_fpu_add(left,right,flags);
+        });
     const auto ar=input_bounds(a,a_bounds),br=input_bounds(b,b_bounds);
     if(!ar || !br)return {};
     const auto [amin,amax]=*ar;const auto [bmin,bmax]=*br;
@@ -121,30 +150,10 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsi
         return value;
     }
     profiling::Scope profile(profiling::Phase::Bounds);
-    if(!fraction_only(a) || !fraction_only(b)) {
-        const auto certified=[](ObservedWord word,std::optional<FloatBounds> bounds)->std::optional<FloatBounds> {
-            if(!word.unknown)return FloatBounds{word.value,word.value};
-            const auto value=normal_identity(word,bounds);
-            return value ? std::optional<FloatBounds>{value->bounds} : std::nullopt;
-        };
-        const auto ar=certified(a,a_bounds),br=certified(b,b_bounds);
-        if(!ar || !br || (std::uint64_t{(*ar)[1]}-(*ar)[0]+1u)*
-            (std::uint64_t{(*br)[1]}-(*br)[0]+1u)>256u)return {};
-        std::uint32_t low=~0u,high=0,common_flags=0;bool first=true;
-        // Small certified exponent crossings can use the existing circuit
-        // directly, in operand order, without assuming rounded monotonicity.
-        for(auto av=(*ar)[0];; ++av) {
-            for(auto bv=(*br)[0];; ++bv) {
-                std::uint32_t flags=0;const auto value=ee_fpu_multiply(av,bv,flags,diagnostic);
-                if(!value || (!first && flags!=common_flags))return {};
-                first=false;common_flags=flags;low=std::min(low,*value);high=std::max(high,*value);
-                if(bv==(*br)[1])break;
-            }
-            if(av==(*ar)[1])break;
-        }
-        const auto result=hull(low,high,common_flags,true);
-        return result && (!result->word.unknown || (result->word.value&0x7FFFFFFFu)) ? result : std::nullopt;
-    }
+    if(!fraction_only(a) || !fraction_only(b))return enumerate_normal_domains(a,b,a_bounds,b_bounds,
+        [diagnostic](std::uint32_t left,std::uint32_t right,std::uint32_t& flags) {
+            return ee_fpu_multiply(left,right,flags,diagnostic);
+        });
     const auto ar=input_bounds(a,a_bounds),br=input_bounds(b,b_bounds);
     if(!ar || !br)return {};
     const auto [amin,amax]=*ar;const auto [bmin,bmax]=*br;

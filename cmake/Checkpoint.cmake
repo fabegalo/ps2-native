@@ -23,8 +23,12 @@ set(checkpoint_schema "ps2n-complete-checkpoint-v1-le-fields\n")
 foreach(header IN LISTS checkpoint_headers)
     file(READ "${header}" content)
     string(REPLACE "\r\n" "\n" content "${content}")
+    # MAC zero classification is an execution helper, not a serialized field.
+    string(REPLACE "if(vu_float_zero(value,bounds[lane]))" "if(!(value.value&0x7FFFFFFFu))" content "${content}")
+    string(REPLACE "// Sound overapproximations, never guessed low bits. Numeric certificates\n// restrict normal word hulls and prove flags even across exponents."
+        "// Sound overapproximations, never guessed low bits. Uncertainty is confined\n// to the fraction of a normal value with a known sign/exponent and flags." content "${content}")
     # Clarifying the execution-only product contract does not change wire fields.
-    string(REPLACE "// The opt-in exponent hull is for EE domain analysis. Default VU callers\n// admit certified exponent crossings only when the word hull proves MAC Z/S\n// and the numeric bounds prove the same exception class throughout."
+    string(REPLACE "// The opt-in exponent hull is for EE domain analysis. Default VU callers\n// admit certified exponent crossings only when MAC Z/S and exceptions are\n// proven from known bits or independently certified numeric bounds."
         "// The opt-in exponent hull is for EE domain analysis only. Default VU\n// callers retain a proven single exponent for their separate MAC flag model." content "${content}")
     # Host input callbacks have no wire fields. Keep existing checkpoint schema
     # identity; the full header still participates in the runtime fingerprint.
