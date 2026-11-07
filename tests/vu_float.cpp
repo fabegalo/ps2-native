@@ -136,6 +136,47 @@ void ranges() {
 }
 void pipeline() {
     VuControl vu;
+    {
+        // Adjacent encodings of sqrt(1/2) and sqrt(2) straddle a unit product.
+        const ObservedWord a{0x3F3504F0u,7u},b{0x3FB504F0u,7u};
+        const FloatBounds ab{0x3F3504F3u,0x3F3504F4u},bb{0x3FB504F3u,0x3FB504F4u};
+        require(!vu_float_product(a,b),"an opaque fraction hull cannot borrow absent numeric certificates");
+        const auto product=vu_float_product(a,b,0,ab,bb);
+        require(product && product->bounded && !product->flags && product->word.value==0x3F000000u &&
+            product->word.unknown==0xFFFFFFu && product->bounds==FloatBounds{0x3F7FFFFFu,0x3F800001u},
+            "certified unit crossing retains both exponents without inventing a rounded product");
+        for(const auto sign:{0u,0x80000000u}) {
+            const auto identity=vu_float_product(product->word,{sign|0x3F800000u,0},0,product->bounds);
+            require(identity && identity->word.value==(product->word.value^sign) && identity->word.unknown==product->word.unknown &&
+                identity->bounds==FloatBounds{product->bounds[0]^sign,product->bounds[1]^sign} && !identity->flags,
+                "right unit multiplication preserves a certified cross-exponent interval and sign");
+            const auto sum=vu_float_add(product->word,{sign,0},product->bounds);
+            const auto reverse=vu_float_add({sign,0},product->word,{},product->bounds);
+            require(sum && reverse && sum->word.value==product->word.value && sum->word.unknown==product->word.unknown &&
+                reverse->bounds==product->bounds && !sum->flags && !reverse->flags,
+                "signed zero addition preserves normal numeric certificates in either operand order");
+        }
+        require(!vu_float_product(product->word,{0x3F800000u,0}) && !vu_float_add(product->word,{0,0}),
+            "cross-exponent identities require independent numeric certificates");
+        require(!vu_float_product({0xFFFFFFFFu,0x7FFFFFFFu},{0x3F800000u,0},0,FloatBounds{0xBF7FFFFFu,0xBF800001u}),
+            "unknown backing bits cannot manufacture a nonzero common magnitude or MAC proof");
+        vu.write_vector(1,{{a.value,a.unknown},{0,0}});vu.restore_vector_bounds(1,0,ab);
+        vu.write_vector(2,{{b.value,b.unknown},{0,0}});vu.restore_vector_bounds(2,0,bb);
+        vu.product(3,1,2,8,4,false,false);
+        require(vu.observe_vector(3).low.value==product->word.value && static_cast<std::uint32_t>(vu.observe_vector(3).low.unknown)==product->word.unknown &&
+            vu.observe_vector_bounds(3,0)==std::optional<FloatBounds>{product->bounds} && !vu.read(17) && !(vu.read(16)&15u),
+            "macro VMUL commits the complete interval and known nonzero positive normal MAC/status flags");
+        const auto unsafe=vu_float_product({0x3FC00000u,0},{0x3FAAAAAAu,1},0,{},FloatBounds{0x3FAAAAAAu,0x3FAAAAABu});
+        require(!unsafe,"a crossing with zero common magnitude still refuses instead of fabricating MAC Z");
+        constexpr auto lower_nop=0x8000033Cu,upper_nop=0x2FFu;
+        const auto micro_product=(8u<<21u)|(2u<<16u)|(1u<<11u)|(3u<<6u)|0x2Au;
+        vu.write_memory(0x11000000u,8,{lower_nop|(std::uint64_t{micro_product}<<32u),0});
+        vu.write_memory(0x11000008u,8,{lower_nop|(std::uint64_t{upper_nop|0x40000000u}<<32u),0});
+        vu.write_memory(0x11000010u,8,{lower_nop|(std::uint64_t{upper_nop}<<32u),0});
+        vu.start_micro(0,0,0);vu.advance_micro(20);
+        require(!vu.micro_running(0) && vu.observe_vector_bounds(3,0)==std::optional<FloatBounds>{product->bounds} &&
+            !vu.read(17) && !(vu.read(16)&15u),"retired micro VMUL preserves the same interval and known MAC/status flags");
+    }
     for(const auto sign:{0u,0x80000000u}) {
         VuControl clipped;clipped.write_vector(1,{{sign|0x00800000u,0},{0,0}});
         clipped.write_vector(2,{{0x3F000000u,0},{0,0}});

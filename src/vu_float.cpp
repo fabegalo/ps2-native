@@ -36,6 +36,12 @@ VuFloatResult packed(std::uint64_t product,int exponent,std::uint32_t sign) {
     return {{sign|(static_cast<std::uint32_t>(exponent)<<23u)|
              (static_cast<std::uint32_t>(product>>shift)&0x7FFFFFu),0},0};
 }
+std::optional<VuFloatResult> normal_identity(ObservedWord word,std::optional<FloatBounds> bounds) {
+    if(!bounds || !word_bounds_match(word,*bounds) || (word.unknown&0x80000000u) ||
+       !(word.value&~word.unknown&0x7FFFFFFFu) || (((*bounds)[0]^(*bounds)[1])&0x80000000u) ||
+       ((*bounds)[0]&0x7FFFFFFFu)<0x00800000u)return {};
+    return VuFloatResult{{word.value&~word.unknown,word.unknown},0,*bounds,true};
+}
 }
 std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
     std::optional<FloatBounds> a_bounds,std::optional<FloatBounds> b_bounds,bool allow_exponent) {
@@ -43,6 +49,8 @@ std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
         std::uint32_t flags=0;const auto value=ee_fpu_add(a.value,b.value,flags);
         return VuFloatResult{{value,0},flags};
     }
+    if(!b.unknown && !(b.value&0x7FFFFFFFu))if(auto value=normal_identity(a,a_bounds))return value;
+    if(!a.unknown && !(a.value&0x7FFFFFFFu))if(auto value=normal_identity(b,b_bounds))return value;
     profiling::Scope profile(profiling::Phase::Bounds);
     if(!fraction_only(a) || !fraction_only(b))return std::nullopt;
     const auto ar=input_bounds(a,a_bounds),br=input_bounds(b,b_bounds);
@@ -102,6 +110,12 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsi
         if(const auto value=ee_fpu_multiply(a.value,b.value,flags,diagnostic))
             return VuFloatResult{{*value,0},flags};
     }
+    // A right-hand unit has no partial rows in discarded Booth columns.
+    if(!b.unknown && (b.value&0x7FFFFFFFu)==0x3F800000u)if(auto value=normal_identity(a,a_bounds)) {
+        const auto sign=b.value&0x80000000u;value->word.value^=sign;
+        for(auto& endpoint:value->bounds)endpoint^=sign;
+        return value;
+    }
     profiling::Scope profile(profiling::Phase::Bounds);
     if(!fraction_only(a) || !fraction_only(b))return std::nullopt;
     const auto ar=input_bounds(a,a_bounds),br=input_bounds(b,b_bounds);
@@ -124,7 +138,15 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsi
     const auto high=packed(std::uint64_t{mantissa(amax)}*mantissa(bmax),
                            static_cast<int>(ea)+static_cast<int>(eb)-127,sign);
     if(low.flags!=high.flags)return std::nullopt;
-    return hull(low.word.value,high.word.value,low.flags,allow_exponent);
+    auto result=hull(low.word.value,high.word.value,low.flags,allow_exponent);
+    if(!result && !allow_exponent && !low.flags && (!a.unknown || a_bounds) && (!b.unknown || b_bounds)) {
+        // Certified domains may cross an exponent boundary while every MAC
+        // class remains known. A nonzero common magnitude proves Z=0; the
+        // hull already proves the sign and the endpoint flags prove U/O.
+        auto expanded=hull(low.word.value,high.word.value,low.flags,true);
+        if(expanded && (expanded->word.value&0x7FFFFFFFu))result=expanded;
+    }
+    return result;
 }
 std::optional<VuFloatResult> vu_float_sqrt(ObservedWord a,std::optional<FloatBounds> bounds) {
     profiling::Scope profile(profiling::Phase::Bounds);

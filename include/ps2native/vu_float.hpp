@@ -17,8 +17,9 @@ struct VuFloatResult {
 // Unsupported uncertainty/cancellation/exception boundaries return nullopt.
 std::optional<VuFloatResult> vu_float_add(ObservedWord a,ObservedWord b,
     std::optional<FloatBounds> a_bounds={},std::optional<FloatBounds> b_bounds={},bool allow_exponent_bounds=false);
-// The opt-in exponent hull is for EE domain analysis only. Default VU
-// callers retain a proven single exponent for their separate MAC flag model.
+// The opt-in exponent hull is for EE domain analysis. Default VU callers
+// admit certified exponent crossings only when the word hull proves MAC Z/S
+// and the numeric bounds prove the same exception class throughout.
 std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsigned diagnostic_early_digit_carry=0,
     std::optional<FloatBounds> a_bounds={},std::optional<FloatBounds> b_bounds={},bool allow_exponent_bounds=false);
 // Enumerate at most eight opaque fraction bits, or at most 65536 encodings
