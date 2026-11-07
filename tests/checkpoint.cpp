@@ -21,8 +21,9 @@ void finish_transfer(Memory& memory) {
     require(gs.vram().read(0,64,0,7,0)==0x88888888u,"restored partial IMAGE transfer finishes at the correct pixel");
 }
 std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const std::uint8_t> payload,
-    const char* schema="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88") {
+    const char* schema="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88",bool current_layout=false) {
     std::vector<std::uint8_t> old_payload(payload.begin(),payload.end());
+    if(!current_layout) {
     const std::array<std::uint8_t,8> bus_tag{'G','I','F','B','U','S','0','1'};
     const auto bus=std::search(old_payload.begin(),old_payload.end(),bus_tag.begin(),bus_tag.end());
     require(bus!=old_payload.end(),"current checkpoint contains the graphics arbitration cursor");old_payload.erase(bus,bus+12);
@@ -69,6 +70,7 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
         require(count<=16,"synthetic VIF FIFO count is bounded");
         old_payload.erase(at,at+48+count*16);
     }}
+    }
     }
     }
     payload=old_payload;
@@ -323,6 +325,13 @@ int main(int argc,char** argv)try {
     (void)load_checkpoint(current_file,state,memory,context);
     const auto exact=checkpoint_state_sha256(state,memory);
     auto reviewed=context;reviewed.allow_runtime_change=true;
+    const auto same_bus_file=directory/"same-graphics-bus-fields.ps2ncp";
+    constexpr auto bus_schema="267777539ec7b7df428a6c552962a9b5cffeb8a3b539cdd175bebdff921c79c8";
+    write_file_atomically(same_bus_file,legacy_envelope(current_info,current_payload,bus_schema,true));
+    if(current_info.schema_sha256!=bus_schema)
+        rejects([&]{(void)load_checkpoint(same_bus_file,resumed,restored,context);},"schema");
+    (void)load_checkpoint(same_bus_file,resumed,restored,reviewed);
+    require(checkpoint_state_sha256(resumed,restored)==exact,"execution-only VU helper changes retain every serialized field");
     const auto bus_file=directory/"legacy-graphics-bus.ps2ncp";
     write_file_atomically(bus_file,legacy_envelope(current_info,current_payload,"25e615e5098e581ee91b9dd84ffe9782be7b73f47ebfa76e377caa06fa871ffd"));
     (void)load_checkpoint(bus_file,resumed,restored,reviewed);
