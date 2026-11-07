@@ -693,14 +693,18 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
                 static_cast<std::int64_t>(static_cast<std::int32_t>(b)));
         const auto accumulator=(std::uint64_t{static_cast<std::uint32_t>(hi)}<<32u)|static_cast<std::uint32_t>(lo);
         multiply(s,lo,hi,d_,accumulator+product);
-    } else if constexpr (Op == O::Mult || Op == O::Mult1) {
-        auto [lo, hi] = Op == O::Mult ? std::tie(s.lo, s.hi) : std::tie(s.lo1, s.hi1);
-        multiply(s, lo, hi, d_, static_cast<std::uint64_t>(
-            static_cast<std::int64_t>(static_cast<std::int32_t>(read_gpr32(s,s_))) *
-            static_cast<std::int64_t>(static_cast<std::int32_t>(read_gpr32(s,t_)))));
-    } else if constexpr (Op == O::Multu || Op == O::Multu1) {
-        auto [lo, hi] = Op == O::Multu ? std::tie(s.lo, s.hi) : std::tie(s.lo1, s.hi1);
-        multiply(s, lo, hi, d_, static_cast<std::uint64_t>(read_gpr32(s,s_)) * read_gpr32(s,t_));
+    } else if constexpr (Op == O::Mult || Op == O::Mult1 || Op == O::Multu || Op == O::Multu1) {
+        constexpr bool second=Op==O::Mult1 || Op==O::Multu1;
+        auto [lo,hi]=second ? std::tie(s.lo1,s.hi1) : std::tie(s.lo,s.hi);
+        const auto zero=[&](unsigned r){return !(s.unknown_gpr_bits[r]&0xFFFFFFFFu) && static_cast<std::uint32_t>(raw_gpr64(s,r))==0;};
+        std::uint64_t product=0;
+        if(!zero(s_) && !zero(t_)) {
+            const auto a=read_gpr32(s,s_),b=read_gpr32(s,t_);
+            if constexpr(Op==O::Mult || Op==O::Mult1)
+                product=static_cast<std::uint64_t>(static_cast<std::int64_t>(static_cast<std::int32_t>(a))*static_cast<std::int64_t>(static_cast<std::int32_t>(b)));
+            else product=std::uint64_t{a}*b;
+        }
+        multiply(s,lo,hi,d_,product);
     } else if constexpr (Op == O::Div || Op == O::Div1) {
         auto [lo, hi] = Op == O::Div ? std::tie(s.lo, s.hi) : std::tie(s.lo1, s.hi1);
         divide_signed(lo, hi, read_gpr32(s,s_), read_gpr32(s,t_));

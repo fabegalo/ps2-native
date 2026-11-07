@@ -1089,6 +1089,32 @@ void immediate_add_knowledge() {
         }
     }
 }
+void multiply_zero_knowledge() {
+    auto owner=std::make_unique<Memory>();auto& memory=*owner;memory.reset_for_boot(m20::build_firmware().rom);
+    for(const auto op:{MipsOpcode::Mult,MipsOpcode::Multu,MipsOpcode::Mult1,MipsOpcode::Multu1})
+    for(const bool swap:{false,true})for(const unsigned destination:{0u,4u,5u,6u})for(const bool interpreter:{false,true}) {
+        auto s=ee_reset_state();s.pc=0x80001000u;s.lo=11;s.hi=12;s.lo1=13;s.hi1=14;
+        s.set_reg128(4,0,0x1234);s.set_reg128(5,0,0x5678);s.set_reg128(6,9,0x9ABC);
+        s.set_reg64_observed(swap?4u:5u,0,~0ull);
+        const bool second=op==MipsOpcode::Mult1 || op==MipsOpcode::Multu1;
+        const auto word=(second ? 0x70000000u : 0u)|(4u<<21)|(5u<<16)|(destination<<11)|
+            ((op==MipsOpcode::Mult || op==MipsOpcode::Mult1) ? 0x18u : 0x19u);
+        const auto upper=s.gpr[destination].high;
+        if(interpreter) {memory.write32(s.pc,word);std::uint64_t count=0;ExecutionContext context{s,memory,count,1,0xFFFFFFFFu};interpret_instruction(context);}
+        else switch(op) {
+            case MipsOpcode::Mult:ee::exec<MipsOpcode::Mult>(s,memory,s.pc,word);break;
+            case MipsOpcode::Multu:ee::exec<MipsOpcode::Multu>(s,memory,s.pc,word);break;
+            case MipsOpcode::Mult1:ee::exec<MipsOpcode::Mult1>(s,memory,s.pc,word);break;
+            case MipsOpcode::Multu1:ee::exec<MipsOpcode::Multu1>(s,memory,s.pc,word);break;
+            default:throw std::runtime_error("test opcode");
+        }
+        require((second ? s.lo1==0 && s.hi1==0 && s.lo==11 && s.hi==12 : s.lo==0 && s.hi==0 && s.lo1==13 && s.hi1==14),"known-zero products establish only the selected LO/HI pipeline");
+        require(!s.gpr[destination].low && !s.unknown_gpr_bits[destination] && s.gpr[destination].high==upper,"known-zero product resolves rd, preserves its upper lane and honors aliases/zero");
+    }
+    auto s=ee_reset_state();s.lo=11;s.hi=12;s.set_reg64(4,1);s.set_reg64_observed(5,0,1);
+    rejects([&]{ee::exec<MipsOpcode::Mult>(s,memory,0,0x00853018u);},"unknown MMIO bits");
+    require(s.lo==11 && s.hi==12,"an unproved nonzero product refuses before changing LO/HI");
+}
 void dma_idle_knowledge() {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_reg32(8,0xB000C000u);
@@ -1231,6 +1257,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {interpreter_decode_cache();privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();vector_accumulator_add();immediate_add_knowledge();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
+    try {interpreter_decode_cache();privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();vector_accumulator_add();immediate_add_knowledge();multiply_zero_knowledge();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }
