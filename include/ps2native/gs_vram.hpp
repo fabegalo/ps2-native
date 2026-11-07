@@ -8,6 +8,7 @@
 #include <vector>
     // HOST_INPUT_BEGIN
 #include "ps2native/gs_gpu.hpp"
+#include "ps2native/device_timing.hpp"
     // HOST_INPUT_END
 
 namespace ps2native {
@@ -42,6 +43,7 @@ public:
     [[nodiscard]] bool bits_known(unsigned byte_address,std::uint32_t mask) const;
     [[nodiscard]] std::span<const std::uint32_t> raw_words() const { synchronize(); return words_; }
     [[nodiscard]] std::span<const std::uint32_t> known_bits() const { synchronize(); return known_; }
+    [[nodiscard]] ObservedWord observe_word(std::uint32_t byte_address) const;
     [[nodiscard]] std::uint64_t gpu_primitives() const noexcept { return gpu_primitives_; }
     [[nodiscard]] std::uint64_t cpu_fallbacks() const noexcept { return cpu_fallbacks_; }
     void record_cpu_fallback(GsGpuFallback reason) noexcept {

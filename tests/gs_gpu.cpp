@@ -313,11 +313,12 @@ void check_pending_knowledge(std::shared_ptr<GsGpu> backend) {
         s.ad(0x42,0x58); // (Cs - 0) * Ad + Cd consumes destination alpha
         rejects([&]{s.sprite(0,0,8,8,0x80402010u,0,0x46);},"unwritten bits");
     },0,0,true,false);
-    paired(backend,"pending conditional write invalidates destination-RGB proof",[](Stream& s){
+    paired(backend,"pending conditional RGB remains symbolic through blending",[](Stream& s){
         s.upload(0,0,width,height,0x8000000080000000ull);
         s.sprite(0,0,8,8,0x80402010u); // unknown SCANMSK joins draw and skip
         s.ad(0x22,0);s.ad(0x42,0x44);
-        rejects([&]{s.sprite(0,0,8,8,0x40402010u,0,0x46);},"unwritten bits");
+        s.sprite(0,0,8,8,0x40402010u,0,0x46);
+        rejects([&]{(void)s.gs.vram().read(0,64,0,0,0);},"unwritten bits");
     },0,0,false,true);
     // A rejected GIF payload remains unfinished. Use another original stream
     // to prove a synchronous CPU knowledge refusal has not poisoned the GPU.
@@ -769,9 +770,10 @@ void check_fallback_and_transfers(std::shared_ptr<GsGpu> gpu) {
         s.ad(0x52,8u|(8ull<<32u));s.ad(0x53,2);
         s.ad(0x42,0x44);s.sprite(2,0,10,8,0x40000000u,0,0x46);
     });
-    paired(gpu,"unknown destination read retains synchronous refusal",[](Stream& s){
+    paired(gpu,"unknown destination blend retains masks and read refusal",[](Stream& s){
         s.ad(0x42,0x44);s.ad(0,0x46);s.ad(1,0x40010203u);s.vertex(0,0);
-        rejects([&]{s.vertex(128,128);},"unwritten bits");
+        s.vertex(128,128);
+        rejects([&]{(void)s.gs.vram().read(0,64,0,0,0);},"unwritten bits");
     },0,0,false);
     paired(gpu,"GPU write -> CPU texture/filter -> GPU write",[](Stream& s){
         s.sprite(0,0,width,height,0x80402010u);

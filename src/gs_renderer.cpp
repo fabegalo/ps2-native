@@ -887,6 +887,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
         if (color_write) {
             std::array<int,3> format_rgb{static_cast<int>(color&255u),static_cast<int>((color>>8u)&255u),static_cast<int>((color>>16u)&255u)};
             bool blend = blending;
+            std::uint32_t blend_unknown=0;
             if (blend && !(color & 0x80000000u)) blend = (general_[0x49].value_or(0u) & 1u) == 0u;
             if (blend) {
                 auto factor = static_cast<int>((color >> 24) & 255u);
@@ -895,17 +896,35 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
                 else if (ac == 1u) factor = psm == 1u ? 128 : static_cast<int>(destination(0xFF000000u)>>24u);
                 const auto sc = (int(aa == 0u) - int(ab == 0u)) * factor + 128 * int(ad == 0u);
                 const auto dc = (int(aa == 1u) - int(ab == 1u)) * factor + 128 * int(ad == 1u);
-                const auto dst = dc ? destination(0xFFFFFFu) : 0u;
+                std::uint32_t dst=0,dst_unknown=0;
+                if(dc) {
+                    const auto address=GsVram::address(base,bw,psm,static_cast<unsigned>(x),static_cast<unsigned>(y));
+                    if(!packed_frame) {
+                        // Keep unwritten destination RGB symbolic until an observable read.
+                        const auto word=vram_.observe_word(address);
+                        dst=word.value;dst_unknown=word.unknown&0xFFFFFFu;
+                    } else dst=destination(0xFFFFFFu);
+                }
                 auto result = color & 0xFF000000u;
                 for (unsigned c = 0; c < 3; ++c) {
                     const auto sum = sc * static_cast<int>((color >> (8u * c)) & 255u) + dc * static_cast<int>((dst >> (8u * c)) & 255u);
                     const auto channel = sum >= 0 ? sum / 128 : (sum - 127) / 128;
                     format_rgb[c]=channel;
                     result |= (saturate ? static_cast<unsigned>(std::clamp(channel, 0, 255)) : static_cast<unsigned>(channel) & 255u) << (8u * c);
+                    const auto unknown=(dst_unknown>>(8u*c))&255u;
+                    if(unknown) {
+                        const auto known=255u^unknown,old=(dst>>(8u*c))&255u;
+                        for(unsigned candidate=0;candidate<256u;++candidate)if((candidate&known)==(old&known)) {
+                            const auto candidate_sum=sc*static_cast<int>((color>>(8u*c))&255u)+dc*static_cast<int>(candidate);
+                            const auto value=candidate_sum>=0 ? candidate_sum/128 : (candidate_sum-127)/128;
+                            const auto formatted=saturate ? static_cast<unsigned>(std::clamp(value,0,255)) : static_cast<unsigned>(value)&255u;
+                            blend_unknown|=(((result>>(8u*c))^formatted)&255u)<<(8u*c);
+                        }
+                    }
                 }
                 color = result;
             }
-            auto color_unknown = !fba && !(color & 0x80000000u) ? 0x80000000u : 0u;
+            auto color_unknown = blend_unknown | (!fba && !(color & 0x80000000u) ? 0x80000000u : 0u);
             if (fba && (*fba & 1u)) color |= 0x80000000u;
             if(packed_frame) {
                 const auto entry=static_cast<unsigned>((dither_matrix>>(4u*((static_cast<unsigned>(y)&3u)*4u+(static_cast<unsigned>(x)&3u))))&7u);

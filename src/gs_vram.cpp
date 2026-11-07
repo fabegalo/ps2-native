@@ -288,10 +288,14 @@ void GsVram::write_depth(std::uint32_t base, unsigned width, unsigned psm,
     const auto mask = (psm == 0u ? 0xFFFFFFFFu : psm == 1u ? 0xFFFFFFu : 0xFFFFu) << shift;
     write_word(address / 4u, value << shift, mask, 0u, conditional);
 }
-std::uint32_t GsVram::word_at(std::uint32_t byte_address) const {
+ObservedWord GsVram::observe_word(std::uint32_t byte_address) const {
     if (byte_address >= kBytes || byte_address % 4u) throw DeviceRefusal("GS VRAM raw address out of range");
     if(gpu_)synchronize_page(byte_address/kPageBytes);
-    if (known_[byte_address / 4u] != 0xFFFFFFFFu) throw DeviceRefusal("GS VRAM read: word contains unwritten bits");
-    return words_[byte_address / 4u];
+    return {words_[byte_address/4u],~known_[byte_address/4u]};
+}
+std::uint32_t GsVram::word_at(std::uint32_t byte_address) const {
+    const auto word=observe_word(byte_address);
+    if(word.unknown)throw DeviceRefusal("GS VRAM read: word contains unwritten bits");
+    return word.value;
 }
 } // namespace ps2native

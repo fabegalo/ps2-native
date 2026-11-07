@@ -335,6 +335,40 @@ void check_textured_sprites() {
     blend.general_write(0x42,0x82);blend.general_write(1,0x80808080);blend.general_write(5,0);
     require(blend.vram().read(0,64,0,0,0)==0x80000000,"negative blend saturates to zero");
 }
+void check_symbolic_blending() {
+    for(unsigned psm:{0u,1u}) {
+        GsRegisters symbolic;symbolic.reset(0);configure_draw(symbolic);symbolic.general_write(0,0x40);
+        symbolic.general_write(0x4C,(1u<<16)|(std::uint64_t{psm}<<24));
+        auto& vram=const_cast<GsVram&>(symbolic.vram());
+        for(unsigned unknown:{0xFFFFFFu,0x0055AAu,0x00000Fu})for(unsigned source:{0u,90u,255u})
+        for(unsigned factor:{8u,128u,255u})for(bool clamp:{false,true}) {
+            constexpr unsigned initial=0x807F4012u;
+            vram.write(0,64,psm,0,0,initial,0,unknown);
+            symbolic.general_write(0x46,clamp);symbolic.general_write(0x42,0x64ull|(std::uint64_t{factor}<<32));
+            symbolic.general_write(1,0x08000000u|source|(source<<8)|(source<<16));symbolic.general_write(5,0);
+            unsigned expected=0,varying=0;
+            for(unsigned channel=0;channel<3;++channel) {
+                const auto shift=channel*8u,known=255u^((unknown>>shift)&255u),old=(initial>>shift)&255u;
+                bool first=true;unsigned reference=0;
+                for(unsigned value=0;value<256u;++value)if((value&known)==(old&known)) {
+                    // Independently evaluate floor(((Cs-Cd)*FIX)/128)+Cd.
+                    const auto product=(static_cast<int>(source)-static_cast<int>(value))*static_cast<int>(factor);
+                    const auto result=product/128-(product<0 && product%128!=0)+static_cast<int>(value);
+                    const auto formatted=clamp ? static_cast<unsigned>(std::clamp(result,0,255)) : static_cast<unsigned>(result)&255u;
+                    if(first){reference=formatted;first=false;}varying|=(reference^formatted)<<shift;
+                }
+                expected|=reference<<shift;
+            }
+            const auto known=vram.known_bits()[0]&0xFFFFFFu;
+            require(known==(~varying&0xFFFFFFu) && ((vram.raw_words()[0]^expected)&known)==0,
+                "symbolic CT32/24 destination blending matches every admissible byte, including negative sums, clamp and wrap");
+            if(varying)rejects([&]{(void)vram.read(0,64,1,0,0);},"unwritten bits");
+            symbolic.general_write(0,0);symbolic.general_write(1,0x80123456);symbolic.general_write(5,0);
+            require(vram.read(0,64,1,0,0)==0x123456,"an actual overwrite establishes RGB after symbolic blending");
+            symbolic.general_write(0,0x40);
+        }
+    }
+}
 void check_drawing_scanout() {
     // Truth table around AREF, independently of blending/frame masks.
     constexpr bool comparison[8][3]={{false,false,false},{true,true,true},
@@ -516,6 +550,7 @@ int main(int argc,char** argv) {
         if(mode=="vram") check_vram();
         else if(mode=="gif") check_transfer_gif();
         else if(mode=="drawing") check_drawing_scanout();
+        else if(mode=="symbolic-blend") check_symbolic_blending();
         else if(mode=="guest") {
             require(argc==4,"ROM and BMP output arguments"); check_guest(argv[2],argv[3]);
         } else throw std::runtime_error("unknown GS test case");
