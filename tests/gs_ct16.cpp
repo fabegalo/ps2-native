@@ -13,6 +13,10 @@ void setup(GsRegisters& gs,unsigned psm,unsigned width,unsigned height,unsigned 
     gs.general_write(0x51,(std::uint64_t{x}<<32)|(std::uint64_t{y}<<48));
     gs.general_write(0x52,width|(std::uint64_t{height}<<32));gs.general_write(0x53,0);
 }
+void drawing(GsRegisters& gs,unsigned psm,std::shared_ptr<GsGpu> gpu) {
+    gs.reset(0);gs.set_gpu_backend(std::move(gpu));gs.general_write(0,0);gs.general_write(0x1A,1);gs.general_write(0x18,0);
+    gs.general_write(0x4C,(1u<<16u)|(psm<<24u));gs.general_write(0x40,(15ull<<16u)|(15ull<<48u));gs.general_write(0x47,3u<<16u);gs.general_write(0x4E,1ull<<32u);gs.general_write(0x22,0);gs.general_write(0x4A,0);gs.general_write(0x45,0);gs.general_write(0x46,1);gs.general_write(0x49,0);
+}
 }
 int main(int argc,char** argv) try {
     std::shared_ptr<GsGpu> gpu;
@@ -103,6 +107,33 @@ int main(int argc,char** argv) try {
         draw();require(gs.vram().read(32768,64,0,0,0)==0x800000F8u,"CT16 texture row 64 addresses its actual second 64x64 page");
         setup(gs,psm,4,2);gs.image_write(0,0);draw();require(gs.vram().read(32768,64,0,0,0)==0x800000F8u,"a cold first-page upload cannot invalidate a cached second-page CT16 texel");
         setup(gs,psm,4,2,0,64);gs.image_write(0x001F001F001F001Full,0x001F001F001F001Full);rejects(draw,"TEXFLUSH");gs.general_write(0x3F,0);draw();
+    }
+    for(unsigned psm:{2u,10u}) {
+        GsRegisters gs;drawing(gs,psm,gpu);auto& vram=const_cast<GsVram&>(gs.vram());
+        const auto point=[&](unsigned x,unsigned y,std::uint32_t color,unsigned z=0){gs.general_write(1,color);gs.general_write(5,x*16u|(std::uint64_t{y*16u}<<16u)|(std::uint64_t{z}<<32u));};
+        point(0,0,0x804080F8u);point(8,0,0x404080F8u);
+        require(vram.read(0,64,psm,0,0)==0xA21Fu && vram.read(0,64,psm,8,0)==0x221Fu,"drawing packs each actual halfword from RGB high five bits and source A7");
+        gs.general_write(0x4A,1);point(8,0,0x404080F8u);require(vram.read(0,64,psm,8,0)==0xA21Fu,"FBA forces the packed alpha bit");gs.general_write(0x4A,0);
+        for(unsigned x:{0u,8u})vram.write(0,64,psm,x,0,0xFFFFu);
+        gs.general_write(0x4C,(1u<<16u)|(psm<<24u)|(0x800000F8ull<<32u));point(0,0,0);point(8,0,0);
+        require(vram.read(0,64,psm,0,0)==0x801Fu && vram.read(0,64,psm,8,0)==0x801Fu,"FRAME mask uses pre-conversion channel positions for both physical halfwords");
+        gs.general_write(0x4C,(1u<<16u)|(psm<<24u)|(7ull<<32u));point(0,0,0);point(8,0,0);
+        require(vram.read(0,64,psm,0,0)==0 && vram.read(0,64,psm,8,0)==0,"discarded low RGB bits of FBMSK cannot preserve packed color bits");
+        gs.general_write(0x4C,(1u<<16u)|(psm<<24u));vram.write(0,64,psm,0,0,0x8000u);gs.general_write(0x47,1u|(3u<<12u));point(0,0,0xF8u);
+        require(vram.read(0,64,psm,0,0)==0x801Fu,"RGB_ONLY alpha-test failure preserves packed destination alpha");gs.general_write(0x47,3u<<16u);
+        gs.general_write(0x45,1);gs.general_write(0x44,0x34u);point(0,0,0x807F7F7Fu);point(1,0,0x807F7F7Fu);
+        require(vram.read(0,64,psm,0,0)==0xBDEFu && vram.read(0,64,psm,1,0)==0xC210u,"signed DIMX offsets use window X/Y before RGB5 quantization");
+        point(0,0,0x80000000u);require(vram.read(0,64,psm,0,0)==0x8000u,"COLCLAMP saturates negative dithered channels");gs.general_write(0x46,0);point(0,0,0x80000000u);
+        require(vram.read(0,64,psm,0,0)==0xFFFFu,"disabled COLCLAMP retains the low eight bits before RGB5 packing");gs.general_write(0x45,0);gs.general_write(0x46,1);
+        gs.general_write(0,64u);gs.general_write(0x42,0x64u|(64ull<<32u));vram.write(0,64,psm,0,0,0x4000u,0,0x8000u);point(0,0,0x80000080u);
+        require(vram.read(0,64,psm,0,0)==0xA008u,"packed destination RGB is expanded before FIX blending without consuming an unused alpha bit");
+        gs.general_write(0x42,0x98u);vram.write(0,64,psm,0,0,0x8000u,0,0x7FFFu);point(0,0,0x80000080u);
+        require(vram.read(0,64,psm,0,0)==0x8010u,"packed destination alpha one is the coefficient 0x80 without consuming destination RGB");
+        vram.write(0,64,psm,0,0,0u,0,0x7FFFu);point(0,0,0x80000080u);require(vram.read(0,64,psm,0,0)==0x8000u,"packed destination alpha zero is the coefficient zero");
+        gs.general_write(0,0);gs.general_write(0x4E,1u|(std::uint64_t{psm}<<24u));gs.general_write(0x47,(1u<<16u)|(2u<<17u));
+        for(unsigned x:{0u,1u}){vram.write(0,64,psm,x,0,0);vram.write_depth(8192,64,psm,x,0,x?25u:15u);point(x,0,0x800000F8u,20u);}
+        require(vram.read(0,64,psm,0,0)==0x801Fu && vram.read_depth(8192,64,psm,0,0)==20u && vram.read(0,64,psm,1,0)==0u && vram.read_depth(8192,64,psm,1,0)==25u,"Z16/Z16S tests and writes share the real packed color/depth storage and preserve a failed comparison");
+        require(!gpu || gs.vram().cpu_fallbacks()>0u,"packed framebuffers retain CPU formatting while a GPU backend is selected");
     }
     std::cout<<"PSMCT16/16S swizzle, halfword knowledge, real IMAGE packing, wrap, overlap and RGB scanout passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

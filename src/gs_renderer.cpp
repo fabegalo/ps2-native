@@ -8,6 +8,12 @@
 
 namespace ps2native {
 namespace {
+constexpr std::uint32_t pack_rgba16(std::uint32_t value) {
+    return ((value>>3u)&31u)|((value>>6u)&0x3E0u)|((value>>9u)&0x7C00u)|((value>>16u)&0x8000u);
+}
+constexpr std::uint32_t unpack_rgb5(std::uint32_t value) {
+    return ((value&31u)<<3u)|(((value>>5u)&31u)<<11u)|(((value>>10u)&31u)<<19u);
+}
 unsigned texture_coordinate(int p,unsigned bits,unsigned mode,unsigned low,unsigned high) {
     if(mode==0u)return static_cast<unsigned>(p)&((1u<<bits)-1u);
     if(mode==1u)return static_cast<unsigned>(std::clamp(p,0,static_cast<int>((1u<<bits)-1u)));
@@ -226,7 +232,7 @@ std::uint32_t GsRegisters::sample_texture(std::uint64_t tex,std::uint64_t clamp,
     const bool packed=psm==2u || psm==10u;
     const auto raw=vram_.read_bits(base,bw,psm,x,y,packed ? 0x7FFFu : 0xFFFFFFFFu);
     if(packed) {
-        const auto rgb=((raw&31u)<<3u)|(((raw>>5u)&31u)<<11u)|(((raw>>10u)&31u)<<19u);
+        const auto rgb=unpack_rgb5(raw);
         if(!(tex&(1ull<<34u)))return rgb;
         const auto texa=required(0x3Bu);
         const auto alpha0=(texa&(1u<<15u)) && !raw ? 0u : static_cast<std::uint32_t>(texa)&255u;
@@ -329,7 +335,8 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     const auto base = static_cast<unsigned>(frame & 511u) * 8192u;
     const auto bw = static_cast<unsigned>((frame >> 16) & 63u) * 64u;
     const auto psm = static_cast<unsigned>((frame >> 24) & 63u);
-    if (psm > 1u) throw DeviceRefusal("GS drawing framebuffer format is not modeled");
+    const bool packed_frame=psm==2u || psm==10u;
+    if (psm>1u && !packed_frame) throw DeviceRefusal("GS drawing framebuffer format is not modeled");
     (void)GsVram::address(base, bw, psm, 0u, 0u);
     const auto zbase = static_cast<unsigned>(zbuf & 511u) * 8192u;
     const auto zpsm = static_cast<unsigned>((zbuf >> 24) & 15u);
@@ -339,7 +346,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     const auto z = v.z;
     if (zwrite || (ztest && zfunc >= 2u)) {
         (void)GsVram::depth_address(zbase, bw, zpsm, 0u, 0u);
-        if (zpsm == 2u) throw DeviceRefusal("GS PSMZ16 cannot share a drawing layout with PSMCT32/24");
+        if (zpsm == 2u && !packed_frame) throw DeviceRefusal("GS PSMZ16 cannot share a drawing layout with PSMCT32/24");
         const auto zmax = zpsm == 0u ? 0xFFFFFFFFu : zpsm == 1u ? 0xFFFFFFu : 0xFFFFu;
         if (z > zmax) throw DeviceRefusal("GS out-of-range vertex depth is not modeled");
         if(triangle)for(const auto& source : vertices)if(source.z>zmax)throw DeviceRefusal("GS out-of-range vertex depth is not modeled");
@@ -460,6 +467,9 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
                ac=static_cast<unsigned>((alpha>>4)&3u),ad=static_cast<unsigned>((alpha>>6)&3u);
     if(blending && (aa==3u || ab==3u || ac==3u || ad==3u))throw DeviceRefusal("GS reserved alpha selector");
     const bool saturate = blending && (general_[0x46].value_or(0u) & 1u);
+    const bool dither=packed_frame && (required(0x45u)&1u);
+    const auto dither_matrix=dither ? required(0x44u) : 0ull;
+    const bool packed_clamp=packed_frame && (blending || dither) ? (required(0x46u)&1u)!=0u : true;
     const auto uv_at=[&](int pixel,int p0,int p1,int t0,int t1) {
         auto den=std::int64_t{p1}-p0;
         auto num=std::int64_t{t0}*den+std::int64_t{t1-t0}*(pixel*16-p0);
@@ -577,7 +587,7 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     auto fallback=textured ? GsGpuFallback::Texture : antialiased ? GsGpuFallback::Antialias :
         (mode&8u) ? GsGpuFallback::Gouraud : (general_unknown_[1]&0xFFFFFFFFull) ?
         GsGpuFallback::UncertainColor : GsGpuFallback::Addressing;
-    if(vram_.gpu_backend() && (!textured || (((tex>>20u)&63u)!=2u && ((tex>>20u)&63u)!=10u)) && (!textured || type==6u) && !antialiased && !(mode&8u) &&
+    if(vram_.gpu_backend() && !packed_frame && (!textured || (((tex>>20u)&63u)!=2u && ((tex>>20u)&63u)!=10u)) && (!textured || type==6u) && !antialiased && !(mode&8u) &&
        !(general_unknown_[1]&0xFFFFFFFFull) && left<right && top<bottom &&
        bw && static_cast<unsigned>(right)<=bw &&
        (!(zwrite || (ztest && zfunc>=2u)) || ((zpsm<=1u || zpsm==10u) &&
@@ -766,6 +776,10 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
     const auto write_pixel = [&](int x, int y, std::uint32_t color, std::uint32_t pixel_z, unsigned coverage) {
         bool color_write = true, depth_write = zwrite && coverage == 128u;
         auto write_mask = static_cast<std::uint32_t>(frame >> 32);
+        const auto destination=[&](std::uint32_t mask) {
+            const auto raw=vram_.read_bits(base,bw,psm,static_cast<unsigned>(x),static_cast<unsigned>(y),packed_frame ? pack_rgba16(mask) : mask);
+            return packed_frame ? unpack_rgb5(raw)|((raw&0x8000u)<<16u) : raw;
+        };
         if (test & 1u) {
             const auto a = color >> 24, reference = static_cast<unsigned>((test >> 4) & 255u);
             bool pass = false;
@@ -794,27 +808,40 @@ void GsRegisters::vertex(std::uint8_t index, std::uint64_t value) {
             if (pixel_z < old || (zfunc == 3u && pixel_z == old)) return;
         }
         if (color_write) {
+            std::array<int,3> format_rgb{static_cast<int>(color&255u),static_cast<int>((color>>8u)&255u),static_cast<int>((color>>16u)&255u)};
             bool blend = blending;
             if (blend && !(color & 0x80000000u)) blend = (general_[0x49].value_or(0u) & 1u) == 0u;
             if (blend) {
                 auto factor = static_cast<int>((color >> 24) & 255u);
                 if (aa == ab) factor = 0;
                 else if (ac == 2u) factor = static_cast<int>((alpha >> 32) & 255u);
-                else if (ac == 1u) factor = psm == 1u ? 128 : static_cast<int>(vram_.read(base, bw, psm,
-                    static_cast<unsigned>(x), static_cast<unsigned>(y)) >> 24);
+                else if (ac == 1u) factor = psm == 1u ? 128 : static_cast<int>(destination(0xFF000000u)>>24u);
                 const auto sc = (int(aa == 0u) - int(ab == 0u)) * factor + 128 * int(ad == 0u);
                 const auto dc = (int(aa == 1u) - int(ab == 1u)) * factor + 128 * int(ad == 1u);
-                const auto dst = dc ? vram_.read(base, bw, 1u, static_cast<unsigned>(x), static_cast<unsigned>(y)) : 0u;
+                const auto dst = dc ? destination(0xFFFFFFu) : 0u;
                 auto result = color & 0xFF000000u;
                 for (unsigned c = 0; c < 3; ++c) {
                     const auto sum = sc * static_cast<int>((color >> (8u * c)) & 255u) + dc * static_cast<int>((dst >> (8u * c)) & 255u);
                     const auto channel = sum >= 0 ? sum / 128 : (sum - 127) / 128;
+                    format_rgb[c]=channel;
                     result |= (saturate ? static_cast<unsigned>(std::clamp(channel, 0, 255)) : static_cast<unsigned>(channel) & 255u) << (8u * c);
                 }
                 color = result;
             }
-            const auto color_unknown = !fba && !(color & 0x80000000u) ? 0x80000000u : 0u;
+            auto color_unknown = !fba && !(color & 0x80000000u) ? 0x80000000u : 0u;
             if (fba && (*fba & 1u)) color |= 0x80000000u;
+            if(packed_frame) {
+                const auto entry=static_cast<unsigned>((dither_matrix>>(4u*((static_cast<unsigned>(y)&3u)*4u+(static_cast<unsigned>(x)&3u))))&7u);
+                const auto offset=static_cast<int>(entry)-(entry&4u ? 8 : 0);
+                auto formatted=color&0xFF000000u;
+                for(unsigned c=0;c<3u;++c) {
+                    const auto channel=format_rgb[c]+offset;
+                    formatted|=(packed_clamp ? static_cast<unsigned>(std::clamp(channel,0,255)) : static_cast<unsigned>(channel)&255u)<<(c*8u);
+                }
+                // FBMSK addresses pre-conversion RGBA bits, independently of
+                // which physical halfword stores this pixel (GS manual 3.9.5).
+                color=pack_rgba16(formatted);write_mask=pack_rgba16(write_mask);color_unknown=pack_rgba16(color_unknown);
+            }
             draw_guard(GsVram::address(base, bw, psm, static_cast<unsigned>(x), static_cast<unsigned>(y)));
             texture_transfer_write(GsVram::address(base, bw, psm, static_cast<unsigned>(x), static_cast<unsigned>(y)));
             vram_.write(base, bw, psm, static_cast<unsigned>(x), static_cast<unsigned>(y), color,
