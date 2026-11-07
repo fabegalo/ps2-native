@@ -47,7 +47,7 @@ template<class T> struct Pair:std::false_type{};
 template<class X,class Y> struct Pair<std::pair<X,Y>>:std::true_type{};
 template<class T> T empty_value() {
     if constexpr(std::is_default_constructible_v<T>)return T{};
-    else if constexpr(std::is_same_v<T,RdramChain>)return T{0};
+    else if constexpr(std::is_same_v<T,RdramChain>)return T{1}; // Replaced by the serialized device vector.
     else if constexpr(std::is_constructible_v<T,std::uint8_t>)return T{std::uint8_t{0}};
     else static_assert(sizeof(T)==0,"checkpoint needs a safe value constructor");
 }
@@ -89,6 +89,10 @@ struct CheckpointAccess {
     static void prepare_read(Iop& i){i.pad_poll_source_={};i.ee_ram_metadata_=nullptr;}
     template<class T> static void prepare_read(DiagnosticHistory<T>& history){history.sink_=nullptr;}
     template<class T> static void validate(const T&){}
+    static void validate(const RdramChain& chain){
+        if(chain.devices_.empty() || chain.devices_.size()>32)
+            throw std::runtime_error("checkpoint RDRAM chain must contain 1 to 32 devices");
+    }
     static void demand(bool condition){if(!condition)throw std::runtime_error("checkpoint modeled state has invalid storage or queue bounds");}
     template<class T> static void validate(const DiagnosticHistory<T>& h){demand((!h.limit_ || h.data_.size()<=h.limit_) && (h.next_==0 || (h.next_<h.data_.size() && h.data_.size()==h.limit_)));}
     static void validate(const EEState& s){for(unsigned reg=0;reg<32;++reg)for(unsigned lane=0;lane<4;++lane)if(const auto bounds=s.gpr_candidates[reg].bounds[lane]){
@@ -343,7 +347,9 @@ CheckpointInfo inspect_checkpoint(const std::filesystem::path& path){return chec
 #ifndef PS2N_CHECKPOINT_SAVE_ONLY
 CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,Memory& memory,const CheckpointContext& context) {
     using namespace checkpoint_detail;validate_context(context);CheckpointAccess::validate_boundary(state,memory);auto parsed=parse(path);const auto& info=parsed.info;
+    // Q/RSQRT/product/PRNG helpers changed methods only, without wire fields.
     const bool reviewed_vu_helper_layout=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1" ||
+        std::string_view(PS2N_CHECKPOINT_SCHEMA)=="11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b" ||
         // IPU bit reader changes methods only; all serialized fields are unchanged.
         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="5a3fed18dfb483c07fddea413019e614a6ad69d786b6c191d632df37d6525bf5" ||
         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="e35e168d5df71786bca2c5a5cbe7fd657120e953659cd5163f47f1bf40db6205";

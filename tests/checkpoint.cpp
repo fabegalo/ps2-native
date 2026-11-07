@@ -115,6 +115,26 @@ int main(int argc,char** argv)try {
         require(checkpoint_state_sha256(state,memory)==checkpoint_state_sha256(resumed,restored),"IPU continuation has identical full state and table bytes");
     }
     {
+        const auto image=program();auto memoryOwner=std::make_unique<Memory>();auto& memory=*memoryOwner;
+        auto stateOwner=std::make_unique<EEState>();auto& state=*stateOwner;prepare_direct_elf(image,nullptr,state,memory);
+        memory.write32(0xB000F430u,mch_ricm(kMchSioPinInit,true,0,0));
+        BootOptions options;options.max_instructions=1;
+        const auto report=run_ee_boot(state,memory,nullptr,options);
+        CheckpointContext context{sha256_hex(image.bytes),"pending-mch"};
+        const auto path=directory/"pending-mch.ps2ncp";save_checkpoint(path,state,memory,report,context);
+        const auto expected=checkpoint_state_sha256(state,memory);
+        auto restoredOwner=std::make_unique<Memory>();auto& restored=*restoredOwner;
+        auto resumedOwner=std::make_unique<EEState>();auto& resumed=*resumedOwner;prepare_direct_elf(image,nullptr,resumed,restored);
+        (void)load_checkpoint(path,resumed,restored,context);
+        require(checkpoint_state_sha256(resumed,restored)==expected,"pending MCH chain restores into a fresh destination");
+        for(auto pair:{std::pair{&state,&memory},std::pair{&resumed,&restored}}) {
+            require(pair.second->read32(0xB000F430u)&kMchRicmBusy,"restored MCH transaction remains busy");
+            pair.first->retired_instructions+=mch_busy_cycles(kRdramSckShort);
+            require(!(pair.second->read32(0xB000F430u)&kMchRicmBusy),"restored MCH transaction completes on its original deadline");
+        }
+        require(checkpoint_state_sha256(resumed,restored)==checkpoint_state_sha256(state,memory),"MCH completion preserves full continuation state");
+    }
+    {
         auto image=program();auto stateOwner=std::make_unique<EEState>();auto& state=*stateOwner;auto memoryOwner=std::make_unique<Memory>();auto& memory=*memoryOwner;prepare_direct_elf(image,nullptr,state,memory);
         state.set_reg128_observed(9,0x44E5800044E58000ull,0x44E5800044E58000ull,0x3FFF00003FFFull,0x3FFF00003FFFull);
         for(auto& bounds:state.gpr_candidates[9].bounds)bounds=FloatBounds{0x44E59100u,0x44E594FFu};
@@ -371,6 +391,12 @@ int main(int argc,char** argv)try {
         (void)load_checkpoint(previous,resumed,restored,reviewed);
         require(checkpoint_state_sha256(resumed,restored)==exact,"audited IPU helper transition preserves every checkpoint byte");
     }
+    const auto unknown_schema=directory/"unreviewed-schema.ps2ncp";
+    write_file_atomically(unknown_schema,legacy_envelope(current_info,current_payload,
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",true));
+    const auto before_unknown=checkpoint_state_sha256(resumed,restored);
+    rejects([&]{(void)load_checkpoint(unknown_schema,resumed,restored,reviewed);},"schema");
+    require(checkpoint_state_sha256(resumed,restored)==before_unknown,"runtime opt-in cannot admit an unreviewed schema or mutate the destination");
     const auto same_bus_file=directory/"same-graphics-bus-fields.ps2ncp";
     constexpr auto bus_schema="267777539ec7b7df428a6c552962a9b5cffeb8a3b539cdd175bebdff921c79c8";
     write_file_atomically(same_bus_file,legacy_envelope(current_info,current_payload,bus_schema,true));
@@ -421,11 +447,11 @@ int main(int argc,char** argv)try {
     options.max_instructions=32;(void)run_ee_boot(state,memory,nullptr,options);(void)run_ee_boot(resumed,restored,nullptr,options);
     require(checkpoint_state_sha256(state,memory)==checkpoint_state_sha256(resumed,restored),"migrated and current checkpoints continue with identical complete state");
     const auto strict=checkpoint_state_sha256(state,memory);
-    rejects([&]{refine_checkpoint_texture_precision(state,memory,64);},"additive");
+    rejects([&]{refine_checkpoint_texture_precision(state,memory,128);},"additive");
     require(checkpoint_state_sha256(state,memory)==strict,"invalid texture refinement cannot mutate a checkpoint");
     refine_checkpoint_texture_precision(state,memory,4);
     refine_checkpoint_texture_precision(state,memory,5);
-    rejects([&]{refine_checkpoint_texture_precision(state,memory,69);},"additive");
+    rejects([&]{refine_checkpoint_texture_precision(state,memory,133);},"additive");
     refine_checkpoint_texture_precision(state,memory,21);
     const auto refined=checkpoint_state_sha256(state,memory);
     rejects([&]{refine_checkpoint_texture_precision(state,memory,1);},"additive");
