@@ -1,5 +1,172 @@
 # Runtime: fronteiras de evento e tradução de memória — 05/11/2026
 
+## IRQ do IOP no cenário comercial reconstruído — 07/11/2026
+
+Commits deste incremento: `3d924d8` (restauração), `5399860` (preparação e
+aliases offline) e `9aaf0d8` (IRQ). O baseline anterior do tabuleiro foi perdido
+quando `out/` foi apagado. Esta medição pertence a outro trecho, reconstruído
+com firmware parcial e injeção explícita do ELF de Super Bust-A-Move USA.
+Não é o reset original, uma sessão gráfica nem uma partida certificada.
+
+### Identidade e execução
+
+- Disco SHA-256 `232c139dfdd8b6fd9b201ac4c11f9e03b204732ee85adc42fdc06a0350929744`,
+  BOOT2 `SLUS_201.15;1`, ELF `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`.
+- ROM0 `d6653f4e…`, NVM `5c3c7a94…`, SCPH-70004:GH-032-11; ROM1
+  `b86fbcca…` conserva a ressalva de procedência do chip DVD no manifesto local.
+- Cenário `b80a5dba916c81b5352a3001959d26d5fb746f326e7bfb68925c579747797ef3`:
+  RTC fixo, hipóteses de encoder/SYNCV/SBUS/IOP/SPU2 e precisão GS 61 explícitas
+  em `out/reconstruction/superbust/probe.cpp`. Os originais permanecem somente leitura.
+- Fonte de controle `out/reconstruction/source-frozen-v1`; candidata
+  `source-frozen-v3`. Comparação dos fontes do núcleo encontrou diferenças
+  somente em `src/iop.cpp` e `include/ps2native/iop.hpp`. Manifestos de hashes
+  e fonte/diff de origem permanecem locais. As alterações concorrentes da HEAD
+  não recebem automaticamente este resultado.
+- Ryzen 7 5700X3D, MSVC 19.44.35229, Ninja Release `/O2 /Ob2 /DNDEBUG /Zi`,
+  link `/DEBUG /INCREMENTAL:NO`, profiling intrusivo OFF, afinidade 16384 e
+  prioridade AboveNormal. GS por software; Vulkan/DirectX compilados, mas
+  nenhum GPU backend selecionado neste runner. Nenhum módulo VU1 AOT ligado.
+- Os dois executáveis `reconstruction-kernel.exe` em `paired-build/` e
+  `candidate-runner/` ligam os mesmos módulos EE de jogo, vetor KSEG e loop
+  carregado, com hash/bytes conferidos e guardas por instrução preservados.
+  Esses conteúdos derivados ficam exclusivamente em `out/`.
+
+### Gargalo, mudança e equivalência
+
+Sampling separado com símbolos correspondentes, usando o sampler existente de
+gow-native-pc já compilado pela investigação local, encontrou `Iop::modeled_irqs`
+em 10,82% de 416 amostras da thread de execução. O coletor recebeu somente o
+PID criado pela tarefa. Não houve implementação de outro profiler nem código
+externo ligado ao produto.
+
+A decisão de interrupção consultava duas vezes a prova de fontes modeladas,
+incluindo buscas de latches que não podiam afetar I_MASK. Agora calcula uma vez
+e evita consultar DEV9/i.Link quando seus bits estão mascarados. As leituras
+completas de I_STAT continuam usando a prova completa. Não há cache persistente,
+estado adicional, alteração de clocks ou mudança no formato do checkpoint.
+Os 32 bits de máscara, VBLANK conhecido/desconhecido, desanexação do GS, IRQs
+e valores parciais são exercitados pelas regressões IOP.
+
+Validação separada desde `kernel-430m.ps2ncp`, total EE inicial 462.416.676:
+30 milhões retiradas em cada caminho, 3.902.111 AOT e 26.097.889 interpretadas.
+Estado completo final igual, payload
+`9e0f3c40889d97bdb6c246c423d89c45fb0b5e50d49d66959f7e30f9b322fc25`,
+PC `0x1C598C`, ciclos 492.416.698. Conferidos também seis campos RGBA com
+timestamps, 9.764 amostras PCM e 12 polls de entrada, todos idênticos. Os BMPs
+inspecionados ainda são pretos; PCM produzido não significa áudio ouvido.
+Os ciclos incluem 22 stalls preservados. Contagem EE não é contador de updates.
+
+### Medição primária
+
+Um aquecimento por variante, excluído previamente, depois cinco pares alternados.
+Sem compilação, hashing, checkpoint de saída ou diagnóstico da tarefa na janela.
+Carga de estado fica fora do intervalo. Todos os resultados foram mantidos:
+
+| Par | Controle (s) | Candidata (s) |
+|---|---:|---:|
+| 1 | 7,74950 | 6,39163 |
+| 2 | 7,18646 | 6,26583 |
+| 3 | 7,00968 | 6,09726 |
+| 4 | 7,67705 | 6,18758 |
+| 5 | 7,30649 | 8,17289 |
+| Mediana | **7,30649** | **6,26583** |
+
+Tempo mediano −14,24%, throughput +16,61%; quatro pares favoráveis e um
+desfavorável. Faixas 7,00968–7,74950 e 6,09726–8,17289 s. A dispersão não
+autoriza excluir o último par nem prometer ganho em toda sessão. Dados em
+`out/reconstruction/superbust/irq-primary-results.json`; validação e inspeções
+em `irq-*-460m-*`. A repetição do sampling teve 73 amostras; uma janela maior
+obteve 133 e apontou timers, interpretação, observação e fetch como custos
+restantes. É uma indicação grosseira, insuficiente para quantificar a próxima
+otimização sem uma coleta maior da cena alvo.
+
+O incremento anterior de raízes observadas, numa janela inicial sem vídeo/PCM,
+teve cinco pares favoráveis, mediana 4,62605 → 0,903548 s por 30 milhões
+(faixas 4,60507–4,63669 e 0,895888–0,984331). É ganho nesse prefixo,
+não no tabuleiro perdido. A tradução parcial do kernel preservou o estado,
+mas sua comparação instrumentada de 100 milhões piorou 32,1299 → 32,8494 s;
+esse resultado negativo também foi preservado e não virou medição primária.
+
+### Resultado combinado com as raízes recuperadas
+
+A continuação identificou quatro raízes de jogo adicionais nos PCs reais do
+diagnóstico. Foram passadas por `aot_arg=--entry=` a `ps2n-dev prepare`, sem
+endereços específicos no runtime. A preparação `1794075695383049` produziu
+7.704 instruções estáticas e 87 raízes verificadas. O executável separado em
+`expanded-runner/` conserva o núcleo da candidata IRQ. A cobertura na mesma
+janela passou de 3.902.111 para 29.795.610 AOT (99,32%), com 204.390
+interpretadas. Estado completo e RGBA/PCM/input/ciclos coincidiram novamente.
+
+Cinco novos pares, com o mesmo checkpoint, settings e aquecimento predefinido,
+comparam o controle original à combinação IRQ + raízes, sem diagnóstico:
+
+| Par | Controle (s) | Combinação (s) |
+|---|---:|---:|
+| 1 | 7,14204 | 1,81378 |
+| 2 | 7,10424 | 1,97608 |
+| 3 | 7,17145 | 1,83249 |
+| 4 | 7,24360 | 1,89792 |
+| 5 | 7,11990 | 1,82918 |
+| Mediana | **7,14204** | **1,83249** |
+
+Tempo −74,34%, throughput **3,90×** nesta janela; cinco pares favoráveis.
+Faixas 7,10424–7,24360 e 1,81378–1,97608 s. Não atribuir todo o ganho à
+mudança IRQ: sua contribuição isolada está medida acima. Dados completos em
+`combined-primary-results.json`. A tradução original foi regenerada em
+`measured-aot/` e seu conjunto conferido com a prova anterior
+`d33f4fefc763db357bf0ec80b189dd71547da8b819270a83a8ca928676b50000`;
+as partições e executáveis medidos permanecem preservados.
+
+A continuação headless alcançou 792.416.676 instruções EE e checkpoint
+`coverage-expanded-760m.ps2ncp`, com leitura real do disco, 61 campos e
+9.072.784 escritas de pixels adicionais na janela de 300 milhões. Esses
+números são progresso e tráfego, não prova de imagem correta ou gameplay.
+Uma nova continuação e inspeção alcançaram 1.202.416.676 instruções, checkpoint
+`scene-expanded-1170m.ps2ncp`. O scanout aceito ainda produz preto; a janela
+inspecionada contém dois campos e 286.720 escritas de pixels, equivalentes
+ao tamanho de dois framebuffers. Limpeza e seleção do buffer são hipóteses
+a distinguir por captura do produtor GIF, não um diagnóstico estabelecido.
+Não foi estabelecido um defeito de scanout nem um deadlock: leituras CDVD/SIF
+continuam avançando. O sampling após expandir o AOT (`profile8-samples.log`)
+obteve só 76 amostras válidas, com latches/espera do IOP e timers em destaque;
+seu tamanho não permite escolher com precisão outra otimização estrutural.
+
+### Restauração, ferramentas e escopo
+
+A restauração de uma transação MCH pendente construía `RdramChain{0}`, rejeitado
+antes de ler os dispositivos serializados. O placeholder válido e a validação
+final de 1–32 dispositivos corrigem a restauração. O boot original contínuo e
+retomado em 17 + 0,1 milhão deram o mesmo payload `e91f28b6…`; ambos também
+atingiram a mesma recusa do encoder 0x7E. A ponte de helpers VU aceita somente
+o esquema auditado, com opt-in de runtime e revalidação; um esquema arbitrário
+continua recusado sem alterar o destino.
+
+Passaram IOP M2.5/M2.6/M2.7, checkpoint completo, análise e o pipeline real de
+preparação/replay. O primeiro ensaio da nova fixture IRQ exigia nomes de fontes
+que o formatador não possui para bits 26–31; corrigida a expectativa textual,
+os 32 bits passaram sem mudar a exigência de recusa. Logs das falhas preservados.
+O lote independente de 120 casos ALU também passou na validação congelada.
+
+Ferramentas instaladas e verificadas: Vulkan SDK 1.4.363.0, Python 3.13.17,
+aqtinstall 3.3.0, Qt 6.8.3 MSVC2022, WPT do ADK 10.1.26100.9457 e Remote Tools
+17.14.42. `glslc`/`spirv-val` validaram o shader real; Vulkan identificou RTX 4070.
+Três testes de GPU/DirectX/sessão Qt offscreen passaram no build de verificação,
+com 1.455 primitivas reais na GPU no teste correspondente. Isso não mede o jogo.
+O coletor VSDiagnostics continuou rejeitando seu agente mesmo após reparo oficial;
+o sampler existente resolveu a coleta. Very Sleepy 0.91 foi instalado, mas não
+executado por exigir janela de progresso. Nenhuma sessão gráfica foi aberta.
+
+Super Bust permanece em cenário experimental preparado e medido; menu/partida
+controlável não foram demonstrados. Simpsons e Shadow conservam seus registros
+isolados e não recebem promoção de suporte por este incremento. Não houve push,
+PR, Release ou CI remota dos novos commits. O launcher não foi medido.
+
+| Título/revisão | Identificação/preparação | Boot, menu e partida | Sessão/desempenho deste incremento |
+|---|---|---|---|
+| Super Bust USA, SLUS-20115 | Disco/ELF conferidos; AOT preparado | Boot original recusa encoder; experimento avança; menu/partida não demonstrados | Equivalência headless e pares acima; sem sessão humana |
+| Simpsons USA, SLUS-20624 | Identificação histórica; sem novo preparo comercial nesta tarefa | Conservar fronteiras isoladas registradas; nenhum novo menu/partida | Sem novo ensaio ou medição |
+| Shadow USA, SCUS-97472 | Identificação histórica; artefatos/trabalho da investigação separada preservados | Nenhuma promoção de suporte por este incremento | Sem nova sessão ou medição nesta tarefa |
+
 ## Cache de decodificação do interpretador — 07/11/2026
 
 O dispatcher compartilhado agora reutiliza metadados de até 256 instruções

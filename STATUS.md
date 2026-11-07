@@ -1,5 +1,22 @@
 # STATUS — ps2-native
 
+## IRQ do IOP medida no cenário reconstruído — 07/11/2026
+
+- Correção de restauração MCH e ponte de helpers auditada em `3d924d8`;
+  preparação sem executar e aliases EE offline em `5399860`.
+- `9aaf0d8` evita provas caras de IRQ mascarada e calcula a máscara uma vez.
+  Cinco pares no trecho comercial reconstruído: mediana **7,30649 → 6,26583 s**
+  por 30 milhões, tempo −14,24%; **4/5** favoráveis, um resultado negativo mantido.
+- Com as raízes reais recuperadas por `ps2n-dev prepare`, a cobertura chega a
+  99,32% e cinco novos pares dão **7,14204 → 1,83249 s**: **3,90×** nesse trecho,
+  cinco favoráveis. Não atribuir todo esse ganho à otimização IRQ isolada.
+- Estado completo, seis campos RGBA, 9.764 amostras PCM e 12 polls iguais.
+  AOT/interpretadas e clocks preservados; ainda imagem preta nessa janela,
+  sem menu, tempo real, sessão gráfica ou medição do launcher demonstrados.
+- IOP, checkpoint, análise e pipeline passaram nas fontes congeladas; SDK Vulkan,
+  Qt e ferramentas instalados/verificados. Evidências, dispersão e limites em
+  [RUNTIME-PERFORMANCE](docs/RUNTIME-PERFORMANCE.md#irq-do-iop-no-cenário-comercial-reconstruído--07112026).
+
 ## Play conectado ao boot original — 07/11/2026
 
 - **Jogar** abre a sessão existente com a BIOS ativa e o disco selecionado,

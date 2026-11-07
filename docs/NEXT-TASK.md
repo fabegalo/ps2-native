@@ -1,5 +1,25 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
+## Continuar o cenário reconstruído e medido — 07/11/2026
+
+Há checkpoints novos identificados em `out/reconstruction/superbust/`; não usar
+os antigos caminhos do tabuleiro apagado. A otimização IRQ `9aaf0d8` passou
+equivalência e cinco pares (mediana −14,24%, um par desfavorável conservado).
+As fontes congeladas v1/v3 isolam essa mudança das alterações concorrentes.
+
+As quatro raízes reais adicionais já foram preparadas: 29.795.610 de 30 milhões
+agora são AOT. A combinação tem cinco pares favoráveis, 7,14204 → 1,83249 s,
+com estado/saídas iguais. Continuar o carregamento headless a partir do novo
+checkpoint `scene-expanded-1170m.ps2ncp`; resolver a cena ainda preta antes
+de medir a partida. Manter firmware parcial/injeção e hipóteses explicitamente
+separados do boot original.
+O sampling após expandir o AOT tem apenas 76 amostras e destaca latches/espera
+do IOP e timers: obter uma coleta maior na cena alvo antes de selecionar outra
+mudança do núcleo. Capturar o próximo produtor GIF e o buffer selecionado;
+o scanout foi aceito, mas a imagem continua preta apesar das escritas em VRAM.
+Revalidar fontes atuais, saídas e restauração ao integrar os incrementos
+concorrentes; este resultado não certifica a HEAD completa nem o launcher.
+
 ## Após conectar Play — 07/11/2026
 
 O botão Jogar tenta o reset original com a BIOS ativa e o disco selecionado,
