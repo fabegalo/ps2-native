@@ -88,7 +88,8 @@ void EEState::set_reg128(unsigned index, std::uint64_t low, std::uint64_t high) 
 }
 void EEState::forget_reg_candidates(unsigned index) noexcept {
     if (candidate_gprs & (1u << index)) {
-        gpr_candidates[index] = {};
+        gpr_candidates[index].value=gpr_candidates[index].unknown=0;
+        gpr_candidates[index].values.reset();
         candidate_gprs &= ~(1u << index);
     }
 }
@@ -107,7 +108,8 @@ void EEState::set_reg64_candidates(unsigned index,std::vector<std::uint64_t> val
     for(const auto value:values){all&=value;any|=value;}
     set_reg64_observed(index,all,all^any);
     if(index && values.size()>1u) {
-        gpr_candidates[index]={all,all^any,std::make_shared<const std::vector<std::uint64_t>>(std::move(values))};
+        auto& domain=gpr_candidates[index];domain.value=all;domain.unknown=all^any;
+        domain.values=std::make_shared<const std::vector<std::uint64_t>>(std::move(values));
         candidate_gprs|=1u<<index;
     }
 }

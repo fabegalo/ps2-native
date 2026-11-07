@@ -778,6 +778,69 @@ void vector_fixed() {
     rejects([&]{ee::exec<MipsOpcode::Vftoi>(state,memory,0,0x4B05217Du);},"sign/exponent");
     require(memory.observe_vu_vector(5).low.value==masked.low.value,"unproven conversion refuses transactionally");
 }
+void vector_cpu_bounds() {
+    for(bool interpreted:{false,true})for(bool cached:{false,true}) {
+        Memory memory;memory.reset_for_boot(m20::build_firmware().rom);EEState state;
+        state.pc=0x80001000;state.set_cp0(Cop0::Status,(1u<<30)|(1u<<29));
+        if(cached){memory.diagnostic_data_cache(true);state.set_cp0(Cop0::Config,0x10003);memory.set_cache_config(0x10003);}
+        const FloatBounds range{0x44E59100u,0x44E594FFu};
+        memory.write_vu_vector(2,{{0x44E5800044E58000ull,0x3FFF00003FFFull},{0x44E5800044E58000ull,0x3FFF00003FFFull}});
+        for(unsigned lane=0;lane<4;++lane)memory.restore_vu_vector_bounds(2,lane,range);
+        state.set_reg32(9,0x80002000u);
+        const auto execute=[&](MipsOpcode opcode,std::uint32_t word){
+            if(interpreted){memory.write32(0xA0000000u|(state.pc&0x1FFFFFFFu),word);std::uint64_t count=0;ExecutionContext ctx{state,memory,count,1,~0u};interpret_instruction(ctx);}
+            else switch(opcode){
+            case MipsOpcode::Qmfc2:ee::exec<MipsOpcode::Qmfc2>(state,memory,0,word);break;
+            case MipsOpcode::Qmtc2:ee::exec<MipsOpcode::Qmtc2>(state,memory,0,word);break;
+            case MipsOpcode::Lq:ee::exec<MipsOpcode::Lq>(state,memory,0,word);break;
+            case MipsOpcode::Sq:ee::exec<MipsOpcode::Sq>(state,memory,0,word);break;
+            case MipsOpcode::Ld:ee::exec<MipsOpcode::Ld>(state,memory,0,word);break;
+            case MipsOpcode::Sd:ee::exec<MipsOpcode::Sd>(state,memory,0,word);break;
+            case MipsOpcode::Lw:ee::exec<MipsOpcode::Lw>(state,memory,0,word);break;
+            case MipsOpcode::Sw:ee::exec<MipsOpcode::Sw>(state,memory,0,word);break;
+            case MipsOpcode::Ldl:ee::exec<MipsOpcode::Ldl>(state,memory,0,word);break;
+            case MipsOpcode::Ldr:ee::exec<MipsOpcode::Ldr>(state,memory,0,word);break;
+            case MipsOpcode::Lwl:ee::exec<MipsOpcode::Lwl>(state,memory,0,word);break;
+            case MipsOpcode::Lwr:ee::exec<MipsOpcode::Lwr>(state,memory,0,word);break;
+            case MipsOpcode::Sdl:ee::exec<MipsOpcode::Sdl>(state,memory,0,word);break;
+            case MipsOpcode::Sdr:ee::exec<MipsOpcode::Sdr>(state,memory,0,word);break;
+            case MipsOpcode::Swl:ee::exec<MipsOpcode::Swl>(state,memory,0,word);break;
+            case MipsOpcode::Swr:ee::exec<MipsOpcode::Swr>(state,memory,0,word);break;
+            default:throw std::runtime_error("unexpected copy fixture opcode");}
+        };
+        execute(MipsOpcode::Qmfc2,0x48281000u);execute(MipsOpcode::Sq,0x7D280000u);
+        execute(MipsOpcode::Lq,0x792A0000u);execute(MipsOpcode::Qmtc2,0x48AA1800u);
+        for(unsigned lane=0;lane<4;++lane)require(memory.observe_vu_vector_bounds(3,lane)==range,
+            "QMFC2/SQ/LQ/QMTC2 preserve all four certified lanes beyond the finite enumeration limit");
+        memory.set_cpu_context(state.cp0(Cop0::Status),0);memory.tlb_write(0,{0,0x70000000u,0x80000007u,7u});
+        state.set_reg32(16,0x70000000u);execute(MipsOpcode::Sq,0x7E0A0000u);
+        const auto scratch=memory.fpu_relation(0x70000004u,{0x44E58000u,0x3FFFu});
+        require(scratch.origin && scratch.minimum==range[0] && scratch.maximum==range[1],"cached RAM to scratchpad preserves the VU certificate");
+        execute(MipsOpcode::Ld,0xDD2B0000u);execute(MipsOpcode::Sd,0xFD2B0020u);
+        execute(MipsOpcode::Lw,0x8D2C0024u);execute(MipsOpcode::Sw,0xAD2C0030u);
+        const auto relation=memory.fpu_relation(0x80002030u,{0x44E58000u,0x3FFFu});
+        require(relation.origin && relation.minimum==range[0] && relation.maximum==range[1],
+            "LD/SD and LW/SW retain the same interval without selecting a float encoding");
+        execute(MipsOpcode::Sdl,0xB12A0047u);execute(MipsOpcode::Sdr,0xB52A0040u);
+        execute(MipsOpcode::Ldl,0x692D0047u);execute(MipsOpcode::Ldr,0x6D2D0040u);
+        require(state.gpr_candidates[13].bounds[0]==range && state.gpr_candidates[13].bounds[1]==range,"SDL/SDR and LDL/LDR preserve both full copied words");
+        execute(MipsOpcode::Swl,0xA92D0063u);execute(MipsOpcode::Swr,0xB92D0060u);
+        execute(MipsOpcode::Lwl,0x892E0063u);execute(MipsOpcode::Lwr,0x992E0060u);
+        require(state.gpr_candidates[14].bounds[0]==range,"SWL/SWR and LWL/LWR preserve full float words");
+        execute(MipsOpcode::Ldl,0x692D0043u);
+        require(state.gpr_candidates[13].bounds[0]==range && state.gpr_candidates[13].bounds[1]==range,"partial LDL retains the untouched word and certifies the copied high word");
+        execute(MipsOpcode::Sdr,0xB52D006Cu);
+        const auto partial=memory.fpu_relation(0x8000206Cu,{0x44E58000u,0x3FFFu});
+        require(partial.origin && partial.minimum==range[0] && partial.maximum==range[1],"partial SDR certifies only its fully copied aligned word");
+        state.set_reg64_candidates(10,{1,2});
+        require(!state.gpr_candidates[10].bounds[0] && !state.gpr_candidates[10].bounds[1] && state.gpr_candidates[10].bounds[2]==range,
+            "finite low-half replacement invalidates only the affected certificates");
+        state.set_reg128(10,0,0);for(const auto& bounds:state.gpr_candidates[10].bounds)require(!bounds,"128-bit replacement invalidates every lane");
+        memory.write32(0x80002000u,0);execute(MipsOpcode::Ld,0xDD2B0000u);
+        require(!state.gpr_candidates[11].bounds[0] && state.gpr_candidates[11].bounds[1]==range,"overwritten memory cannot reintroduce its old certificate");
+        execute(MipsOpcode::Qmfc2,0x48201000u);for(const auto& bounds:state.gpr_candidates[0].bounds)require(!bounds,"QMFC2 preserves immutable zero metadata");
+    }
+}
 void vector_setup() {
     Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_cp0(Cop0::Status,1u<<30);
@@ -1033,6 +1096,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_setup();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
+    try {privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

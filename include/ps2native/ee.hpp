@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <optional>
 #include "ps2native/fpu_affine.hpp"
 namespace ps2native {
 // Full 128-bit GPR storage. Implemented instructions operate on the lower
@@ -12,6 +13,8 @@ struct Register128 {
 struct GprCandidates {
     std::uint64_t value{},unknown{};
     std::shared_ptr<const std::vector<std::uint64_t>> values;
+    // Raw lane certificates survive CPU/vector copies without enumeration.
+    std::array<std::optional<std::array<std::uint32_t,2>>,4> bounds{};
 };
 // COP0 register numbers used by the boot path (EE Core User's Manual).
 enum class Cop0 : unsigned {

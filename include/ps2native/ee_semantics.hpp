@@ -183,6 +183,7 @@ PS2N_EE_INLINE Register128 read_gpr128(const EEState& state, unsigned index) {
 PS2N_EE_INLINE void write_gpr64(EEState& state, unsigned index, std::uint64_t value) {
     check_gpr_index(index);
     if (state.candidate_gprs & (1u << index)) state.forget_reg_candidates(index);
+    state.gpr_candidates[index].bounds[0].reset();state.gpr_candidates[index].bounds[1].reset();
     if (state.unknown_gprs) {
         state.unknown_gpr_bits[index] = 0;
         state.unknown_gprs &= ~(1u << index);
@@ -205,6 +206,7 @@ PS2N_EE_INLINE void write_gpr64_observed(EEState& state, unsigned index, std::ui
 PS2N_EE_INLINE void write_gpr128(EEState& state, unsigned index, std::uint64_t low, std::uint64_t high) {
     write_gpr64(state,index,low);
     state.unknown_gpr_high_bits[index] = 0;
+    state.gpr_candidates[index].bounds[2].reset();state.gpr_candidates[index].bounds[3].reset();
     if (index != 0) state.gpr[index].high = high;
 }
 PS2N_EE_INLINE void write_gpr128_observed(EEState& state, unsigned index, std::uint64_t low, std::uint64_t high,
@@ -269,6 +271,40 @@ inline FpuAffine finite_word_relation(Memory& memory,ObservedWord word,const std
     // No affine scaling is inferred from an arbitrary integer computation.
     return {memory.allocate_fpu_origin(),0,0,false,word.value,word.unknown,values.front(),values.back(),
         std::make_shared<const std::vector<std::uint32_t>>(std::move(values))};
+}
+inline ObservedWord gpr_word(const EEState& state,unsigned reg,unsigned lane) {
+    if(!reg)return {};
+    const auto value=lane<2u ? state.gpr[reg].low : state.gpr[reg].high;
+    const auto unknown=lane<2u ? state.unknown_gpr_bits[reg] : state.unknown_gpr_high_bits[reg];
+    const auto shift=(lane&1u)*32u;
+    return {static_cast<std::uint32_t>(value>>shift),static_cast<std::uint32_t>(unknown>>shift)};
+}
+inline FpuAffine bounded_word_relation(Memory& memory,ObservedWord word,FloatBounds range) {
+    if(!word_bounds_match(word,range))throw DeviceRefusal("CPU transfer bounds differ from the copied word");
+    FpuAffine relation{memory.allocate_fpu_origin(),0,(word.unknown&0xFF800000u) ? 0u : (word.value>>23u)&255u,
+        false,word.value,word.unknown,range[0],range[1],{}};
+    if(word.unknown&0xFF800000u)
+        relation.ranges=std::make_shared<const std::vector<FloatBounds>>(std::initializer_list<FloatBounds>{range});
+    return relation;
+}
+inline void load_gpr_bounds(EEState& state,Memory& memory,unsigned reg,std::uint32_t address,unsigned lanes) {
+    if(!reg || (!state.unknown_gpr_bits[reg] && (lanes<3u || !state.unknown_gpr_high_bits[reg])))return;
+    for(unsigned lane=0;lane<lanes;++lane) {
+        const auto word=gpr_word(state,reg,lane);if(!word.unknown)continue;
+        const auto relation=memory.fpu_relation(address+lane*4u,word);
+        if(relation.origin) {
+            const FloatBounds range{relation.minimum,relation.maximum};
+            if(!word_bounds_match(word,range))throw DeviceRefusal("CPU load bounds differ from the loaded word");
+            state.gpr_candidates[reg].bounds[lane]=range;
+        }
+    }
+}
+inline void store_gpr_bounds(const EEState& state,Memory& memory,unsigned reg,std::uint32_t address,unsigned lanes) {
+    if(!reg)return;
+    for(unsigned lane=0;lane<lanes;++lane)if(const auto bounds=state.gpr_candidates[reg].bounds[lane]) {
+        const auto word=gpr_word(state,reg,lane);
+        if(word.unknown)memory.remember_fpu_relation(address+lane*4u,word,bounded_word_relation(memory,word,*bounds));
+    }
 }
 inline std::optional<std::vector<std::uint32_t>> stored_word_candidates(Memory& memory,std::uint32_t address,ObservedWord word) {
     if(!word.unknown)return std::vector<std::uint32_t>{word.value};
@@ -477,12 +513,7 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
                     const auto shift=(lane&1u)*32u;
                     const ObservedWord word{static_cast<std::uint32_t>(half.value>>shift),static_cast<std::uint32_t>(half.unknown>>shift)};
                     if(!word.unknown)continue;
-                    const auto range=*bounds[lane];
-                    FpuAffine relation{m.allocate_fpu_origin(),0,(word.unknown&0xFF800000u) ? 0u : (word.value>>23u)&255u,
-                        false,word.value,word.unknown,range[0],range[1],{}};
-                    if(word.unknown&0xFF800000u)
-                        relation.ranges=std::make_shared<const std::vector<FloatBounds>>(std::initializer_list<FloatBounds>{range});
-                    m.remember_fpu_relation(address+4u*lane,word,std::move(relation));
+                    m.remember_fpu_relation(address+4u*lane,word,bounded_word_relation(m,word,*bounds[lane]));
                 }
             }
         } else if constexpr (Op == O::Cfc2) {
@@ -495,9 +526,11 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         else if constexpr (Op == O::Qmfc2) {
             const auto word=m.observe_vu_vector(d_);
             write_gpr128_observed(s,t_,word.low.value,word.high.value,word.low.unknown,word.high.unknown);
+            if(t_ && (word.low.unknown || word.high.unknown))for(unsigned lane=0;lane<4u;++lane)s.gpr_candidates[t_].bounds[lane]=m.observe_vu_vector_bounds(d_,lane);
         } else if constexpr (Op == O::Qmtc2) {
             const auto value=t_ ? s.gpr[t_] : Register128{};
             m.write_vu_vector(d_,{{value.low,s.unknown_gpr_bits[t_]},{value.high,s.unknown_gpr_high_bits[t_]}});
+            if(t_)for(unsigned lane=0;lane<4u;++lane)if(const auto bounds=s.gpr_candidates[t_].bounds[lane])m.restore_vu_vector_bounds(d_,lane,*bounds);
             // MFC1/integer operations can carry a finite low-64-bit domain.
             // Q MTC2 copies those same raw lanes; it does not widen their
             // numeric range to every combination of the unknown bit mask.
@@ -835,6 +868,25 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         else {const auto observed=m.load32_observed(aligned);value=observed.value;source_unknown=observed.unknown;}
         auto result=raw_gpr64(s,t_);
         auto unknown=s.unknown_gpr_bits[t_];
+        std::array<std::optional<FloatBounds>,2> copied_bounds{};
+        if(t_ && (unknown || source_unknown)) {
+            const auto first=left ? bytes-1u-offset : 0u,count=left ? offset+1u : bytes-offset;
+            for(unsigned lane=0;lane<bytes/4u;++lane) {
+                const auto at=lane*4u;
+                if(at+4u<=first || at>=first+count)copied_bounds[lane]=s.gpr_candidates[t_].bounds[lane];
+                else if(at>=first && at+4u<=first+count) {
+                    const auto from=left ? at-first : at+offset;
+                    if(from&3u)continue;
+                    const ObservedWord word{static_cast<std::uint32_t>(value>>(from*8u)),static_cast<std::uint32_t>(source_unknown>>(from*8u))};
+                    const auto relation=m.fpu_relation(aligned+from,word);
+                    if(relation.origin) {
+                        const FloatBounds range{relation.minimum,relation.maximum};
+                        if(!word_bounds_match(word,range))throw DeviceRefusal("partial CPU load certificate differs from the copied word");
+                        copied_bounds[lane]=range;
+                    }
+                }
+            }
+        }
         // Merge selected bytes with the old destination, little endian.
         // A byte loop avoids host shifts by the width at the full-load edges.
         for(unsigned i=0;i<bytes;++i) {
@@ -847,6 +899,7 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         }
         if constexpr(!wide)unknown=(unknown&0xFFFFFFFFu)|((unknown&0x80000000u) ? 0xFFFFFFFF00000000ull : 0u);
         write_gpr64_observed(s,t_,wide ? result : sx32(static_cast<std::uint32_t>(result)),unknown);
+        if(t_)for(unsigned lane=0;lane<bytes/4u;++lane)s.gpr_candidates[t_].bounds[lane]=copied_bounds[lane];
     } else if constexpr (Op == O::Swl || Op == O::Swr || Op == O::Sdl || Op == O::Sdr) {
         constexpr unsigned bytes=(Op==O::Sdl || Op==O::Sdr) ? 8u : 4u;
         constexpr bool left=Op==O::Swl || Op==O::Sdl;
@@ -865,6 +918,15 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
             const auto shift=left ? (bytes-1u-offset)*8u : 0u;
             const auto mask=count==8u ? ~0ull : (1ull<<(count*8u))-1u;
             m.store_bytes_observed(aligned+first,count,{(value>>shift)&mask,(s.unknown_gpr_bits[t_]>>shift)&mask});
+            for(unsigned lane=0;lane<bytes/4u;++lane) {
+                const auto at=lane*4u;if(at<first || at+4u>first+count)continue;
+                const auto from=left ? bytes-1u-offset+at : at-offset;
+                if(from&3u)continue;
+                if(const auto bounds=s.gpr_candidates[t_].bounds[from/4u]) {
+                    const auto word=gpr_word(s,t_,from/4u);
+                    if(word.unknown)m.remember_fpu_relation(aligned+at,word,bounded_word_relation(m,word,*bounds));
+                }
+            }
             return;
         }
         // Only enabled bytes are written; never read-modify-write an MMIO
@@ -887,9 +949,10 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         }
         const auto unknown = std::uint64_t{word.unknown} | ((word.unknown & 0x80000000u) ? 0xFFFFFFFF00000000ull : 0u);
         write_gpr64_observed(s,t_,Op==O::Lw ? sx32(word.value) : word.value,Op==O::Lw ? unknown : word.unknown);
+        load_gpr_bounds(s,m,t_,address,1);
     } else if constexpr (Op == O::Ld) {
-        const auto word=m.load64_observed(effective_address(s,w));
-        write_gpr64_observed(s,t_,word.value,word.unknown);
+        const auto address=effective_address(s,w);const auto word=m.load64_observed(address);
+        write_gpr64_observed(s,t_,word.value,word.unknown);load_gpr_bounds(s,m,t_,address,2);
     // LQ/SQ silently clear the low four address bits (no address error).
     } else if constexpr (Op == O::Lq) {
         const auto quad = effective_address(s, w) & ~15u;
@@ -905,6 +968,7 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
                 s.set_reg64_candidates(t_,std::move(values));
             }
         }
+        load_gpr_bounds(s,m,t_,quad,4);
     } else if constexpr (Op == O::Sb) {
         m.store8_observed(effective_address(s,w),{static_cast<std::uint32_t>(raw_gpr64(s,t_)),static_cast<std::uint32_t>(s.unknown_gpr_bits[t_])});
     } else if constexpr (Op == O::Sh) {
@@ -916,11 +980,15 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
             const auto candidates=s.reg64_candidates(t_);
             m.store32_observed(address,word);
             if(candidates)m.remember_fpu_relation(address,word,finite_word_relation(m,word,*candidates));
+            store_gpr_bounds(s,m,t_,address,1);
         }
         else m.write32(effective_address(s, w), read_gpr32(s,t_));
     } else if constexpr (Op == O::Sd) {
         const auto unknown=s.unknown_gpr_bits[t_];
-        if (unknown) m.store64_observed(effective_address(s,w),{raw_gpr64(s,t_),unknown});
+        if (unknown) {
+            const auto address=effective_address(s,w);m.store64_observed(address,{raw_gpr64(s,t_),unknown});
+            store_gpr_bounds(s,m,t_,address,2);
+        }
         else m.write64(effective_address(s,w),read_gpr64(s,t_));
     } else if constexpr (Op == O::Sq) {
         const auto quad = effective_address(s, w) & ~15u;
@@ -935,6 +1003,7 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
                 for(const auto item:*candidates)projected.push_back(item>>shift);
                 m.remember_fpu_relation(quad+lane*4u,word,finite_word_relation(m,word,projected));
             }
+            store_gpr_bounds(s,m,t_,quad,4);
         } else {
             const auto value=read_gpr128(s,t_);
             m.write128(quad,value.low,value.high);

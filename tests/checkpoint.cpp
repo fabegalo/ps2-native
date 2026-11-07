@@ -23,6 +23,12 @@ void finish_transfer(Memory& memory) {
 std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const std::uint8_t> payload,
     const char* schema="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88",bool current_layout=false) {
     std::vector<std::uint8_t> old_payload(payload.begin(),payload.end());
+    const std::array<std::uint8_t,8> cpu_tag{'G','P','R','B','N','D','0','1'};
+    for(unsigned reg=0;reg<32;++reg) {
+        const auto at=std::search(old_payload.begin(),old_payload.end(),cpu_tag.begin(),cpu_tag.end());
+        require(at!=old_payload.end() && at+12<=old_payload.end() && std::all_of(at+8,at+12,[](auto b){return b==0;}),"legacy CPU fixture has no new lane certificates");
+        old_payload.erase(at,at+12);
+    }
     if(!current_layout) {
     const std::array<std::uint8_t,8> bus_tag{'G','I','F','B','U','S','0','1'};
     const auto bus=std::search(old_payload.begin(),old_payload.end(),bus_tag.begin(),bus_tag.end());
@@ -86,6 +92,16 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
 }
 int main(int argc,char** argv)try {
     if(argc!=2)return 2;const auto directory=std::filesystem::path(argv[1]);ps2native::create_directories(directory);
+    {
+        auto image=program();auto stateOwner=std::make_unique<EEState>();auto& state=*stateOwner;auto memoryOwner=std::make_unique<Memory>();auto& memory=*memoryOwner;prepare_direct_elf(image,nullptr,state,memory);
+        state.set_reg128_observed(9,0x44E5800044E58000ull,0x44E5800044E58000ull,0x3FFF00003FFFull,0x3FFF00003FFFull);
+        for(auto& bounds:state.gpr_candidates[9].bounds)bounds=FloatBounds{0x44E59100u,0x44E594FFu};
+        BootReport boundary;boundary.outcome=BootOutcome::BudgetExhausted;boundary.pc=state.pc;
+        CheckpointContext context{sha256_hex(image.bytes),"CPU lane certificates"};const auto file=directory/"gpr-lane-bounds.ps2ncp";
+        save_checkpoint(file,state,memory,boundary,context);const auto expected=checkpoint_state_sha256(state,memory);
+        auto restoredStateOwner=std::make_unique<EEState>();auto& restored=*restoredStateOwner;auto restoredOwner=std::make_unique<Memory>();auto& resumed=*restoredOwner;prepare_direct_elf(image,nullptr,restored,resumed);(void)load_checkpoint(file,restored,resumed,context);
+        require(checkpoint_state_sha256(restored,resumed)==expected && restored.gpr_candidates[9].bounds==state.gpr_candidates[9].bounds,"checkpoint retains all CPU lane certificates");
+    }
     {
         auto image=program();EEState state;auto storage=std::make_unique<Memory>();auto& memory=*storage;prepare_direct_elf(image,nullptr,state,memory);
         memory.write128(0xA0000200u,0x07000011u,0);memory.write128(0xA0000210u,0x07000022u,0);

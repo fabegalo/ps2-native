@@ -1,4 +1,12 @@
 // Explicit modeled state. Raw bindings are validated and reattached separately.
+template<class A> static void fields(A& a,GprCandidates& v){
+    a(v.value,v.unknown,v.values);
+    if(!a.legacy_gpr_bounds) {
+        std::uint64_t tag=0x3130444E42525047ull;a(tag);
+        if(tag!=0x3130444E42525047ull)throw std::runtime_error("checkpoint CPU lane certificate extension differs");
+        a(v.bounds);
+    }else if constexpr(A::reading)v.bounds={};
+}
 template<class A> static void fields(A& a,Memory& v){
     a(v.data_cache_,v.data_cache_model_,v.data_cache_uncached_hits_,v.cache_config_,v.ram_,v.unknown_words_,v.fpu_relations_,v.fpu_origin_);
     if(a.legacy_scalar_flags) {
