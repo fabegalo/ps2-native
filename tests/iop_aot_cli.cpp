@@ -18,9 +18,9 @@ template<class C> int run(int argc,C** argv) try {
     const auto hash=capture.identity;
     const auto image=read_file(capture.directory/("iop_"+hash+".iop"));
     const std::uint32_t incomplete_roots[]{0},complete_roots[]{0,4,8,12};
-    require(generate_iop_aot_sources(image,0,incomplete_roots,"negative").dispatcher.find("&at_12}")==std::string::npos,
+    require(generate_iop_aot_sources(image,0,incomplete_roots,"negative").dispatcher.find("::at_12}")==std::string::npos,
         "negative control reproduces indirect-target coverage hole");
-    require(generate_iop_aot_sources(image,0,complete_roots,"complete").dispatcher.find("&at_12}")!=std::string::npos,
+    require(generate_iop_aot_sources(image,0,complete_roots,"complete").dispatcher.find("::at_12}")!=std::string::npos,
         "observed indirect target is emitted by the existing offline generator");
     iop.ee_write(12,4,0x24020009u);iop.ee_write(16,4,0x08000003u);
     iop.run_until(7);capture.finish();

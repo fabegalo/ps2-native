@@ -125,20 +125,27 @@ AotSources generate_iop_aot_sources(std::span<const std::uint8_t> bytes,std::uin
     const auto scope="iop_aot_"+digest(module_key+source+":"+std::to_string(kIopAotAbi));
     const std::string includes="#include <ps2native/iop_aot.hpp>\n#include <ps2native/iop_ops.hpp>\n";
     AotSources result;std::ostringstream out;
-    out<<"// Offline IOP translation of already-relocated bytes. No IRX relocation is reapplied.\n"<<includes<<"namespace ps2native::"<<scope<<" {\n";
+    out<<"// Offline IOP translation of already-relocated bytes. No IRX relocation is reapplied.\n"<<includes;
     std::map<std::uint32_t,std::vector<IopAotEntry>> buckets;
+    std::map<std::uint32_t,std::string> entry_scopes;
     for(const auto& e:entries)buckets[e.address/partition_bytes].push_back(e);
     for(const auto& [bucket,part]:buckets) {
-        std::ostringstream unit;unit<<includes<<"namespace ps2native::"<<scope<<" {\n";
+        std::string code="iop-code:"+std::to_string(kIopAotAbi);
+        for(const auto& e:part)code+=":"+hex(e.address)+":"+hex(e.word);
+        const auto part_scope="iop_code_"+digest(code);
+        std::ostringstream unit;unit<<includes<<"namespace ps2native::"<<part_scope<<" {\n";
+        out<<"namespace ps2native::"<<part_scope<<" {\n";
         for(const auto& e:part) {
+            entry_scopes[e.address]=part_scope;
             const auto name="at_"+std::to_string(e.address);
             out<<"void "<<name<<"(Iop&);\n";
             unit<<"void "<<name<<"(Iop& iop){iop.execute_native<"<<hex(e.word)<<"u>();}\n";
         }
+        out<<"}\n";
         unit<<"}\n";auto text=unit.str();result.partitions.push_back({"ps2n_aot_"+digest(text)+".cpp",std::move(text)});
     }
-    out<<"static const IopAotEntry entries[]{\n";
-    for(const auto& e:entries)out<<"{"<<hex(e.address)<<"u,"<<hex(e.word)<<"u,&at_"<<e.address<<"},\n";
+    out<<"namespace ps2native::"<<scope<<" {\nstatic const IopAotEntry entries[]{\n";
+    for(const auto& e:entries)out<<"{"<<hex(e.address)<<"u,"<<hex(e.word)<<"u,&ps2native::"<<entry_scopes.at(e.address)<<"::at_"<<e.address<<"},\n";
     if(entries.empty())throw std::runtime_error("IOP AOT found no supported instructions");
     out<<"};\nstatic const IopAotModule module{\""<<source<<"\",\""<<identity<<"\",entries};\n"
        <<"static const IopAotRegistration registration{module};\n}\n";

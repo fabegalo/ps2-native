@@ -34,6 +34,12 @@ int main() try {
     auto again=generate_iop_aot_sources(bytes,0,roots,"fixture",256);
     require(sources.dispatcher==again.dispatcher && sources.partitions.size()==again.partitions.size(),"deterministic partitioned offline generation");
     for(unsigned n=0;n<sources.partitions.size();++n)require(sources.partitions[n].text==again.partitions[n].text,"stable partition bytes");
+    auto changed_data=bytes;changed_data[0x1F0]=1;
+    const auto data_sources=generate_iop_aot_sources(changed_data,0,roots,"another-captured-image",256);
+    require(sources.dispatcher!=data_sources.dispatcher && sources.partitions.size()==data_sources.partitions.size(),
+        "source identity still changes when non-executable image bytes change");
+    for(unsigned n=0;n<sources.partitions.size();++n)
+        require(sources.partitions[n].name==data_sources.partitions[n].name,"unchanged native code is reusable across loaded snapshots");
     const std::uint32_t expanded_roots[]{0x1000,0x80,0x1028,0x200};
     const auto expanded=generate_iop_aot_sources(bytes,0,expanded_roots,"fixture",256);
     require(sources.partitions.front().name==expanded.partitions.front().name && sources.dispatcher!=expanded.dispatcher,
@@ -46,7 +52,8 @@ int main() try {
     observed[0x1000/4]={0,~0u};
     const auto capture=encode_iop_aot_image(0,observed);
     const auto sparse=generate_iop_aot_sources(capture,0,roots,"sparse",256);
-    require(sparse.dispatcher.find("&at_4096")==std::string::npos,"unwritten instruction bits cannot become native code during offline preparation");
+    require(sources.dispatcher.find("::at_4096}")!=std::string::npos && sparse.dispatcher.find("::at_4096}")==std::string::npos,
+        "unwritten instruction bits cannot become native code during offline preparation");
     rejects([&]{(void)generate_iop_aot_sources(capture,4,roots,"wrong-base");},"mismatch");
     std::cout<<"IOP AOT: load/branch delays, exceptions/RFE, stores, cycles, identity and offline partitions passed\n";
     return 0;
