@@ -1,5 +1,16 @@
 # STATUS — ps2-native
 
+## Código reutilizado no IPU — 07/11/2026
+
+- Copiado/adaptado `bits_at` do ps2-web-recomp, revisão fixada, com atribuição:
+  `SETIQ` agora aceita FB e BP não alinhados; `SETVQ` aceita BP não alinhado.
+- Passaram os testes de tabelas (8.192 combinações BP/FB), MMIO/IRQ e
+  checkpoint/continuação no snapshot local. Tabelas e MMIO também passaram
+  sobre HEAD com somente esta alteração; detalhes em
+  [REFERENCE-AUDIT](docs/REFERENCE-AUDIT.md#reutilização-efetiva-do-leitor-ipu--07112026).
+- Ganho de compatibilidade de comandos; sem medição de FPS, FMV completo
+  ou nova certificação de jogo. Alterações concorrentes foram preservadas.
+
 ## Interpretador: cache de decodificação medido — 07/11/2026
 
 - Cache local por execução reutiliza PC/palavra decodificados após o fetch

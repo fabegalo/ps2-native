@@ -1,6 +1,44 @@
 # Referências técnicas versus requisitos do ps2-native — 03/11/2026
 
-> Observações baseadas no README e em arquivos específicos dos repositórios consultados. Não são prova de que todo código desses projetos funciona em jogos reais. **Nenhuma dependência de código foi integrada.**
+## Reutilização efetiva do leitor IPU — 07/11/2026
+
+**Código incorporado:** `bits_at` de Samir Nuri, [ps2-web-recomp,
+e026b971324068773eed88bf502437de9e581b6b](https://github.com/snuri00/ps2-web-recomp/blob/e026b971324068773eed88bf502437de9e581b6b/runtime/src/ipu/ipu.cpp),
+adaptado para a fila por instância em `include/ps2native/ipu.hpp`.
+Atribuição e MIT preservados em `third_party/ps2-web-recomp/LICENSE`;
+escopo em [LICENSE-DECISION](LICENSE-DECISION.md#reutilização-efetiva-leitor-do-ipu--07112026).
+
+Antes, o runtime recusava `SETIQ` com FB diferente de zero e cargas de tabelas
+fora da fronteira de qword. Agora lê bytes MSB-first no BP estabelecido por
+`BCLR`, aplica FB de `SETIQ`, retém a qword parcial e só publica a tabela
+quando todos os bits existem. Mantém ordem de entrada, limites da FIFO,
+BUSY, IRQ e recusas de dados desconhecidos/opções reservadas. `SETVQ` também
+usa o BP corrente. É o caminho real de MMIO/FIFO, sem comando alternativo.
+
+Validação Release MSVC x64 (`/O2 /Ob2 /DNDEBUG /Z7`, Ninja, GPU e launcher
+desativados), fontes congeladas em `out/reference-ipu/`:
+
+- `native-ipu-tables`: passou; 8.192 pares BP/FB, 128 posições SETVQ,
+  sequência de bytes independente atravessando qwords, substituição pendente,
+  reset, FIFO e recusas. O mesmo teste na implementação anterior falha na
+  recusa de alinhamento, antes da alteração.
+- `bios-gs-ipu-control`: passou; escritas de CPU no FIFO só encerram BUSY e
+  geram a interrupção após a última qword necessária.
+- `native-complete-checkpoint`: passou; inclui carga parcial BP=127/FB=63,
+  restauração em memória nova, conclusão e igualdade de estado completo.
+  Migração opt-in aceita somente fingerprints auditados com codec inalterado
+  e reserialização idêntica; schemas arbitrários continuam recusados.
+- Tabelas e MMIO passaram também em `head-source`, HEAD mais somente os
+  hunks desta entrega. O teste completo de checkpoint usa o snapshot local
+  que inclui correções concorrentes, entre elas a construção de RDRAM já
+  pendente; essas alterações não foram incorporadas neste commit.
+
+As tabelas são conservadas no formato já usado pelo ps2-native. Não foram
+importados a ordenação zigzag interna, o decoder MPEG completo, HLE ou
+temporização do doador. Nenhum jogo, vídeo completo, sessão do launcher ou
+ganho de FPS foi validado nesta etapa; não se declara um título novo compatível.
+
+> Observações baseadas no README e em arquivos específicos dos repositórios consultados. Não são prova de que todo código desses projetos funciona em jogos reais. As auditorias anteriores registram consultas sem integração; a incorporação efetiva do leitor IPU está documentada acima.
 
 | Subsistema / necessidade | PS2Recomp (GPL-3.0) | PCSX2 (GPL-3.0+) | Diretriz ps2-native |
 |---|---|---|---|

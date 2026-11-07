@@ -1,5 +1,14 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
+## Após reutilização do leitor IPU — 07/11/2026
+
+`SETIQ` com FB/BP não alinhados e `SETVQ` com BP não alinhado já foram
+integrados e testados, com código do ps2-web-recomp. Não repetir esta etapa.
+O restante da decodificação MPEG continua ausente: selecionar a próxima parte
+a reutilizar a partir de uma recusa observada no cenário comercial disponível.
+Esta entrega não substitui a recuperação da cena e a nova medição de desempenho
+descritas abaixo. Evidência em [REFERENCE-AUDIT](REFERENCE-AUDIT.md#reutilização-efetiva-do-leitor-ipu--07112026).
+
 ## Após o cache do interpretador — 07/11/2026
 
 O cache por execução foi implementado e medido no boot experimental reconstruído:

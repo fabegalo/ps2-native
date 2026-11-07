@@ -596,6 +596,15 @@ void ipu_control() {
     device_refused([&] {(void)memory.read32(0xB0002020u);},"requires BCLR");
     memory.write32(0xB0002000u,0);
     require(memory.read32(0xB0002020u)==0,"new BCLR explicitly initializes bit position zero");
+    memory.write32(0xB000F000u,0x100u);
+    memory.write32(0xB0002000u,0x50000004u);
+    for(unsigned q=0;q<5;++q) {
+        require(memory.load32_observed(0xB0002010u).value&0x80000000u,"unaligned SETIQ remains busy until its entire payload exists");
+        require(!(memory.load32_observed(0xB000F000u).value&0x100u),"partial table input does not raise completion IRQ");
+        memory.write128(0xB0007010u,0xF0DEBC9A78563412ull,0xF0DEBC9A78563412ull);
+    }
+    require(!(memory.load32_observed(0xB0002010u).value&0x80000000u) &&
+            (memory.load32_observed(0xB000F000u).value&0x100u),"CPU FIFO writes complete unaligned SETIQ and raise the IPU interrupt");
 }
 
 void iop_memory() {

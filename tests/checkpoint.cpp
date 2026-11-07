@@ -93,6 +93,28 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
 int main(int argc,char** argv)try {
     if(argc!=2)return 2;const auto directory=std::filesystem::path(argv[1]);ps2native::create_directories(directory);
     {
+        const auto image=program();auto memoryOwner=std::make_unique<Memory>();auto& memory=*memoryOwner;
+        auto stateOwner=std::make_unique<EEState>();auto& state=*stateOwner;prepare_direct_elf(image,nullptr,state,memory);
+        memory.write32(0xB0002000u,127u);
+        memory.write32(0xB0002000u,0x5800003Fu);
+        for(unsigned q=0;q<4;++q) memory.write128(0xB0007010u,0xF0DEBC9A78563412ull,0xF0DEBC9A78563412ull);
+        BootReport boundary;boundary.outcome=BootOutcome::BudgetExhausted;boundary.pc=state.pc;
+        CheckpointContext context{sha256_hex(image.bytes),"pending unaligned IPU table"};
+        const auto file=directory/"pending-ipu-table.ps2ncp";save_checkpoint(file,state,memory,boundary,context);
+        auto resumedOwner=std::make_unique<EEState>();auto& resumed=*resumedOwner;
+        auto restoredOwner=std::make_unique<Memory>();auto& restored=*restoredOwner;prepare_direct_elf(image,nullptr,resumed,restored);
+        (void)load_checkpoint(file,resumed,restored,context);
+        require(checkpoint_state_sha256(state,memory)==checkpoint_state_sha256(resumed,restored),"pending unaligned IPU table restores every field");
+        for(auto* target:{&memory,&restored}) {
+            target->write32(0xB000F000u,0x100u);
+            target->write128(0xB0007010u,0xF0DEBC9A78563412ull,0xF0DEBC9A78563412ull);
+            require(target->load32_observed(0xB0002010u).value&0x80000000u,"unaligned IPU table still needs the last qword after restore");
+            target->write128(0xB0007010u,0xF0DEBC9A78563412ull,0xF0DEBC9A78563412ull);
+            require(!(target->load32_observed(0xB0002010u).value&0x80000000u) && (target->load32_observed(0xB000F000u).value&0x100u),"restored table completes with its original bit offset and IRQ");
+        }
+        require(checkpoint_state_sha256(state,memory)==checkpoint_state_sha256(resumed,restored),"IPU continuation has identical full state and table bytes");
+    }
+    {
         auto image=program();auto stateOwner=std::make_unique<EEState>();auto& state=*stateOwner;auto memoryOwner=std::make_unique<Memory>();auto& memory=*memoryOwner;prepare_direct_elf(image,nullptr,state,memory);
         state.set_reg128_observed(9,0x44E5800044E58000ull,0x44E5800044E58000ull,0x3FFF00003FFFull,0x3FFF00003FFFull);
         for(auto& bounds:state.gpr_candidates[9].bounds)bounds=FloatBounds{0x44E59100u,0x44E594FFu};
@@ -341,6 +363,14 @@ int main(int argc,char** argv)try {
     (void)load_checkpoint(current_file,state,memory,context);
     const auto exact=checkpoint_state_sha256(state,memory);
     auto reviewed=context;reviewed.allow_runtime_change=true;
+    for(const auto* schema:{"11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b",
+                           "db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1"}) {
+        const auto previous=directory/"before-ipu-bit-reader.ps2ncp";
+        write_file_atomically(previous,legacy_envelope(current_info,current_payload,schema,true));
+        rejects([&]{(void)load_checkpoint(previous,resumed,restored,context);},"schema");
+        (void)load_checkpoint(previous,resumed,restored,reviewed);
+        require(checkpoint_state_sha256(resumed,restored)==exact,"audited IPU helper transition preserves every checkpoint byte");
+    }
     const auto same_bus_file=directory/"same-graphics-bus-fields.ps2ncp";
     constexpr auto bus_schema="267777539ec7b7df428a6c552962a9b5cffeb8a3b539cdd175bebdff921c79c8";
     write_file_atomically(same_bus_file,legacy_envelope(current_info,current_payload,bus_schema,true));

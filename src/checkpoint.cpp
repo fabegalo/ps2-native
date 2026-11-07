@@ -343,7 +343,15 @@ CheckpointInfo inspect_checkpoint(const std::filesystem::path& path){return chec
 #ifndef PS2N_CHECKPOINT_SAVE_ONLY
 CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,Memory& memory,const CheckpointContext& context) {
     using namespace checkpoint_detail;validate_context(context);CheckpointAccess::validate_boundary(state,memory);auto parsed=parse(path);const auto& info=parsed.info;
-    const bool reviewed_vu_helper_layout=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1";
+    const bool reviewed_vu_helper_layout=std::string_view(PS2N_CHECKPOINT_SCHEMA)=="db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1" ||
+        // IPU bit reader changes methods only; all serialized fields are unchanged.
+        std::string_view(PS2N_CHECKPOINT_SCHEMA)=="5a3fed18dfb483c07fddea413019e614a6ad69d786b6c191d632df37d6525bf5" ||
+        std::string_view(PS2N_CHECKPOINT_SCHEMA)=="e35e168d5df71786bca2c5a5cbe7fd657120e953659cd5163f47f1bf40db6205";
+    const bool same_ipu_fields=context.allow_runtime_change &&
+        (std::string_view(PS2N_CHECKPOINT_SCHEMA)=="5a3fed18dfb483c07fddea413019e614a6ad69d786b6c191d632df37d6525bf5" ||
+         std::string_view(PS2N_CHECKPOINT_SCHEMA)=="e35e168d5df71786bca2c5a5cbe7fd657120e953659cd5163f47f1bf40db6205") &&
+        (info.schema_sha256=="11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b" ||
+         info.schema_sha256=="db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1");
     // Audited byte-identical v1 transition: execution-only ee_semantics.hpp
     // moved from the state fingerprint to the runtime fingerprint. Pin both
     // ends so a future state-field change cannot silently reuse this bridge.
@@ -429,7 +437,7 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
     const bool legacy_graphics_bus=context.allow_runtime_change && bus_transition &&
         (info.schema_sha256=="25e615e5098e581ee91b9dd84ffe9782be7b73f47ebfa76e377caa06fa871ffd" || legacy_vif_interrupt);
     const bool previous_gpr_fields=context.allow_runtime_change && info.schema_sha256=="267777539ec7b7df428a6c552962a9b5cffeb8a3b539cdd175bebdff921c79c8";
-    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !previous_gpr_fields && !same_graphics_bus_fields && !legacy_graphics_bus && !legacy_vif_interrupt && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields && !legacy_spu2 && !same_spu2_fields && !legacy_vertex_st && !legacy_from_spr && !legacy_voice_readback && !legacy_vif_payload && !legacy_micro_bounds && !same_micro_bounds && !legacy_transfer_bounds)
+    if(info.schema_sha256!=PS2N_CHECKPOINT_SCHEMA && !same_ipu_fields && !previous_gpr_fields && !same_graphics_bus_fields && !legacy_graphics_bus && !legacy_vif_interrupt && !reviewed_v1 && !legacy_scalar_flags && !same_scalar_fields && !legacy_spu2 && !same_spu2_fields && !legacy_vertex_st && !legacy_from_spr && !legacy_voice_readback && !legacy_vif_payload && !legacy_micro_bounds && !same_micro_bounds && !legacy_transfer_bounds)
         throw std::runtime_error("checkpoint state schema differs; no partial/guessed migration is permitted");
     if(info.runtime_sha256!=PS2N_CHECKPOINT_RUNTIME && !context.allow_runtime_change)throw std::runtime_error("checkpoint runtime changed; explicit reviewed allow-runtime-change is required");
     if(info.scenario_sha256!=context.scenario_sha256)throw std::runtime_error("checkpoint scenario identity differs");
@@ -444,7 +452,7 @@ CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,
     if(CheckpointAccess::bindings(staged_memory,context.expected_disc_sha256)!=info.bindings_sha256)throw std::runtime_error("checkpoint changed immutable firmware bindings");
     if(iop_execution_refused(staged_memory))
         throw std::runtime_error("checkpoint contains an IOP refusal; inspect it without resuming partial execution: "+*staged_memory.iop().stop_reason());
-    if(legacy_gpr_bounds || same_graphics_bus_fields || legacy_scalar_flags || legacy_spu2 || legacy_vertex_st || legacy_from_spr || legacy_voice_readback || legacy_vif_payload || legacy_micro_bounds || legacy_transfer_bounds || legacy_vif_interrupt || legacy_graphics_bus) {
+    if(same_ipu_fields || legacy_gpr_bounds || same_graphics_bus_fields || legacy_scalar_flags || legacy_spu2 || legacy_vertex_st || legacy_from_spr || legacy_voice_readback || legacy_vif_payload || legacy_micro_bounds || legacy_transfer_bounds || legacy_vif_interrupt || legacy_graphics_bus) {
         Writer original;original.legacy_scalar_flags=legacy_scalar_flags;original.legacy_spu2=legacy_spu2;original.legacy_vertex_st=legacy_vertex_st;original.legacy_from_spr=legacy_from_spr;original.legacy_voice_readback=legacy_voice_readback;original.legacy_vif_payload=legacy_vif_payload;original.legacy_micro_bounds=legacy_micro_bounds;original.legacy_transfer_bounds=legacy_transfer_bounds;original.legacy_vif_interrupt=legacy_vif_interrupt;original.legacy_graphics_bus=legacy_graphics_bus;original.legacy_gpr_bounds=legacy_gpr_bounds;original(clock,stalls,staged_state,staged_memory);
         if(sha256_hex(original.output)!=info.payload_sha256)throw std::runtime_error("checkpoint scalar migration changed legacy fields");
     }

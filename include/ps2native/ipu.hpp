@@ -6,7 +6,7 @@
 
 namespace ps2native {
 // EE User's Manual 6.0, sections 8.1.2 and 8.3. Only idle reset and
-// configuration, BCLR and aligned table loads are implemented. MPEG decoding
+// configuration, BCLR and bit-addressed table loads are implemented. MPEG decoding
 // and conversion remain explicit refusals. Table execution is synchronous once
 // all input bytes exist; this is a functional model, not IPU pipeline timing.
 class IpuRegisters {
@@ -64,8 +64,8 @@ public:
         if(command==5u || command==6u || command==9u) {
             const auto allowed=command==5u ? 0x5800003Fu : command==6u ? 0x60000000u : 0x91FF01FFu;
             if(value&~allowed) throw DeviceRefusal("IPU table command reserved bits set");
-            if(command!=9u && (!bit_position_ || *bit_position_ || (command==5u && (value&63u))))
-                throw DeviceRefusal("IPU table load requires established qword alignment and zero FB");
+            if(command!=9u && !bit_position_)
+                throw DeviceRefusal("IPU table load requires BCLR to establish its bit position");
             control_.value&=~0xC000u; control_.unknown&=~0xC000u;
             if(command==9u) {thresholds_=value&0x01FF01FFu;return true;}
             pending_=value;
@@ -97,20 +97,37 @@ public:
     [[nodiscard]] const auto& vector_table() const noexcept {return vq_;}
     [[nodiscard]] const auto& thresholds() const noexcept {return thresholds_;}
 private:
+    // Adapted from ps2-web-recomp's bits_at (Samir Nuri, MIT).
+    // e026b971324068773eed88bf502437de9e581b6b, runtime/src/ipu/ipu.cpp.
+    // See third_party/ps2-web-recomp/LICENSE. Caller checks the entire payload.
+    [[nodiscard]] std::uint32_t bits_at(std::size_t bit,unsigned n) const {
+        if(!n) return 0;
+        std::uint64_t v=0;
+        const std::size_t byte=bit>>3;
+        for(std::size_t i=0;i<8;++i)
+            v=(v<<8)|(byte+i<input_.size() ? input_[byte+i] : 0u);
+        return static_cast<std::uint32_t>((v<<(bit&7u))>>(64-n));
+    }
     bool load_table() {
         if(!pending_) return false;
         const bool iq=(*pending_>>28u)==5u;
         const auto count=iq ? 64u : 32u;
-        if(input_.size()<count) return false;
+        const auto first=*bit_position_+(iq ? (*pending_&63u) : 0u);
+        const auto end=first+count*8u;
+        if(input_.size()*8u<end) return false;
+        auto bit=first;
         if(iq) {
             std::array<std::uint8_t,64> bytes{};
-            for(auto& byte:bytes){byte=input_.front();input_.pop_front();}
+            for(auto& byte:bytes){byte=static_cast<std::uint8_t>(bits_at(bit,8));bit+=8;}
             iq_[(*pending_>>27u)&1u]=bytes;
         } else {
             std::array<std::uint8_t,32> bytes{};
-            for(auto& byte:bytes){byte=input_.front();input_.pop_front();}
+            for(auto& byte:bytes){byte=static_cast<std::uint8_t>(bits_at(bit,8));bit+=8;}
             vq_=bytes;
         }
+        // Retain the partial qword so BP still indexes the queued bitstream.
+        for(unsigned i=0;i<(end/128u)*16u;++i) input_.pop_front();
+        bit_position_=end&127u;
         pending_.reset();
         return true;
     }

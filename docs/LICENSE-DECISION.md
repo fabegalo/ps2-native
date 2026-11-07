@@ -1,5 +1,20 @@
 # Decisão de licença — 2026-11-03
 
+## Reutilização efetiva: leitor do IPU — 07/11/2026
+
+A rotina `bits_at` de [ps2-web-recomp, revisão
+e026b971324068773eed88bf502437de9e581b6b](https://github.com/snuri00/ps2-web-recomp/blob/e026b971324068773eed88bf502437de9e581b6b/runtime/src/ipu/ipu.cpp)
+foi copiada e adaptada em `include/ps2native/ipu.hpp`: troca a fila global pela
+fila da instância e acrescenta `const`. A extração MSB-first de até oito bytes
+mantém o algoritmo original; o chamador local verifica a disponibilidade total
+antes de publicar a tabela. Copyright Samir Nuri, MIT, preservado em
+`third_party/ps2-web-recomp/LICENSE`. Não adiciona dependência externa.
+
+O despacho, retenção da qword parcial, limites da FIFO, estado desconhecido,
+IRQ, checkpoints e testes usam os contratos existentes do ps2-native. Não
+foram importados o decoder MPEG completo, HLE, ordenação zigzag interna do
+doador ou suposições de temporização. As tabelas locais mantêm ordem de entrada.
+
 **Decisão para o M0:** BSD-3-Clause para código original independente (`LICENSE`). Nenhum código de GPL foi copiado, ligado, distribuído ou incorporado. Nenhuma dependência C++ externa foi adicionada. A matriz CI usa `actions/checkout` fixado no SHA da versão v4.2.2.
 
 | Projeto consultado | Arquivos oficiais verificados | Licença declarada | Uso no M0 |
