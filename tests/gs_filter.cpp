@@ -6,7 +6,7 @@ using namespace ps2native;
 using namespace boot_checks;
 namespace {
 std::uint32_t source(unsigned x,unsigned y){return 0x80000000u|(x*16u)|(y*16u<<8u)|((x+y)*8u<<16u);}
-void setup(GsRegisters& gs,bool flush=true,bool cold_experiment=false,bool cold_reset=true,unsigned precision=0) {
+void setup(GsRegisters& gs,bool flush=true,bool cold_experiment=false,bool cold_reset=true,unsigned precision=0,bool write_clamp=true) {
     if(cold_reset)gs.reset(0);
     if(cold_experiment)gs.diagnostic_texture_cache_reset_invalid();
     if(precision)gs.diagnostic_texture_precision(precision);
@@ -20,7 +20,7 @@ void setup(GsRegisters& gs,bool flush=true,bool cold_experiment=false,bool cold_
         source((n+2)%8,(n+2)/8)|(std::uint64_t{source((n+3)%8,(n+3)/8)}<<32u));
     if(flush)gs.general_write(0x3F,0);
     gs.general_write(6,32ull|(1ull<<14u)|(3ull<<26u)|(3ull<<30u)|(1ull<<34u)|(1ull<<35u));
-    gs.general_write(8,0);gs.general_write(0x14,0x60);
+    if(write_clamp)gs.general_write(8,0);gs.general_write(0x14,0x60);
 }
 void pixel(GsRegisters& gs,unsigned x,unsigned y,unsigned u,unsigned v) {
     gs.general_write(0,0x116);gs.general_write(3,u|(std::uint64_t{v}<<16u));
@@ -30,6 +30,32 @@ void pixel(GsRegisters& gs,unsigned x,unsigned y,unsigned u,unsigned v) {
 }
 }
 int main() try {
+    {
+        GsRegisters strict;strict.reset(0);
+        rejects([&]{strict.write(kGsSmode2,8,0x396881,0,{});},"reserved bits");
+        GsRegisters padded;padded.reset(0);padded.diagnostic_texture_precision(256);
+        padded.write(kGsSmode2,8,0x396881,0,{});
+        require(padded.latched(kGsSmode2)==0x396881,"SMODE2 padding experiment retains the actual guest word");
+        rejects([&]{padded.write(kGsSmode2,4,1,0,{});},"64-bit stores only");
+        rejects([&]{padded.write(kGsSmode1,8,1ull<<38,0,{});},"reserved bits");
+        require(padded.latched(kGsSmode2)==0x396881,"unsupported access does not change the last accepted video mode");
+    }
+    {
+        GsRegisters strict;setup(strict,true,false,true,0,false);
+        const auto writes=strict.vram().pixel_writes();
+        rejects([&]{pixel(strict,0,0,8,8);},"register 8 has not been written");
+        require(strict.vram().pixel_writes()==writes,"unknown CLAMP stays refused before drawing in the default mode");
+        GsRegisters repeat;repeat.reset(0);repeat.diagnostic_texture_precision(128);repeat.diagnostic_scanmask_reset(0);
+        setup(repeat,true,false,false,0,false);
+        for(unsigned index:{8u,9u})require(repeat.general_observed(index)->value==0 && repeat.general_observed(index)->unknown==~0xFull,
+            "the reset experiment defines only the four CLAMP mode bits");
+        pixel(repeat,0,0,136,136);
+        require(repeat.vram().read(0,64,0,0,0)==source(0,0),"experimental REPEAT wraps an independent 8x8 grid exactly");
+        repeat.write(kGsCsr,8,kCsrReset,0,{});
+        require(repeat.general_observed(9)->unknown==~0xFull,"soft reset reapplies the chosen mode without inventing MIN/MAX values");
+        repeat.reset(0);require(!repeat.general(8) && !repeat.general(9),"a new session removes the reset experiment");
+    }
+
     for(const bool negative:{false,true}) {
         GsRegisters st;setup(st);st.general_write(0,0x16);st.general_write(0x14,0);
         st.general_write(1,0x3F00000080808080ull); // first Q must not control sprite division

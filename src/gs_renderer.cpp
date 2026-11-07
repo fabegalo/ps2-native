@@ -52,6 +52,7 @@ std::uint64_t GsRegisters::required(std::uint8_t index) const {
 void GsRegisters::reset_drawing() {
     general_ = {}; general_unknown_={}; display_ = {}; first_vertex_.reset(); triangle_vertices_count_=0; transfer_ = {};
     general_[0x22]=diagnostic_reset_scanmask_;
+    if(diagnostic_texture_precision_&128u)for(unsigned index:{8u,9u}) {general_[index]=0;general_unknown_[index]=~0xFull;}
     clut_={};clut_base_={};sampled_pages_={};dirty_texture_pages_={};transfer_generation_=0;texture_flush_generation_.reset();
     if(diagnostic_reset_texture_cache_invalid_)texture_flush_generation_=0;
     imr_ = 0x7F00u;

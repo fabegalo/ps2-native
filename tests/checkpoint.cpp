@@ -414,11 +414,12 @@ int main(int argc,char** argv)try {
     options.max_instructions=32;(void)run_ee_boot(state,memory,nullptr,options);(void)run_ee_boot(resumed,restored,nullptr,options);
     require(checkpoint_state_sha256(state,memory)==checkpoint_state_sha256(resumed,restored),"migrated and current checkpoints continue with identical complete state");
     const auto strict=checkpoint_state_sha256(state,memory);
-    rejects([&]{refine_checkpoint_texture_precision(state,memory,128);},"additive");
+    rejects([&]{refine_checkpoint_texture_precision(state,memory,512);},"additive");
+    rejects([&]{refine_checkpoint_texture_precision(state,memory,128);},"before guest execution");
     require(checkpoint_state_sha256(state,memory)==strict,"invalid texture refinement cannot mutate a checkpoint");
     refine_checkpoint_texture_precision(state,memory,4);
     refine_checkpoint_texture_precision(state,memory,5);
-    rejects([&]{refine_checkpoint_texture_precision(state,memory,133);},"additive");
+    rejects([&]{refine_checkpoint_texture_precision(state,memory,133);},"before guest execution");
     refine_checkpoint_texture_precision(state,memory,21);
     const auto refined=checkpoint_state_sha256(state,memory);
     rejects([&]{refine_checkpoint_texture_precision(state,memory,1);},"additive");

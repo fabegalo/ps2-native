@@ -73,8 +73,10 @@ struct CheckpointAccess {
     }
     static void refine_texture(Memory& memory,unsigned modes) {
         auto& gs=memory.registers_.gs_;
-        if(!modes || (modes&~63u) || (gs.diagnostic_texture_precision_&modes)!=gs.diagnostic_texture_precision_)
+        if(!modes || (modes&~447u) || (gs.diagnostic_texture_precision_&modes)!=gs.diagnostic_texture_precision_)
             throw DeviceRefusal("checkpoint texture refinement requires valid additive diagnostic modes");
+        if((modes&128u) && !(gs.diagnostic_texture_precision_&128u))
+            throw DeviceRefusal("CLAMP reset experiment must be selected before guest execution");
         gs.diagnostic_texture_precision_=modes;
     }
     template<class T> static void prepare_read(T&){}

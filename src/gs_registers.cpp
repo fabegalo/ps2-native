@@ -62,8 +62,15 @@ void GsRegisters::reset(std::uint64_t now, std::optional<std::uint64_t> diagnost
     line_ = {Sync::Running, 2u, {now, kEeCyclesPerBusCycle * kBusCyclesPerNtscLine}};
 }
 void GsRegisters::diagnostic_scanmask_reset(unsigned mask) {
-    if(mask>3u || mask==1u || event_cycle_ ||
-       std::any_of(general_.begin(),general_.end(),[](const auto& value){return value.has_value();}))
+    const auto unused=[&] {
+        for(unsigned index=0;index<general_.size();++index)if(general_[index]) {
+            if((diagnostic_texture_precision_&128u) && (index==8u || index==9u) &&
+               *general_[index]==0 && general_unknown_[index]==~0xFull)continue;
+            return false;
+        }
+        return true;
+    };
+    if(mask>3u || mask==1u || event_cycle_ || !unused())
         throw DeviceRefusal("diagnostic SCANMSK needs a valid mask before guest activity");
     diagnostic_reset_scanmask_=mask;general_[0x22]=mask;
 }
@@ -78,10 +85,13 @@ void GsRegisters::diagnostic_texture_precision(unsigned modes) {
     // No state fields changed: old checkpoints retain the disabled bit.
     // Hardware corner joins and setup DDA rounding remain unverified.
     // Bit5: exceptional zero-Q LOD saturates toward minification, unmeasured.
-    if(!modes || (modes&~63u) || event_cycle_ ||
+    // Bit7: unmeasured CLAMP reset modes REPEAT/REPEAT; MIN/MAX bits remain unknown.
+    // Bit8: unmeasured SMODE2 padding has no effect on its four defined bits.
+    if(!modes || (modes&~447u) || event_cycle_ ||
        std::any_of(general_.begin(),general_.end(),[](const auto& value){return value.has_value();}))
         throw DeviceRefusal("diagnostic texture precision needs valid modes before guest activity");
     diagnostic_texture_precision_=modes;
+    if(modes&128u)for(unsigned index:{8u,9u}) {general_[index]=0;general_unknown_[index]=~0xFull;}
 }
 
 std::uint64_t GsRegisters::read(std::uint32_t physical, std::size_t bytes) const {
@@ -257,7 +267,7 @@ void GsRegisters::write_impl(std::uint32_t physical, std::size_t bytes, std::uin
         if (bytes != 8u)
             throw DeviceRefusal(std::string("GS ") + reg.name + " write of " + std::to_string(bytes) +
                                 " byte(s) is not modeled (64-bit stores only)");
-        if ((value & ~reg.valid) != 0u)
+        if ((value & ~reg.valid) != 0u && !(physical==kGsSmode2 && (diagnostic_texture_precision_&256u)))
             throw DeviceRefusal(std::string("GS ") + reg.name + " " + hex(value, 16) + ": reserved bits " +
                                 hex(value & ~reg.valid, 16) + " set; their effect is not documented");
         if (physical == kGsSmode1) {

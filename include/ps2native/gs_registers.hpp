@@ -99,6 +99,10 @@ public:
     // truncation; bit2 nominal rational triangle UV floored to 10.4.
     // Bit3: linear host-to-local pixel stream for rectangles outside the
     // manual's alignment constraints (reference-emulator hypothesis).
+    // RUNTIME_HELPERS_BEGIN
+    // Bit7 assumes REPEAT/REPEAT CLAMP reset modes; MIN/MAX bits remain unknown.
+    // Bit8 assumes SMODE2 padding has no effect; the full written word is retained.
+    // RUNTIME_HELPERS_END
     // These do not establish physical GS DDA/filter precision. Color/depth
     // interpolation retains its strict precision checks in every mode.
     void diagnostic_texture_precision(unsigned modes);
