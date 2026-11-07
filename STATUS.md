@@ -1,5 +1,18 @@
 # STATUS — ps2-native
 
+## Super Bust: menu visual e índice IOP validados — 07/11/2026
+
+- `008d2d1` indexa latches sem armazenar valores; crescimento, reset, colisões
+  e restauração sobre destino aquecido foram verificados. Formato preservado.
+- Menu reconstruído alcançado por Start/Cross na janela real; há scanout
+  animado, polls SIO2, XInput conectado e PCM não nulo enviado ao WinMM.
+- Três pares Release/Vulkan no menu: mediana **1,20008 → 1,06588 s** por
+  30 milhões EE. Estado integral, seis campos RGBA, PCM e entrada iguais.
+- Janela atualizada aberta, anterior preservada pausada. Observados cerca de
+  **5–6 FPS / 8–10% EE**; faltas de áudio persistem. **Tempo real e partida
+  controlável com áudio contínuo ainda não foram demonstrados.**
+- Identidades, resultados negativos e limites em [RUNTIME-PERFORMANCE](docs/RUNTIME-PERFORMANCE.md).
+
 ## BIOS: ROM1 e reset SMAP, Browser ainda ausente — 07/11/2026
 
 - `ps2n-boot` carrega ROM1 com pareamento/hash/metadados explícitos e protege

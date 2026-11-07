@@ -1,5 +1,76 @@
 # Runtime: fronteiras de evento e tradução de memória — 05/11/2026
 
+## Menu real: índice de latches e GPU física — 07/11/2026
+
+Incremento `008d2d1`. A janela foi acompanhada até a intro animada e o menu,
+com Start/Cross enviados pelo GameView/SIO2. Checkpoints novos, sem substituir
+os anteriores: `out/reconstruction/superbust/live-scene-original-speed.ps2ncp`
+e `interactive-menu-restored.ps2ncp`, cada um com manifesto de identidade.
+O cenário continua experimental: firmware parcial seguido de injeção do ELF,
+separado do boot original. Nenhum módulo VU1 AOT foi ligado.
+
+Controle: `source-frozen-v3` / runtime `d0eb66a1b794f7d7ef8a43aade4c9ebce7fd5a0dd52d6a4445e6970fb285a52c`.
+Candidata: `source-frozen-v4` / `66e57922f479660f7e29a109396ecae1d57c851667c61c91fa69d424d02d10ce`.
+Esquema comum `11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b`.
+MSVC 19.44, Ninja Release `/O2 /Ob2 /DNDEBUG /Zi`, profiling OFF; Qt 6.8.3.
+Os runners em `live-reference/` e `live-latch/` e a janela `latch-build/`
+usam AOT do ELF USA (7.704 instruções estáticas) e do loop carregado (8),
+com hashes/bytes conferidos. O vetor KSEG não foi mesclado nesta comparação.
+A nova fonte difere do controle apenas pelo índice IOP e invalidação no bind
+de checkpoint, além dos testes. Alterações concorrentes da main não recebem
+automaticamente estes resultados. Não houve código externo incorporado.
+
+O índice de 4.096 slots guarda posições, nunca valores; é reconstruído no
+crescimento e invalidado no reset/restore. Colisões mantêm a busca linear,
+também preservada para listas que excedam a capacidade de representação.
+A candidata passou `native-m27-iop`, `native-complete-checkpoint` e
+`native-checkpoint-cli`; teste adicional cobre colisão de endereço.
+O teste de checkpoint inclui destinos com presença/ausência previamente
+memorizadas e listas do mesmo tamanho, mas registradores diferentes.
+
+Validação separada do menu, CPU de referência versus índice + Vulkan RTX 4070:
+30.000.000 instruções, ciclos finais 21.194.531.422, payload completo
+`64cb95d8b7487dd0a909152868ad6b78844a33b6e3e426fa1c0ba599ad1dfc74` igual.
+Seis campos RGBA `06b27420574d69529e735fc94c342a58641fbe305862f754f1ee7806df7199b0`,
+9.766 amostras PCM `2c6c1f6a3e2afd9f95add849212653150b15f89b81c2ae7d602550096fb410cb`,
+12 polls de entrada `f69e62ddcc1762e8738af458ec7ba86350ce78ae0cd1695847d0a07bf5cc8a89`.
+GPU executou 335 primitivas em 63 lotes. Logs `menu-*-validation.log`.
+
+Três pares alternados, mesmo menu/Vulkan, blocos de 100 mil como na janela,
+sem diagnósticos/hashes na janela primária e sem compilação/teste concorrente
+desta tarefa; janela anterior pausada. Outras tarefas do usuário não foram
+encerradas, e não houve fixação de afinidade/prioridade:
+
+| Par | Controle (s) | Índice (s) |
+| --- | ---: | ---: |
+| 1 | 1,21400 | 1,06588 |
+| 2 | 1,19295 | 1,07091 |
+| 3 | 1,20008 | 1,05287 |
+
+Mediana **1,20008 → 1,06588 s**, −11,18% de tempo / 1,126× throughput.
+São aproximadamente 0,1 s convidado: ainda muito abaixo da velocidade original.
+Logs `menu-index-timing-*`. A GPU também preservou saídas na intro animada.
+
+Resultados não selecionados, todos preservados: um cache pequeno só de
+índices deu 0,882560/0,904682/0,920882 → 0,862993/0,846335/0,848534 s
+na intro, com blocos de 20 milhões. Ao adicionar cache de ausências em 64
+slots e usar os blocos de 100 mil, os pares foram
+0,876156/0,843623/0,853324 → 0,872220/0,879790/0,875311 s: sem ganho consistente.
+Essa variante foi substituída. A nova investigação de latches foi motivada
+por amostragem atual, não pela repetição sem evidência da tentativa histórica
+rejeitada. Medição adicional da intro com Vulkan deu 0,695707 s; não confundir
+com os pares do menu. Logs `live-timing-*` e `live-negative-*`.
+
+A janela atualizada (`out/reconstruction/latch-build/ps2-native.exe`, manifesto
+`interactive-menu-vulkan.json`) foi inspecionada: imagem, polls, XInput e PCM
+não nulo enviados ao WinMM; cerca de **5–6 FPS / 8–10% EE**, com faltas de
+buffer. A anterior permaneceu aberta, pausada. Não foi demonstrada partida
+controlável na velocidade original nem áudio contínuo/audível certificado.
+Sampling da nova janela: 1.839 amostras no worker, espera 10,93%, endereço
+VRAM 7,40%, latches 6,74%, transferência GS 5,60%, timer EE 4,84%;
+`menu-index-live-sampling.log`. Próxima candidata reduz trabalho repetido
+na transferência IMAGE; não há resultado atribuído a ela ainda.
+
 ## IRQ do IOP no cenário comercial reconstruído — 07/11/2026
 
 Commits deste incremento: `3d924d8` (restauração), `5399860` (preparação e

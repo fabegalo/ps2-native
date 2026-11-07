@@ -1,5 +1,18 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
+## Super Bust — prioridade explícita: velocidade original
+
+O menu foi reconstruído e o índice IOP (`008d2d1`) entregue numa janela
+Vulkan separada, preservando a anterior aberta. Ainda há cerca de 5–6 FPS
+e faltas de áudio. Não promover para gameplay em tempo real.
+
+O perfil da janela atual aponta espera GPU, endereçamento VRAM e transferência
+IMAGE. Validar a candidata que reutiliza o endereço já conferido e desempacota
+pixels inteiros, preservando RGB24 parcial, máscaras, padding e erro. Comparar
+estado/RGBA/PCM/entrada, medir pares no menu e depois a partida, e amostrar
+novamente. Candidata em `out/reconstruction/source-frozen-v5`; a janela usa
+`source-frozen-v4`. Nenhum resultado da candidata foi atribuído à janela.
+
 ## BIOS — fronteira verificada em 07/11/2026
 
 ROM1 pela CLI e reset TX/RX SMAP estão implementados/testados. No cenário
