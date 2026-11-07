@@ -1,5 +1,18 @@
 # STATUS — ps2-native
 
+## BIOS: ROM1 e reset SMAP, Browser ainda ausente — 07/11/2026
+
+- `ps2n-boot` carrega ROM1 com pareamento/hash/metadados explícitos e protege
+  o firmware contra sobrescrita. Hipóteses de diagnóstico permanecem opt-in.
+- Reset TX/RX SMAP implementado, com prazo, bits desconhecidos, invalidação
+  por energia e checkpoint pendente. **12/12** regressões passaram em fonte
+  isolada; um checkpoint real anterior foi migrado preservando seu payload antigo.
+- Boot experimental sem disco chegou ao reset do MAC Ethernet. Ensaio separado
+  de reset lento avançou 1,5 bilhão EE, mas produziu zero pixels/scanout:
+  **o Browser ainda não foi demonstrado**. Controle original mantém encoder `0x7E`.
+- Evidências, executáveis preservados e limites em [M2.8-STATUS](docs/M2.8-STATUS.md).
+  Sem nova sessão gráfica, áudio audível ou CI publicada.
+
 ## God of War: VADDA e primeira investigação local — 07/11/2026
 
 - Identificado o disco USA `SCUS-97399`, BOOT2 `SCUS_973.99;1`; ISO e ELF

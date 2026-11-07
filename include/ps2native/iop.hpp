@@ -20,6 +20,7 @@
 #include "ps2native/gs_registers.hpp"
 #include "ps2native/nvm.hpp"
 #include "ps2native/microwire.hpp"
+#include "ps2native/smap.hpp"
 #include "ps2native/disc.hpp"
 #include "ps2native/gif.hpp"
 #include "ps2native/vif.hpp"
@@ -226,6 +227,10 @@ public:
     // experiment only. No active peripheral or IRQ response is supplied.
     void diagnostic_dev9_control_latches();
     void diagnostic_dev9_power_settle_cycles(std::uint32_t cycles);
+    void diagnostic_smap_reset_cycles(std::uint32_t cycles) {
+        if(cycle_)throw DeviceRefusal("SMAP reset timing must be selected before guest execution");
+        smap_.diagnostic_reset_cycles(cycles);
+    }
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles);
     void diagnostic_sio2_reset_clears_completion() {
         if(cycle_)throw DeviceRefusal("SIO2 reset-latch experiment requires reset state before execution");
@@ -527,6 +532,7 @@ private:
     std::array<std::optional<std::uint32_t>, 16> cop0_{};
     const ConsoleHardware* hardware_{};
     std::optional<std::uint64_t> rtc_epoch_; // immutable external input, like ROM/NVM/disc bindings
+    SmapFifos smap_;
     // Bus configuration as written; empty value: unknown (reset value never
     // established, or an unknown value written back).
     std::vector<std::pair<std::uint32_t, std::optional<std::uint32_t>>> latches_;

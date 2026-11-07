@@ -1,5 +1,22 @@
 # Referências técnicas versus requisitos do ps2-native — 03/11/2026
 
+## Reset FIFO SMAP consultado — 07/11/2026
+
+Referência primária fixada: ps2sdk `d41ea62946e53d9a0c8788bb9eb8c8faf488b559`,
+[`smapregs.h`](https://github.com/ps2dev/ps2sdk/blob/d41ea62946e53d9a0c8788bb9eb8c8faf488b559/common/include/smapregs.h),
+[`speedregs.h`](https://github.com/ps2dev/ps2sdk/blob/d41ea62946e53d9a0c8788bb9eb8c8faf488b559/common/include/speedregs.h)
+e [`ps2dev9.c`](https://github.com/ps2dev/ps2sdk/blob/d41ea62946e53d9a0c8788bb9eb8c8faf488b559/iop/dev9/dev9/src/ps2dev9.c).
+O driver escreve RESET nas portas de byte TX/RX e aguarda sua limpeza. O bit de
+capacidade SMAP é separado da revisão SPEED. Isso fundamenta o protocolo,
+mas não mede sua latência física.
+
+`SmapFifos` é implementação original: estado desconhecido antes da escrita,
+conclusão por prazo IOP explicitamente selecionado, FIFO vazia após reset,
+invalidação em energia e serialização completa. Nenhum código AFL/GPL foi
+copiado. Play! `Source/iop/Iop_Dev9.cpp` foi consultado, mas seus retornos zero
+para acessos desconhecidos não constituem componente adequado a este contrato.
+Resultados e limitações em [M2.8-STATUS](M2.8-STATUS.md).
+
 ## Reutilização efetiva do leitor IPU — 07/11/2026
 
 **Código incorporado:** `bits_at` de Samir Nuri, [ps2-web-recomp,

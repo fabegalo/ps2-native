@@ -211,6 +211,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     gpr_ = {};
     dev9_power_={0,0xFFFFu};speed_irq_mask_={0,0xFFFFu};dev9_irq_acknowledged_=false;diagnostic_dev9_irq_disconnected_=false;
     speed_eeprom_.reset();speed_gpio_dir_={0,0xFFu};speed_gpio_data_={0,0xFFu};speed_gpio_clock_at_.reset();
+    smap_.reset();
     diagnostic_dev9_controls_=dev9_initial_power_ready_=false;dev9_controls_={};
     diagnostic_dev9_settle_cycles_=0;dev9_power_ready_at_.reset();
     gpr_sio2_epoch_={};sio2_control_epoch_=undefined_sio2_epoch_=0;
@@ -1769,6 +1770,7 @@ void Iop::write_dev9_power(ObservedWord word) {
         // registers have been measured across this power/reset transition.
         speed_irq_mask_={0,0xFFFFu};speed_gpio_dir_={0,0xFFu};speed_gpio_data_={0,0xFFu};
         speed_eeprom_.drive(false,false,false);speed_gpio_clock_at_.reset();
+        smap_.power_reset();
         if((word.value&5u)==5u && diagnostic_dev9_settle_cycles_)
             dev9_power_ready_at_=cycle_+diagnostic_dev9_settle_cycles_;
     }
@@ -2763,6 +2765,15 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         }
         return word.value;
     }
+    if(physical==0x10001000u || physical==0x10001030u) {
+        if(bytes!=1u)throw IopStop{"SMAP FIFO control requires byte reads"};
+        if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
+            throw IopStop{"SMAP FIFO requires a measured SPEED interface with established power"};
+        const auto word=smap_.read(physical==0x10001030u,cycle_);
+        undefined_load_="SMAP FIFO control unused bits have no measured readback";
+        undefined_known_=~word.unknown&(std::string_view(what)=="LBU" ? ~0u : 0xFFu);
+        return word.value;
+    }
     if(physical==0x10000002u || physical==0x10000004u || physical==0x1000000Eu) {
         if(bytes!=2u)throw IopStop{name+": SPEED identity requires a halfword read"};
         if(!hardware_ || !hardware_->speed_revisions)
@@ -3067,6 +3078,12 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         return;
     }
     const auto name = std::string("store ") + what + " of IOP register " + hex(physical);
+    if(physical==0x10001000u || physical==0x10001030u) {
+        if(bytes!=1u)throw IopStop{"SMAP FIFO control requires byte writes"};
+        if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
+            throw IopStop{"SMAP FIFO requires a measured SPEED interface with established power"};
+        smap_.write(physical==0x10001030u,{value.value_or(0),value ? 0u : ~0u},cycle_);return;
+    }
     const auto spu2_offset=physical&0x7FFu;
     const bool unassigned_spu2=(spu2_offset>=0x346u && spu2_offset<=0x3FFu) ||
         (spu2_offset>=0x746u && spu2_offset<=0x75Fu) ||

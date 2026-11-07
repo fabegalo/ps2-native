@@ -37,6 +37,8 @@ int boot_main(int argc, Character** argv) {
     if (argc < 2) {
         std::cerr << "Usage: ps2n-boot <your-rom0.bin> [--expect-sha256=HEX] [--max-instructions=N]\n"
                      "                 [--console=MODEL[:MAINBOARD]] [--nvm=FILE] [--expect-nvm-sha256=HEX]\n"
+                     "                 [--rom1=FILE --expect-rom1-sha256=HEX --rom1-build=TEXT]\n"
+                     "                 [--rom1-dvd-version=TEXT --rom1-provenance=TEXT] (requires --expect-sha256 and --console)\n"
                      "                 [--trace=events|full] [--trace-out=FILE] [--tail=N] [--stop-at=0xADDRESS]\n"
                      "                 [--diagnostic-dir=DIR --diagnostic-ring=N --diagnostic-stream-bytes=N]\n"
                      "                 [--diagnostic-ram=ADDRESS:BYTES] (passive backing RAM)\n"
@@ -52,8 +54,20 @@ int boot_main(int argc, Character** argv) {
                      "                 [--assume-sbus-configuration-latches] (unverified configuration model)\n"
                      "                 [--assume-iop-dmacinten=0..3] (unmeasured reset, diagnostic only)\n"
                      "                 [--assume-iop-sio2-irq-clear] (unmeasured reset, diagnostic only)\n"
+                     "                 [--assume-sio2-disconnected=N] (all ports absent, unmeasured timeout in IOP cycles)\n"
+                     "                 [--assume-sio2-reset-clears-completion] (unmeasured CTRL reset effect)\n"
+                     "                 [--assume-sio2-dma-word-cycles=N] (unmeasured DMA word timing)\n"
+                     "                 [--assume-sio2-port-timing=0..3] (unmeasured RECV2 bits 4/5)\n"
+                     "                 [--assume-dev9-power-reset=0|1|4|5] [--assume-dev9-control-latches] (unmeasured)\n"
+                     "                 [--assume-dev9-power-settle-cycles=N] (unmeasured power settling time)\n"
+                     "                 [--assume-smap-reset-cycles=N] (unmeasured FIFO reset completion time)\n"
+                     "                 [--assume-forbid-dvdp-error-bit-clear] (unmeasured SCMD 15 reply bit 7 only)\n"
                      "                 [--assume-spu2-quiescent-reset] (unmeasured inactive voices/inputs and IRQ9 clear)\n"
                      "                 [--assume-spu2-admas-control-latch] (unmeasured whole written-control readback)\n"
+                     "                 [--assume-spu2-7ca-latch] (unmeasured 0x7CA side effects)\n"
+                     "                 [--assume-spu2-reserved-latches] (unmeasured unassigned-register side effects)\n"
+                     "                 [--assume-spu2-effect-address-reserved-zero] (unmeasured reserved readback bits)\n"
+                     "                 [--assume-spu2-dma-wrap-to-zero] (unmeasured sound RAM wrap policy)\n"
                      "                 [--assume-spu2-adma-word-cycles=N] (unmeasured shared bus, round-robin, priming/underflow wait)\n"
                      "                 [--assume-spu2-pio-word-cycles=N] (unmeasured PIO throughput, diagnostic only)\n";
         return 2;
@@ -69,6 +83,19 @@ int boot_main(int argc, Character** argv) {
         std::optional<std::filesystem::path> frame_out;
         const ps2native::ConsoleHardware* hardware = nullptr;
         std::optional<std::filesystem::path> nvm_path;
+        std::optional<std::filesystem::path> rom1_path;
+        ps2native::Rom1Identity rom1_identity;
+        std::optional<std::uint32_t> sio2_disconnected;
+        bool sio2_reset_clears_completion{};
+        std::optional<std::uint32_t> sio2_dma_word_cycles;
+        bool spu2_7ca_latch{};
+        bool spu2_reserved_latches{};
+        std::optional<std::uint16_t> dev9_power_reset;
+        bool dev9_control_latches{};
+        bool spu2_dma_wrap_to_zero{};
+        std::optional<unsigned> sio2_port_timing;
+        std::optional<std::uint32_t> dev9_power_settle_cycles;
+        std::optional<std::uint32_t> smap_reset_cycles;
         ps2native::NvmLoadOptions nvm_options;
         ps2native::DiagnosticAssumptions assumptions;
         auto number = [](const std::string& text, const char* label) {
@@ -96,6 +123,16 @@ int boot_main(int argc, Character** argv) {
                 nvm_path = std::filesystem::path(argv[i]).native().substr(6);
             } else if (flag.starts_with("--expect-nvm-sha256=")) {
                 nvm_options.expected_sha256 = flag.substr(20);
+            } else if (flag.starts_with("--rom1=")) {
+                rom1_path = std::filesystem::path(argv[i]).native().substr(7);
+            } else if (flag.starts_with("--expect-rom1-sha256=")) {
+                rom1_identity.sha256 = flag.substr(21);
+            } else if (flag.starts_with("--rom1-build=")) {
+                rom1_identity.build = flag.substr(13);
+            } else if (flag.starts_with("--rom1-dvd-version=")) {
+                rom1_identity.dvd_version = flag.substr(19);
+            } else if (flag.starts_with("--rom1-provenance=")) {
+                rom1_identity.provenance = flag.substr(18);
             } else if (flag.starts_with("--assume-video-encoder=")) {
                 const auto text = flag.substr(23);
                 const auto colon = text.find(':');
@@ -113,8 +150,50 @@ int boot_main(int argc, Character** argv) {
                 assumptions.sbus_configuration_latches=true;
             } else if (flag=="--assume-iop-sio2-irq-clear") {
                 assumptions.iop_sio2_irq_clear=true;
+            } else if (flag=="--assume-sio2-reset-clears-completion") {
+                sio2_reset_clears_completion=true;
+            } else if (flag.starts_with("--assume-sio2-port-timing=")) {
+                const auto value=number(flag.substr(sizeof("--assume-sio2-port-timing=")-1u),"--assume-sio2-port-timing");
+                if(value>3u)throw std::runtime_error("SIO2 port timing must be 0..3");
+                sio2_port_timing=static_cast<unsigned>(value);
+            } else if (flag.starts_with("--assume-sio2-dma-word-cycles=")) {
+                const auto value=number(flag.substr(sizeof("--assume-sio2-dma-word-cycles=")-1u),"--assume-sio2-dma-word-cycles");
+                if(!value || value>std::numeric_limits<std::uint32_t>::max())
+                    throw std::runtime_error("SIO2 DMA word cycles must be 1..UINT32_MAX");
+                sio2_dma_word_cycles=static_cast<std::uint32_t>(value);
+            } else if (flag=="--assume-dev9-control-latches") {
+                dev9_control_latches=true;
+            } else if (flag=="--assume-forbid-dvdp-error-bit-clear") {
+                assumptions.mechacon_forbid_dvdp_error_bit_clear=true;
+            } else if (flag.starts_with("--assume-dev9-power-reset=")) {
+                const auto value=number(flag.substr(sizeof("--assume-dev9-power-reset=")-1u),"--assume-dev9-power-reset");
+                if(value&~5ull)throw std::runtime_error("DEV9 power reset must be 0, 1, 4 or 5");
+                dev9_power_reset=static_cast<std::uint16_t>(value);
+            } else if (flag.starts_with("--assume-smap-reset-cycles=")) {
+                const auto value=number(flag.substr(sizeof("--assume-smap-reset-cycles=")-1u),"--assume-smap-reset-cycles");
+                if(!value || value>std::numeric_limits<std::uint32_t>::max())
+                    throw std::runtime_error("SMAP reset cycles must be 1..UINT32_MAX");
+                smap_reset_cycles=static_cast<std::uint32_t>(value);
+            } else if (flag.starts_with("--assume-dev9-power-settle-cycles=")) {
+                const auto value=number(flag.substr(sizeof("--assume-dev9-power-settle-cycles=")-1u),"--assume-dev9-power-settle-cycles");
+                if(!value || value>std::numeric_limits<std::uint32_t>::max())
+                    throw std::runtime_error("DEV9 power settling cycles must be 1..UINT32_MAX");
+                dev9_power_settle_cycles=static_cast<std::uint32_t>(value);
+            } else if (flag.starts_with("--assume-sio2-disconnected=")) {
+                const auto value=number(flag.substr(sizeof("--assume-sio2-disconnected=")-1u),"--assume-sio2-disconnected");
+                if(!value || value>std::numeric_limits<std::uint32_t>::max())
+                    throw std::runtime_error("SIO2 timeout cycles must be 1..UINT32_MAX");
+                sio2_disconnected=static_cast<std::uint32_t>(value);
             } else if(flag=="--assume-spu2-admas-control-latch") {
                 assumptions.spu2_admas_control_latch=true;
+            } else if(flag=="--assume-spu2-7ca-latch") {
+                spu2_7ca_latch=true;
+            } else if(flag=="--assume-spu2-reserved-latches") {
+                spu2_reserved_latches=true;
+            } else if(flag=="--assume-spu2-effect-address-reserved-zero") {
+                assumptions.spu2_effect_address_reserved_zero=true;
+            } else if(flag=="--assume-spu2-dma-wrap-to-zero") {
+                spu2_dma_wrap_to_zero=true;
             } else if(flag.starts_with("--assume-spu2-adma-word-cycles=")) {
                 const auto value=number(flag.substr(sizeof("--assume-spu2-adma-word-cycles=")-1u),"--assume-spu2-adma-word-cycles");
                 if(!value || value>std::numeric_limits<std::uint32_t>::max())throw std::runtime_error("SPU2 ADMA word cycles must be 1..UINT32_MAX");
@@ -159,6 +238,19 @@ int boot_main(int argc, Character** argv) {
         } else if (nvm_options.expected_sha256) {
             throw std::runtime_error("--expect-nvm-sha256 needs --nvm");
         }
+        std::optional<ps2native::Rom1Image> rom1;
+        if (rom1_path) {
+            if (!hardware || !load.expected_sha256)
+                throw std::runtime_error("--rom1 requires --console and --expect-sha256 for the reviewed firmware pairing");
+            rom1_identity.rom0_sha256 = *load.expected_sha256;
+            rom1_identity.romver = bios.version.romver;
+            rom1_identity.model = hardware->model;
+            rom1_identity.mainboard = hardware->mainboard;
+            rom1 = ps2native::load_bios_rom1(ps2native::read_file(*rom1_path), bios, *hardware, rom1_identity);
+        } else if (!rom1_identity.sha256.empty() || !rom1_identity.build.empty() ||
+                   !rom1_identity.dvd_version.empty() || !rom1_identity.provenance.empty()) {
+            throw std::runtime_error("ROM1 identity options require --rom1");
+        }
 
         std::ostringstream header;
         header << "# ps2-native EE boot trace v1\n"
@@ -185,6 +277,32 @@ int boot_main(int argc, Character** argv) {
         } else {
             header << "# nvm none\n";
         }
+        if (rom1)
+            header << "# rom1 sha256 " << rom1->identity.sha256 << ", build " << rom1->identity.build
+                   << ", DVD " << rom1->identity.dvd_version << ", provenance " << rom1->identity.provenance << '\n';
+        if (sio2_disconnected)
+            header << "# DIAGNOSTIC SIO2 all four ports disconnected; timeout " << *sio2_disconnected
+                   << " IOP cycles (unmeasured)\n";
+        if (sio2_reset_clears_completion)
+            header << "# DIAGNOSTIC SIO2 CTRL reset clears pending completion (unmeasured)\n";
+        if (sio2_dma_word_cycles)
+            header << "# DIAGNOSTIC SIO2 DMA word timing " << *sio2_dma_word_cycles << " IOP cycles (unmeasured)\n";
+        if (sio2_port_timing)
+            header << "# DIAGNOSTIC SIO2 RECV2 port timing bits 4/5 = " << *sio2_port_timing << " (unmeasured)\n";
+        if (spu2_7ca_latch)
+            header << "# DIAGNOSTIC SPU2 0x7CA retained as a latch; side effects unverified\n";
+        if (spu2_reserved_latches)
+            header << "# DIAGNOSTIC SPU2 unassigned registers retained as latches; side effects unverified\n";
+        if (dev9_power_reset)
+            header << "# DIAGNOSTIC DEV9 power reset bits 0/2 = " << *dev9_power_reset << " (unmeasured)\n";
+        if (dev9_control_latches)
+            header << "# DIAGNOSTIC DEV9 controls retained as latches; side effects unverified\n";
+        if (dev9_power_settle_cycles)
+            header << "# DIAGNOSTIC DEV9 power settling " << *dev9_power_settle_cycles << " IOP cycles (unmeasured)\n";
+        if (smap_reset_cycles)
+            header << "# DIAGNOSTIC SMAP FIFO reset completion " << *smap_reset_cycles << " IOP cycles (unmeasured)\n";
+        if (spu2_dma_wrap_to_zero)
+            header << "# DIAGNOSTIC SPU2 normal DMA wraps to sound RAM word zero (unmeasured)\n";
         if (!assumptions.empty()) {
             header << "# DIAGNOSTIC EXPERIMENT (not a boot of a measured console): assumed video encoder registers";
             for (const auto& [index, value] : assumptions.video_encoder_registers)
@@ -209,6 +327,10 @@ int boot_main(int argc, Character** argv) {
                 header<<"# DIAGNOSTIC SPU2 PIO throughput "<<*assumptions.spu2_pio_word_cycles<<" IOP cycles/halfword (unmeasured); actual FIFO bytes written to sound RAM\n";
             if(assumptions.spu2_quiescent_reset)
                 header<<"# DIAGNOSTIC SPU2 cores/voices/inputs inactive, no transfer and IRQ9 clear at reset; quiet clock phase modeled (unmeasured)\n";
+            if(assumptions.spu2_effect_address_reserved_zero)
+                header<<"# DIAGNOSTIC SPU2 effect-address reserved readback bits zero (unmeasured)\n";
+            if(assumptions.mechacon_forbid_dvdp_error_bit_clear)
+                header<<"# DIAGNOSTIC MECHACON ForbidDVDP reply bit 7 clear; other reply bits and permissions remain unknown (unmeasured)\n";
         }
         header << "# engine " << (module != nullptr ? "hybrid: AOT blocks " + std::to_string(module->block_count) +
                                                           " + interpreter fallback"
@@ -227,11 +349,39 @@ int boot_main(int argc, Character** argv) {
         ps2native::EEState state;
         ps2native::Memory memory;
         ps2native::prepare_ee_boot(bios, module, state, memory, hardware, nvm ? &*nvm : nullptr,
-                                   assumptions.empty() ? nullptr : &assumptions);
-        const std::array protected_inputs{std::filesystem::path(argv[1]), nvm_path.value_or(std::filesystem::path{})};
+                                   assumptions.empty() ? nullptr : &assumptions, rom1 ? &*rom1 : nullptr);
+        if (sio2_disconnected)
+            memory.diagnostic_sio2_unplugged_ports(15u,*sio2_disconnected);
+        if (sio2_reset_clears_completion)
+            memory.diagnostic_sio2_reset_clears_completion();
+        if (sio2_dma_word_cycles)
+            memory.diagnostic_sio2_dma_word_cycles(*sio2_dma_word_cycles);
+        if (sio2_port_timing)
+            memory.diagnostic_sio2_port_timing(*sio2_port_timing);
+        if (spu2_7ca_latch)
+            memory.diagnostic_spu2_7ca_latch();
+        if (spu2_reserved_latches)
+            memory.diagnostic_spu2_reserved_latches();
+        if (dev9_power_reset)
+            memory.diagnostic_dev9_power_reset(*dev9_power_reset);
+        if (dev9_control_latches)
+            memory.diagnostic_dev9_control_latches();
+        if (dev9_power_settle_cycles)
+            memory.diagnostic_dev9_power_settle_cycles(*dev9_power_settle_cycles);
+        if (smap_reset_cycles)
+            memory.diagnostic_smap_reset_cycles(*smap_reset_cycles);
+        if (spu2_dma_wrap_to_zero)
+            memory.diagnostic_spu2_dma_wrap_to_zero();
+        const std::array protected_inputs{std::filesystem::path(argv[1]), nvm_path.value_or(std::filesystem::path{}),
+                                         rom1_path.value_or(std::filesystem::path{})};
+        for (const auto& output : {trace_out,frame_out})
+            for (const auto& input : protected_inputs)
+                if (output && !input.empty() && ps2native::file_exists(*output) &&
+                    ps2native::files_equivalent(input,*output))
+                    throw std::runtime_error("boot output must not overwrite firmware input");
         diagnostic.attach(options, protected_inputs);
         const auto report = checkpoint.run(state, memory, module, options, protected_inputs,[&](auto& restored) {
-            const std::array capture_inputs{std::filesystem::path(argv[1]),nvm_path.value_or(std::filesystem::path{}),checkpoint.resume,checkpoint.output};
+            const std::array capture_inputs{std::filesystem::path(argv[1]),nvm_path.value_or(std::filesystem::path{}),rom1_path.value_or(std::filesystem::path{}),checkpoint.resume,checkpoint.output};
             vu1.attach(restored,capture_inputs);
             graphics.attach(restored);
         });

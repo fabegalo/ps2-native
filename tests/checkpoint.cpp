@@ -23,6 +23,12 @@ void finish_transfer(Memory& memory) {
 std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const std::uint8_t> payload,
     const char* schema="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88",bool current_layout=false,bool keep_cpu_bounds=false) {
     std::vector<std::uint8_t> old_payload(payload.begin(),payload.end());
+    const std::array<std::uint8_t,8> smap_tag{'S','M','A','P','R','S','T','1'};
+    const auto smap=std::search(old_payload.begin(),old_payload.end(),smap_tag.begin(),smap_tag.end());
+    require(smap!=old_payload.end() && smap+18<=old_payload.end() &&
+            std::all_of(smap+8,smap+18,[](auto b){return b==0;}),
+            "legacy fixtures predate SMAP and must have no established FIFO state or timing");
+    old_payload.erase(smap,smap+18);
     const std::array<std::uint8_t,8> cpu_tag{'G','P','R','B','N','D','0','1'};
     for(unsigned reg=0;!keep_cpu_bounds && reg<32;++reg) {
         const auto at=std::search(old_payload.begin(),old_payload.end(),cpu_tag.begin(),cpu_tag.end());
@@ -146,7 +152,8 @@ int main(int argc,char** argv)try {
         const auto info=inspect_checkpoint(file);const auto bytes=read_file(file);
         const auto payload=std::span<const std::uint8_t>(bytes).last(static_cast<std::size_t>(info.payload_bytes));
         auto reviewed=context;reviewed.allow_runtime_change=true;
-        for(const auto* schema:{"11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b",
+        for(const auto* schema:{"50585f2224cd852e9ef36ef63b53e10fe41691975b7c38fe44dd5384280d08cc",
+                               "11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b",
                                "5a3fed18dfb483c07fddea413019e614a6ad69d786b6c191d632df37d6525bf5",
                                "db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1"}) {
             const auto alias=directory/"gpr-lane-helper-alias.ps2ncp";
@@ -395,7 +402,8 @@ int main(int argc,char** argv)try {
     (void)load_checkpoint(current_file,state,memory,context);
     const auto exact=checkpoint_state_sha256(state,memory);
     auto reviewed=context;reviewed.allow_runtime_change=true;
-    for(const auto* schema:{"11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b",
+    for(const auto* schema:{"50585f2224cd852e9ef36ef63b53e10fe41691975b7c38fe44dd5384280d08cc",
+                               "11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b",
                            "db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1"}) {
         const auto previous=directory/"before-ipu-bit-reader.ps2ncp";
         write_file_atomically(previous,legacy_envelope(current_info,current_payload,schema,true,true));

@@ -1,5 +1,26 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
+## BIOS — fronteira verificada em 07/11/2026
+
+ROM1 pela CLI e reset TX/RX SMAP estão implementados/testados. No cenário
+experimental sem disco, a próxima operação recusada foi o reset MODE0 do MAC
+Ethernet, IOP `0xA7594`, escrita `0x2000` em `0x10002000`. Há trabalho concorrente
+local de EMAC; conferir a implementação e seus testes antes de duplicá-lo.
+O incremento FIFO foi validado separadamente para preservar esse trabalho.
+
+Estados e argumentos em `out/bios-boot/`. Os binários `fifo-reset-build` preservam
+os estados intermediários; `clean-build` corresponde ao incremento validado com
+checkpoint marcado. O checkpoint pré-SMAP de 400 milhões foi migrado com opt-in
+para `legacy-400m-normalized.ps2ncp`. Uma extensão MAC de campos precisa de sua
+própria revisão de esquema/migração; não aceitar hashes arbitrários nem descartar
+estado FIFO conhecido. Usar o runtime compatível ou reconstruir o cenário.
+
+O cenário de reset lento terminou 1,5 bilhão EE sem recusa, mas ainda sem imagem;
+inspecionar threads/timers e a resposta de erro do convidado antes de estender o
+orçamento. Não chamar o idle de boot concluído nem anunciar Browser por contagem.
+O boot padrão continua exigindo evidência do encoder `0x7E` e reset GS.
+Relatório: [M2.8-STATUS](M2.8-STATUS.md). Nenhuma sessão gráfica foi aberta.
+
 ## God of War — pedido de execução, 07/11/2026
 
 Usar os artefatos novos em `out/gow/`, não os checkpoints de outros títulos.

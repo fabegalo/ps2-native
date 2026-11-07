@@ -1,5 +1,38 @@
 # Ferramentas de desenvolvimento
 
+## Boot com ROM1 pareada — 07/11/2026
+
+`ps2n-boot` e seus runners híbridos aceitam o mesmo carregador ROM1 do núcleo:
+
+```sh
+ps2n-boot ROM0.bin --console=MODELO:PLACA --expect-sha256=SHA256_ROM0 --rom1=ROM1.bin --expect-rom1-sha256=SHA256_ROM1 --rom1-build=BUILD --rom1-dvd-version=VERSAO "--rom1-provenance=Evidência revisada do pareamento"
+```
+
+Hashes, ROMVER/modelo/placa, ROMDIR, build e versão DVD são conferidos antes
+de executar o firmware. A proveniência é obrigatória; nomes de arquivos e
+região não estabelecem um pareamento. `--nvm`/`--expect-nvm-sha256` continuam
+selecionando e validando a NVM. Checkpoints e saídas de diagnóstico protegem
+também a ROM1; trace/frame não podem sobrescrever nenhum firmware de entrada.
+
+As opções `--assume-sio2-disconnected`, `--assume-sio2-reset-clears-completion`,
+`--assume-sio2-dma-word-cycles`, `--assume-sio2-port-timing`, `--assume-dev9-power-reset`,
+`--assume-dev9-control-latches`, `--assume-dev9-power-settle-cycles`, `--assume-spu2-7ca-latch`,
+`--assume-spu2-reserved-latches`, `--assume-spu2-effect-address-reserved-zero`,
+`--assume-spu2-dma-wrap-to-zero` e `--assume-forbid-dvdp-error-bit-clear`
+expõem experimentos existentes do núcleo. O cabeçalho registra cada hipótese;
+nenhuma é ativada automaticamente. Consulte `ps2n-boot` sem argumentos para
+as unidades e os limites. Para ensaios longos, use `--diagnostic-dir` com
+anel limitado e checkpoints por cenário, preservando o último ponto válido.
+
+`--assume-smap-reset-cycles` seleciona a latência experimental do novo reset
+TX/RX SMAP, em ciclos IOP. O padrão recusa sua conclusão sem essa entrada;
+DMA e tráfego Ethernet continuam explicitamente não implementados.
+
+`cli-rom1-boot` usa somente firmware sintético e verifica o pareamento,
+metadados obrigatórios, hashes incorretos, opções experimentais e preservação
+dos arquivos de entrada. Os detalhes dos ensaios reais ficam em
+[M2.8-STATUS](M2.8-STATUS.md).
+
 ## Preparação sem execução e aliases EE — 07/11/2026
 
 `ps2n-dev prepare perfil.ps2n` identifica, analisa, gera e compila pelos mesmos

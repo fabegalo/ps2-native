@@ -91,6 +91,7 @@ public:
     void diagnostic_speed_eeprom_presence(bool present) { iop_.diagnostic_speed_eeprom_presence(present); }
     void diagnostic_dev9_control_latches() { iop_.diagnostic_dev9_control_latches(); }
     void diagnostic_dev9_power_settle_cycles(std::uint32_t cycles) { iop_.diagnostic_dev9_power_settle_cycles(cycles); }
+    void diagnostic_smap_reset_cycles(std::uint32_t cycles) { iop_.diagnostic_smap_reset_cycles(cycles); }
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles) { iop_.diagnostic_sio2_infrared_timeout(cycles); }
     void diagnostic_sio2_port_timing(unsigned bits) { iop_.diagnostic_sio2_port_timing(bits); }
     void diagnostic_sio2_digital_pad(unsigned port,std::uint16_t buttons,std::uint32_t cycles) { iop_.diagnostic_sio2_digital_pad(port,buttons,cycles); }
