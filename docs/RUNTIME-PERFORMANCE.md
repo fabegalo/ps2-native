@@ -97,3 +97,118 @@ Nenhum ensaio comercial permanece ativo ao encerrar. Evidência local em
 `out/runtime-final-summary.json`, `runtime-final-performance-results.json`,
 `runtime-final-*-results.json` e `runtime-tlb-tests.log`; não distribuir
 artefatos comerciais ou seus traces.
+
+## Busca de instruções por página — 07/11/2026
+
+Pedido: desempenho e fidelidade de Super Bust-A-Move, por execução direta,
+sem launcher. O profiler existente agora separa interrupções e observação;
+os escopos desaparecem dos builds sem profiling. Antes da mudança, a coleta
+registrou 30.000.006 consultas de interrupção, 30 milhões de observações e
+35.093.967 acessos de memória. Tempos instrumentados não são parcelas do
+tempo Release.
+
+### Mudança e isolamento
+
+`Memory::fetch32` reutiliza a resolução de até 16 páginas completas de 4 KiB
+de RAM, ROM ou scratchpad. A chave inclui página virtual, ASID, privilégio,
+ERL e mapeamento. Escritas TLB, reset/carregamento e leitura de checkpoint
+invalidam o cache host. Alinhamento continua obrigatório; páginas parciais
+e dispositivos usam a resolução comum. Bytes e máscaras de conhecimento
+são lidos novamente após sincronização DMA. Não são armazenados conteúdo
+executável, conhecimento ou falhas. A comparação dos bytes AOT permanece.
+
+384 bytes host adicionais por Memory nesta ABI, sem campos novos no
+checkpoint, configuração pública, dependências ou regra por título.
+Fontes congeladas a partir de `7e7ceda` mais o trabalho local existente,
+registradas em `out/perf-nov07-baseline-provenance.json`. O par muda somente
+`src/memory.cpp` e o cache host de `memory.hpp`; trabalho concorrente foi
+preservado. Núcleo e traduções AOT recompilados juntos.
+
+MSVC 19.44, `/O2 /Ob2 /DNDEBUG`, profiling OFF, afinidade 16384, prioridade
+AboveNormal, mesmo manifesto `interactive-menu.json`, checkpoint, firmware,
+disco verificados e entrada FFFF. GS CPU para isolar execução. Carga e hashes
+finais fora da janela; scanout original dentro. Nenhuma compilação da tarefa
+durante esta matriz. Cinco pares alternados, após aquecimento excluído previamente:
+
+| Par | Controle (s / 30 milhões) | Cache de resolução (s) |
+|---|---:|---:|
+| 1 | 12,1153910 | 10,7895352 |
+| 2 | 8,1082155 | 7,8050025 |
+| 3 | 7,9320712 | 7,3612893 |
+| 4 | 7,9313101 | 7,3675274 |
+| 5 | 7,9974762 | 7,5366949 |
+| **Mediana** | **7,9974762** | **7,5366949** |
+
+Throughput mediano **+6,11%**, tempo **−5,76%**. Todos os cinco pares
+favoreceram a mudança; houve variação externa, sobretudo no primeiro.
+Aquecimento: 8,1666972 / 8,5739689 s, sem favorecer o cache.
+Mediana dos 25 intervalos: **1,256657 → 1,174710 s por campo original**.
+CPU total do processo, incluindo carga/hashes: 9,609375 → 9,156250 s.
+Executável de medida: 12.016.128 → 12.017.152 bytes. Não é tempo real nem
+medição de updates do jogo.
+
+Duas candidatas foram descartadas: divisores especializados dos timers
+venceram dois de cinco pares; consulta especializada de conhecimento de
+palavras alinhadas venceu um de cinco. Não entraram no núcleo. Todos os
+valores, incluindo aquecimentos, ficaram em
+`out/perf-nov07-{timers,memory,fetch}-performance-results.json`; resumo em
+`out/perf-nov07-fetch-summary.json`. O aquecimento inicial dos timers
+coincidiu com o teste de checkpoint e não foi usado como evidência de ganho.
+Os casos de borda dos três prescalers ficaram no snapshot local da candidata.
+
+### Equivalência e referências
+
+Dez validações pareadas: CPU, interpretação pura, checkpoint 10 + 20 milhões,
+Vulkan e D3D12. Todas conservaram estado completo
+`82c384eb3fc5822d9ea3469d265c514ab904ca16e6c0c02441ca07e37194c2ed`,
+VRAM/máscaras, seis campos RGBA 640 × 224, 9.766 amostras PCM com timestamps,
+12 polls de entrada, ciclos EE/IOP e efeitos modelados. Na janela híbrida,
+25.446.236 instruções AOT e 4.553.764 interpretadas; VU1 não executou.
+RTX 4070: 294 primitivas reais por backend (282 texturizadas e 12 flat),
+108 lotes, zero fallback. Seus tempos são de validação, não um benchmark
+pareado dos backends. Evidência em `out/perf-nov07-validation-summary.json`.
+
+Oito regressões focadas passaram no snapshot pareado: boot híbrido/TLB,
+cache/contexto EE, timers/IRQ, HBLANK IOP, quadro/timer Direct ELF e checkpoint.
+Novos casos cobrem máscaras após stores, isolamento do scratchpad,
+privilégio/ERL e ROM1 parcial. Testes existentes cobrem ASID,
+mudança de TLB, páginas grandes, alteração de bytes e restauração aquecida.
+
+Uma segunda compilação, de `7e7ceda` mais apenas esta alteração, passou
+sete dos oito testes. `native-ee-context` ainda espera a recusa de
+`MADD.S` para `1*2+1,25`, já suportado pelo núcleo. A implementação anterior
+de `fetch32`, recompilada nessa mesma cópia, falha exatamente na mesma
+asserção (`multiplier rounding not modeled`). É falha preexistente da base;
+o teste corrigido nas edições concorrentes passou no snapshot pareado.
+Essa correção alheia não foi incluída neste incremento.
+Após sua integração em `3a40856`, uma nova cópia isolada desse commit mais
+esta alteração foi recompilada: **8/8 testes passaram**, incluindo contexto
+EE e checkpoint completo. A identidade de esquema permaneceu `5662ca9c…`.
+Logs: `out/perf-nov07-final-clean-{build,tests}.log`.
+
+Perfil posterior do snapshot pareado, obtido separadamente e com o mesmo
+estado final: EE não atribuído 22,53%, interrupções 17,95%, observação
+13,46%, memória 11,44%, IOP 10,81%, verificação de código 9,83% e GS CPU
+3,74% do tempo exclusivo instrumentado. A instrumentação faz dezenas de
+milhões de leituras de relógio e altera essas proporções. Usar os caminhos
+identificados para uma próxima coleta Release, não como previsão de ganho
+nem justificativa para retirar validações. Dados em
+`out/perf-nov07-profile-final-results.json`.
+
+Referências consultadas, sem copiar ou integrar código externo:
+
+- [Play!: comandos por quadro](https://github.com/jpd002/Play-/blob/master/Source/gs/GSH_Vulkan/GSH_VulkanFrameCommandBuffer.cpp)
+  e [licença permissiva](https://github.com/jpd002/Play-/blob/master/License.txt): submissões/fences.
+- [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs/blob/main/README.md):
+  compute/replay e limites declarados de precisão física de interpolação/AA1.
+- [PCSX2: texture cache](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/GS/Renderers/HW/GSTextureCache.h)
+  e [Counters.cpp](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Counters.cpp):
+  validade/invalidação e organização por eventos, sob GPL-3.0+.
+- [Play!: COP_SCU](https://github.com/jpd002/Play-/blob/master/Source/COP_SCU.cpp):
+  comparação arquitetural; o incremento artificial de Count por leitura
+  não foi transportado para este runtime.
+
+O núcleo permanece original BSD. A autorização para usar referências GPL
+não resultou em incorporação nesta etapa. Sem sessão humana, áudio ouvido,
+launcher, primeira partida ou certificação de outros dispositivos. A melhoria
+medida pertence ao menu headless. CI/publicação não executadas nesta etapa.

@@ -1,5 +1,22 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
+## Desempenho de Super Bust-A-Move, sem launcher — 07/11/2026
+
+O cache de resolução de instruções venceu cinco pares no menu headless:
+7,997476 → 7,536695 s por 30 milhões (+6,11% de throughput). Estado completo,
+RGBA, PCM/entrada e ciclos coincidiram em CPU, interpretação, checkpoint
+10 + 20 milhões, Vulkan e D3D12. Ainda 1,174710 s por campo original;
+não registrar tempo real ou gameplay como entregue.
+
+Usar o perfil posterior ao cache para escolher o próximo custo de execução,
+memória ou observação; não reutilizar as proporções anteriores. Preservar
+amostras negativas de timers/palavras alinhadas, alterações concorrentes e
+checkpoints originais. O pedido não exige launcher nem retoma Computer Use.
+Perfil posterior: EE/interrupções/observação continuam à frente do GS CPU;
+as proporções incluem overhead dos timers. Isolar esses caminhos numa
+coleta Release antes de outra mudança, mantendo identidade AOT e efeitos.
+Evidências em [RUNTIME-PERFORMANCE](RUNTIME-PERFORMANCE.md).
+
 ## Simpsons — pedido atual, 07/11/2026
 
 MFIFO/fromSPR e BC0F/T/FL/TL estão implementados; 34 testes focados passaram

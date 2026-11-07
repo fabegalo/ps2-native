@@ -94,7 +94,12 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     require(memory.read32(0xA0001000u) == 0xCAFEF00Du, "RAM through KSEG0 and KSEG1");
     require(memory.fetch32(0x80001000u)==0xCAFEF00Du,"fetch reads current RAM bytes");
     memory.store32_observed(0xA0001000u,{0xCAFEF00Du,0x100u});
+    require(memory.load32_observed(0x80001000u).unknown==0x100u,
+            "aligned word reads retain every unknown bit");
     device_refused([&]{(void)memory.fetch32(0x80001000u);},"unknown RAM bits");
+    memory.write8(0xA0001001u,0xF0u);
+    require(memory.fetch32(0x80001000u)==0xCAFEF00Du,
+            "a known byte store immediately clears the corresponding word uncertainty");
     memory.write32(0xA0001000u,0xCAFEF00Du);
     bus_fault([&]{(void)memory.fetch32(0x80001002u);},BusFault::Unaligned,"instruction fetch");
     device_refused([&]{(void)memory.fetch32(0xB000F000u);},"instruction fetch from device registers");
@@ -119,6 +124,10 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     memory.tlb_write(0, {0u, 0x70000000u, 0x80000007u, 7u});
     memory.write32(0x70003FF0u, 0xA5A5A5A5u);
     require(memory.read32(0x70003FF0u) == 0xA5A5A5A5u, "S entry with PageMask 0 spans 16 KiB");
+    memory.store32_observed(0x70001000u,{0x12345678u,0x80000001u});
+    require(memory.load32_observed(0x70001000u).unknown==0x80000001u &&
+            memory.fetch32(0x80001000u)==0xCAFEF00Du,
+            "aligned scratchpad knowledge is isolated from the same main-RAM offset");
     require(memory.tlb_probe(0x70000000u) == 0u, "TLBP finds the only defined entry");
     for (unsigned n = 0; n < Memory::kTlbEntries; ++n)
         memory.tlb_write(n, {0u, 0xE0000000u + 0x2000u * n, 0u, 0u});
@@ -157,6 +166,11 @@ void check_translation_reuse(const std::vector<std::uint8_t>& rom) {
     memory.tlb_write(0, {0u, address, (2u << 6) | 0x1Eu, (3u << 6) | 0x1Eu});
     memory.tlb_write(1, {0u, address | 1u, (4u << 6) | 0x1Eu, (5u << 6) | 0x1Eu});
     require(memory.fetch32(address) == 0x11223344u, "first ASID reads its own frame");
+    require(memory.fetch32(0x80002000u)==0x11223344u,"warm an unmapped kernel-segment fetch");
+    memory.set_translation_context(0,false,Memory::Privilege::User);
+    bus_fault([&]{(void)memory.fetch32(0x80002000u);},BusFault::Privilege,"privilege");
+    memory.set_translation_context(0,true);
+    bus_fault([&]{(void)memory.fetch32(address);},BusFault::Unmapped,"unmapped physical address");
     memory.set_translation_context(1, false);
     require(memory.fetch32(address) == 0x99AABBCCu, "warmed virtual address changes frame with ASID");
     memory.set_translation_context(0, false);
@@ -195,6 +209,10 @@ void check_translation_reuse(const std::vector<std::uint8_t>& rom) {
     memory.reset_for_boot(rom);
     memory.set_translation_context(0, false);
     bus_fault([&] { (void)memory.fetch32(large + 0x7000u); }, BusFault::TlbRefill, "undefined since reset");
+    const std::vector<std::uint8_t> partial_rom1{1u,2u,3u,4u};
+    memory.reset_for_boot(rom,nullptr,nullptr,nullptr,partial_rom1);
+    require(memory.fetch32(0xBE000000u)==0x04030201u,"a partial ROM1 page can supply its valid word");
+    bus_fault([&]{(void)memory.fetch32(0xBE000004u);},BusFault::Unmapped,"unmapped physical address");
 }
 
 // The reset vector replaced by one instruction: the stop must name it.

@@ -28,6 +28,7 @@ void enter_ee_exception(EEState& state, std::uint32_t code, std::uint32_t pc, bo
 
 namespace {
 bool poll_interrupts(EEState& state, Memory* memory) {
+    profiling::Scope profile(profiling::Phase::Interrupts);
     auto cause = state.cp0(Cop0::Cause);
     const auto status = state.cp0(Cop0::Status);
     if (memory != nullptr && (status & kStatusIM2)) {

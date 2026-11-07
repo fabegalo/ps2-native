@@ -692,10 +692,35 @@ void Memory::store128_observed(std::uint32_t address, ObservedQuadword word) {
 }
 std::uint32_t Memory::fetch32(std::uint32_t address) const {
     profiling::Scope profile(profiling::Phase::Memory);
-    // Fetch never observes the data cache or emits a data-bus callback. Resolve
-    // every access (including privilege/TLB/alignment) and read the current
-    // storage word, so CPU stores, DMA and cache writeback remain visible.
-    const auto target=resolve(address,4,false,"instruction fetch");
+    // Fetch never observes the data cache or emits a data-bus callback. Reuse
+    // only page resolution for the same address-space context; read current
+    // bytes and knowledge after DMA so stores and writeback remain visible.
+    const auto page_offset=address&0xFFFu;
+    const auto key=std::uint64_t{address>>12u} | (std::uint64_t{asid_}<<20u) |
+        (static_cast<std::uint64_t>(privilege_)<<28u) | (std::uint64_t{error_level_}<<30u) |
+        (static_cast<std::uint64_t>(mapping_)<<31u);
+    auto& cached=fetch_pages_[(address>>12u)&(fetch_pages_.size()-1u)];
+    Target target;
+    if (!(address&3u) && cached.key==key) {
+        target=cached.base;
+        target.offset+=page_offset;
+        target.physical+=page_offset;
+    } else {
+        target=resolve(address,4,false,"instruction fetch");
+        if(target.region==BusRegion::MainRam || target.region==BusRegion::Scratchpad ||
+           target.region==BusRegion::BiosRom || target.region==BusRegion::Rom1) {
+            const auto& storage=target.region==BusRegion::MainRam ? ram_
+                : target.region==BusRegion::Scratchpad ? scratchpad_
+                : target.region==BusRegion::BiosRom ? rom_ : rom1_;
+            const auto base=target.offset&~0xFFFu;
+            // Cache only a complete storage page, never bytes, pointers or device reads.
+            if((target.offset&0xFFFu)==page_offset && base<=storage.size() && storage.size()-base>=4096u) {
+                cached={key,target};
+                cached.base.offset=base;
+                cached.base.physical-=page_offset;
+            }
+        }
+    }
     if(target.region!=BusRegion::MainRam && target.region!=BusRegion::Scratchpad &&
        target.region!=BusRegion::BiosRom && target.region!=BusRegion::Rom1)
         return static_cast<std::uint32_t>(read_le(address,4,"instruction fetch",false));

@@ -330,8 +330,15 @@ private:
         std::uint8_t index{};
     };
     mutable std::array<TlbMatchCacheEntry,256> tlb_match_cache_{};
+    // Read-only page resolution; TLB writes, reset and checkpoint reads invalidate it.
+    struct FetchPage {
+        std::uint64_t key{UINT64_MAX};
+        Target base{};
+    };
+    mutable std::array<FetchPage,16> fetch_pages_{};
     void reset_tlb_cache() noexcept {
         for(auto& entry:tlb_match_cache_)entry.key=UINT32_MAX;
+        for(auto& entry:fetch_pages_)entry.key=UINT64_MAX;
     }
     // RUNTIME_HELPERS_END
     Mapping mapping_{Mapping::ElfProgram};

@@ -2,6 +2,24 @@
 
 **Registro vivo de progresso e evidências.** Atualizar este arquivo quando houver avanço **verificado**; não reescrever os READMEs, `AGENTS.md` ou `CLAUDE.md` a cada marco. Relatórios detalhados continuam em `docs/M*-STATUS.md`; o trabalho seguinte fica em `docs/NEXT-TASK.md`.
 
+## Super Bust-A-Move: resolução de instruções +6,11% — 07/11/2026
+
+- Menu headless, sem launcher: cinco pares Release mediram 30 milhões em
+  **7,997476 → 7,536695 s**; intervalo mediano por campo original
+  **1,256657 → 1,174710 s**. Houve variação externa; todos os pares medidos
+  favoreceram o cache de resolução. Ainda muito abaixo de tempo real.
+- Reutilização por página/ASID/privilégio/ERL/mapeamento, invalidada por
+  TLB, reset e restauração. Bytes e conhecimento continuam lidos após DMA;
+  identidade AOT e recusas preservadas. Sem código externo integrado.
+- Oito regressões focadas e dez validações comerciais conservaram estado,
+  seis campos RGBA, VRAM/máscaras, PCM, entrada e ciclos, incluindo
+  interpretação, checkpoint 10 + 20 milhões e Vulkan/D3D12 na RTX 4070.
+- Candidatas de timers e palavra alinhada descartadas; alterações concorrentes
+  preservadas. Sem sessão humana, partida, gameplay ou CI/publicação novos.
+  Após `3a40856`, nova compilação isolada com esta alteração passou **8/8**;
+  a expectativa FPU antiga identificada na base anterior já foi corrigida.
+  [Método e amostras](docs/RUNTIME-PERFORMANCE.md#busca-de-instruções-por-página--07112026).
+
 ## Simpsons: MFIFO e BC0 implementados, ainda sem vídeo — 07/11/2026
 
 - O núcleo agora transporta fromSPR normal e MFIFO para VIF1/GIF, incluindo

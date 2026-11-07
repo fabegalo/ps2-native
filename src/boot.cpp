@@ -46,6 +46,7 @@ public:
         : options_(options), report_(report), state_(state), memory_(memory) {}
 
     void on_instruction(std::uint32_t pc, std::uint32_t word, ExecutionEngine engine) override {
+        profiling::Scope profile(profiling::Phase::Observation);
         if (options_.diagnostics) options_.diagnostics->instruction(state_, pc, word);
         if (options_.on_frame) present();
         const RetiredInstruction r{++sequence_, pc, word, engine};
