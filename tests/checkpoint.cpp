@@ -22,6 +22,13 @@ void finish_transfer(Memory& memory) {
 std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const std::uint8_t> payload,
     const char* schema="771b628039a2b4c73a7c836b022c56d167cf8cd22310d8fe75803cb7934d3f88") {
     std::vector<std::uint8_t> old_payload(payload.begin(),payload.end());
+    const std::array<std::uint8_t,8> bounds_tag{'V','U','M','B','N','D','0','1'};
+    auto bounds_at=std::search(old_payload.begin(),old_payload.end(),bounds_tag.begin(),bounds_tag.end());
+    require(bounds_at!=old_payload.end(),"current checkpoint has tagged VU numeric bounds");
+    // This legacy fixture has no active numeric certificate: each optional is one byte.
+    constexpr unsigned certificates=33u*4u+2u*(8u+4u)*4u;
+    require(std::all_of(bounds_at+8,bounds_at+8+certificates,[](auto b){return b==0;}),"legacy fixture has no new certificates to erase");
+    old_payload.erase(bounds_at,bounds_at+8+certificates);
     const std::array<std::uint8_t,8> spr_tag{0x5F,0x53,0x50,0x52,0x44,0x4D,0x41,0x31};
     const auto spr_at=std::search(old_payload.begin(),old_payload.end(),spr_tag.begin(),spr_tag.end());
     require(spr_at!=old_payload.end(),"current checkpoint has a tagged fromSPR clock extension");
@@ -50,6 +57,32 @@ std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<const st
 }
 int main(int argc,char** argv)try {
     if(argc!=2)return 2;const auto directory=std::filesystem::path(argv[1]);ps2native::create_directories(directory);
+    for(unsigned prefix:{7u,11u}) {
+        auto micro_image=program();Memory micro;EEState ms;prepare_direct_elf(micro_image,nullptr,ms,micro);
+        constexpr std::uint32_t nop=0x8000033Cu,unop=0x2FFu;
+        const std::uint32_t lows[]{0x01E10000u,0x01E20001u,nop,nop,0x03E02002u,nop,nop};
+        const std::uint32_t highs[]{unop,unop,(15u<<21u)|(2u<<16u)|(1u<<11u)|(3u<<6u)|0x2Au,
+            (15u<<21u)|(4u<<16u)|(3u<<11u)|0x17Du,unop,unop|0x40000000u,unop};
+        for(unsigned n=0;n<7;++n)micro.write64(0xB1008000u+n*8u,lows[n]|(std::uint64_t{highs[n]}<<32u));
+        micro.write128(0xB100C000u,0x3F8000013F800001ull,0x3F8000013F800001ull);
+        micro.write128(0xB100C010u,0x3F8000033F800003ull,0x3F8000033F800003ull);
+        micro.write128(0xB0005000u,0x14000000u,0);
+        BootOptions options;options.max_instructions=prefix;
+        const auto boundary=run_ee_boot(ms,micro,nullptr,options);
+        require(boundary.outcome==BootOutcome::BudgetExhausted,"micro certificate fixture reaches a safe pipeline boundary");
+        const auto path=directory/("micro-bounds-"+std::to_string(prefix)+".ps2ncp");
+        CheckpointContext context{sha256_hex(micro_image.bytes),"micro numeric ranges"};
+        save_checkpoint(path,ms,micro,boundary,context);const auto saved=checkpoint_state_sha256(ms,micro);
+        EEState rs;Memory restored;prepare_direct_elf(micro_image,nullptr,rs,restored);
+        (void)load_checkpoint(path,rs,restored,context);
+        require(checkpoint_state_sha256(rs,restored)==saved,"pending and retired VU numeric ranges round-trip");
+        options.max_instructions=40;
+        require(run_ee_boot(ms,micro,nullptr,options).outcome==BootOutcome::BudgetExhausted &&
+                run_ee_boot(rs,restored,nullptr,options).outcome==BootOutcome::BudgetExhausted,"both micro continuations finish");
+        require(checkpoint_state_sha256(ms,micro)==checkpoint_state_sha256(rs,restored),"micro range continuation matches every guest field");
+        const auto coordinate=micro.load32_observed(0xB100C020u);
+        require(coordinate.value==16u && !coordinate.unknown,"real VU1 arithmetic, FTOI and SQ publish the independently expected coordinate");
+    }
     for(const bool queued:{false,true}) {
         auto image=program();EEState state;Memory memory;prepare_direct_elf(image,nullptr,state,memory);
         memory.set_clock(&state.retired_instructions,&state.stall_cycles);

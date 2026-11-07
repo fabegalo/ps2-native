@@ -94,7 +94,9 @@ void Gif::write_path1_observed(ObservedDoubleword low,ObservedDoubleword high,Gs
             allowed_high=0xFFFFFFFF000000FFull;
         }
         if((low.unknown&~allowed_low) || (high.unknown&~allowed_high))
-            throw DeviceRefusal("PATH1 consumes unknown VU1 packet bits in a retained GIF/GS field");
+            throw DeviceRefusal("PATH1 consumes unknown VU1 packet bits in a retained GIF/GS field: descriptor="+
+                hex((regs_>>(reg_index_*4u))&15u,1)+" value="+hex(high.value,16)+"_"+hex(low.value,16)+
+                " unknown="+hex(high.unknown,16)+"_"+hex(low.unknown,16));
     }
     write_path(low.value&~low.unknown,high.value&~high.unknown,gs,1u,low.unknown,high.unknown);
     if(!in_packet_)path1_requested_=false;

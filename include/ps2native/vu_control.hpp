@@ -33,7 +33,7 @@ public:
         pending_q1_.reset();
         registers_ = {};
         unknown_ = {};
-        vector_bounds_={};accumulator_bounds_={};q_bounds_.reset();
+        vector_bounds_={};accumulator_bounds_={};q_bounds_.reset();vu1_vector_bounds_={};
         registers_[0] = 0;
         for (unsigned index=1;index<16;++index) {registers_[index]=0;unknown_[index]=0xFFFFu;}
         for (const auto index : {16u,17u,18u,28u,29u}) registers_[index] = 0;
@@ -403,6 +403,7 @@ private:
         unsigned index{},mask{};
         std::array<ObservedWord,4> words{};
         std::uint64_t ready{};
+        std::array<std::optional<FloatBounds>,4> bounds{};
     };
     struct MicroFlagWrite {std::uint32_t mac{},status{};std::uint64_t ready{};};
     struct MicroFmac {MicroVectorWrite output{};std::uint32_t mac{},status{};bool active{},hazard{},changes_flags{};};
@@ -472,7 +473,7 @@ private:
         const auto lane=(address&15u)/4u;
         if(address<0x4200u) {
             const auto index=(address-0x4000u)/16u;
-            if(index) vu1_vectors_[index][lane]=word;
+            if(index) {vu1_vectors_[index][lane]=word;vu1_vector_bounds_[index][lane].reset();}
         } else if(address<0x4300u) {
             const auto index=(address-0x4200u)/16u;
             if(index && !lane) vu1_integers_[index]={word.value&0xFFFFu,word.unknown&0xFFFFu};
@@ -498,6 +499,7 @@ private:
     }
     std::array<std::array<std::optional<FloatBounds>,4>,32> vector_bounds_{};
     std::array<std::optional<FloatBounds>,4> accumulator_bounds_{};
+    std::array<std::array<std::optional<FloatBounds>,4>,33> vu1_vector_bounds_{};
     std::optional<FloatBounds> q_bounds_;
     std::array<ObservedWord,4> accumulator_{};
     std::array<ObservedWord,4> accumulator1_{};

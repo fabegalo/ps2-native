@@ -63,11 +63,14 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper_shared(unsigned dynamic_uni
     for(unsigned lane=0;lane<4u;++lane) {
         const auto bit=8u>>lane;if(!(mask&bit))continue;
         const auto a=vectors[fs][lane];
+        const auto a_bounds=unit ? vu1_vector_bounds_[fs][lane] : vector_bounds_[fs][lane];
         if(fixed) {
             constexpr unsigned fractions[]{0,4,12,15};
-            result.output.words[lane]=vu_float_to_fixed(a,fractions[extended&3u]);continue;
+            result.output.words[lane]=vu_float_to_fixed(a,fractions[extended&3u],a_bounds);continue;
         }
         const auto b=broadcast==5u ? (unit ? vu1_controls_[6] : observe(22)) : vectors[ft][broadcast<4u ? broadcast : lane];
+        const auto b_bounds=broadcast==5u ? (unit ? std::optional<FloatBounds>{} : q_bounds_) :
+            (unit ? vu1_vector_bounds_[ft][broadcast<4u ? broadcast : lane] : vector_bounds_[ft][broadcast<4u ? broadcast : lane]);
         if(comparison) {
             if(a.unknown || b.unknown)throw DeviceRefusal("MAX/MINI consumes unknown VF operand bits");
             const auto am=a.value&0x7FFFFFFFu,bm=b.value&0x7FFFFFFFu;
@@ -83,33 +86,34 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper_shared(unsigned dynamic_uni
             result.output.words[lane]=(maximum ? greater : less) ? a : b;
             continue;
         }
-        std::uint32_t flags=0;ObservedWord value;
+        std::uint32_t flags=0;ObservedWord value;std::optional<FloatBounds> bounds;
         if(addition) {
-            const auto sum=vu_float_add(a,{(b.value^(subtract ? 0x80000000u : 0u))&~b.unknown,b.unknown});
+            const auto sum=vu_float_add(a,{(b.value^(subtract ? 0x80000000u : 0u))&~b.unknown,b.unknown},a_bounds,signed_bounds(b_bounds,subtract));
             if(!sum)throw DeviceRefusal("FMAC addition consumes unknown VF operands with unproven fraction/flags");
-            value=sum->word;flags=sum->flags;
+            value=sum->word;flags=sum->flags;if(sum->bounded)bounds=sum->bounds;
         }
         else {
-            const auto product=vu_float_product(a,b,diagnostic_power_two_carry_);
+            const auto product=vu_float_product(a,b,diagnostic_power_two_carry_,a_bounds,b_bounds);
             if(!product)throw DeviceRefusal("FMAC multiply consumes unknown VF operand bits or unproven fraction/flags");
             flags=product->flags;
             if(flags&0xC000u)throw DeviceRefusal("FMAC exceptional product/ACC metadata is not modeled");
-            value=product->word;
+            value=product->word;if(product->bounded)bounds=product->bounds;
             if(accumulate) {
                 auto acc=(unit ? accumulator1_ : accumulator_)[lane];
+                auto acc_bounds=unit ? vu1_vector_bounds_[32][lane] : accumulator_bounds_[lane];
                 // Consecutive MULA/MADDA/MADD share the accumulator bypass;
                 // vector destinations and flags still commit only at S.
                 for(unsigned n=state.vector_writes;n>0;--n) {
                     const auto& previous=state.vectors[n-1u];
-                    if(previous.index==32u && (previous.mask&bit)){acc=previous.words[lane];break;}
+                    if(previous.index==32u && (previous.mask&bit)){acc=previous.words[lane];acc_bounds=previous.bounds[lane];break;}
                 }
-                const auto sum=vu_float_add(acc,value);
+                const auto sum=vu_float_add(acc,value,acc_bounds,bounds);
                 if(!sum)throw DeviceRefusal("FMAC accumulation consumes unknown ACC bits or unproven fraction/flags");
-                value=sum->word;flags=sum->flags;
+                value=sum->word;flags=sum->flags;bounds=sum->bounded ? std::optional<FloatBounds>{sum->bounds} : std::nullopt;
                 if(flags&0xC000u)throw DeviceRefusal("FMAC exceptional accumulation/ACC metadata is not modeled");
             }
         }
-        result.output.words[lane]=value;
+        result.output.words[lane]=value;result.output.bounds[lane]=bounds;
         // Shared bounds certify sign/exponent and exception classes. An
         // uncertain normal fraction therefore cannot change Z/S/U/O flags.
         if(!(value.value&0x7FFFFFFFu)){result.mac|=bit;result.status|=1u;}

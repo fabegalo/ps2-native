@@ -211,8 +211,8 @@ void pipeline() {
     vu.write_memory(0x11000008u,8,{lower_nop|(std::uint64_t{upper_nop|0x40000000u}<<32u),0});
     vu.write_memory(0x11000010u,8,{lower_nop|(std::uint64_t{upper_nop}<<32u),0});
     vu.start_micro(0,0,0);vu.advance_micro(20);
-    require(!vu.micro_running(0) && !vu.observe_vector_bounds(3,0),
-        "retired micro writes discard a macro certificate even for the same arithmetic bit hull");
+    require(!vu.micro_running(0) && vu.observe_vector_bounds(3,0).has_value(),
+        "retired micro writes replace a macro certificate with their independently calculated range");
 
 }
 }

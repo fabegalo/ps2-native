@@ -1,6 +1,7 @@
 // Original integer LIW fixtures, not firmware microprograms.
 #include "boot_checks.hpp"
 #include "ps2native/vu_control.hpp"
+#include "ps2native/vu_fixed.hpp"
 #include <iostream>
 using namespace ps2native;
 using namespace boot_checks;
@@ -38,6 +39,15 @@ std::uint32_t upper(unsigned op,unsigned destination,unsigned left,unsigned righ
 }
 }
 int main() try {
+    {
+        const ObservedWord word{0x44E58000u,0x3FFFu};
+        const FloatBounds narrow{0x44E59100u,0x44E59101u};
+        require(vu_float_to_fixed(word,4).unknown!=0,"a bare float hull still represents distinct coordinates");
+        const auto result=vu_float_to_fixed(word,4,narrow);
+        require(!result.unknown && result.value==vu_float_to_fixed({narrow[0],0},4).value,
+            "a certified numeric range can prove fixed coordinates without choosing uncertain fraction bits");
+        rejects([&]{(void)vu_float_to_fixed(word,4,FloatBounds{0x44E58000u,0x44E60000u});},"certificate differs");
+    }
     for(unsigned unit=0;unit<2u;++unit) {
         VuControl vu;instruction(vu,unit,0,addiu(1,0,5));instruction(vu,unit,1,addiu(2,1,1));
         instruction(vu,unit,2,nop,upper_nop|0x40000000u);instruction(vu,unit,3,nop);
