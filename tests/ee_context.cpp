@@ -695,6 +695,23 @@ void vector_q() {
     memory.write_vu_vector(4,{{0x40A00000u,0},{0,0}});
     ee::exec<MipsOpcode::VmulQ>(s,memory,0,0x4B00219Cu);
     require(static_cast<std::uint32_t>(memory.observe_vu_vector(6).low.value)==0x40200000u,"VMULq uses completed Q");
+    {
+        constexpr auto sub_q=0x4A8004A4u; // VSUBq.y VF18,VF0,Q; FT is reserved.
+        require(try_decode_r5900(0,sub_q)->opcode==MipsOpcode::VsubQ && !try_decode_r5900(0,sub_q|(1u<<16u)),
+            "VSUBq decoding preserves the reserved FT field");
+        const ObservedQuadword initial{{0x404000003F800000ull,0},{0x40A0000040800000ull,0}};
+        memory.write_vu_vector(18,initial);memory.write32(0x80001100u,sub_q);s.pc=0x80001100u;
+        const auto before=s.cycles();interpret_instruction(ctx);const auto interpreted=memory.observe_vu_vector(18);
+        require(interpreted.low.value==0xBF0000003F800000ull && interpreted.high.value==initial.high.value &&
+            !interpreted.low.unknown && !interpreted.high.unknown && memory.read_vu_control(22)==0x3F000000u &&
+            memory.read_vu_control(17)==0x40u && (memory.read_vu_control(16)&15u)==2u && s.cycles()==before+1u,
+            "interpreted VSUBq subtracts completed Q, preserves other lanes and Q, and publishes masked MAC/status flags");
+        memory.write_vu_vector(18,initial);ee::exec<MipsOpcode::VsubQ>(s,memory,0,sub_q);
+        const auto native=memory.observe_vu_vector(18);
+        require(native.low.value==interpreted.low.value && native.high.value==interpreted.high.value &&
+            native.low.unknown==interpreted.low.unknown && native.high.unknown==interpreted.high.unknown,
+            "native VSUBq helper matches the independent interpreted result");
+    }
     s.set_cp0(Cop0::Count,0xFFFFFFFEu);s.count_anchor=s.cycles();s.set_cp0(Cop0::Compare,1);s.set_cp0(Cop0::Cause,0);s.stall(4);
     require(s.count()==2 && (s.cp0(Cop0::Cause)&kStatusIM7),"Compare latches across Count wrap during stall");
     memory.write_vu_vector(5,{{0x40000000u,0},{0,0}});

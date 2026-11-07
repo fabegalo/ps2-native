@@ -298,6 +298,7 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
         // arbitrary unused fields. This does not change the SQRT operand lane.
         if (rs>=16u && !(rs&2u) && rd==0u && (word&0x7FFu)==0x3BDu) return make(MipsOpcode::Vsqrt);
         if (rs>=16u && rt==0u && funct==0x20u) return make(MipsOpcode::VaddQ);
+        if (rs>=16u && rt==0u && funct==0x24u) return make(MipsOpcode::VsubQ);
         if (rs>=16u && rt==0u && funct==0x1Cu) return make(MipsOpcode::VmulQ);
         if (rs==16u && funct==0x30u && rt<16u && rd<16u && sa<16u) return make(MipsOpcode::Viadd);
         if (rs>=16u && funct==0x2Cu) return make(MipsOpcode::Vsub);
