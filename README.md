@@ -18,9 +18,9 @@
 
 ## What is ps2-native?
 
-The goal is to execute the **original PlayStation 2 system and games** on modern computers, with static ahead-of-time (AOT) translation of Emotion Engine (R5900/MIPS) instructions into native C++ as the primary path. The compatibility runtime must still reproduce the console's CPU behavior, memory, firmware services, IOP, graphics, audio, devices and timing.
+The goal is to execute the **original PlayStation 2 BIOS/interface and games** on modern computers, following the x360-native model: original code translated statically (**AOT**) and system services implemented through **native HLE**. Executed EE/R5900, IOP/R3000A and VU0/VU1 instructions must be compiled for the host. GS, DMA, SPU2, controls, memory and timing remain necessary in the shared runtime.
 
-Firmware code and dynamically loaded or copied code that cannot safely be translated statically may use an **explicit, traceable interpreter path**. Compiling code is not the same as booting a console or making a game playable.
+Interpreters are restricted to validation binaries, outside production executables. Dynamic modules require offline AOT preparation; HLE may supply BIOS/kernel and IOP services without interpreting instructions. This does not authorize fabricated BIOS screens or omitted guest effects. This is the required execution policy, not a claim of complete implementation or validated gameplay.
 
 The **original PlayStation 2 Browser** and system configuration screens are targets in their own right. A future desktop launcher will manage users' local content; it will not replace Sony's menus with imitations.
 
@@ -40,7 +40,7 @@ The **original PlayStation 2 Browser** and system configuration screens are targ
 
 1. Load and validate user-supplied firmware or a legally obtained MIPS executable. Keep each BIOS revision, region and its matching resources isolated.
 2. Analyze provably reachable code and emit C++20 AOT blocks for instructions with supported semantics.
-3. Execute native blocks where available. The firmware boot runner uses the interpreter explicitly for code outside proven AOT coverage, with traceable engine switches and named block points.
+3. Execute prepared AOT artifacts with the necessary native HLE services. Missing code requires offline preparation and a precise diagnostic; interpreter fallback is not permitted in the product.
 4. Improve hardware fidelity using technical evidence, reproducible synthetic tests and documented real-firmware observations. Unsupported operations must not silently succeed.
 
 **Performance-first, correctness-preserving:** optimize the recompilation, CPU, memory and graphics paths without sacrificing console behavior. Any future enhanced rendering mode must preserve game logic, physics and synchronization.
@@ -78,7 +78,7 @@ The user's original ROM0, ROM1/ROM2, NVM, games and generated proprietary transl
 
 ## Roadmap
 
-The long-term direction is **generic AOT → accurate EE/IOP, firmware and DMA → faithful GS/VU/SPU2 → original Browser → games → a simple cross-platform launcher and carefully measured optimizations**. This is a technical direction, not a release schedule or a compatibility promise. Follow [the next engineering task](docs/NEXT-TASK.md) for active work.
+The direction is **generic EE/IOP/VU AOT + native HLE services → original BIOS/Browser and games, with faithful GS/DMA/SPU2, controls and timing → cross-platform launcher and measured original speed**. BIOS and games are required targets; completing hardware boot is not a prerequisite for progress on a game path. This is a technical direction, not a release schedule or a compatibility promise. Follow [the next engineering task](docs/NEXT-TASK.md) for active work.
 
 ## Contributing and documentation
 

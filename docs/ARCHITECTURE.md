@@ -2,9 +2,15 @@
 
 ## Diretriz
 
-Uma base C++20 compartilhada para Windows x64/ARM64, Linux x64/ARM64 (inclui Steam Deck) e macOS Intel/Apple Silicon. Separar as fronteiras de hardware do convidado das interfaces de host; não duplicar arquivos por sistema. A recompilação AOT é o caminho primário **somente quando o código estático estiver comprovadamente coberto**. Sem sucesso falso em syscalls e dispositivos.
+Uma base C++20 compartilhada para Windows x64/ARM64, Linux x64/ARM64 (inclui Steam Deck) e macOS Intel/Apple Silicon. O modelo aprovado segue o x360-native: **código original de sistema/jogos em AOT + serviços HLE nativos**. EE/R5900, IOP/R3000A e VU0/VU1 não podem interpretar instruções nos executáveis de produção; interpretadores ficam em binários separados de validação. Código dinâmico precisa de artefatos AOT preparados offline, com identidade, relocação e invalidação corretas.
 
-## Contratos implementados
+A **BIOS/Browser original, System Configuration e Memory Card continuam obrigatórios**, como a dashboard original no x360-native. Sua interface deve executar código original traduzido e usar recursos da revisão correspondente. HLE pode fornecer kernel, syscalls e serviços IOP; não autoriza telas inventadas, sucesso falso ou efeitos convidados omitidos. Não é necessário executar cada instrução do kernel original para executar a interface original. GS, DMA, SPU2, controles, memória e temporização continuam no núcleo compartilhado.
+
+A sessão HLE assistida deve ser identificada separadamente do reset de hardware e dos checkpoints experimentais. BIOS e jogos são alvos do produto; concluir o boot de hardware não deve bloquear trabalho independente no caminho de um jogo. Esta diretriz define o contrato exigido, não certifica que a implementação já o cumpra.
+
+## Contratos registrados nos marcos anteriores
+
+As tabelas e seções históricas abaixo descrevem implementações e evidências de cada marco. Fallback interpretado e dependência de boot integral nelas registrados não são autorização para produção; prevalece a diretriz acima.
 
 | Componente | Entrada | Saída | Garantias / falhas |
 |---|---|---|---|
@@ -52,21 +58,21 @@ arbitragem concorrente falham. Contratos, métricas, instruções e limites em [
 ## Organização futura (interfaces propostas, NÃO implementadas)
 
 - **disc/importer:** detectar disco, serial, região, hash e preservar caminho original; biblioteca indexada sem copiar ISOs.
-- **EE ISA/dispatch:** cobertura R5900/MMI/FPU/COP0, descoberta de funções, ELF relocável, overlays, saltos indiretos, syscalls e cache de tradução. Separar AOT do fallback interpretado/JIT *declarado*.
+- **EE ISA/dispatch:** cobertura R5900/MMI/FPU/COP0, descoberta de funções, ELF relocável, overlays, saltos indiretos, syscalls e cache de tradução. Separar AOT de produção dos interpretadores de validação; sem JIT ou fallback interpretado em produção.
 - **EE memory/bus:** tradução de endereços, scratchpad, DMA, dispositivos, interrupções, atomicidade, proteção e invalidação de código modificado.
 - **IOP:** R3000A, IRX, SIF/RPC, CDVD e sincronização.
 - **VU0/VU1 + VIF/GIF/DMA:** macro/micro, tempos e semântica vetorial reais.
 - **GS (fiel):** interfaces de comandos VRAM/texturas, provas de imagem e backends modernos; **Native** renderizará através de contratos compartilhados, nunca alterando física/temporização.
 - **SPU2, controles e memory cards:** I/O persistente e seguro, áudio e sincronização.
-- **BIOS host:** exigir dumps do usuário, sistema original e diferenças regionais; não distribuir firmware. (M2.0 já valida a ROM0 e inicia o EE; a M2.6 carrega a NVM do MECHACON do dump do usuário, validada contra o perfil; ROM1/ROM2/EROM e a maior parte dos dispositivos seguem pendentes.)
-- **launcher:** gerenciador gráfico, importação sem duplicar, AOT automático, diagnóstico, salvamento e handoff para boot original.
+- **BIOS e HLE:** executar a interface original traduzida AOT com recursos do usuário e serviços HLE nativos quando necessários; preservar revisões/regionais e não distribuir firmware. (M2.0 já valida a ROM0 e inicia o EE; a M2.6 carrega a NVM do MECHACON do dump do usuário, validada contra o perfil; ROM1/ROM2/EROM e a maior parte dos dispositivos seguem pendentes.)
+- **launcher:** gerenciador gráfico, importação sem duplicar, AOT automático, diagnóstico, salvamento e execução nativa da BIOS original e dos jogos, com serviços HLE quando necessários.
 - **platform:** filesystem Unicode, paths longos, SIMD, memória executável, GPU, áudio e input isolados por backend; API multiplataforma única.
 
 ## Posição sobre referências
 
 - **PS2Recomp**: `ps2xRecomp/src/lib/{elf_parser,control_flow_analyzer,r5900_decoder,vu_translator}.cpp` e `ps2xRuntime/`: base experimental madura como referência de questões R5900, mas ainda com tradução incompleta, limites em controle de fluxo e componentes stub. GPL-3.0 => não integrar código neste projeto BSD.
 - **PCSX2**: `pcsx2/Interpreter.cpp`, `pcsx2/Memory.cpp`, diretórios R5900, GS, SPU2, IOP: referência principal para especificação observável e testes futuros; não reaproveitar código GPL-3.0+.
-- **Play!**: HLE do sistema; não satisfaz sozinho o Browser/boot original. Licença tipo BSD 2 cláusulas, mas conteúdo deve ser revisado caso a caso antes de integrar.
+- **Play!**: HLE do sistema é candidato aos serviços nativos autorizados; executar a interface original ainda exige seus próprios artefatos AOT e recursos. Licença tipo BSD 2 cláusulas, mas conteúdo deve ser revisado caso a caso antes de integrar.
 - **N64Recomp**: modelo útil de separação compilador/runtime (licença MIT); arquitetura de N64 não é compatível com o PS2 sem projeto específico de hardware.
 
 Ver `LICENSE-DECISION.md` para a decisão completa.
@@ -102,7 +108,7 @@ AotModule (blocos + SHA-256) ──► run_ee_boot ──► bloco AOT no PC exa
                          BootReport: trace reproduzível, cauda, ponto de bloqueio explícito
 ```
 
-O interpretador é o fallback **explícito** previsto desde o M0: cada troca de motor aparece no trace e nada que não seja modelado é ignorado. Detalhes, testes e limitações: [M2.0-STATUS.md](M2.0-STATUS.md).
+No marco M0/M2.0 histórico, o interpretador era o fallback **explícito**: cada troca de motor aparece no trace e nada que não seja modelado é ignorado. Detalhes, testes e limitações: [M2.0-STATUS.md](M2.0-STATUS.md).
 
 ## M2.1 — Guiado pela BIOS real
 

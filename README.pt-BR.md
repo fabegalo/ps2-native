@@ -18,9 +18,9 @@
 
 ## O que é o ps2-native?
 
-O objetivo é executar o **sistema e os jogos originais do PlayStation 2** em computadores modernos, usando tradução estática antecipada (**AOT**) das instruções do Emotion Engine (R5900/MIPS) para C++ nativo como caminho principal. O runtime de compatibilidade ainda precisa reproduzir corretamente CPU, memória, serviços do firmware, IOP, gráficos, áudio, dispositivos e temporização.
+O objetivo é executar a **BIOS/interface e os jogos originais do PlayStation 2** em computadores modernos, seguindo o modelo do x360-native: código original traduzido estaticamente (**AOT**) e serviços de sistema implementados por **HLE nativo**. Instruções de EE/R5900, IOP/R3000A e VU0/VU1 que executarem devem estar compiladas para o host. GS, DMA, SPU2, controles, memória e temporização continuam necessários no runtime compartilhado.
 
-Código do firmware e módulos dinâmicos ou copiados para RAM que não puderem ser traduzidos estaticamente com segurança podem usar um caminho de **interpretação explícito e rastreável**. Compilar código não significa inicializar o console nem tornar um jogo jogável.
+Interpretadores são restritos a binários de validação, fora dos executáveis de produção. Módulos dinâmicos exigem preparação AOT offline; HLE pode fornecer serviços de BIOS/kernel e IOP sem interpretar instruções. Isso não autoriza recriar as telas da BIOS ou ignorar efeitos convidados. Esta é a política de execução exigida; não é uma afirmação de implementação completa ou gameplay validado.
 
 O **Browser original do PlayStation 2** e as telas de configuração do sistema são alvos próprios. Um futuro launcher desktop gerenciará o conteúdo local do usuário; ele não substituirá os menus da Sony por imitações.
 
@@ -40,7 +40,7 @@ O **Browser original do PlayStation 2** e as telas de configuração do sistema 
 
 1. Carregar e validar firmware fornecido pelo usuário ou um executável MIPS obtido legalmente. Isolar cada revisão/região de BIOS e seus recursos correspondentes.
 2. Analisar código comprovadamente alcançável e gerar blocos AOT em C++20 somente com semântica suportada.
-3. Executar blocos nativos quando disponíveis. No boot do firmware, o interpretador assume explicitamente o código fora da cobertura AOT comprovada, registrando trocas de motor e bloqueios.
+3. Executar os artefatos AOT preparados com os serviços HLE nativos necessários. Código ausente exige preparação offline e diagnóstico preciso; não há fallback interpretado permitido no produto.
 4. Melhorar a fidelidade ao hardware com evidências técnicas, testes sintéticos reproduzíveis e observações documentadas de execuções de firmware real. Operações não implementadas nunca devem retornar sucesso silencioso.
 
 **Performance-first, correctness-preserving:** otimizar recompilador, CPU, memória e gráficos preservando o comportamento do console. Um futuro modo gráfico aprimorado deverá preservar lógica, física e sincronização dos jogos.
@@ -78,7 +78,7 @@ ROM0, ROM1/ROM2, NVM, jogos e traduções proprietárias geradas **não são for
 
 ## Roadmap
 
-A direção de longo prazo é **AOT genérico → EE/IOP, firmware e DMA fiéis → GS/VU/SPU2 → Browser original → jogos → launcher multiplataforma simples e otimizações medidas**. Isso não é uma promessa de compatibilidade nem um cronograma de lançamento. Acompanhe a [próxima tarefa de engenharia](docs/NEXT-TASK.md) para o trabalho ativo.
+A direção é **AOT genérico de EE/IOP/VU + serviços HLE nativos → BIOS/Browser original e jogos, com GS/DMA/SPU2, controles e temporização fiéis → launcher multiplataforma e velocidade original medida**. BIOS e jogos são alvos obrigatórios; concluir o boot de hardware não é pré-requisito para avançar no caminho de um jogo. Isso não é uma promessa de compatibilidade nem um cronograma de lançamento. Acompanhe a [próxima tarefa de engenharia](docs/NEXT-TASK.md) para o trabalho ativo.
 
 ## Contribuição e documentação
 

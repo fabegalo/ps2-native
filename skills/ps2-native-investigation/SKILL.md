@@ -19,14 +19,14 @@ continue independent work; historical results are not a current baseline.
 
 Identify the input revision/hash, execution path, effective AOT modules, backend,
 source root, compiler and build configuration needed to reproduce the symptom.
-Keep original boot, Direct ELF and experimental checkpoint scenarios distinct.
+Keep hardware-reset firmware runs, HLE-assisted original BIOS/game sessions, Direct ELF and experimental checkpoints distinct. Original BIOS UI remains a required target; native HLE is authorized for its underlying services.
 The ownership map in AGENTS.md identifies the shared subsystem to change.
 
 ## Locate the failing layer
 
 | Evidence | Inspect first |
 |---|---|
-| Missing AOT target or unexpected fallback | `analysis.cpp`, `control_flow.cpp`, `aot.cpp`, `aot_runtime.cpp`; verified roots, overlays and code identity |
+| Missing AOT target or forbidden production fallback | `analysis.cpp`, `control_flow.cpp`, `aot.cpp`, `aot_runtime.cpp`; verified roots, overlays and code identity |
 | Wrong register, numeric result or exception | Shared EE/VU semantics and the relevant independent expected-result tests |
 | Unknown data, stale bytes or different continuation | `memory*.cpp`, cache/writeback, TLB, DMA and checkpoint invalidation |
 | No guest progress or a device refusal | `boot.cpp`, EE/IOP synchronization and the named device; distinguish waiting from a proven deadlock |
@@ -60,6 +60,14 @@ attempts and keep moving within the authorized scope. Request input only for a
 missing fact, resource or permission that actually prevents the dependent action.
 
 ## Reuse and implement at the owning layer
+
+Follow the x360-native execution model in AGENTS.md: guest instructions use
+static AOT; native HLE may implement BIOS/kernel/IOP services while the original
+BIOS UI code and resources remain original. Do not treat a hardware-reset blocker
+as a prohibition on HLE or an independent game path. Preserve service ABI, errors,
+guest memory effects, timing and asynchronous completion; never use a fake-success
+stub. Interpreters remain confined to separate validation binaries. A missing-AOT
+refusal requires completing offline preparation, not stopping delivery there.
 
 Consult the relevant candidates in [REFERENCE-AUDIT.md](../../docs/REFERENCE-AUDIT.md)
 before implementing a missing subsystem behavior. Pin and inspect the applicable

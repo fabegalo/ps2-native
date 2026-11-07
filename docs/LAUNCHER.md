@@ -1,5 +1,7 @@
 # Launcher desktop — arquitetura, contratos e validação
 
+A política atual é AOT + HLE nativo: a BIOS/interface original e os jogos são alvos obrigatórios. HLE pode fornecer serviços de sistema, mas não telas substitutas. Interpretadores ficam somente em binários de validação. O comportamento de diagnóstico descrito abaixo é histórico e não autoriza fallback no produto. Ver [AGENTS.md](../AGENTS.md) e [arquitetura](ARCHITECTURE.md).
+
 O executável `ps2-native` é o launcher desktop de desenvolvimento: organiza os dumps de BIOS, a NVM do console e as imagens de disco **do próprio usuário** e executa o diagnóstico de boot existente (`ps2n-boot`). Ele **não substitui** o Browser, a System Configuration nem o boot de disco do firmware: essas telas pertencem ao sistema original e só aparecerão quando o runtime puder executá-lo. Nenhuma tela do sistema é simulada; ações indisponíveis aparecem bloqueadas com o motivo.
 
 ## Camadas
