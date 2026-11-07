@@ -50,6 +50,20 @@ int main() try {
     }
 
     for(unsigned unit=0;unit<2u;++unit) {
+        VuControl vu;seed_vector(vu,unit,1,{0x3F800000u,0x40000000u,0x40800000u,0x41000000u});
+        instruction(vu,unit,0,0x40000000u,upper_nop|0x80000000u);
+        instruction(vu,unit,1,0x40400000u,upper(0x22u,2,0,0,8)|0x80000000u);
+        instruction(vu,unit,2,nop,upper(0x1Eu,3,1,0,8)|0x40000000u);
+        instruction(vu,unit,3,nop,upper(0x26u,4,1,0,8));
+        vu.start_micro(unit,0,0);vu.advance_micro(20);
+        require(!vu.micro_running(unit) && vu.diagnostic_micro_instructions(unit)==4u,"LOI branch-shaped constants issue once and preserve E delay/drain");
+        for(const auto [reg,value]:{std::pair{2u,0x40000000u},std::pair{3u,0x40400000u},std::pair{4u,0xC0000000u}}){const auto word=vector_lane(vu,unit,reg,0);require(word.value==value && !word.unknown,"VU0/VU1 use the old paired I and the newly loaded I on following LIWs");}
+        instruction(vu,unit,0,0x40000000u,upper(0x1BCu,0,1,1,8)|0x80000000u);
+        instruction(vu,unit,1,nop,upper(0x23u,5,1,0,8)|0x40000000u);instruction(vu,unit,2,nop);
+        vu.start_micro(unit,0,30);vu.advance_micro(50);
+        const auto accumulated=vector_lane(vu,unit,5,0);require(accumulated.value==0x40400000u && !accumulated.unknown,"MADDi uses the new I and the real pending accumulator bypass");
+    }
+    for(unsigned unit=0;unit<2u;++unit) {
         VuControl vu;const auto data=unit?0x1100C000u:0x11004000u;
         const ObservedWord word{0x44E58000u,0x3FFFu};
         vu.write_memory(data,4,{word.value,word.unknown});vu.restore_data_bounds(data,{0x44E59100u,0x44E59101u});
@@ -437,6 +451,21 @@ int main() try {
         require(predicate.value==(mask==9u ? 1u : 0u) && predicate.unknown==(mask==1u ? 1u : 0u),
             "FCAND ignores unselected uncertainty and lets an established one prove its predicate");
         if(mask==9u)require(integer(vu,unit,2).value==6 && !integer(vu,unit,2).unknown,
+            "a flag-check predicate uses its documented one-cycle bypass");
+    }
+    for(unsigned unit=0;unit<2;++unit)for(unsigned mask:{0xFFFFFFu,0xFFFFFEu,0xFFFFF7u,0xFFFFFDu}) {
+        VuControl vu;seed_vector(vu,unit,2,{0,0,0,0x3F800000u});
+        const ObservedQuadword uncertain{{0xC00000003F800000ull,0xFFFFu},{0,0}};
+        if(unit){vu.write_vector(31,uncertain);vu.write(2,0x401u);vu.vector_store_increment(31,2,15);}else vu.write_vector(1,uncertain);
+        const auto clip_upper=(14u<<21u)|(2u<<16u)|(1u<<11u)|0x1FFu;
+        instruction(vu,unit,0,nop,clip_upper);for(unsigned n=1;n<4;++n)instruction(vu,unit,n,nop);
+        instruction(vu,unit,4,0x26000000u|mask);
+        instruction(vu,unit,5,mask==0xFFFFF7u ? addiu(2,1,5) : nop);
+        instruction(vu,unit,6,nop,upper_nop|0x40000000u);instruction(vu,unit,7,nop);
+        vu.start_micro(unit,0,0);vu.advance_micro(12);const auto predicate=integer(vu,unit,1);
+        require(predicate.value==((mask==0xFFFFFFu || mask==0xFFFFF7u) ? 1u : 0u) && predicate.unknown==(mask==0xFFFFFEu ? 1u : 0u),
+            "FCOR proves all-one, unresolved and known-zero predicates without inventing clipping bits");
+        if(mask==0xFFFFF7u)require(integer(vu,unit,2).value==6 && !integer(vu,unit,2).unknown,
             "a flag-check predicate uses its documented one-cycle bypass");
     }
     for(unsigned unit=0;unit<2;++unit)for(const bool direct:{false,true}) {

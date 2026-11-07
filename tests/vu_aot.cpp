@@ -30,8 +30,9 @@ void analysis_contract(const std::filesystem::path& directory) {
     require(graph.instructions.contains(128u*8u) && !graph.instructions.contains(129u*8u) && !graph.instructions.contains(140u*8u) &&
         std::any_of(graph.boundaries.begin(),graph.boundaries.end(),[](const auto& entry){return entry.reason.find("indirect")!=std::string::npos;}),
         "indirect control flow remains an explicit proof boundary");
-    auto unsupported=image;unsupported.words[1]={0x800002FFu,0};
-    require(analyze_vu1_aot(unsupported).instructions.empty(),"unmodeled I control cannot become a fake native instruction");
+    require(graph.instructions.at(13u*8u).writes_i && graph.instructions.at(14u*8u).reads_i && graph.instructions.at(14u*8u).writes_i && graph.instructions.at(15u*8u).reads_i,"native CFG tracks I dependencies and does not interpret immediate bits as lower branches");
+    auto unsupported=image;unsupported.words[1]={0x100002FFu,0};
+    require(analyze_vu1_aot(unsupported).instructions.empty(),"unmodeled D control cannot become a fake native instruction");
     options.entries={4};rejects([&]{(void)analyze_vu1_aot(image,options);},"aligned byte PC");
     options.entries={0,512,1024,2048,16376};const auto split=generate_vu1_aot_sources(image,options,"vu_test",1024);
     const auto again=generate_vu1_aot_sources(image,options,"vu_test",1024);
@@ -87,6 +88,9 @@ void equivalence(unsigned entry,bool dynamic=false) {
         " native="+std::to_string(stats.native_instructions)+" interpreted="+std::to_string(stats.interpreted_instructions)+
         " missing="+std::to_string(stats.missing_program)+" untranslated="+std::to_string(stats.untranslated_pc));
     if(entry==vu_aot_fixture::math_entry) {
+        require(native.vu.observe_data(0x4350u).value==0x40400000u && !native.vu.observe_data(0x4350u).unknown,"native LOI commits the complete raw immediate");
+        for(const auto [reg,value]:{std::pair{11u,0x40000000u},std::pair{12u,0x40400000u},std::pair{13u,0xBF800000u}}){const auto word=native.vu.observe_data(0x4000u+reg*16u);require(word.value==value && !word.unknown,"native ADDi uses the old paired I, followed by real MULi and SUBi");}
+
         require(native.vu.observe_data(0x4320u).value==0xF37BC0u && !native.vu.observe_data(0x4320u).unknown,"compiled FCSET and CLIP publish the independent 24-bit expected history");
         require(native.vu.read_memory(0x1100C03Cu,4).value==1 && !native.vu.read_memory(0x1100C03Cu,4).unknown,"native ISW stores a real zero-extended integer through its writeback");
         require(native.vu.observe_data(0x4210u).value==1 && !native.vu.observe_data(0x4210u).unknown,"compiled FCAND derives the real clipping predicate");

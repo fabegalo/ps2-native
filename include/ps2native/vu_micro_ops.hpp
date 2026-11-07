@@ -29,18 +29,18 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper_shared(unsigned dynamic_uni
         addition=true;subtract=(function&~3u)==4u;broadcast=function&3u;
     } else if(function==0x28u || function==0x2Cu) {
         addition=true;subtract=function==0x2Cu;
-    } else if(function==0x20u || function==0x24u) {
-        addition=true;subtract=function==0x24u;broadcast=5u;
-        if((code>>16u)&31u)throw DeviceRefusal("ADDq/SUBq reserved FT field is nonzero");
+    } else if(function==0x20u || function==0x24u || function==0x22u || function==0x26u) {
+        addition=true;subtract=function==0x24u || function==0x26u;broadcast=(function&2u) ? 6u : 5u;
+        if((code>>16u)&31u)throw DeviceRefusal("ADDq/SUBq/ADDi/SUBi reserved FT field is nonzero");
     } else if((function&~3u)==0x10u || (function&~3u)==0x14u) {
         comparison=true;maximum=(function&~3u)==0x10u;broadcast=function&3u;
     } else if(function==0x2Bu || function==0x2Fu) {
         comparison=true;maximum=function==0x2Bu;
     } else if((function&~3u)==0x18u || (function&~3u)==8u) {
         accumulate=(function&~3u)==8u;broadcast=function&3u;
-    } else if(function==0x1Cu || function==0x21u) {
-        accumulate=function==0x21u;broadcast=5u;
-        if((code>>16u)&31u)throw DeviceRefusal("MULq/MADDq reserved FT field is nonzero");
+    } else if(function==0x1Cu || function==0x21u || function==0x1Eu || function==0x23u) {
+        accumulate=function==0x21u || function==0x23u;broadcast=(function&2u) ? 6u : 5u;
+        if((code>>16u)&31u)throw DeviceRefusal("MULq/MADDq/MULi/MADDi reserved FT field is nonzero");
     } else if(function==0x2Au || function==0x29u) {
         accumulate=function==0x29u;
     } else throw DeviceRefusal("upper instruction is not modeled: "+vu_micro_hexword(instruction));
@@ -55,7 +55,7 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper_shared(unsigned dynamic_uni
     // FMAC source dependencies stall the entire LIW. A lower instruction in
     // this same pair reads the old values; neither half has committed yet.
     for(unsigned lane=0;lane<4u;++lane)if(mask&(8u>>lane)) {
-        if(pending(fs,lane) || (!fixed && broadcast!=5u && pending(ft,broadcast<4u ? broadcast : lane))) {
+        if(pending(fs,lane) || (!fixed && broadcast<5u && pending(ft,broadcast<4u ? broadcast : lane))) {
             result.hazard=true;return result;
         }
     }
@@ -68,8 +68,8 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper_shared(unsigned dynamic_uni
             constexpr unsigned fractions[]{0,4,12,15};
             result.output.words[lane]=vu_float_to_fixed(a,fractions[extended&3u],a_bounds);continue;
         }
-        const auto b=broadcast==5u ? (unit ? vu1_controls_[6] : observe(22)) : vectors[ft][broadcast<4u ? broadcast : lane];
-        const auto b_bounds=broadcast==5u ? (unit ? std::optional<FloatBounds>{} : q_bounds_) :
+        const auto b=broadcast>=5u ? (unit ? vu1_controls_[broadcast==5u ? 6u : 5u] : observe(broadcast==5u ? 22u : 21u)) : vectors[ft][broadcast<4u ? broadcast : lane];
+        const auto b_bounds=broadcast>=5u ? (broadcast==5u && !unit ? q_bounds_ : std::optional<FloatBounds>{}) :
             (unit ? vu1_vector_bounds_[ft][broadcast<4u ? broadcast : lane] : vector_bounds_[ft][broadcast<4u ? broadcast : lane]);
         if(comparison) {
             if(a.unknown || b.unknown)throw DeviceRefusal("MAX/MINI consumes unknown VF operand bits");
@@ -145,10 +145,11 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
     }
     const std::uint32_t lo=Low<0 ? dynamic_low : static_cast<std::uint32_t>(Low);
     const std::uint32_t hi=Upper<0 ? dynamic_upper : static_cast<std::uint32_t>(Upper);
-    if(hi&0xB8000000u)throw DeviceRefusal("I/M/D/T microinstruction controls are not modeled");
+    if(hi&0x38000000u)throw DeviceRefusal("M/D/T microinstruction controls are not modeled");
+    const bool load_i=(hi&0x80000000u)!=0u;
     // Resource/operand interlocks precede evaluation of either half. WAITQ
     // can therefore supply the newly completed Q to an upper MULq in this LIW.
-    const auto primary=lo>>25u,extended=lo&0x7FFu;
+    const auto primary=load_i ? 0xFFu : lo>>25u,extended=lo&0x7FFu;
     if(primary==0x40u && (extended==0x3BCu || extended==0x3BFu) && (unit ? pending_q1_ : pending_q_)) {
         ++state.next;return;
     }
@@ -211,16 +212,23 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
         if(word.unknown&0xFFFFu)throw DeviceRefusal("integer operand VI"+std::to_string(r)+" contains unknown bits");
         return word.value&0xFFFFu;
     };
-    if(op==8u || op==9u) {
+    if(load_i) { /* LOI replaces the entire lower operation. */ }
+    else if(op==8u || op==9u) {
         const auto imm=(lo&0x7FFu)|(((lo>>21u)&15u)<<11u);
         if(it>=16u)throw DeviceRefusal("integer destination is outside VI00..VI15");
         result=std::pair{it,(op==8u ? reg(is)+imm : reg(is)-imm)&0xFFFFu};
-    } else if(op==0x12u) { // FCAND returns the masked clipping predicate in VI01.
-        if(lo&0x01000000u)throw DeviceRefusal("FCAND reserved bit is nonzero");
-        const auto clip=unit ? vu1_controls_[2] : observe(18);
-        const auto mask=lo&0xFFFFFFu,known=clip.value&~clip.unknown&mask;
-        result=std::pair{1u,known ? 1u : 0u};
-        integer_unknown=!known && (clip.unknown&mask) ? 1u : 0u;flag_check=true;
+    } else if(op==0x12u || op==0x13u) { // Clipping predicates return their result in VI01.
+        if(lo&0x01000000u)throw DeviceRefusal("FCAND/FCOR reserved bit is nonzero");
+        const auto flags=unit ? vu1_controls_[2] : observe(18);
+        const auto mask=lo&0xFFFFFFu;
+        if(op==0x12u) {
+            const auto known=flags.value&~flags.unknown&mask;
+            result=std::pair{1u,known ? 1u : 0u};integer_unknown=!known && (flags.unknown&mask) ? 1u : 0u;
+        } else {
+            const auto zero=~(flags.value|flags.unknown|mask)&0xFFFFFFu,unknown=flags.unknown&~mask&0xFFFFFFu;
+            result=std::pair{1u,!zero && !unknown ? 1u : 0u};integer_unknown=!zero && unknown ? 1u : 0u;
+        }
+        flag_check=true;
     } else if(op==0x11u) { // FCSET reaches the shared S stage after four cycles.
         if(lo&0x01000000u)throw DeviceRefusal("FCSET reserved bit is nonzero");
         result=std::pair{18u,lo&0xFFFFFFu};clipping.reset();
@@ -417,6 +425,8 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
         if(path1_)queued_path1_=request;
         else {gif->request_path1();path1_=request;}
     }
+    // LOI becomes visible to the next LIW; the paired upper used the old I.
+    if(load_i) {if(unit)vu1_controls_[5]={lo,0};else {registers_[21]=lo;unknown_[21]=0;}}
     if(q_result)(unit ? pending_q1_ : pending_q_)=*q_result;
     if(result && result->first) {
         state.pending[state.writes++]={result->first,{result->second,integer_unknown},state.next+4u,integer_load,flag_check};

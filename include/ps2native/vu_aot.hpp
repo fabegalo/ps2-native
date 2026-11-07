@@ -15,7 +15,7 @@ struct VuAotInstruction {
     std::uint32_t lower{},upper{};
     std::uint32_t vf_reads{},vf_writes{};
     std::uint16_t vi_reads{},vi_writes{};
-    bool reads_acc{},writes_acc{},reads_q{},writes_q{},reads_flags{},writes_flags{};
+    bool reads_acc{},writes_acc{},reads_q{},writes_q{},reads_i{},writes_i{},reads_flags{},writes_flags{};
 };
 struct VuAotBoundary { std::uint32_t pc{}; std::string reason; };
 struct VuAotAnalysis {

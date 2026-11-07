@@ -35,7 +35,12 @@ inline std::vector<std::uint8_t> micro_image() {
     pair(8,(0x29u<<25u)|(2u<<16u)|(1u<<11u)|2u);
     pair(9,addiu(8,0,7),upper(0x1FFu,0,1,2,14));pair(10,addiu(8,0,99));
     pair(11,(5u<<25u)|(1u<<21u)|(1u<<16u)|3u,upper(0x2Fu,8,1,2));
-    pair(12,0x24FFFFFFu,upper_nop|0x40000000u);pair(13,nop);
+    pair(12,0x24FFFFFFu);
+    pair(13,0x40000000u,upper_nop|0x80000000u); // LOI 2.0; these bits must never decode as a branch.
+    pair(14,0x40400000u,upper(0x22u,11,0,0,8)|0x80000000u); // ADDi sees old I=2 while LOI installs 3.
+    pair(15,nop,upper(0x1Eu,12,1,0,8));
+    pair(16,nop,upper(0x26u,13,2,0,8));
+    pair(17,0x26FFFFFFu,upper_nop|0x40000000u);pair(18,nop);
 
     // FTOI computes a real sprite's opposite corner and SQ writes the
     // original PACKED XYZ2 packet before the independent XGKICK transfer.

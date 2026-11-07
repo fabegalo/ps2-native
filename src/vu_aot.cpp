@@ -27,7 +27,7 @@ std::string digest(const std::string& value) {
     return sha256_hex({reinterpret_cast<const std::uint8_t*>(value.data()),value.size()});
 }
 bool upper_supported(std::uint32_t word) {
-    if(word&0xB8000000u)return false;
+    if(word&0x38000000u)return false;
     const auto code=word&0x07FFFFFFu,function=code&63u,extended=code&0x7FFu;
     if(code==0x2FFu)return true;
     if(extended==0x1FFu)return !(word&0x06000000u) && ((word>>21u)&15u)==14u;
@@ -37,7 +37,7 @@ bool upper_supported(std::uint32_t word) {
        (function&~3u)==0x14u || (function&~3u)==0x18u || (function&~3u)==8u)return true;
     switch(function) {
     case 0x28u:case 0x2Cu:case 0x2Bu:case 0x2Fu:case 0x2Au:case 0x29u:return true;
-    case 0x20u:case 0x24u:case 0x1Cu:case 0x21u:return !((code>>16u)&31u);
+    case 0x20u:case 0x24u:case 0x1Cu:case 0x21u:case 0x22u:case 0x26u:case 0x1Eu:case 0x23u:return !((code>>16u)&31u);
     default:return false;
     }
 }
@@ -50,7 +50,7 @@ bool lower_supported(std::uint32_t word) {
     case 5u:return is<16u && it<16u;
     case 4u:return is<16u && it<16u && mask && !(mask&(mask-1u));
     case 8u:case 9u:return is<16u && it<16u;
-    case 0x11u:case 0x12u:return !(word&0x01000000u);
+    case 0x11u:case 0x12u:case 0x13u:return !(word&0x01000000u);
     case 0x18u:case 0x1Au:case 0x1Bu:return is<16u && it<16u && !(word&0x01E007FFu);
     case 0x20u:return true;
     case 0x21u:return it<16u;
@@ -88,7 +88,7 @@ bool any_branch(std::uint32_t low) {
     return direct_branch(low) || (low>>25u)==0x24u || (low>>25u)==0x25u;
 }
 VuAotInstruction dependencies(std::uint32_t low,std::uint32_t upper) {
-    VuAotInstruction result;result.lower=low;result.upper=upper;
+    VuAotInstruction result;result.lower=low;result.upper=upper;result.writes_i=(upper&0x80000000u)!=0u;
     const auto code=upper&0x07FFFFFFu,function=code&63u,extended=code&0x7FFu;
     const auto fs=(code>>11u)&31u,ft=(code>>16u)&31u,fd=(code>>6u)&31u;
     if(extended==0x1FFu) {
@@ -97,20 +97,22 @@ VuAotInstruction dependencies(std::uint32_t low,std::uint32_t upper) {
     }else if(code!=0x2FFu && ((code>>21u)&15u)) {
         const bool fixed=(extended&~3u)==0x17Cu;
         const bool acc=(extended&~3u)==0x1BCu || (extended&~3u)==0xBCu || extended==0x2BEu || extended==0x2BFu;
-        result.reads_acc=(extended&~3u)==0xBCu || extended==0x2BFu || (function&~3u)==8u || function==0x21u || function==0x29u;
+        result.reads_acc=(extended&~3u)==0xBCu || extended==0x2BFu || (function&~3u)==8u || function==0x21u || function==0x23u || function==0x29u;
         result.reads_q=function==0x20u || function==0x24u || function==0x1Cu || function==0x21u;
+        result.reads_i=function==0x22u || function==0x26u || function==0x1Eu || function==0x23u;
         result.vf_reads|=std::uint32_t{1}<<fs;
-        if(!fixed && !result.reads_q)result.vf_reads|=std::uint32_t{1}<<ft;
+        if(!fixed && !result.reads_q && !result.reads_i)result.vf_reads|=std::uint32_t{1}<<ft;
         result.writes_acc=acc;
         if(!acc)result.vf_writes|=std::uint32_t{1}<<(fixed ? ft : fd);
         result.writes_flags=!fixed && (function&~3u)!=0x10u && (function&~3u)!=0x14u && function!=0x2Bu && function!=0x2Fu;
     }
+    if(result.writes_i){result.vf_reads&=~1u;result.vf_writes&=~1u;return result;}
     const auto op=low>>25u,is=(low>>11u)&31u,it=(low>>16u)&31u,id=(low>>6u)&31u,ext=low&0x7FFu;
     const auto read_vi=[&](unsigned reg){if(reg<16u)result.vi_reads|=static_cast<std::uint16_t>(1u<<reg);};
     const auto write_vi=[&](unsigned reg){if(reg<16u)result.vi_writes|=static_cast<std::uint16_t>(1u<<reg);};
     if(op==8u || op==9u){read_vi(is);write_vi(it);}
     else if(op==0x11u)result.writes_flags=true;
-    else if(op==0x12u){write_vi(1);result.reads_flags=true;}
+    else if(op==0x12u || op==0x13u){write_vi(1);result.reads_flags=true;}
     else if(op==0x18u || op==0x1Au || op==0x1Bu){read_vi(is);write_vi(it);result.reads_flags=true;}
     else if(op==0x21u)write_vi(it);
     else if(op==0x28u || op==0x29u){read_vi(is);read_vi(it);}
@@ -229,14 +231,14 @@ VuAotAnalysis analyze_vu1_aot(const VuAotImage& image,const VuAotOptions& option
         std::string boundary;
         if(lower.unknown || upper.unknown)boundary="instruction pair contains unknown/unwritten bits";
         else if(!upper_supported(upper.value))boundary="upper instruction/control is outside the proved shared subset";
-        else if(!lower_supported(lower.value))boundary=any_branch(lower.value) ? "indirect target lacks static proof" : "lower instruction is outside the proved shared subset";
-        else if(delay && (any_branch(lower.value) || (upper.value&0x40000000u)))boundary="branch/E inside a delay slot lacks proof";
+        else if(!(upper.value&0x80000000u) && !lower_supported(lower.value))boundary=any_branch(lower.value) ? "indirect target lacks static proof" : "lower instruction is outside the proved shared subset";
+        else if(delay && ((!(upper.value&0x80000000u) && any_branch(lower.value)) || (upper.value&0x40000000u)))boundary="branch/E inside a delay slot lacks proof";
         if(!boundary.empty()){boundaries.emplace(pc,boundary);continue;}
         graph.instructions.emplace(pc,dependencies(lower.value,upper.value));
         if(delay)continue;
         const auto next=(pc+8u)&16383u;
         if(upper.value&0x40000000u)work.emplace_back(next,true);
-        else if(direct_branch(lower.value)) {
+        else if(!(upper.value&0x80000000u) && direct_branch(lower.value)) {
             work.emplace_back(next,true);
             const auto bits=lower.value&0x7FFu;
             const auto offset=static_cast<std::int32_t>(bits)-((bits&0x400u) ? 2048 : 0);
