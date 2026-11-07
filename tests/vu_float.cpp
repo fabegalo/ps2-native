@@ -44,6 +44,22 @@ void rsqrt_domains() {
         "invalid RSQRT refuses before changing Q or scheduling a completion");
 }
 void ranges() {
+    const ObservedWord crossing{0x3F000000u,0xFFFFFFu};
+    const FloatBounds crossing_bounds{0x3F7FFFFEu,0x3F800000u};
+    for(const auto unit:{0x3F800000u,0xBF800000u}) {
+        const auto result=vu_float_product({unit,0},crossing,0,{},crossing_bounds);
+        require(result && result->bounded && !result->flags && result->word.unknown &&
+            (result->word.value&0x7FFFFFFFu),"small certified exponent crossings preserve a proven MAC class");
+        for(auto value=crossing_bounds[0];value<=crossing_bounds[1];++value) {
+            unsigned flags=0;const auto exact=ee_fpu_multiply(unit,value,flags);
+            require(exact && contains(result->word,*exact) && *exact>=result->bounds[0] && *exact<=result->bounds[1] &&
+                flags==result->flags,"enumeration preserves every directed circuit product and flag");
+        }
+        require(contains(result->word,unit),"the independent exact unit endpoint remains represented");
+    }
+    require(!vu_float_product({0x3F800000u,0},crossing) &&
+        !vu_float_product({0x3F800000u,0},crossing,0,{},FloatBounds{0x3F7FFF00u,0x3F800000u}),
+        "opaque and excessive exponent-crossing domains still refuse");
     for(const auto a_sign:{0u,0x80000000u})for(const auto b_sign:{0u,0x80000000u}) {
         const ObservedWord opaque{a_sign,0x7FFFFFFFu},zero{b_sign,0x7FFFFFu};
         for(bool swap:{false,true}) {
