@@ -32,8 +32,11 @@ recompiler. Upstream authorship/notices are preserved.
 The SDK PS2Runtime class now has an exclusive integrated native backend,
 implemented in src/ps2recomp_runtime.cpp, owning the platform CPU, Memory,
 NVM and adapted HLE kernel. The standalone SDK memory, GS, scheduler and
-VU/IOP interpreters are excluded from that backend. The generated R5900Context
-ABI and remaining upstream services are not yet connected to this owner.
+VU/IOP interpreters are excluded from that backend. In the integrated output,
+R5900Context aliases the existing execution context and the SDK emits constant
+instructions through the platform native semantics. The standalone generated
+ABI stays in a separate compilation profile. Remaining upstream services still
+require adaptation.
 SDK tools and combined binaries require
 GPL-3.0 distribution terms and corresponding source, including these patches;
 the original platform code retains its BSD-3-Clause notices. Dependencies

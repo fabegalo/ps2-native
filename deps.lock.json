@@ -21,7 +21,7 @@
       },
       {
         "file": "patches/ps2recomp/0002-utf8-recompiler-paths.patch",
-        "sha256": "5f79a687e416125bf7963b22c3af3a961384f8752178df9ccf6f4a1854a692b6",
+        "sha256": "b3879dcea6a07e26270734e02e948b2556fa852098d1a419edd777b8f4629ba0",
         "base_files": {
           "ps2xRecomp/src/lib/elf_parser.cpp": "0867461f05f870191219d6a43d41c9bf75b2a956c97cf6662b32a2e25fff24be",
           "ps2xRecomp/src/lib/config_manager.cpp": "5367d142de74ec8172598ee6430b3c3e8d4482aa2921832f5fe2d3aa14d528d5",
@@ -29,20 +29,30 @@
           "ps2xRecomp/include/ps2recomp/ps2_recompiler.h": "a89ac276a0f4853dc8212affa401d3083f7a8c32566b27a656a1f679c31afb65"
         },
         "files": {
-          "ps2xRecomp/src/lib/elf_parser.cpp": "3d605b0c710a1eda29a290c19b617fac57588622f3cd891ce7d30b8bdadb70cf",
+          "ps2xRecomp/src/lib/elf_parser.cpp": "2d4aa417c07ac38e3615eecd27978e3af8c5270cb0f9a7408a9a6636a06b6307",
           "ps2xRecomp/src/lib/config_manager.cpp": "584ba38d23c32e0ee587a431001bda908f157216ea3629e705cb039aaa78fd58",
-          "ps2xRecomp/src/lib/ps2_recompiler.cpp": "eba2ec9902fbfa2d356416845494ec937e0acff7c3a0472cadfd9b5b9a5de8b1",
+          "ps2xRecomp/src/lib/ps2_recompiler.cpp": "f785e01f4128d21aa001cdfc3ca2826d2be7cc887f04247a35088d3e2134efc9",
           "ps2xRecomp/include/ps2recomp/ps2_recompiler.h": "993d86ce4d01c860722831d074f64d984fd7b180fa42564d0f009df9922969a1"
         }
       },
       {
         "file": "patches/ps2recomp/0003-exclusive-native-state-owner.patch",
-        "sha256": "15fd976c776369be352013a538eb6a2cdfeebf3febed87499bb0bc992d931f0f",
+        "sha256": "bce03e28827d4ede25623ab04ad3aa2bbc6348a3dc301f10c0250188aa9543c0",
         "base_files": {
           "ps2xRuntime/include/ps2_runtime.h": "30f8614adb393d34a2cbc9dc5a2f701b1d2b468e7c4878c9e494fd8341aa2a67"
         },
         "files": {
-          "ps2xRuntime/include/ps2_runtime.h": "268727330ac25dc866138cc9a8003c88dcc8165d040071be8cc80ddcc45dc101"
+          "ps2xRuntime/include/ps2_runtime.h": "84526f71f45e0054724d7e136cf69171bfbf217522e1ebe2c69020723ef38b3c"
+        }
+      },
+      {
+        "file": "patches/ps2recomp/0004-native-aot-emission.patch",
+        "sha256": "c9c655c5a62444bce387b52ca0ae8511c854b57bfe1baf306b4b71a971163a6c",
+        "base_files": {
+          "ps2xRecomp/src/lib/function_emitter.cpp": "a0dc4503e18abd010fa008f2e5b03b16ed9d05434435ff49725a72c11102ba84"
+        },
+        "files": {
+          "ps2xRecomp/src/lib/function_emitter.cpp": "6b22f156a329bd6fbdc737559d112c5200b5618451ff9176d62d55dd2d59906d"
         }
       }
     ],

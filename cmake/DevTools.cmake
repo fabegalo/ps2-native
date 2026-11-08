@@ -11,6 +11,7 @@ string(SHA256 sdk_lock_hash "${sdk_lock}")
 string(JSON sdk_revision GET "${sdk_lock}" ps2recomp_sdk commit)
 target_compile_definitions(ps2n-dev PRIVATE
     PS2N_PS2RECOMP_REVISION="${sdk_revision}"
+    PS2N_PS2RECOMP_BACKEND_SHA256="${PS2N_PS2RECOMP_BACKEND_SHA256}"
     PS2N_PS2RECOMP_LOCK_SHA256="${sdk_lock_hash}")
 target_link_libraries(ps2n-dev PRIVATE ps2n_core)
 target_compile_definitions(ps2n-dev PRIVATE
@@ -27,11 +28,14 @@ if(BUILD_TESTING)
         list(APPEND sdk_native_test_args "${CMAKE_CXX_COMPILER}"
             "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include"
             "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xIOP/include"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ps2recomp_native.cpp")
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ps2recomp_native.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/include" "$<TARGET_FILE:ps2n_sdk_runtime>"
+            "$<TARGET_FILE:ps2n_core_native>" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ps2recomp_integrated.cpp")
+        add_dependencies(ps2n-sdk-prepare-tests ps2n_sdk_runtime)
     endif()
     add_test(NAME sdk-prepare-pipeline COMMAND ps2n-sdk-prepare-tests
         $<TARGET_FILE:ps2n-dev> "${CMAKE_CURRENT_BINARY_DIR}/ps2recomp-integration" ${sdk_native_test_args})
-    set_tests_properties(sdk-prepare-pipeline PROPERTIES TIMEOUT 120 RESOURCE_LOCK ps2n_sdk_prepare)
+    set_tests_properties(sdk-prepare-pipeline PROPERTIES TIMEOUT 180 RESOURCE_LOCK ps2n_sdk_prepare)
     add_test(NAME sdk-lock-controls COMMAND "${CMAKE_COMMAND}"
         "-DPS2N_LOCK_FILE=${PS2N_LOCK_FILE}" "-DPS2N_PS2RECOMP_SOURCE_DIR=${PS2N_PS2RECOMP_SOURCE_DIR}"
         "-DSCRATCH=${CMAKE_CURRENT_BINARY_DIR}/ps2recomp-integration"

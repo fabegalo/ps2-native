@@ -27,7 +27,36 @@
          {
              if (m_reporter)
              {
-@@ -2507,7 +2509,7 @@
+@@ -2339,15 +2341,20 @@
+             m_sections.push_back(section);
+         }
+ 
+-        if (m_sections.empty())
+-        {
+-            AppendLoadSegmentsAsSections(*m_elf, m_sections);
+-            if (!m_sections.empty())
+-            {
++        bool hasExecutableMetadata = false;
++        for (ELFIO::Elf_Half i = 0; i < sec_num; ++i)
++            hasExecutableMetadata |= (m_elf->sections[i]->get_flags() & ELFIO::SHF_EXECINSTR) != 0;
++        if (!hasExecutableMetadata)
++        {
++            std::vector<Section> loads;
++            AppendLoadSegmentsAsSections(*m_elf, loads);
++            if (std::any_of(loads.begin(), loads.end(), [](const Section& section) {
++                    return section.isCode && section.data && section.size;
++                }))
++            {
++                m_sections = std::move(loads);
+                 if (m_reporter)
+-                {
+-                    m_reporter->info("elf", "ELF has no section headers; using loadable segments as sections (" + std::to_string(m_sections.size()) + " entries).");
+-                }
++                    m_reporter->info("elf", "No executable section metadata; using executable PT_LOAD segments.");
+             }
+         }
+     }
+@@ -2507,7 +2514,7 @@
          if (HasDwarfSections(*m_elf))
          {
  #if defined(_WIN32)
@@ -67,7 +96,14 @@
              throw std::runtime_error("Failed to open file for writing: " + m_configPath);
 --- a/ps2xRecomp/src/lib/ps2_recompiler.cpp
 +++ b/ps2xRecomp/src/lib/ps2_recompiler.cpp
-@@ -28,6 +28,12 @@
+@@ -1,3 +1,6 @@
++#ifdef PS2N_PS2RECOMP_NATIVE_CODEGEN
++#include "ps2recomp_codegen.hpp"
++#endif
+ #include "ps2recomp/ps2_recompiler.h"
+ #include "ps2recomp/instructions.h"
+ #include "ps2recomp/types.h"
+@@ -28,6 +31,12 @@
  {
      namespace
      {
@@ -80,7 +116,23 @@
          uint32_t decodeAbsoluteJumpTarget(uint32_t address, uint32_t target)
          {
              return ((address + 4) & 0xF0000000u) | (target << 2);
-@@ -1024,7 +1030,7 @@
+@@ -101,6 +110,7 @@
+ 
+         void writeCombinedOutputPreamble(std::ostream &output)
+         {
++            output << "#ifdef PS2N_SDK_NATIVE_BACKEND\n#include <ps2_runtime.h>\n#include <ps2_recompiled_functions.h>\n#else\n";
+             output << "#include <stdexcept>\n";
+             output << "#include <ps2_recompiled_functions.h>\n\n";
+             output << "#include \"ps2_runtime_macros.h\"\n";
+@@ -112,6 +122,7 @@
+             output << "#include \"ps2_log.h\"\n";
+             output << "#endif\n";
+             output << "\n";
++            output << "#endif\n";
+         }
+ 
+         enum class PatchClass
+@@ -1024,7 +1035,7 @@
              m_codeGenerator->setConfiguredJumpTables(m_config.jumpTables);
              m_codeGenerator->setEmitInstructionComments(true);
  
@@ -89,7 +141,7 @@
  
              return true;
          }
-@@ -1374,11 +1380,11 @@
+@@ -1374,11 +1385,11 @@
  
              if (m_config.singleFileOutput)
              {
@@ -103,7 +155,7 @@
                  }
  
                  writeCombinedOutputPreamble(combinedOutput);
-@@ -1518,7 +1524,7 @@
+@@ -1518,7 +1529,7 @@
  
                              if (!combinedOutput)
                              {
@@ -112,7 +164,7 @@
                              }
                          }
                      };
-@@ -1575,12 +1581,12 @@
+@@ -1575,12 +1586,12 @@
                  combinedOutput.close();
                  if (!combinedOutput)
                  {
@@ -127,7 +179,7 @@
                      m_reporter.progress(msg.str());
                  }
              }
-@@ -1607,9 +1613,9 @@
+@@ -1607,9 +1618,9 @@
                  auto writeGeneratedFile = [&](GeneratedFile generated)
                  {
                      fs::create_directories(generated.outputPath.parent_path());
@@ -140,8 +192,18 @@
                      }
                  };
  
-@@ -1771,14 +1777,14 @@
-             std::string registerFunctions = m_codeGenerator->generateFunctionRegistration(m_functions, m_generatedStubs);
+@@ -1766,19 +1777,22 @@
+                 }
+             }
+ 
++            std::string registerFunctions = m_codeGenerator->generateFunctionRegistration(m_functions, m_generatedStubs);
++#ifdef PS2N_PS2RECOMP_NATIVE_CODEGEN
++            registerFunctions=ps2native::sdk_native_registration(*m_codeGenerator,m_functions,m_decodedFunctions,
++                m_resumeEntryTargetsByOwner,m_config.inputPath,registerFunctions);
++#endif
+             m_decodedFunctions.clear();
+-
+-            std::string registerFunctions = m_codeGenerator->generateFunctionRegistration(m_functions, m_generatedStubs);
              m_generatedStubs.clear();
  
 -            fs::path registerPath = fs::path(m_config.outputPath) / "register_functions.cpp";
@@ -160,7 +222,7 @@
                  m_reporter.progress(msg.str());
              }
  
-@@ -1833,12 +1839,12 @@
+@@ -1833,12 +1847,12 @@
              // ss << "\n} // namespace stubs\n";
              // ss << "} // namespace ps2recomp\n";
  
@@ -176,7 +238,16 @@
                  m_reporter.progress(msg.str());
              }
              return true;
-@@ -1877,12 +1883,12 @@
+@@ -1860,7 +1874,7 @@
+             ss << "#define PS2_RECOMPILED_FUNCTIONS_H\n\n";
+ 
+             ss << "#include <cstdint>\n\n";
+-            ss << "struct R5900Context;\n";
++            ss << "#ifdef PS2N_SDK_NATIVE_BACKEND\n#include <ps2_runtime.h>\n#else\nstruct R5900Context;\n#endif\n";
+             ss << "class PS2Runtime;\n\n";
+ 
+             for (const auto &function : m_functions)
+@@ -1877,12 +1891,12 @@
  
              ss << "\n#endif // PS2_RECOMPILED_FUNCTIONS_H\n";
  
@@ -192,7 +263,7 @@
                  m_reporter.progress(msg.str());
              }
              return true;
-@@ -2291,16 +2297,22 @@
+@@ -2291,16 +2305,22 @@
          }
      }
  
@@ -217,7 +288,7 @@
          file.close();
  
          return true;
-@@ -2345,7 +2357,7 @@
+@@ -2345,7 +2365,7 @@
              }
          }
  

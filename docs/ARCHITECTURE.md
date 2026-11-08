@@ -70,9 +70,19 @@ componentes existentes dentro da memória compartilhada. O backend standalone
 do SDK não é ligado a esse executável. Os checkpoints mantêm os campos atuais;
 o contrato do SDK e seu lock participam da identidade de runtime.
 
-O ABI `R5900Context` e os serviços upstream ainda precisam ser adaptados para
-executar o C++ gerado por `prepare-sdk`; seu recibo continua informando
-`runtime_ready=false`. A troca do proprietário não certifica Browser/gameplay.
+No perfil integrado, `R5900Context` é um alias do `ExecutionContext`
+existente, que referencia EE e memória canônicos. Orçamento e observação
+usam o despachante AOT comum; os relógios continuam únicos.
+O emissor do SDK usa as instruções que ele decodificou e o emissor nativo
+compartilhado do projeto, preservando guards por instrução, delay slots,
+exceções e invalidação. A saída standalone fica isolada por perfil de compilação.
+Os campos `PS2N_ELF_AOT_SOURCE` e `PS2N_SESSION_AOT_SOURCE` também aceitam
+`<preparação>/sdk-prepare.json`; o CMake verifica SDK, backend e todas as saídas
+antes de compilar, sem copiar traduções. O recibo inclui a identidade do backend
+local e `runtime_ready=false`: geração de fontes não certifica binário, cobertura
+ou execução de Browser/jogos. Instruções reconhecidas pelo SDK mas ausentes
+no ISA nativo, como BC2*, ainda recusam a preparação. Serviços upstream
+restantes ainda exigem adaptação.
 O interpretador e a memória privados de `ps2xIOP` não estão ligados;
 carregamento/relocação IRX e serviços RPC precisam usar AOT IOP antes de
 habilitar esse caminho. GPU e checkpoints atuais permanecem preservados.

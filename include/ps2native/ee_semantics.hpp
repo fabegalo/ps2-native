@@ -118,7 +118,7 @@ bool aot_polling_loop(ExecutionContext& ctx,std::uint32_t start,std::span<const 
 // Visible to the host compiler so constant PCs, words and delay-slot flags
 // specialize the guard together with the instruction. Fetch and interrupt
 // sampling stay at every instruction boundary, including after DMA/observers.
-PS2N_EE_INLINE bool aot_enter_checked(ExecutionContext& ctx, std::uint32_t pc, std::uint32_t word, bool has_delay_slot) {
+inline bool aot_enter_checked(ExecutionContext& ctx, std::uint32_t pc, std::uint32_t word, bool has_delay_slot) {
     auto& state = ctx.state;
     if (state.pc != pc) return false;
     if (ctx.executed >= ctx.budget || (!state.delay_pending && state.pc == ctx.stop_pc)) return false;

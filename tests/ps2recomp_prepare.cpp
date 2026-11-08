@@ -1,4 +1,6 @@
 #include "direct_program.hpp"
+#include "hle_fixture.hpp"
+#include "ps2native/aot.hpp"
 #include "iso_image.hpp"
 #include "../tools/dev_process.hpp"
 #include "ps2native/io.hpp"
@@ -11,7 +13,7 @@ using namespace ps2native;
 void require(bool ok, const std::string& message) { if (!ok) throw std::runtime_error(message); }
 std::string text(const fs::path& path) { const auto b=read_file(path);return {b.begin(),b.end()}; }
 int main(int argc,char** argv) {
-    if(argc!=3 && argc!=7)return 2;
+    if(argc!=3 && argc!=11)return 2;
     const auto root=fs::weakly_canonical(fs::absolute(argv[2]));
     if(!fs::create_directory(native_io_path(root)))return 2;
     try {
@@ -37,7 +39,7 @@ int main(int argc,char** argv) {
         const auto config=text(output / "recompiler.toml");
         require(config.find("patch_cop0 = false")!=std::string::npos &&
             config.find("patch_cache = false")!=std::string::npos,"unsafe patch policy");
-        if(argc==7) {
+        if(argc==11) {
             const auto objects=root / "native-objects", executable=root / "native-fixture.exe";
             ps2native::create_directories(objects);
             const auto generated=root / "native-source";
@@ -55,10 +57,47 @@ int main(int argc,char** argv) {
             require(!result.timed_out && !result.exit_code,text(root / "compile.log"));
             result=dev::process(executable,{},root / "native.log",5);
             require(!result.timed_out && !result.exit_code,text(root / "native.log"));
+            const auto integrated=[&](const fs::path& image,const fs::path& source,const direct_test::Program& program,const char* mode) {
+                const auto baseline=root / "baseline.cpp";
+                // Unreachable static edges remain explicit boundaries; both executions are native-only.
+                AotOptions options{program.roots,{},true};
+                try {(void)write_text_if_changed(baseline,generate_aot_cpp(parse_ee_elf(read_file(image)),options));}
+                catch(const std::exception& error){throw std::runtime_error(std::string("Prior native baseline ")+mode+": "+error.what());}
+                const auto binary=root / "integrated-fixture.exe";
+                std::vector<fs::path> native_args{"/nologo","/std:c++20","/EHsc","/O2","/MD","/utf-8","/bigobj",
+                    "/DPS2N_NATIVE_ONLY=1","/DPS2N_SDK_NATIVE_BACKEND=1",
+                    option("/I",argv[4]),option("/I",argv[7]),option("/I",source),
+                    option("/I",fs::path(argv[10]).parent_path()),fs::path(argv[10]),
+                    source / "ps2_recompiled_functions.cpp",source / "register_functions.cpp",baseline,
+                    option("/Fo",objects / ""),option("/Fe",binary),fs::path(argv[8]),fs::path(argv[9]),
+                    "kernel32.lib","user32.lib","gdi32.lib","winspool.lib","shell32.lib","ole32.lib",
+                    "oleaut32.lib","uuid.lib","comdlg32.lib","advapi32.lib"};
+                const auto compilation=dev::process(argv[3],native_args,root / "integrated-compile.log",60);
+                require(!compilation.timed_out,std::string("SDK host compilation timed out for ")+mode);
+                require(!compilation.exit_code,text(root / "integrated-compile.log"));
+                const auto execution=dev::process(binary,{image,mode},root / "integrated-run.log",15);
+                require(!execution.timed_out && !execution.exit_code,text(root / "integrated-run.log"));
+                std::cout<<text(root / "integrated-run.log");
+            };
+            // Share one fixture and object directory; no second SDK/runtime build.
+            integrated(input,generated,p,"cpu");
             fs::rename(native_io_path(generated),native_io_path(output / "generated"));
+            for(const auto* mode:{"frame","hle"}) {
+                const auto program=std::string_view(mode)=="hle"?hle_test::program():direct_test::frame();
+                const auto image=root / (std::string(mode)+".elf"),prepared=root / (std::string(mode)+"-aot");
+                (void)write_binary_if_changed(image,direct_test::elf(program));
+                call(image,prepared,false,true);
+                integrated(image,prepared / "generated",program,mode);
+            }
         }
         call(input,output,false,true);
         require(text(output / "sdk-prepare.json")==receipt,"reused output changed");
+        auto stale_backend=nlohmann::json::parse(receipt);
+        stale_backend["native_backend_sha256"]=std::string(64,'0');
+        (void)write_text_if_changed(output / "sdk-prepare.json",stale_backend.dump());
+        call(input,output,false,false);
+        require(nlohmann::json::parse(text(output / "sdk-prepare.json"))==stale_backend,"stale backend refusal modified the existing preparation");
+        (void)write_text_if_changed(output / "sdk-prepare.json",receipt);
         const auto generated=output / "generated" / "ps2_recompiled_functions.cpp";
         const auto tampered=text(generated)+"\n// negative control\n";
         (void)write_text_if_changed(generated,tampered);

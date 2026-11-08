@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <iostream>
 #include <sstream>
+#include <set>
 #include <stdexcept>
 
 namespace ps2native::dev {
@@ -25,10 +26,11 @@ int prepare_ps2recomp(const std::filesystem::path& source, const std::filesystem
         const auto receipt = json::parse(bytes.begin(), bytes.end());
         if (receipt.at("schema") != "ps2n-ps2recomp-prepare-v1" || receipt.at("input_sha256") != input_hash ||
             receipt.at("sdk_lock_sha256") != PS2N_PS2RECOMP_LOCK_SHA256 || receipt.at("disc") != disc ||
-            receipt.at("input") != path_utf8(input) || receipt.at("files").empty())
+            receipt.at("input") != path_utf8(input) || receipt.at("native_backend") != "ps2runtime-native-v1" ||
+            receipt.at("native_backend_sha256") != PS2N_PS2RECOMP_BACKEND_SHA256 || receipt.at("files").empty())
             throw std::runtime_error("PS2Recomp output identity differs; preserve it and select a different output directory");
         for (const auto* name : required)
-            if (!receipt.at("files").contains(path_utf8(fs::path("generated") / name)))
+            if (!receipt.at("files").contains(std::string("generated/")+name))
                 throw std::runtime_error("PS2Recomp receipt is incomplete");
         for (const auto& [name, hash] : receipt.at("files").items()) {
             const auto path = fs::u8path(name);
@@ -37,7 +39,7 @@ int prepare_ps2recomp(const std::filesystem::path& source, const std::filesystem
             if (sha256_file(output / path) != hash.get<std::string>())
                 throw std::runtime_error("PS2Recomp output changed: " + name);
         }
-        std::cout << "PS2Recomp translation reused; runtime integration remains pending\n";
+        std::cout << "PS2Recomp native translation reused; host compilation and execution must be validated\n";
         return 0;
     }
     fs::create_directories(native_io_path(output.parent_path()));
@@ -55,10 +57,13 @@ int prepare_ps2recomp(const std::filesystem::path& source, const std::filesystem
         config.outputWorkerThreads = 1;
         config.patchSyscalls = config.patchCop0 = config.patchCache = false;
         // Analyzer heuristics are evidence, never permission to skip/stub/patch guest code.
-        for (const auto& function : analyzer.getFunctions()) {
-            (void)image.instruction_at(function.start);
+        std::set<std::uint32_t> entries{image.entry};
+        entries.insert(image.function_entries.begin(),image.function_entries.end());
+        for (const auto& function : analyzer.getFunctions()) entries.insert(function.start);
+        for (const auto entry : entries) {
+            (void)image.instruction_at(entry);
             std::ostringstream address;
-            address << "0x" << std::hex << function.start;
+            address << "0x" << std::hex << entry;
             config.entryPointHints.push_back(address.str());
         }
         const auto config_path = path_utf8(native_io_path(output / "recompiler.toml"));
@@ -87,14 +92,17 @@ int prepare_ps2recomp(const std::filesystem::path& source, const std::filesystem
         if (sha256_file(input) != input_hash) throw std::runtime_error("Input changed during PS2Recomp preparation");
         json receipt{{"schema", "ps2n-ps2recomp-prepare-v1"}, {"sdk_revision", PS2N_PS2RECOMP_REVISION},
             {"sdk_lock_sha256", PS2N_PS2RECOMP_LOCK_SHA256}, {"input_sha256", input_hash}, {"input", path_utf8(input)}, {"disc", disc},
-            {"functions", counters.functionsRecompiled}, {"runtime_ready", false}, {"files", json::object()}};
+            {"functions", counters.functionsRecompiled}, {"native_backend", "ps2runtime-native-v1"},
+            {"native_backend_sha256", PS2N_PS2RECOMP_BACKEND_SHA256}, {"elf_sha256", sha256_hex(image.bytes)},
+            {"runtime_ready", false}, {"files", json::object()}};
         for (const auto& item : fs::recursive_directory_iterator(native_io_path(output))) {
             if (!item.is_regular_file()) continue;
-            receipt["files"][path_utf8(item.path().lexically_relative(native_io_path(output)))] = sha256_file(item.path());
+            const auto relative=item.path().lexically_relative(native_io_path(output)).generic_u8string();
+            receipt["files"][std::string(relative.begin(),relative.end())] = sha256_file(item.path());
         }
         (void)write_text_if_changed(receipt_path, receipt.dump(2) + '\n');
         std::cout << "PS2Recomp AOT generated: " << counters.functionsRecompiled
-                  << " functions; runtime integration remains pending\n";
+                  << " functions for the integrated PS2Runtime; host compilation and execution must be validated\n";
         return 0;
     } catch (...) {
         // This invocation exclusively created this directory; originals are outside it.

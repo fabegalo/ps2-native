@@ -82,6 +82,10 @@ endfunction()
 # A plain data manifest, never included/evaluated as CMake code. Only listed,
 # content-verified units enter the build; stale files in the directory cannot.
 function(ps2n_target_aot_source target source)
+    if(source MATCHES "sdk-prepare[.]json$")
+        ps2n_target_sdk_source(${target} "${source}")
+        return()
+    endif()
     get_filename_component(dispatcher "${source}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     _ps2n_target_aot_file(${target} "${dispatcher}")
     get_property(reference TARGET ${target} PROPERTY PS2N_AOT_SOURCE_REFERENCE)

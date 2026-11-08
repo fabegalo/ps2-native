@@ -31,6 +31,29 @@ std::string address_label(std::uint32_t address) {
     return hex.substr(2, 8); // Valid C++ identifier suffix, deterministic.
 }
 
+} // namespace
+
+void emit_aot_instruction(std::ostream& out, const MipsInstruction& instruction) {
+    const auto pc = hex32(instruction.pc);
+    const auto word = hex32(instruction.word);
+    out << "instruction_" << address_label(instruction.pc) << ":\n"
+        << "    if (!aot_enter_checked(ctx, " << pc << ", " << word << ", "
+        << (instruction.has_delay_slot() ? "true" : "false") << ")) return;\n"
+        << "    {\n";
+    const bool system=instruction.opcode>=MipsOpcode::Mfc0;
+    if(system) {
+        out<<"        execute_ee_system<MipsOpcode::"<<mips_opcode_name(instruction.opcode)<<", "<<word<<">(ctx);\n"
+           <<"        if (state.pc != "<<hex32(instruction.pc+4u)<<") return;\n";
+    } else {
+        out<<"        const auto frame = ee::begin(state, "<<pc<<");\n"
+           <<"        ee::exec<MipsOpcode::"<<mips_opcode_name(instruction.opcode)<<", "<<word
+           <<">(state, memory, "<<pc<<", "<<word<<");\n"
+           <<"        if (ee::retire(ctx, frame)) return;\n";
+    }
+    out<<"    }\n";
+}
+
+namespace {
 std::map<std::uint32_t, BlockSource> make_blocks(const AotControlFlow& graph) {
     std::map<std::uint32_t, BlockSource> blocks;
     for (const auto start : graph.leaders) {
@@ -89,25 +112,7 @@ void emit_block(std::ostringstream& out, const BlockSource& block, bool compiled
         out << "        case " << hex32(instruction.pc) << ": goto instruction_"
             << address_label(instruction.pc) << ";\n";
     out << "        default: return;\n    }\n";
-    for (const auto& instruction : block.instructions) {
-        const auto pc = hex32(instruction.pc);
-        const auto word = hex32(instruction.word);
-        out << "instruction_" << address_label(instruction.pc) << ":\n"
-            << "    if (!aot_enter_checked(ctx, " << pc << ", " << word << ", "
-            << (instruction.has_delay_slot() ? "true" : "false") << ")) return;\n"
-            << "    {\n";
-        const bool system=instruction.opcode>=MipsOpcode::Mfc0;
-        if(system) {
-            out<<"        execute_ee_system<MipsOpcode::"<<mips_opcode_name(instruction.opcode)<<", "<<word<<">(ctx);\n"
-               <<"        if (state.pc != "<<hex32(instruction.pc+4u)<<") return;\n";
-        } else {
-            out<<"        const auto frame = ee::begin(state, "<<pc<<");\n"
-               <<"        ee::exec<MipsOpcode::"<<mips_opcode_name(instruction.opcode)<<", "<<word
-               <<">(state, memory, "<<pc<<", "<<word<<");\n"
-               <<"        if (ee::retire(ctx, frame)) return;\n";
-        }
-        out<<"    }\n";
-    }
+    for (const auto& instruction : block.instructions) emit_aot_instruction(out,instruction);
     if (compiled_delay_slot) {
         const auto slot=block.instructions.back().pc+4u;
         // A branch changes neither the translation/cache context nor the

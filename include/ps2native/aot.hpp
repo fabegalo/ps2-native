@@ -3,6 +3,9 @@
 #include <string>
 #include <cstdint>
 #include <vector>
+    // RUNTIME_HELPERS_BEGIN
+#include <iosfwd>
+    // RUNTIME_HELPERS_END
 namespace ps2native {
 // Optional known code entry points for stripped ELF or verified function pointers.
 // Never guess arbitrary data words as executable code.
@@ -21,6 +24,10 @@ struct AotOptions {
 
 // Emits compiled native basic-block functions and a dispatch table.
 // The runtime fails closed for unknown dynamic targets and modified code.
+    // RUNTIME_HELPERS_BEGIN
+// Shared offline emitter for the SDK and existing native preparation backend.
+void emit_aot_instruction(std::ostream&, const MipsInstruction&);
+    // RUNTIME_HELPERS_END
 [[nodiscard]] std::string generate_aot_cpp(const ElfImage& image,
                                            const AotOptions& options = {});
 } // namespace ps2native
