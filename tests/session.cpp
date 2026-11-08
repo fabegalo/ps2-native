@@ -6,6 +6,7 @@
 #include "ps2native/frontend/content.hpp"
 #include "ps2native/checkpoint.hpp"
 #include "ps2native/io.hpp"
+#include "ps2_runtime.h"
 #include <iostream>
 #include <stdexcept>
 
@@ -48,6 +49,9 @@ int main(int argc, char** argv) try {
     request.disc = fixture.disc;
     request.expected_disc_boot = probe_disc(fixture.disc).info.at("boot");
     SessionSupervisor session;
+    require(&session.ee()==&session.runtime().cpu() && &session.memory()==&session.runtime().memory(),
+            "Supervisor borrows the SDK-owned state without another console");
+    auto* const canonical_cpu=&session.ee();auto* const canonical_memory=&session.memory();
     BootOptions options; options.max_instructions = 100; options.max_trace_events = 8;
     rejects([&] { (void)session.run(nullptr, options); }, "not prepared");
     session.prepare_original(request, nullptr);
@@ -94,6 +98,9 @@ int main(int argc, char** argv) try {
     session.prepare_original(request,nullptr);
     require(session.memory().hle_kernel()==nullptr && session.ee().pc==kEeResetVector,
             "Original boot detaches HLE before resetting the same console");
+    require(canonical_cpu==&session.ee() && canonical_memory==&session.memory(),"SDK owner keeps state addresses stable across lifecycle transitions");
+    session.runtime().invalidate_preparation();
+    rejects([&]{(void)session.run(nullptr,options);},"not prepared");
     std::cout << "Session supervisor identity refusals, shared state and execution accounting passed\n";
     return 0;
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

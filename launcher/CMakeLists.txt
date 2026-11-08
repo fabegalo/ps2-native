@@ -152,8 +152,27 @@ if(APPLE)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(ps2n-experimental-fixture ../tests/experimental_make_fixture.cpp)
+    target_link_libraries(ps2n-experimental-fixture PRIVATE ps2n_core)
+    set(session_rom "${FIXTURE_DIR}/experimental-rom0.bin")
+    set(session_elf "${FIXTURE_DIR}/experimental-ee.elf")
+    set(session_ee "${FIXTURE_DIR}/experimental_ee.cpp")
+    set(session_iop "${FIXTURE_DIR}/experimental_iop.cpp")
+    add_custom_command(OUTPUT "${session_rom}" "${session_elf}"
+        COMMAND $<TARGET_FILE:ps2n-experimental-fixture> "${session_rom}" "${session_elf}"
+        DEPENDS ps2n-experimental-fixture VERBATIM)
+    add_custom_command(OUTPUT "${session_ee}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${session_elf}" "${session_ee}" --execution-alias=0x80000000
+        DEPENDS ps2n-aot "${session_elf}" VERBATIM)
+    add_custom_command(OUTPUT "${session_iop}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${session_rom}" "${session_iop}" --iop --base=0x1FC00000 --entry=0xBFC00000
+        DEPENDS ps2n-aot "${session_rom}" VERBATIM)
+    add_library(ps2n-experimental-ee OBJECT "${session_ee}")
+    target_link_libraries(ps2n-experimental-ee PRIVATE ps2n_core_native)
+    target_compile_definitions(ps2n-experimental-ee PRIVATE aot_module=session_aot_module run_recompiled=run_session_recompiled)
     qt_add_executable(ps2n-experimental-tests
         ../tests/experimental_session.cpp
+        "${session_iop}"
         src/launcher.cpp src/launcher.hpp
         src/entry_model.cpp src/entry_model.hpp
         src/diagnostic_runner.cpp src/diagnostic_runner.hpp
@@ -161,7 +180,8 @@ if(BUILD_TESTING)
         src/host_audio.cpp src/host_audio.hpp)
     set_target_properties(ps2n-experimental-tests PROPERTIES AUTOMOC ON)
     target_include_directories(ps2n-experimental-tests PRIVATE src ../tests)
-    target_link_libraries(ps2n-experimental-tests PRIVATE ps2n_frontend Qt6::Quick)
+    target_link_libraries(ps2n-experimental-tests PRIVATE ps2n_frontend_native ps2n-experimental-ee Qt6::Quick)
+    target_compile_definitions(ps2n-experimental-tests PRIVATE PS2N_SESSION_AOT=1)
     if(WIN32)
         target_link_libraries(ps2n-experimental-tests PRIVATE winmm)
     elseif(TARGET Qt6::Multimedia)

@@ -62,10 +62,18 @@ listados em `deps.lock.json`, na ordem; o CMake recusa revisão/patch incompatí
 os parsers existentes, analisa e gera C++ pelo SDK, sem adotar automaticamente
 patches, funções omitidas ou stubs sugeridos pelo analisador. A identidade
 inclui entrada, lock do SDK e hashes das saídas para reutilização verificada.
-Este incremento **não liga `PS2Runtime` ao launcher nem certifica execução**;
-o recibo informa `runtime_ready=false`. O próximo limite é substituir a
-posse do estado e adaptar o ABI `R5900Context`/serviços, sem duplicar a memória
-atual. O interpretador e a memória privados de `ps2xIOP` não estão ligados;
+Em 08/11/2026, o mantenedor validou um backend integrado exclusivo na classe
+`PS2Runtime` do SDK (`PS2N_SDK_NATIVE_BACKEND`). Ele possui EE, memória,
+NVM e o kernel HLE adaptado; supervisor, launcher e CLIs usam referências a
+esse estado. IOP/VU AOT, hardware/DMA, GS, áudio e controles permanecem nos
+componentes existentes dentro da memória compartilhada. O backend standalone
+do SDK não é ligado a esse executável. Os checkpoints mantêm os campos atuais;
+o contrato do SDK e seu lock participam da identidade de runtime.
+
+O ABI `R5900Context` e os serviços upstream ainda precisam ser adaptados para
+executar o C++ gerado por `prepare-sdk`; seu recibo continua informando
+`runtime_ready=false`. A troca do proprietário não certifica Browser/gameplay.
+O interpretador e a memória privados de `ps2xIOP` não estão ligados;
 carregamento/relocação IRX e serviços RPC precisam usar AOT IOP antes de
 habilitar esse caminho. GPU e checkpoints atuais permanecem preservados.
 

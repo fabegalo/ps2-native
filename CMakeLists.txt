@@ -32,9 +32,10 @@ endif()
 
 # Launcher core: content identification, the persistent library and runtime
 # contracts. No GUI dependency, so it builds and is tested on every host.
+include(cmake/PS2Runtime.cmake)
 add_library(ps2n_frontend STATIC src/frontend/content.cpp src/frontend/library.cpp src/frontend/runtime.cpp
     src/frontend/session.cpp)
-target_link_libraries(ps2n_frontend PUBLIC ps2n_core)
+target_link_libraries(ps2n_frontend PUBLIC ps2n_sdk_runtime)
 if(MSVC)
     target_compile_options(ps2n_frontend PRIVATE /W4 /permissive- /utf-8)
 else()
@@ -46,7 +47,7 @@ target_link_libraries(ps2n-aot PRIVATE ps2n_core)
 
 # M2.0: EE boot from the reset vector of a user-supplied ROM0 (interpreter only).
 add_executable(ps2n-boot tools/ps2n-boot.cpp)
-target_link_libraries(ps2n-boot PRIVATE ps2n_core)
+target_link_libraries(ps2n-boot PRIVATE ps2n_sdk_runtime)
 
 # Optional local hybrid runner for YOUR firmware: generate the translation with
 #   ps2n-aot <your-rom0.bin> <out.cpp> --bios
@@ -58,7 +59,7 @@ if(PS2N_BIOS_AOT_SOURCE)
     add_executable(ps2n-boot-hybrid tools/ps2n-boot.cpp)
     ps2n_target_aot_source(ps2n-boot-hybrid "${PS2N_BIOS_AOT_SOURCE}")
     target_compile_definitions(ps2n-boot-hybrid PRIVATE PS2N_BOOT_WITH_AOT=1)
-    target_link_libraries(ps2n-boot-hybrid PRIVATE ps2n_core)
+    target_link_libraries(ps2n-boot-hybrid PRIVATE ps2n_sdk_runtime)
 endif()
 
 include(CTest)

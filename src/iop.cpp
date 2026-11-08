@@ -1428,6 +1428,7 @@ bool Iop::advance_idle_loop(std::uint64_t target) {
     cycle_+=count;
     return true;
 }
+#endif
 
 std::uint32_t Iop::ee_cdvd_read(std::uint32_t physical,std::size_t bytes) {
     if(stopped())throw DeviceRefusal("CDVD read after the IOP stopped: "+*stop_);

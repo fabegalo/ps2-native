@@ -15,7 +15,7 @@ ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h
 The adaptation reuses kernel object allocation, EE descriptors/error codes,
 semaphore/event algorithms and thread lifecycle. Context/memory access,
 dispatch and scheduling use ps2-native EEState, Memory and clocks.
-No upstream PS2Runtime, second memory/device state, host-clock VBLANK scheduler,
+No standalone upstream runtime, second memory/device state, host-clock VBLANK scheduler,
 game overrides or success stubs are linked. Device IRQ wakeups, alarms, file/RPC
 services and HLE checkpoint serialization are not implemented in this subset.
 
@@ -29,9 +29,12 @@ transitive dependency revisions and reproducible patches in patches/ps2recomp.
 Local changes: embeddable CMake paths, host-controlled compiler policy and
 UTF-8 file paths, checked output writes and explicit error queries in the
 recompiler. Upstream authorship/notices are preserved.
-The upstream PS2Runtime and ps2xIOP execution engines are not yet linked into
-the platform runtime by this increment. The existing HLE adaptation above
-continues to use the platform state. SDK tools and combined binaries require
+The SDK PS2Runtime class now has an exclusive integrated native backend,
+implemented in src/ps2recomp_runtime.cpp, owning the platform CPU, Memory,
+NVM and adapted HLE kernel. The standalone SDK memory, GS, scheduler and
+VU/IOP interpreters are excluded from that backend. The generated R5900Context
+ABI and remaining upstream services are not yet connected to this owner.
+SDK tools and combined binaries require
 GPL-3.0 distribution terms and corresponding source, including these patches;
 the original platform code retains its BSD-3-Clause notices. Dependencies
 retain their own licenses and notices in their pinned source trees.

@@ -4,12 +4,15 @@
 #include "ps2native/hle.hpp"
 #include <memory>
 
+class PS2Runtime;
+
 namespace ps2native::frontend {
 // One console state for original boot and reviewed checkpoint sessions.
 // Host threads, presentation, audio queues and input stay in the adapter.
 class SessionSupervisor {
 public:
     SessionSupervisor();
+    ~SessionSupervisor();
     SessionSupervisor(const SessionSupervisor&) = delete;
     SessionSupervisor& operator=(const SessionSupervisor&) = delete;
     SessionSupervisor(SessionSupervisor&&) = delete;
@@ -22,15 +25,11 @@ public:
                           const ConsoleHardware* hardware = nullptr, const NvmImage* nvm = nullptr,
                           const DiagnosticAssumptions* assumptions = nullptr, const Rom1Image* rom1 = nullptr);
     [[nodiscard]] BootReport run(const AotModule* module, const BootOptions& options);
-    [[nodiscard]] EEState& ee() noexcept { return ee_; }
-    [[nodiscard]] Memory& memory() noexcept { return *memory_; }
+    [[nodiscard]] PS2Runtime& runtime() noexcept;
+    [[nodiscard]] EEState& ee() noexcept;
+    [[nodiscard]] Memory& memory() noexcept;
 
 private:
-    // IOP retains an NVM pointer; the owner cannot move and NVM outlives Memory.
-    std::optional<NvmImage> nvm_;
-    std::unique_ptr<Memory> memory_;
-    EEState ee_;
-    std::unique_ptr<HleKernel> hle_;
-    bool prepared_{};
+    std::unique_ptr<PS2Runtime> runtime_;
 };
 } // namespace ps2native::frontend

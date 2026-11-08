@@ -1,23 +1,24 @@
 #include "ps2native/frontend/session.hpp"
 #include "ps2native/frontend/content.hpp"
 #include "ps2native/io.hpp"
+#include "ps2_runtime.h"
 #include <stdexcept>
 
 namespace ps2native::frontend {
-SessionSupervisor::SessionSupervisor() : memory_(std::make_unique<Memory>()) {}
+SessionSupervisor::SessionSupervisor() : runtime_(std::make_unique<PS2Runtime>()) {}
+SessionSupervisor::~SessionSupervisor() = default;
+PS2Runtime& SessionSupervisor::runtime() noexcept { return *runtime_; }
+EEState& SessionSupervisor::ee() noexcept { return runtime_->cpu(); }
+Memory& SessionSupervisor::memory() noexcept { return runtime_->memory(); }
 
 void SessionSupervisor::prepare_firmware(const BiosImage& bios, const AotModule* module,
                                         const ConsoleHardware* hardware, const NvmImage* nvm,
                                         const DiagnosticAssumptions* assumptions, const Rom1Image* rom1) {
-    prepared_ = false;
-    hle_.reset();
-    nvm_ = nvm ? std::optional<NvmImage>{*nvm} : std::nullopt;
-    prepare_ee_boot(bios, module, ee_, *memory_, hardware, nvm_ ? &*nvm_ : nullptr, assumptions, rom1);
-    prepared_ = true;
+    runtime_->prepare_firmware(bios,module,hardware,nvm,assumptions,rom1);
 }
 
 void SessionSupervisor::prepare_original(const SessionRequest& request, const AotModule* module) {
-    prepared_ = false;
+    runtime_->invalidate_preparation();
     if (!request.experimental_manifest.empty()) throw std::runtime_error("Original boot refuses an experimental manifest");
     if (request.renderer != RendererMode::GsFaithful) throw std::runtime_error("Native renderer is unavailable for original boot");
     if (request.expected_rom0_sha256.empty()) throw std::runtime_error("Original boot requires the identified ROM0 SHA-256");
@@ -44,23 +45,21 @@ void SessionSupervisor::prepare_original(const SessionRequest& request, const Ao
     auto disc = std::make_shared<DiscImage>(disc_path);
     (void)disc->boot_path();
     prepare_firmware(bios, module, hardware, nvm ? &*nvm : nullptr);
-    prepared_ = false;
     const auto medium = probe.info.find("media");
-    memory_->mount_disc(std::move(disc), medium != probe.info.end() && medium->second == "DVD" ? Iop::DiscMedium::Ps2Dvd : Iop::DiscMedium::Ps2Cd, true);
-    prepared_ = true;
+    try {
+        memory().mount_disc(std::move(disc), medium != probe.info.end() && medium->second == "DVD" ? Iop::DiscMedium::Ps2Dvd : Iop::DiscMedium::Ps2Cd, true);
+    } catch (...) {
+        runtime_->invalidate_preparation();
+        throw;
+    }
 }
 
 void SessionSupervisor::prepare_hle_elf(const ElfImage& elf, const AotModule* module,
                                       const DirectElfEnvironment& environment) {
-    prepared_ = false;
-    hle_.reset();
-    prepare_direct_elf(elf,module,ee_,*memory_,environment);
-    hle_=std::make_unique<HleKernel>(ee_,*memory_);
-    prepared_ = true;
+    runtime_->prepare_hle_elf(elf,module,environment);
 }
 
 BootReport SessionSupervisor::run(const AotModule* module, const BootOptions& options) {
-    if (!prepared_) throw std::runtime_error("Console session is not prepared");
-    return run_ee_boot(ee_, *memory_, module, options);
+    return runtime_->run(module,options);
 }
 } // namespace ps2native::frontend

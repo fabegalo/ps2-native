@@ -4,7 +4,7 @@
 #include "gamepad_retry.hpp"
 #include "launcher.hpp"
 #include "qt_support.hpp"
-#include "bios_program.hpp"
+#include "experimental_program.hpp"
 #include "iso_image.hpp"
 #include "ps2native/boot.hpp"
 #include "ps2native/checkpoint.hpp"
@@ -21,6 +21,7 @@
 
 using namespace ps2native;
 using namespace ps2launcher;
+namespace ps2native { const AotModule& session_aot_module(); }
 namespace {
 void require(bool ok,const std::string& message) { if(!ok)throw std::runtime_error(message); }
 template<class Predicate> void until(Predicate done,const char* what) {
@@ -46,33 +47,8 @@ struct Fixture {
         memory.mount_disc(std::make_shared<DiscImage>(root/"disc.iso"),Iop::DiscMedium::Ps2Cd,true);
     }
     explicit Fixture(const std::filesystem::path& directory):root(directory) {
-        auto raw=m20::build_firmware().rom;
-        const auto ver=std::search(raw.begin(),raw.end(),std::begin(m20::kRomver),std::end(m20::kRomver)-1);
-        require(ver!=raw.end(),"synthetic ROMVER");std::copy(hardware->romver.begin(),hardware->romver.end(),ver);
-        m20::Assembler a(kEeResetVector);
-        const auto sh=[&](unsigned address,unsigned value){a.la(8,address);a.la(9,value);a.sh(9,0,8);};
-        const auto sw=[&](unsigned address,unsigned value){a.la(8,address);a.la(9,value);a.sw(9,0,8);};
-        sh(0xBF90019A,0);sh(0xBF90059A,0);
-        const unsigned base=0xBF900400;
-        sh(base+0x1A8,0);sh(base+0x1AA,0x2800);
-        sh(base+0x1AC,0x0404);for(unsigned i=0;i<7;++i)sh(base+0x1AC,0x7777);
-        sh(base+0x1AC,0x0304);for(unsigned i=0;i<7;++i)sh(base+0x1AC,0x9999);
-        sh(base+0x19A,0x8010);for(unsigned i=0;i<40;++i)a.nop();sh(base+0x19A,0x8000);
-        for(unsigned reg=0x180;reg<0x198;reg+=2)sh(base+reg,(reg==0x188 || reg==0x190)?1:0);
-        sh(base+0x198,0xC00);sh(0xBF900788,0x3FFF);sh(0xBF90078A,0x3FFF);
-        sh(base,0x3FFF);sh(base+2,0x3FFF);sh(base+4,0x1000);sh(base+6,0xF);sh(base+8,0x1FC0);
-        sh(base+0x1C0,0);sh(base+0x1C2,0x2800);sh(base+0x1A0,1);
-        sw(0xBF801070,0);sw(0xBF801078,0);
-        a.label("poll");sw(0xBF808268,0x3BC);sw(0xBF808200,(5u<<18)|(5u<<8)|0x40);
-        a.la(8,0xBF808260);
-        for(unsigned i=0;i<5;++i){a.la(9,i==0?1:i==1?0x42:0);a.sb(9,0,8);}
-        sw(0xBF808204,0);sw(0xBF808268,0x3B1);
-        for(unsigned i=0;i<80;++i)a.nop();
-        a.la(8,0xBF808264);a.la(10,0xA0000300);
-        for(unsigned i=0;i<5;++i){a.lbu(9,0,8);a.nop();a.sb(9,i,10);}
-        sw(0xBF808280,1);a.beq(0,0,"poll");a.nop();
-        const auto code=m20::le_words(a.finish());require(code.size()<m20::kResetSize,"synthetic code fits RESET");
-        std::copy(code.begin(),code.end(),raw.begin());bios=load_bios_rom0(raw);write_file_atomically(root/"rom0.bin",raw);
+        const auto raw=experimental_test::firmware();bios=load_bios_rom0(raw);write_file_atomically(root/"rom0.bin",raw);
+        write_file_atomically(root/"ee.elf",experimental_test::ee_elf());
         std::vector<std::uint8_t> nv(kNvmBytes);
         const auto& layout=nvm_layout_info(hardware->mechacon->layout);
         std::copy(hardware->model.begin(),hardware->model.end(),nv.begin()+layout.model_name);
@@ -95,7 +71,7 @@ struct Fixture {
         prepare_ee_boot(bios,nullptr,ee,*memory,hardware,&nvm,&assumptions,&rom1);
         memory->configure_rtc(1794028522ull);
         memory->mount_disc(std::make_shared<DiscImage>(root/"disc.iso"),Iop::DiscMedium::Ps2Cd,true);
-        ee.pc=0x80010000;memory->write32(ee.pc,0x1000FFFF);memory->write32(ee.pc+4,0);
+        ee.pc=0x80010000;memory->write32(ee.pc,0x1000FFFF);memory->write32(ee.pc+4,0);memory->write32(ee.pc+8,0xDu);
         auto& iop=const_cast<Iop&>(memory->iop());iop.diagnostic_sio2_digital_pad(0,0xFFFF,32);
         auto& gs=const_cast<GsRegisters&>(memory->gs());
         gs.write(kGsSmode1,8,kSmode1Sint|(2ull<<kSmode1CmodShift),0,{});
@@ -113,7 +89,7 @@ struct Fixture {
                 {"model",qstr(identity.model)},{"mainboard",qstr(identity.mainboard)},{"sha256",qstr(identity.sha256)},
                 {"build","fixture"},{"dvd_version","0.01E"},{"provenance","original synthetic test pairing"}}},
             {"disc","disc.iso"},{"disc_sha256",qstr(context.expected_disc_sha256)},{"disc_medium","ps2-cd"},
-            {"checkpoint","start.ps2ncp"},{"checkpoint_sha256",qstr(sha256_file(root/"start.ps2ncp"))},
+            {"aot_elf","ee.elf"},{"checkpoint","start.ps2ncp"},{"checkpoint_sha256",qstr(sha256_file(root/"start.ps2ncp"))},
             {"scenario_sha256",qstr(context.scenario_sha256)},{"hypotheses","Synthetic GS timing, digital pad and quiescent SPU2; no Sony code"}};
         json(root/"session.json",config);
     }
@@ -143,7 +119,7 @@ int main(int argc,char** argv)try {
     until([&]{return session.state()==frontend::SessionState::Running || !session.active();},"start");
     require(session.active(),session.last_error());
     until([&]{return !observed.isNull() || !session.active();},"GS presentation");
-    require(observed.size()==QSize(4,4) && observed.pixelColor(0,0)==QColor(0x10,0x20,0x40),"real GS RGBA reaches Qt");
+    require(observed.size()==QSize(4,4) && observed.pixelColor(0,0)==QColor(0x10,0x20,0x40),"real GS RGBA reaches Qt: "+session.last_error());
     session.key(Qt::Key_Z,true);
     // Allow real polls to consume the held button, then acknowledge pause.
     QElapsedTimer inputTime;inputTime.start();
@@ -179,7 +155,7 @@ int main(int argc,char** argv)try {
         options.copy_device_histories=run==0;
         options.max_instructions=run?100000:300000;
         options.on_frame=[&](const Framebuffer& f){frames[run].push_back(sha256_hex(f.rgba));};
-        for(unsigned n=0;n<(run?3u:1u);++n)require((run?supervised.run(nullptr,options):run_ee_boot(state,*resumed,nullptr,options)).outcome==BootOutcome::BudgetExhausted,"reference execution");
+        for(unsigned n=0;n<(run?3u:1u);++n)require((run?supervised.run(&session_aot_module(),options):run_ee_boot(state,*resumed,&session_aot_module(),options)).outcome==BootOutcome::BudgetExhausted,"reference execution");
         states[run]=checkpoint_state_sha256(currentState,currentMemory);
     }
     require(states[0]==states[1] && states[0]!=frozen,"worker slicing preserves complete state, cycles, DMA and IRQ");

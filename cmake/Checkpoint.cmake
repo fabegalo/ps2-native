@@ -106,6 +106,12 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${gs_shader_files
 # Runtime-only headers must also trigger a reconfigure: filtering them out of
 # the wire schema must never leave the runtime fingerprint stale after an edit.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${checkpoint_runtime_headers} ${checkpoint_sources} "${CMAKE_CURRENT_SOURCE_DIR}/src/checkpoint_fields.inc")
+foreach(sdk_contract IN ITEMS "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_runtime.h" "${PS2N_LOCK_FILE}")
+    file(READ "${sdk_contract}" sdk_content)
+    string(REPLACE "\r\n" "\n" sdk_content "${sdk_content}")
+    string(APPEND checkpoint_runtime "${sdk_content}\n")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${sdk_contract}")
+endforeach()
 string(SHA256 checkpoint_runtime_hash "${checkpoint_runtime}")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/checkpoint_build.hpp" CONTENT

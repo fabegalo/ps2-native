@@ -4,6 +4,7 @@
 #include "ps2native/sha256.hpp"
 #include "ps2native/disc.hpp"
 #include "ps2native/hle.hpp"
+#include "ps2_runtime.h"
 #include "diagnostic_cli.hpp"
 #include "checkpoint_cli.hpp"
 #include "vu_aot_cli.hpp"
@@ -68,18 +69,17 @@ template<class C> int run_main(int argc, C** argv) {
         }
         const auto elf = disc_input ? ps2native::DiscImage(std::filesystem::path(argv[1])).boot_elf()
                                    : ps2native::parse_ee_elf(ps2native::read_file(std::filesystem::path(argv[1])));
-        ps2native::Memory memory;
-        ps2native::EEState state;
+        PS2Runtime runtime;
+        auto& memory=runtime.memory();
+        auto& state=runtime.cpu();
         const ps2native::AotModule* module = nullptr;
 #ifdef PS2N_RUN_WITH_AOT
         module = &ps2native::aot_module();
 #endif
-        ps2native::prepare_direct_elf(elf, module, state, memory);
-        std::unique_ptr<ps2native::HleKernel> kernel;
         if(hle) {
             if(!checkpoint.resume.empty() || !checkpoint.output.empty())throw std::runtime_error("HLE kernel checkpoints are not implemented");
-            kernel=std::make_unique<ps2native::HleKernel>(state,memory);
-        }
+            runtime.prepare_hle_elf(elf,module);
+        } else runtime.prepare_direct_elf(elf,module);
         if (!iop_image.empty() || iop_load || iop_entry) {
             if (iop_image.empty() || !iop_load || !iop_entry)
                 throw std::runtime_error("IOP image requires explicit --iop-image, --iop-load and --iop-entry");
@@ -103,7 +103,7 @@ template<class C> int run_main(int argc, C** argv) {
                   << " interpreted=" << report.interpreted_instructions << " switches=" << report.engine_switches
                   << " runtime_ms=" << elapsed << '\n' << report.reason << '\n';
         checkpoint.print_execution_metrics(report);
-        if(kernel)std::cout<<"HLE syscalls="<<kernel->syscall_count()<<" current_thread="<<kernel->current_thread_id()<<'\n';
+        if(const auto* kernel=memory.hle_kernel())std::cout<<"HLE syscalls="<<kernel->syscall_count()<<" current_thread="<<kernel->current_thread_id()<<'\n';
         vu1.print(memory);
         std::cout << "status=0x" << std::hex << state.cp0(ps2native::Cop0::Status)
                   << " cause=0x" << state.cp0(ps2native::Cop0::Cause) << " epc=0x" << state.cp0(ps2native::Cop0::Epc)

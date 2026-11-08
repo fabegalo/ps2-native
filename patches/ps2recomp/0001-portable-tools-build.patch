@@ -33,8 +33,13 @@
      EnableFastReleaseMode(ps2_analyzer_lib)
 --- a/ps2xRuntime/cmake/ReleaseMode.cmake
 +++ b/ps2xRuntime/cmake/ReleaseMode.cmake
-@@ -3,6 +3,10 @@
- check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
+@@ -1,8 +1,14 @@
+ include(CheckIPOSupported)
+ 
+-check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
++if(NOT PS2N_PS2RECOMP_INTEGRATION)
++    check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
++endif()
  
  function(EnableFastReleaseMode TargetName)
 +    # The embedding platform owns ISA, floating-point and security flags.

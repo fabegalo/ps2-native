@@ -21,4 +21,8 @@ if(BUILD_TESTING)
         "-DIMAGE=${HLE_IMAGE}" "-DSCRATCH=${CMAKE_CURRENT_BINARY_DIR}/hle-test"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/hle_compare.cmake")
     set_tests_properties(hle-kernel-equivalence PROPERTIES TIMEOUT 60)
+    add_executable(ps2n-sdk-runtime-hle-tests tests/ps2recomp_runtime_hle.cpp "${HLE_SOURCE}")
+    target_link_libraries(ps2n-sdk-runtime-hle-tests PRIVATE ps2n_sdk_runtime)
+    add_test(NAME sdk-runtime-hle-owner COMMAND ps2n-sdk-runtime-hle-tests "${HLE_IMAGE}")
+    set_tests_properties(sdk-runtime-hle-owner PROPERTIES TIMEOUT 60)
 endif()

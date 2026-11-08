@@ -7,7 +7,7 @@
     "patches": [
       {
         "file": "patches/ps2recomp/0001-portable-tools-build.patch",
-        "sha256": "e4b5d7cfa4aff0648d837c83c07de3ab9f9d27fdc19f063d70296e07d012a7ac",
+        "sha256": "39714fed922f788a440d0c69b6bf19770b3cfc3d54ee3fe623cacd8efe9610dd",
         "base_files": {
           "ps2xRecomp/CMakeLists.txt": "9527576addff4609663ab8bf47ad7d4477fdc4c3ffa8ab74a50c2dd3d07c8487",
           "ps2xAnalyzer/CMakeLists.txt": "21b320dd8fb3a3e6585361f7162b573f79569216c2eb0339db77e1525a8c48e5",
@@ -16,7 +16,7 @@
         "files": {
           "ps2xRecomp/CMakeLists.txt": "cec58f721d389783702d2e917fc29267f45de783c9e56b15a0d0c77c043a59aa",
           "ps2xAnalyzer/CMakeLists.txt": "ab3b3a4fa8ae371517d4481a01c8f95544facd615244de9836b7009a7b36667d",
-          "ps2xRuntime/cmake/ReleaseMode.cmake": "75aedc3a6cc4de75a7e2d636c69eb8ae0288425165c9d3709ab4edd6acd8ca0a"
+          "ps2xRuntime/cmake/ReleaseMode.cmake": "81f3e02988337275a2256a72fbb76f2ea94a1fdbf5ed879a33348d75f735763e"
         }
       },
       {
@@ -33,6 +33,16 @@
           "ps2xRecomp/src/lib/config_manager.cpp": "584ba38d23c32e0ee587a431001bda908f157216ea3629e705cb039aaa78fd58",
           "ps2xRecomp/src/lib/ps2_recompiler.cpp": "eba2ec9902fbfa2d356416845494ec937e0acff7c3a0472cadfd9b5b9a5de8b1",
           "ps2xRecomp/include/ps2recomp/ps2_recompiler.h": "993d86ce4d01c860722831d074f64d984fd7b180fa42564d0f009df9922969a1"
+        }
+      },
+      {
+        "file": "patches/ps2recomp/0003-exclusive-native-state-owner.patch",
+        "sha256": "15fd976c776369be352013a538eb6a2cdfeebf3febed87499bb0bc992d931f0f",
+        "base_files": {
+          "ps2xRuntime/include/ps2_runtime.h": "30f8614adb393d34a2cbc9dc5a2f701b1d2b468e7c4878c9e494fd8341aa2a67"
+        },
+        "files": {
+          "ps2xRuntime/include/ps2_runtime.h": "268727330ac25dc866138cc9a8003c88dcc8165d040071be8cc80ddcc45dc101"
         }
       }
     ],
