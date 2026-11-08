@@ -1,11 +1,5 @@
 set(PS2N_IOP_AOT_SOURCES "" CACHE STRING "Semicolon-separated offline IOP AOT source dispatchers")
-foreach(target IN ITEMS ps2n-boot ps2n-boot-hybrid ps2n-run ps2n-run-hybrid)
-    if(TARGET ${target})
-        foreach(source IN LISTS PS2N_IOP_AOT_SOURCES)
-            ps2n_target_aot_source(${target} "${source}")
-        endforeach()
-    endif()
-endforeach()
+
 if(BUILD_TESTING)
     add_executable(ps2n-iop-aot-cli-tests tests/iop_aot_cli.cpp)
     target_include_directories(ps2n-iop-aot-cli-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tools")

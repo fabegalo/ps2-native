@@ -135,12 +135,12 @@ template<class C> int test_main(int argc,C** argv) {
             "native prepare preserves artifacts without running guest code");
         profile.values["engine"]="aot";save_text(file,profile.serialize());invoke("native-reference",{"run",file},0);
         const auto reference=cli::utf8_path(read_text(profile.path("build")/"ps2n-dev/last.txt"));
-        require(read_text(reference/"manifest.json").find("\"execution_policy\":\"hybrid-aot\"")!=std::string::npos &&
+        require(read_text(reference/"manifest.json").find("\"execution_policy\":\"native-aot\"")!=std::string::npos &&
             read_text(reference/"aot-reference.txt")==read_text(covered/"aot-reference.txt") &&
             read_text(reference/"diagnostic/state.json")==read_text(covered/"diagnostic/state.json"),
-            "native and hybrid reuse AOT and preserve the same guest state");
+            "native engine aliases reuse AOT and preserve the same guest state");
         const auto compare=process(debug,{"compare",covered/"diagnostic/full-events.ndjson",reference/"diagnostic/full-events.ndjson"},root/"native-compare.log",15);
-        require(compare.exit_code==0,"native/hybrid complete guest events match");
+        require(compare.exit_code==0,"native engine aliases preserve complete guest events");
         require(sha256_file(elf)==hash,"native preparation preserves its original input");
         std::cout<<"Native preparation, missing-code refusal, exact reuse and reference equivalence passed\n";
         return 0;

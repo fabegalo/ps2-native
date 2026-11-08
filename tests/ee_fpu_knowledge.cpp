@@ -1,10 +1,11 @@
 // Original instruction streams and bit-mask assertions; no firmware data.
 #include "boot_checks.hpp"
 #include "bios_program.hpp"
-#include "ps2native/interpreter.hpp"
+#include "ee_native_fixture.hpp"
 #include "ps2native/vu_float.hpp"
 #include "ps2native/boot.hpp"
 #include "ps2native/checkpoint.hpp"
+#include "ps2native/ee_system.hpp"
 #include <chrono>
 #include <iostream>
 using namespace ps2native;
@@ -12,12 +13,12 @@ using namespace boot_checks;
 namespace {
 constexpr std::uint32_t math(unsigned fn,unsigned fd,unsigned fs,unsigned ft){return 0x46000000u|(ft<<16u)|(fs<<11u)|(fd<<6u)|fn;}
 void integer_domains(Memory& memory) {
-    for(const bool interpreted:{false,true}) {
+    for(const bool retired_path:{false,true}) {
         EEState s;s.set_cp0(Cop0::Status,kStatusCU1);
         const auto run=[&](std::uint32_t word) {
             s.pc=0x80001000;memory.write32(s.pc,word);std::uint64_t count=0;
             ExecutionContext ctx{s,memory,count,100,0xFFFFFFFFu};
-            if(interpreted || word==0x44020000u || word==0x44852000u)interpret_instruction(ctx);
+            if(retired_path || word==0x44020000u || word==0x44852000u)compiled_fixture_step(ctx);
             else switch(word) {
                 case 0x00021DC2u:ee::exec<MipsOpcode::Srl>(s,memory,0,word);break;
                 case 0x306300FFu:ee::exec<MipsOpcode::Andi>(s,memory,0,word);break;
@@ -69,12 +70,23 @@ void integer_domains(Memory& memory) {
             "every pair remains represented after the finite-work fallback");
     }
 }
+template<MipsOpcode Op,std::uint32_t Word>
+void native_trace_op(ExecutionContext& context) {
+    if(aot_enter_checked(context,context.state.pc,Word,false))execute_ee_system<Op,Word>(context);
+}
+const AotBlock trace_blocks[]{
+    {0x80001000u,native_trace_op<MipsOpcode::MulS,0x460208C2u>},
+    {0x80001004u,native_trace_op<MipsOpcode::MovS,0x46001906u>}
+};
+const std::array<std::uint8_t,8> trace_words{0xC2,0x08,0x02,0x46,0x06,0x19,0x00,0x46};
+const auto trace_source=sha256_hex(trace_words);
+const AotModule trace_module{trace_blocks,2,nullptr,0,"synthetic-words",trace_source.c_str()};
 void floating_trace(Memory& memory) {
     EEState state;state.pc=0x80001000;state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
     state.fpr[1]=0x3F800001u;state.fpr[2]=0x3F800003u;
     memory.write32(state.pc,math(2,3,1,2));memory.write32(state.pc+4u,math(6,4,3,0));
     BootOptions options;options.max_instructions=2;options.stop_at=state.pc+8u;options.trace=TraceLevel::Full;
-    const auto report=run_ee_boot(state,memory,nullptr,options);
+    const auto report=run_ee_boot(state,memory,&trace_module,options);
     require(report.retired==2 && state.unknown_fpr_bits[3] && state.fpr[4]==state.fpr[3],
         "a full trace executes the real uncertain product and register copy");
     bool inputs=false,result=false;
@@ -84,7 +96,7 @@ void floating_trace(Memory& memory) {
     }
     require(inputs && result,"full COP1 records expose original operands and resulting uncertainty without choosing unknown bits");
     state.pc=0x80001000;options.trace=TraceLevel::Events;
-    const auto events=run_ee_boot(state,memory,nullptr,options);
+    const auto events=run_ee_boot(state,memory,&trace_module,options);
     for(const auto& line:events.trace)require(line.find("  F ")==std::string::npos,"event tracing carries no per-operation FPU records");
 }
 void scalar_carry_experiment() {
@@ -103,6 +115,21 @@ void scalar_carry_experiment() {
     require(ee_fpu_multiply(0x3FC00000u,0x3F800002u,flags)==0x3FC00002u && !flags &&
         ee_fpu_multiply(0xBFC00000u,0x3F800002u,flags)==0xBFC00002u,
         "the established lowest-negative-digit carry class transfers to coarse significands with identical low input columns");
+    flags=0xC000u;
+    require(!ee_fpu_multiply(0x43A00000u,0x404CCC00u,flags) && flags==0xC000u &&
+        !ee_fpu_multiply(0x43A00000u,0x404CCC00u,flags,PowerTwoEarlyDigits),
+        "strict and power-only modes retain ambiguous late-column products");
+    flags=0x0183C079u;
+    require(!ee_fpu_multiply(0xFFC80000u,0x1C16E000u,flags) && flags==0x0183C079u,
+        "an unestablished stage-6 correction must not certify an invented low result bit");
+    require(ee_fpu_multiply(0xFFC80000u,0x1C16E000u,flags,CoarseEarlyDigits)==0xDC6BBE00u && flags==0x01830079u,
+        "the explicitly selected reference class resolves the stage-6 counterexample and preserves flags");
+    for(const auto [a,b,expected]:{std::tuple{0x43A00000u,0x404CCC00u,0x447FFF00u},
+        std::tuple{0xC3A00000u,0x404CCC00u,0xC47FFF00u},std::tuple{0x3FC00000u,0x3F80CC00u,0x3FC13200u},
+        std::tuple{0x3F800000u,0x3F80CC00u,0x3F80CC00u},std::tuple{0x43A00000u,0x3F80FC00u,0x43A13AFFu}}) {
+        flags=0;require(ee_fpu_multiply(a,b,flags,CoarseEarlyDigits)==expected && !flags,
+            "the opt-in late-column model retains both no-loss and established single-negative loss classes");
+    }
     require(!ee_fpu_multiply(0x40400000u,0x3FC90F80u,flags) &&
         !ee_fpu_multiply(0x40400000u,0x3FC90F80u,flags,PowerTwoEarlyDigits),
         "strict and legacy VU experiments keep the other coarse early digits unresolved");
@@ -112,12 +139,12 @@ void scalar_carry_experiment() {
         "the transferred carry class retains normal-to-underflow handling");
     flags=0x1234u;rejects([&]{(void)ee_fpu_multiply(0x3F800000u,0x3F800000u,flags,3);},"unknown FPU carry experiment");
     require(flags==0x1234u,"an invalid diagnostic policy changes no numeric flags");
-    Memory memory;const auto rom=m20::build_firmware().rom;memory.reset_for_boot(rom);
+    Memory memory;const auto rom=m20::build_firmware().rom;reset_native_ee_fixture(memory,rom);
     EEState state;state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
     const auto multiply=[&](std::uint32_t a,std::uint32_t b) {
         state.fpr[1]=a;state.fpr[2]=b;state.unknown_fpr_bits[1]=state.unknown_fpr_bits[2]=0;
         state.pc=0x80001000;memory.write32(state.pc,math(2,3,1,2));std::uint64_t count=0;
-        ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};interpret_instruction(context);
+        ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};compiled_fixture_step(context);
     };
     multiply(0x40000000u,0x3FC90F80u);require(state.unknown_fpr_bits[3],"ordinary scalar multiplication keeps the unmeasured early carry unresolved");
     rejects([&]{memory.diagnostic_ee_early_digit_carry();},"precede scalar FPU");
@@ -127,7 +154,7 @@ void scalar_carry_experiment() {
     require(checkpoint_state_sha256(state,memory)==uncertain_state,"failed refinement does not mutate the checkpoint");
     state.unknown_fpr_bits.fill(0);state.fpr_affine={};
     rejects([&]{refine_checkpoint_scalar_carry(state,memory);},"certified numeric history");
-    memory=Memory{};memory.reset_for_boot(rom);state=EEState{};state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
+    memory=Memory{};reset_native_ee_fixture(memory,rom);state=EEState{};state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
     memory.set_clock(&state.retired_instructions,&state.stall_cycles);
     multiply(0x40000000u,0x3F800000u);
     rejects([&]{memory.diagnostic_ee_early_digit_carry();},"precede scalar FPU");
@@ -135,7 +162,7 @@ void scalar_carry_experiment() {
     multiply(0x40000000u,0x3FC90F80u);
     require(state.fpr[3]==0x40490F7Fu && !state.unknown_fpr_bits[3],
         "certified known arithmetic permits explicit refinement before the first uncertain result");
-    memory.reset_for_boot(rom);memory.diagnostic_ee_early_digit_carry();
+    reset_native_ee_fixture(memory,rom);memory.diagnostic_ee_early_digit_carry();
     state=EEState{};state.pc=0x80001000;state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
     memory.set_clock(&state.retired_instructions,&state.stall_cycles);
     BootOptions stop;stop.stop_at=state.pc;const auto boundary=run_ee_boot(state,memory,nullptr,stop);
@@ -143,7 +170,7 @@ void scalar_carry_experiment() {
     CheckpointContext checkpoint;checkpoint.scenario_sha256=std::string(64,'c');
     const auto path=std::filesystem::temp_directory_path()/("ps2n-ee-carry-"+
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+".checkpoint");
-    save_checkpoint(path,state,memory,boundary,checkpoint);memory.reset_for_boot(rom);
+    save_checkpoint(path,state,memory,boundary,checkpoint);reset_native_ee_fixture(memory,rom);
     memory.set_clock(&state.retired_instructions,&state.stall_cycles);
     (void)load_checkpoint(path,state,memory,checkpoint);std::filesystem::remove(path);
     multiply(0x40000000u,0x3FC90F80u);
@@ -155,15 +182,15 @@ void scalar_carry_experiment() {
     multiply(0x3FC90F80u,0x40000000u);
     require(state.fpr[3]==0x40490F80u && !state.unknown_fpr_bits[3],"the experimental multiplier preserves operand asymmetry");
     multiply(0x333BBD2Eu,0x333BBD2Eu);require(state.unknown_fpr_bits[3],"the scalar experiment does not choose arbitrary unresolved products");
-    memory.reset_for_boot(rom);multiply(0x40000000u,0x3FC90F80u);
+    reset_native_ee_fixture(memory,rom);multiply(0x40000000u,0x3FC90F80u);
     require(state.unknown_fpr_bits[3],"cold reset restores strict scalar arithmetic");
 }
 void copied_numeric_identity() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     EEState state;state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
     const auto step=[&](std::uint32_t word) {
         state.pc=0x80001000;memory.write32(state.pc,word);std::uint64_t count=0;
-        ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};interpret_instruction(context);
+        ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};compiled_fixture_step(context);
     };
     const auto source=[&](std::uint32_t value,std::uint32_t unknown,std::vector<std::uint32_t> values) {
         state.fpr[1]=value;state.unknown_fpr_bits[1]=unknown;
@@ -185,15 +212,15 @@ void copied_numeric_identity() {
     require(state.unknown_fpr_bits[3],"independent equal domains still admit distinct quotients");
 }
 void vector_memory_bounds() {
-    for(const bool interpreted:{false,true}) {
-        Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    for(const bool retired_path:{false,true}) {
+        Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
         memory.diagnostic_data_cache();memory.set_cache_config(0x10443u);
         EEState state;state.set_cp0(Cop0::Status,kStatusCU1|(1u<<30u));
         state.set_cp0(Cop0::Config,0x10443u);state.set_reg32(1,0x80002000u);
         const auto step=[&](std::uint32_t word) {
             state.pc=0xA0001000;memory.write32(state.pc,word);std::uint64_t count=0;
             ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};
-            if(interpreted || (word>>26u)==0x31u)interpret_instruction(context);
+            if(retired_path || (word>>26u)==0x31u)compiled_fixture_step(context);
             else if((word>>26u)==0x3Eu)ee::exec<MipsOpcode::Sqc2>(state,memory,state.pc,word);
             else if((word>>26u)==0x12u)ee::exec<MipsOpcode::Qmtc2>(state,memory,state.pc,word);
             else ee::exec<MipsOpcode::Lqc2>(state,memory,state.pc,word);
@@ -239,18 +266,18 @@ void profiling_state_equivalence() {
     std::string expected;
     for(unsigned pass=0;pass<2;++pass) {
         auto& memory=memories[pass];auto& state=states[pass];
-        memory.reset_for_boot(m20::build_firmware().rom);
+        reset_native_ee_fixture(memory,m20::build_firmware().rom);
         state.pc=0x80001000u;state.set_cp0(Cop0::Status,kStatusCU1|kStatusERL);
         state.fpr[1]=0x3F800001u;state.fpr[2]=0x3F800003u;
         memory.write32(state.pc,math(2,3,1,2));memory.write32(state.pc+4u,math(6,4,3,0));
         options.profile=pass ? &profile : nullptr;
         if(pass && !profiling::available) {
             const auto before=checkpoint_state_sha256(state,memory);
-            rejects([&]{(void)run_ee_boot(state,memory,nullptr,options);},"PS2N_ENABLE_PROFILING");
+            rejects([&]{(void)run_ee_boot(state,memory,&trace_module,options);},"PS2N_ENABLE_PROFILING");
             require(checkpoint_state_sha256(state,memory)==before,"a disabled profiler refuses before changing guest state");
             return;
         }
-        const auto report=run_ee_boot(state,memory,nullptr,options);
+        const auto report=run_ee_boot(state,memory,&trace_module,options);
         require(report.retired==2,"profiled execution retires the same instructions");
         const auto hash=checkpoint_state_sha256(state,memory);
         if(!pass)expected=hash;
@@ -264,10 +291,10 @@ void profiling_state_equivalence() {
 }
 }
 void division_ranges() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     EEState state;state.set_cp0(Cop0::Status,kStatusCU1);
     std::uint64_t executed=0;ExecutionContext context{state,memory,executed,100,0xFFFFFFFFu};
-    const auto step=[&]{state.pc=0x80001000u;memory.write32(state.pc,math(3,4,1,2));interpret_instruction(context);};
+    const auto step=[&]{state.pc=0x80001000u;memory.write32(state.pc,math(3,4,1,2));compiled_fixture_step(context);};
     constexpr std::uint32_t first=0x3C05C405u,last=0x3C060536u;
     state.fpr[1]=0x3C040000u;state.unknown_fpr_bits[1]=0x3FFFFu;
     state.fpr_affine[1]={memory.allocate_fpu_origin(),0,120,false,state.fpr[1],state.unknown_fpr_bits[1],first,last,{}};
@@ -307,7 +334,7 @@ void division_ranges() {
         "the pair-count limit refuses oversized Cartesian products before publishing partial results");
 }
 void addition_range_classes() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     EEState state;state.set_cp0(Cop0::Status,kStatusCU1);
     auto ranges=std::make_shared<std::vector<FloatBounds>>();
     for(unsigned exponent=100;exponent<=164;++exponent)ranges->push_back({exponent<<23u,exponent<<23u});
@@ -317,7 +344,7 @@ void addition_range_classes() {
             ranges->front()[0],ranges->back()[1],{},ranges};
     }
     state.pc=0x80001000u;state.fcr31=0x0183C079u;memory.write32(state.pc,math(0,3,1,2));
-    std::uint64_t executed=0;ExecutionContext context{state,memory,executed,100,0xFFFFFFFFu};interpret_instruction(context);
+    std::uint64_t executed=0;ExecutionContext context{state,memory,executed,100,0xFFFFFFFFu};compiled_fixture_step(context);
     require(state.fpr_affine[3].ranges && state.fcr31==0x01830079u,
         "more than 4096 sign/exponent class pairs retain bounded sums and common flags");
     for(const auto& a:*ranges)for(const auto& b:*ranges) {
@@ -330,7 +357,7 @@ void addition_range_classes() {
 int main() try {
     division_ranges();
     addition_range_classes();
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     integer_domains(memory);
     floating_trace(memory);
     scalar_carry_experiment();
@@ -339,7 +366,7 @@ int main() try {
     profiling_state_equivalence();
     EEState state;state.set_cp0(Cop0::Status,kStatusCU1);
     std::uint64_t executed=0;ExecutionContext context{state,memory,executed,1000,0xFFFFFFFFu};
-    const auto step=[&](std::uint32_t word){state.pc=0x80001000;memory.write32(state.pc,word);interpret_instruction(context);};
+    const auto step=[&](std::uint32_t word){state.pc=0x80001000;memory.write32(state.pc,word);compiled_fixture_step(context);};
     state.fpr[1]=0x3F800001;state.fpr[2]=0x3F800003;state.fcr31=0x0183C079;
     step(math(2,3,1,2));
     const auto value=state.fpr[3],unknown=state.unknown_fpr_bits[3];

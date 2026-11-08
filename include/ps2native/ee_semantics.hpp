@@ -437,7 +437,7 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
     (void)m;
     (void)pc;
     // Host execution is sequential: guest memory accesses are already ordered (SYNC).
-    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::VaddBc || Op == O::VsubBc || Op == O::VaddaBc || Op == O::Vopmula || Op == O::Vopmsub || Op == O::Vcallms || Op == O::Vsqrt || Op == O::Vrsqrt || Op == O::Vdiv || Op == O::Vwaitq || Op == O::VaddQ || Op == O::VsubQ || Op == O::VmulQ || Op == O::Vmove || Op == O::Vnop || Op == O::Vftoi) {
+    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::VaddBc || Op == O::VsubBc || Op == O::VaddaBc || Op == O::Vopmula || Op == O::Vopmsub || Op == O::Vsqrt || Op == O::Vrsqrt || Op == O::Vdiv || Op == O::Vwaitq || Op == O::VaddQ || Op == O::VsubQ || Op == O::VmulQ || Op == O::Vmove || Op == O::Vnop || Op == O::Vftoi || Op == O::Vrinit || Op == O::Vrnext || Op == O::Vrget || Op == O::Vrxor || Op == O::Vcallms || Op == O::Vmsub || Op == O::VmsubBc || Op == O::Vmsuba || Op == O::VmsubaBc) {
         if (!(s.cp0(Cop0::Status) & (1u<<30)))
             throw std::runtime_error("COP2 transfer with Status.CU2 = 0; coprocessor unusable vectoring is not modeled");
         constexpr bool transfer=Op==O::Cfc2 || Op==O::Ctc2 || Op==O::Qmfc2 || Op==O::Qmtc2;
@@ -569,13 +569,18 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         }
         else if constexpr (Op == O::Vmr32) m.vu_rotate(t_,d_,(w>>21u)&15u);
         else if constexpr (Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc ||
-                           Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc) {
-            constexpr bool broadcast=Op==O::VmulBc || Op==O::VmaddBc || Op==O::VmulaBc || Op==O::VmaddaBc;
-            constexpr bool accumulate=Op==O::Vmadd || Op==O::VmaddBc || Op==O::Vmadda || Op==O::VmaddaBc;
-            constexpr bool to_accumulator=Op==O::Vmula || Op==O::VmulaBc || Op==O::Vmadda || Op==O::VmaddaBc;
-            m.vu_product(a_,d_,t_,(w>>21u)&15u,broadcast ? w&3u : 4u,accumulate,to_accumulator);
+                           Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::Vmsub || Op == O::VmsubBc || Op == O::Vmsuba || Op == O::VmsubaBc) {
+            constexpr bool broadcast=Op==O::VmulBc || Op==O::VmaddBc || Op==O::VmulaBc || Op==O::VmaddaBc || Op==O::VmsubBc || Op==O::VmsubaBc;
+            constexpr bool accumulate=Op==O::Vmadd || Op==O::VmaddBc || Op==O::Vmadda || Op==O::VmaddaBc || Op==O::Vmsub || Op==O::VmsubBc || Op==O::Vmsuba || Op==O::VmsubaBc;
+            constexpr bool to_accumulator=Op==O::Vmula || Op==O::VmulaBc || Op==O::Vmadda || Op==O::VmaddaBc || Op==O::Vmsuba || Op==O::VmsubaBc;
+            constexpr bool subtract=Op==O::Vmsub || Op==O::VmsubBc || Op==O::Vmsuba || Op==O::VmsubaBc;
+            m.vu_product(a_,d_,t_,(w>>21u)&15u,broadcast ? w&3u : 4u,accumulate,to_accumulator,false,subtract);
         }
         else if constexpr (Op == O::Vsqi) m.vu_vector_store_increment(d_,t_,(w>>21u)&15u);
+        else if constexpr (Op == O::Vrinit) m.vu_rinit(d_, (w >> 21u) & 3u);
+        else if constexpr (Op == O::Vrxor) m.vu_rxor(d_, (w >> 21u) & 3u);
+        else if constexpr (Op == O::Vrget) m.vu_rget(t_, (w >> 21u) & 15u);
+        else if constexpr (Op == O::Vrnext) m.vu_rnext(t_, (w >> 21u) & 15u);
         else m.vu_add_integer(a_,d_,t_);
     } else if constexpr (Op == O::Nop || Op == O::Sync) {
     // 32-bit shifts produce sign-extended 64-bit results.
@@ -774,9 +779,12 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         write_gpr128(s,d_, lanes(a.low, b.low), lanes(a.high, b.high));
     // PCPYH: broadcast the low halfword independently in each 64-bit half.
     } else if constexpr (Op == O::Pcpyh) {
-        const auto source = read_gpr128(s,t_);
+        const auto source = t_ ? s.gpr[t_] : Register128{};
+        const auto ulow = t_ ? (s.unknown_gpr_bits[t_] & 0xFFFFu) : 0u;
+        const auto uhigh = t_ ? (s.unknown_gpr_high_bits[t_] & 0xFFFFu) : 0u;
         constexpr auto repeat = 0x0001000100010001ull;
-        write_gpr128(s,d_, (source.low & 0xFFFFu) * repeat, (source.high & 0xFFFFu) * repeat);
+        write_gpr128_observed(s, d_, (source.low & 0xFFFFu) * repeat, (source.high & 0xFFFFu) * repeat,
+                              ulow * repeat, uhigh * repeat);
     } else if constexpr (Op == O::Pcpyld) {
         write_gpr128_observed(s,d_,raw_gpr64(s,t_),raw_gpr64(s,s_),s.unknown_gpr_bits[t_],s.unknown_gpr_bits[s_]);
     } else if constexpr (Op == O::Plzcw) {

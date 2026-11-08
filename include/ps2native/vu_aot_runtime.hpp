@@ -25,7 +25,7 @@ struct VuAotModule {
     // HOST_INPUT_END
 };
 // Generated objects register immutable descriptors. No compiler or dynamic
-// loader runs during gameplay; a missing translation is interpreted explicitly.
+// loader runs during gameplay; a missing translation stops explicitly.
 struct VuAotRegistration { explicit VuAotRegistration(const VuAotModule& module); };
 struct VuAotStats {
     std::uint64_t native_instructions{},interpreted_instructions{},identity_checks{};

@@ -31,12 +31,12 @@ void check_loader(const ElfImage& elf) {
         for(auto off=seg.file_size;off<seg.memory_size;++off)
             require(memory.read8(seg.vaddr+off)==0,"ELF BSS zeroed");
     require(memory.read32(0x100)==0,"reload clears RAM");
-    // Unknown opcode remains a named interpreter error, no fake success.
+    // Unknown opcode remains an explicit missing-AOT error, no fake success.
     memory.write32(elf.entry,0x7000003Fu); // Reserved/unimplemented MMI encoding.
     BootOptions options; options.max_instructions=1;
     const auto unknown=run_ee_boot(state,memory,nullptr,options);
     require(unknown.outcome==BootOutcome::BlockPoint && unknown.retired==0 &&
-            unknown.reason.find("not implemented by the interpreter")!=std::string::npos,"unknown instruction boundary");
+            unknown.reason.find("missing EE AOT")!=std::string::npos,"unknown instruction boundary");
 }
 void check_timer_edges() {
     EEState state; state.pc=0x00100004u;state.delay_pending=true;state.delay_target=0x00100020u;
@@ -106,7 +106,7 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
     std::vector<std::string> trace[2],events[2];std::vector<Framebuffer> frames[2];
     std::vector<std::uint8_t> ram[2]; EEState states[2];BootReport reports[2];
     for(unsigned run=0;run<2;++run) {
-        Memory memory; auto& state=states[run];const auto* module=run?&aot_module():nullptr;
+        Memory memory; auto& state=states[run];const auto* module=&aot_module();
         prepare_direct_elf(elf,module,state,memory);
         if(!fixture.iop.empty()) {
             // Both documented chain setup and the SDK's SIF-specific setup
@@ -133,7 +133,7 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
             require(memory.read32(direct_test::data+8)&0x8000,"handler captured timer pending");
             require(memory.read64(direct_test::data+32)==30 && memory.read64(direct_test::data+40)==0x0123456789ABCDEFull,
                     "PLZCW counts both source words and preserves destination upper 64 bits in both engines");
-            require(report.interpreted_instructions>0,"system operations remain explicit interpreter boundaries");
+            require(report.interpreted_instructions==0 && report.aot_instructions==report.retired,"system operations execute native AOT");
         } else if(mode=="dma") {
             std::uint32_t sum=0;
             for(unsigned i=0;i<64;++i) {
@@ -163,7 +163,7 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
                     contains(events[run],"SIF0 EE destination complete"),"SIF0 completion preserves original producer execution");
         } else if(mode=="unaligned") {
             require(memory.read64(direct_test::data+960)==0x98A8B8C8D8E8F808ull &&
-                    memory.read64(direct_test::data+968)==0x9E7B583512EFCCA9ull,"PSUBB executes in shared AOT/interpreter path");
+                    memory.read64(direct_test::data+968)==0x9E7B583512EFCCA9ull,"PSUBB executes in shared native AOT path");
             unsigned index=0;
             for(unsigned width:{4u,8u})for(unsigned offset=0;offset<width;++offset,++index) {
                 const auto result=direct_test::data+128+index*32;
@@ -207,9 +207,9 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
             require(contains(report.trace,"SYSCALL exception -> 0x80000180") &&
                     contains(report.trace,"BREAK exception -> 0x80000180"),"explicit exception trace");
             require(memory.read64(direct_test::data+48)==0x3210321032103210ull &&
-                    memory.read64(direct_test::data+56)==0xCDEFCDEFCDEFCDEFull,"PCPYH broadcasts both independent halfwords in AOT/interpreter");
+                    memory.read64(direct_test::data+56)==0xCDEFCDEFCDEFCDEFull,"PCPYH broadcasts both independent halfwords in native AOT");
             require(memory.read64(direct_test::data+64)==0x3210321032103210ull &&
-                    memory.read64(direct_test::data+72)==0x3210321032103210ull,"PCPYLD all operands aliased in AOT/interpreter");
+                    memory.read64(direct_test::data+72)==0x3210321032103210ull,"PCPYLD all operands aliased in native AOT");
         } else {
             const auto frame=memory.gs().scanout(state.retired_instructions);
             require(frame.width==64 && frame.height==32 && frame.rgba[0]==0 && frame.rgba[2]==32,"Direct ELF guest frame");
@@ -234,16 +234,16 @@ void compare(const std::string& mode,const ElfImage& elf,const std::filesystem::
     std::cout<<mode<<" retired="<<reports[1].retired<<" aot="<<reports[1].aot_instructions<<" interpreted="
              <<reports[1].interpreted_instructions<<" switches="<<reports[1].engine_switches<<'\n';
     // Equivalent conditions: same image, no trace tail/frame callbacks, alternating
-    // interpreter and hybrid, initialization excluded. Report all samples.
+    // native repetitions, initialization excluded. Report all samples.
     for(unsigned repeat=0;repeat<3;++repeat)for(unsigned run=0;run<2;++run) {
-        Memory memory; EEState state; const auto* module=run?&aot_module():nullptr;
+        Memory memory; EEState state; const auto* module=&aot_module();
         prepare_direct_elf(elf,module,state,memory);
         if(!fixture.iop.empty())memory.load_iop_program(fixture.iop,0x1000,0x1000);
         BootOptions options;options.max_instructions=300000;options.stop_at=fixture.stop;options.tail_instructions=0;
         const auto start=std::chrono::steady_clock::now();const auto report=run_ee_boot(state,memory,module,options);
         const auto ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
         require(report.outcome==BootOutcome::StopAddress && report.retired==reports[run].retired,"benchmark workload equivalence");
-        std::cout<<"sample="<<repeat<<" engine="<<(run?"hybrid":"interpreter")<<" runtime_ms="<<ms<<'\n';
+        std::cout<<"sample="<<repeat<<" engine="<<"native-aot"<<" runtime_ms="<<ms<<'\n';
     }
 }
 }

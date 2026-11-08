@@ -235,7 +235,7 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
 #ifdef PS2N_NATIVE_ONLY
             p_->status=original?tr("Original BIOS boot with game disc — static AOT, software GS. Missing translations are reported explicitly."):QStringLiteral("Experimental — %1\n%2").arg(module?tr("Static AOT"):tr("Missing AOT"),qstr(required(config,"hypotheses")));
 #else
-            p_->status=original?tr("Original BIOS boot with game disc — reference interpreter, software GS. Compatibility is incomplete; execution stops at the first unsupported behavior."):QStringLiteral("Experimental — %1\n%2").arg(module?QStringLiteral("AOT + interpretador explícito"):QStringLiteral("somente interpretador"),qstr(required(config,"hypotheses")));
+            p_->status=original?tr("Original BIOS boot with game disc — offline AOT, shared console state. Execution stops when a required translation or device behavior is unavailable."):QStringLiteral("Experimental — %1\n%2").arg(module?QStringLiteral("AOT nativo"):QStringLiteral("AOT ausente — execução indisponível"),qstr(required(config,"hypotheses")));
 #endif
             const auto map=config.value("gamepad_mapping").toArray();
             if(!map.isEmpty()){

@@ -2,14 +2,14 @@
 // GS line clock that drives HBLANK for the EE timers, the DEV9 latches, the EE
 // SIO transmit path, LWC1/SWC1 and the explicit MCH refusal, demonstrated on
 // synthetic inputs only (no Sony content). The M2.2 variant of the synthetic
-// ROM0 is booted interpreter-only and hybrid (AOT translation of the same
+// ROM0 is booted compiled_fixture-only and hybrid (AOT translation of the same
 // ROM0 compiled into this executable) and both runs must agree.
 #include "bios_program.hpp"
 #include "boot_checks.hpp"
 
 #include "ps2native/aot_runtime.hpp"
 #include "ps2native/core.hpp"
-#include "ps2native/interpreter.hpp"
+#include "ee_native_fixture.hpp"
 
 #include <array>
 #include <cstdint>
@@ -106,7 +106,7 @@ void check_gs() {
 
 void check_bus(const std::vector<std::uint8_t>& rom) {
     Memory m;
-    m.reset_for_boot(rom);
+    reset_native_ee_fixture(m,rom);
     std::uint64_t cycles = 50u;
     m.set_clock(&cycles);
 
@@ -181,7 +181,7 @@ void check_bus(const std::vector<std::uint8_t>& rom) {
     device_refused([&] { (void)m.read32(0xB000F4E0u); }, "register 0x1000F4E0 is not modeled");
     device_refused([&] { (void)m.read32(0xB000F460u); }, "MCH 0x1000F460 read before any write");
 
-    m.reset_for_boot(rom);
+    reset_native_ee_fixture(m,rom);
     require(m.sio_output().empty() && !m.gs().latched(kGsSmode1) && !m.gs().latched(kGsSynch1),
             "reset clears SIO output and GS registers");
 }
@@ -191,12 +191,12 @@ void check_fpu(const std::vector<std::uint8_t>& rom) {
     require(lwc1 && lwc1->opcode == MipsOpcode::Lwc1 && lwc1->rs == 8u && lwc1->rt == 2u, "LWC1 $f2, 0x10(t0)");
     const auto swc1 = try_decode_r5900(0u, 0xE5020014u);
     require(swc1 && swc1->opcode == MipsOpcode::Swc1, "SWC1 $f2, 0x14(t0)");
-    require(!mips_aot_supported(MipsOpcode::Lwc1) && !mips_aot_supported(MipsOpcode::Swc1),
-            "COP1 transfers run in the interpreter");
+    require(mips_aot_supported(MipsOpcode::Lwc1) && mips_aot_supported(MipsOpcode::Swc1),
+            "COP1 transfers have native AOT coverage");
 
     EEState s = ee_reset_state();
     Memory m;
-    m.reset_for_boot(rom);
+    reset_native_ee_fixture(m,rom);
     m.set_clock(&s.retired_instructions);
     m.set_translation_context(0, true);
     m20::Assembler a(0x80001000u);
@@ -209,9 +209,9 @@ void check_fpu(const std::vector<std::uint8_t>& rom) {
     s.pc = 0x80001000u;
     std::uint64_t executed = 0;
     ExecutionContext ctx{s, m, executed, 100u, 0xFFFFFFFFu, nullptr};
-    interpret_instruction(ctx);
+    compiled_fixture_step(ctx);
     try {
-        interpret_instruction(ctx);
+        compiled_fixture_step(ctx);
         throw std::runtime_error("LWC1 with CU1 = 0 was not stopped");
     } catch (const GuestStop& stop) {
         require(stop.kind == StopKind::GuestException &&
@@ -221,9 +221,9 @@ void check_fpu(const std::vector<std::uint8_t>& rom) {
     require(s.fpr[2] == 0u, "no load without CU1");
     s.set_cp0(Cop0::Status, s.cp0(Cop0::Status) | kStatusCU1);
     s.pc = 0x80001004u;
-    interpret_instruction(ctx);
+    compiled_fixture_step(ctx);
     require(s.fpr[2] == 0xCAFEF00Du, "LWC1 raw word");
-    interpret_instruction(ctx);
+    compiled_fixture_step(ctx);
     require(m.read32(0x80002004u) == 0xCAFEF00Du, "SWC1 raw word");
 }
 
@@ -276,29 +276,33 @@ void check_constant_jumps(const BiosImage& bios, const m20::Firmware& fw) {
     unresolved("m22_slot_jr", "no constant LUI-derived target in the straight-line code before JR");
     unresolved("m22_outside_jr", "constant target 0x80200000 is not code in the image");
     require(graph.unresolved_jumps.size() == 3u, "no other unresolved JR");
-    const auto& module = aot_module();
+    NativeBootFixture native_fixture(aot_module());
+    const auto& module = native_fixture.module;
     require(find_aot_block(module, fw.at("m22_const_target")) != nullptr, "constant target translated");
 }
 
 void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
     const auto bios = load_bios_rom0(rom);
-    const auto& module = aot_module();
+    NativeBootFixture native_fixture(aot_module());
+    const auto& module = native_fixture.module;
     require(std::string(module.source_kind) == "bios-rom0" && bios.sha256 == module.source_sha256,
             "AOT module provenance");
     check_constant_jumps(bios, fw);
     BootOptions options;
     options.trace = TraceLevel::Full;
-    auto run = [&](const AotModule* aot, EEState& state, Memory& memory) {
+    auto run = [&](bool sliced, EEState& state, Memory& memory) {
+        const auto* aot=&module;
         prepare_ee_boot(bios, aot, state, memory);
-        return run_ee_boot(state, memory, aot, options);
+        seed_native_test_iop(memory);
+        return run_native_sliced(state,memory,module,options,sliced ? 17u : options.max_instructions);
     };
-    EEState interpreted_state, hybrid_state;
-    Memory interpreted_memory, hybrid_memory;
-    const auto interpreted = run(nullptr, interpreted_state, interpreted_memory);
-    const auto hybrid = run(&module, hybrid_state, hybrid_memory);
+    EEState retired_path_state, hybrid_state;
+    Memory retired_path_memory, hybrid_memory;
+    const auto retired_path = run(true, retired_path_state, retired_path_memory);
+    const auto hybrid = run(false, hybrid_state, hybrid_memory);
     const auto mmio = fw.at("mmio") + 4u;
-    for (const auto* report : {&interpreted, &hybrid}) {
-        const std::string name = report == &interpreted ? "interpreter" : "hybrid";
+    for (const auto* report : {&retired_path, &hybrid}) {
+        const std::string name = report == &retired_path ? "compiled_fixture" : "hybrid";
         require(report->outcome == BootOutcome::BlockPoint && report->pc == mmio &&
                 report->reason.find("0xB000F020 (physical 0x1000F020, INTC)") != std::string::npos,
                 name + " block point at the INTC load: " + report->reason);
@@ -316,14 +320,14 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
             require(contains(report->trace, line), name + " trace: " + line);
         require(report->sio_output == m20::kM22SioText, name + " report SIO output");
     }
-    check_results(interpreted_state, interpreted_memory, "interpreter");
+    check_results(retired_path_state, retired_path_memory, "compiled_fixture");
     check_results(hybrid_state, hybrid_memory, "hybrid");
-    require(interpreted.aot_instructions == 0u, "interpreter-only run");
-    require(contains(hybrid.trace, " int ") && hybrid.aot_instructions > 0u, "hybrid used both engines");
+    require(retired_path.interpreted_instructions == 0u && retired_path.aot_instructions == retired_path.retired, "compiled_fixture-only run");
+    require(hybrid.interpreted_instructions==0 && hybrid.aot_instructions==hybrid.retired, "native execution has no fallback");
     for (const char* op : {" Lwc1", " Swc1"})
         require(std::any_of(hybrid.trace.begin(), hybrid.trace.end(), [&](const std::string& line) {
-                    return line.starts_with("I ") && line.find(" int ") != std::string::npos && line.ends_with(op);
-                }), std::string("hybrid ran") + op + " in the interpreter");
+                    return line.starts_with("I ") && line.find(" aot ") != std::string::npos && line.ends_with(op);
+                }), std::string("hybrid ran") + op + " in the compiled_fixture");
     require(std::any_of(hybrid.trace.begin(), hybrid.trace.end(), [&](const std::string& line) {
                 return line.starts_with("I ") && line.find(" aot ") != std::string::npos && line.ends_with(" Sb");
             }), "hybrid ran the SIO TX stores in AOT blocks");
@@ -331,19 +335,19 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
         require(contains(hybrid.trace, " aot " + hex8(fw.at(site)) + " "), std::string("hybrid ran ") + site + " in AOT");
     require(contains(hybrid.trace, " aot " + hex8(fw.at("m22_const_target")) + " "),
             "hybrid entered the constant target in an AOT block");
-    require(hybrid.retired == interpreted.retired, "same retired instruction count");
-    require(normalized(hybrid.trace) == normalized(interpreted.trace), "hybrid and interpreter traces agree");
+    require(hybrid.retired == retired_path.retired, "same retired instruction count");
+    same_trace(hybrid.trace,retired_path.trace);
     for (unsigned n = 0; n < 32; ++n)
-        require(hybrid_state.gpr[n].low == interpreted_state.gpr[n].low &&
-                hybrid_state.gpr[n].high == interpreted_state.gpr[n].high, "same GPRs");
-    require(hybrid_state.fpr == interpreted_state.fpr, "same FPRs");
-    require(hybrid_state.cop0 == interpreted_state.cop0 && hybrid_state.count() == interpreted_state.count(),
+        require(hybrid_state.gpr[n].low == retired_path_state.gpr[n].low &&
+                hybrid_state.gpr[n].high == retired_path_state.gpr[n].high, "same GPRs");
+    require(hybrid_state.fpr == retired_path_state.fpr, "same FPRs");
+    require(hybrid_state.cop0 == retired_path_state.cop0 && hybrid_state.count() == retired_path_state.count(),
             "same COP0 and Count");
-    require(hybrid_memory.read32(m20::kM22FirstLineResult) == interpreted_memory.read32(m20::kM22FirstLineResult),
+    require(hybrid_memory.read32(m20::kM22FirstLineResult) == retired_path_memory.read32(m20::kM22FirstLineResult),
             "same HBLANK measurement");
     EEState again_state;
     Memory again_memory;
-    require(run(&module, again_state, again_memory).trace == hybrid.trace, "deterministic trace");
+    require(run(false, again_state, again_memory).trace == hybrid.trace, "deterministic trace");
 }
 } // namespace
 

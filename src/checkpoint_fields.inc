@@ -92,4 +92,12 @@ template<class A> static void fields(A& a,Microwire64x16& v){a(v.words_,v.presen
 template<class A> static void fields(A& a,Iop::MechaReplyByte& v){a(v.value,v.known,v.origin);}
 template<class A,class T> static void fields(A& a,DiagnosticHistory<T>& v){a(v.data_,v.next_,v.limit_);}
 
-template<class A> static void fields(A& a,SmapFifos& v){a(v.fifos_,v.reset_cycles_);}
+template<class A> static void fields(A& a,SmapFifos& v){
+    a(v.fifos_,v.reset_cycles_);
+    if(!a.legacy_smap_mac)a(v.emac_reset_at_,v.bd_mode_,v.descriptors_,v.descriptor_known_);
+    else if constexpr(A::reading){v.emac_reset_at_.reset();v.bd_mode_.reset();v.descriptors_={};v.descriptor_known_={};}
+    if(!a.legacy_smap_mac && !a.legacy_smap_configuration)a(v.interrupt_status_,v.emac_configuration_,v.phy_cycles_,v.phy_data_,v.phy_command_,v.phy_complete_at_,v.phy_reset_at_,v.phy_bmcr_);
+    else if constexpr(A::reading){v.interrupt_status_={0,0xFFFFu};v.emac_configuration_={};v.phy_cycles_=0;v.phy_data_.reset();v.phy_command_.reset();v.phy_complete_at_.reset();v.phy_reset_at_.reset();v.phy_bmcr_={0,0xFFFFu};}
+    if(!a.legacy_smap_mac && !a.legacy_smap_configuration && !a.legacy_smap_packets)a(v.loopback_cycles_,v.mac_enable_,v.tx_data_,v.tx_known_,v.rx_data_,v.rx_known_,v.tx_write_,v.tx_read_,v.tx_used_,v.rx_read_,v.rx_write_,v.rx_used_,v.frame_count_,v.tx_descriptor_,v.rx_descriptor_,v.tx_complete_at_);
+    else if constexpr(A::reading){v.loopback_cycles_=0;v.invalidate_packets();}
+}

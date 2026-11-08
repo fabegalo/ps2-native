@@ -48,15 +48,44 @@ inline bool contains(const std::vector<std::string>& lines, const std::string& t
     return std::any_of(lines.begin(), lines.end(),
                        [&](const std::string& line) { return line.find(text) != std::string::npos; });
 }
-// Trace without engine markers, the stop line and the engine column, so the
-// interpreter-only and hybrid runs can be compared line by line.
+// Sequence numbers and engine markers restart at each invocation.
 inline std::vector<std::string> normalized(const std::vector<std::string>& trace) {
     std::vector<std::string> lines;
     for (const auto& line : trace) {
         if (line.starts_with("E ") || line.starts_with("STOP")) continue;
-        if (line.starts_with("I ")) lines.push_back(line.substr(0, 13) + "*" + line.substr(16));
+        if (line.starts_with("I ")) lines.push_back("I * *" + line.substr(16));
         else lines.push_back(line);
     }
     return lines;
+}
+inline ps2native::BootReport run_native_sliced(ps2native::EEState& state,ps2native::Memory& memory,
+        const ps2native::AotModule& module,ps2native::BootOptions options,std::uint64_t slice) {
+    using namespace ps2native;
+    const auto budget=options.max_instructions;
+    std::uint64_t retired=0,aot=0;
+    std::vector<std::string> trace,tail;
+    BootReport result;
+    do {
+        options.max_instructions=std::min(slice,budget-retired);
+        result=run_ee_boot(state,memory,&module,options);
+        retired+=result.retired;aot+=result.aot_instructions;
+        require(result.interpreted_instructions==0,"native slicing cannot interpret");
+        trace.insert(trace.end(),result.trace.begin(),result.trace.end());
+        tail.insert(tail.end(),result.tail.begin(),result.tail.end());
+        if(tail.size()>options.tail_instructions)tail.erase(tail.begin(),tail.end()-options.tail_instructions);
+        if(result.outcome!=BootOutcome::BudgetExhausted || !result.retired)break;
+    } while(retired<budget);
+    result.retired=retired;result.aot_instructions=aot;
+    result.trace=std::move(trace);result.tail=std::move(tail);
+    return result;
+}
+inline void same_trace(const std::vector<std::string>& left,const std::vector<std::string>& right) {
+    const auto a=normalized(left),b=normalized(right);
+    const auto mismatch=std::mismatch(a.begin(),a.end(),b.begin(),b.end());
+    require(mismatch.first==a.end() && mismatch.second==b.end(),
+        "native trace mismatch at "+std::to_string(mismatch.first-a.begin())+
+        " ("+std::to_string(a.size())+"/"+std::to_string(b.size())+"):\n"+
+        (mismatch.first==a.end()?"<end>":*mismatch.first)+"\n"+
+        (mismatch.second==b.end()?"<end>":*mismatch.second));
 }
 } // namespace boot_checks

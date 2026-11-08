@@ -10,10 +10,11 @@ include(cmake/PS2Recomp.cmake)
 add_library(ps2n_core STATIC
     src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/memory_cache.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
-    src/interpreter.cpp src/ee_system.cpp src/boot.cpp src/diagnostics.cpp src/analysis.cpp src/ee_registers.cpp
+    src/ee_system.cpp src/boot.cpp src/diagnostics.cpp src/analysis.cpp src/ee_registers.cpp
     src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp src/nvm.cpp
     src/video_encoder.cpp src/gif.cpp src/gs_vram.cpp src/gs_renderer.cpp src/framebuffer.cpp src/vu_micro.cpp src/vu_aot.cpp
     src/iop_spu2.cpp src/audio.cpp src/iop_aot.cpp third_party/ps2recomp/hle_kernel.cpp)
+target_compile_definitions(ps2n_core PUBLIC PS2N_NATIVE_ONLY=1)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 include(cmake/GsVulkan.cmake)
 include(cmake/GsDirectX.cmake)
@@ -45,21 +46,25 @@ endif()
 add_executable(ps2n-aot tools/ps2n-aot.cpp)
 target_link_libraries(ps2n-aot PRIVATE ps2n_core)
 
-# M2.0: EE boot from the reset vector of a user-supplied ROM0 (interpreter only).
+# EE boot from a user-supplied ROM0; matching offline AOT is required.
 add_executable(ps2n-boot tools/ps2n-boot.cpp)
 target_link_libraries(ps2n-boot PRIVATE ps2n_sdk_runtime)
 
-# Optional local hybrid runner for YOUR firmware: generate the translation with
+# Optional local AOT artifact for YOUR firmware: generate the translation with
 #   ps2n-aot <your-rom0.bin> <out.cpp> --bios
 # and configure with -DPS2N_BIOS_AOT_SOURCE=<out.cpp>. The generated file is
 # derived from Sony firmware: keep it local, never commit or distribute it.
 set(PS2N_BIOS_AOT_SOURCE "" CACHE FILEPATH "ps2n-aot --bios translation of a user-supplied ROM0")
 include(cmake/AotSource.cmake)
 if(PS2N_BIOS_AOT_SOURCE)
+    add_library(ps2n_bios_aot OBJECT)
+    ps2n_target_aot_source(ps2n_bios_aot "${PS2N_BIOS_AOT_SOURCE}")
+    target_link_libraries(ps2n_bios_aot PRIVATE ps2n_core)
+    target_link_libraries(ps2n-boot PRIVATE ps2n_bios_aot)
+    target_compile_definitions(ps2n-boot PRIVATE PS2N_BOOT_WITH_AOT=1)
     add_executable(ps2n-boot-hybrid tools/ps2n-boot.cpp)
-    ps2n_target_aot_source(ps2n-boot-hybrid "${PS2N_BIOS_AOT_SOURCE}")
     target_compile_definitions(ps2n-boot-hybrid PRIVATE PS2N_BOOT_WITH_AOT=1)
-    target_link_libraries(ps2n-boot-hybrid PRIVATE ps2n_sdk_runtime)
+    target_link_libraries(ps2n-boot-hybrid PRIVATE ps2n_sdk_runtime ps2n_bios_aot)
 endif()
 
 include(CTest)
@@ -275,45 +280,56 @@ if(BUILD_TESTING)
         add_test(NAME ${M13_TEST} COMMAND ps2n-m13-${M13_CASE} "${M13_INPUT}" ${M13_MODE})
     endforeach()
 
+    set(BOOT_PAYLOAD_IMAGE "${FIXTURE_DIR}/boot-payload.elf")
+    set(BOOT_PAYLOAD_SOURCE "${FIXTURE_DIR}/boot_payload.cpp")
+    add_custom_command(OUTPUT "${BOOT_PAYLOAD_IMAGE}"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${BOOT_PAYLOAD_IMAGE}" bios-payload
+        DEPENDS ps2n-make-fixture VERBATIM)
+    add_custom_command(OUTPUT "${BOOT_PAYLOAD_SOURCE}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${BOOT_PAYLOAD_IMAGE}" "${BOOT_PAYLOAD_SOURCE}" --execution-alias=0x80000000
+        DEPENDS ps2n-aot "${BOOT_PAYLOAD_IMAGE}" VERBATIM)
+    add_library(ps2n-test-boot-payload OBJECT "${BOOT_PAYLOAD_SOURCE}")
+    target_compile_definitions(ps2n-test-boot-payload PRIVATE aot_module=boot_payload_aot_module run_recompiled=run_boot_payload)
+    target_link_libraries(ps2n-test-boot-payload PRIVATE ps2n_core)
     # M2.0: synthetic ROM0 (tests/bios_program.hpp, no Sony content) booted from
-    # the reset vector, interpreter-only and hybrid with its ps2n-aot --bios translation.
+    # the reset vector with explicit offline roots and a translated RAM payload.
     set(M20_ROM "${FIXTURE_DIR}/synthetic-rom0.bin")
     set(M20_AOT "${FIXTURE_DIR}/synthetic_rom0_aot.cpp")
     add_custom_command(
-        OUTPUT "${M20_ROM}"
-        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M20_ROM}" bios
+        OUTPUT "${M20_ROM}" "${M20_ROM}.entries"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M20_ROM}" bios "${M20_ROM}.entries"
         DEPENDS ps2n-make-fixture VERBATIM)
     add_custom_command(
         OUTPUT "${M20_AOT}"
-        COMMAND $<TARGET_FILE:ps2n-aot> "${M20_ROM}" "${M20_AOT}" --bios
-        DEPENDS ps2n-aot "${M20_ROM}" VERBATIM)
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M20_ROM}" "${M20_AOT}" --bios "--entries=${M20_ROM}.entries"
+        DEPENDS ps2n-aot "${M20_ROM}" "${M20_ROM}.entries" VERBATIM)
     add_executable(ps2n-boot-m20 tests/boot_m20.cpp "${M20_AOT}")
     target_link_libraries(ps2n-boot-m20 PRIVATE ps2n_core)
     add_test(NAME native-m20-boot COMMAND ps2n-boot-m20 "${M20_ROM}")
 
     set(M20_BLOCK_POINT "# block point 0x[0-9A-F]+ \\[bus: device not implemented\\] EE bus R32 \\(LW\\) at 0xB000F020 \\(physical 0x1000F020, INTC\\)")
-    add_test(NAME cli-m20-boot-interpreter COMMAND ps2n-boot "${M20_ROM}" --trace=full)
-    set_tests_properties(cli-m20-boot-interpreter PROPERTIES
-        PASS_REGULAR_EXPRESSION "# engine interpreter only.*${M20_BLOCK_POINT}")
-    add_executable(ps2n-boot-synthetic-hybrid tools/ps2n-boot.cpp "${M20_AOT}")
-    target_compile_definitions(ps2n-boot-synthetic-hybrid PRIVATE PS2N_BOOT_WITH_AOT=1)
-    target_link_libraries(ps2n-boot-synthetic-hybrid PRIVATE ps2n_core)
-    add_test(NAME cli-m20-boot-hybrid COMMAND ps2n-boot-synthetic-hybrid "${M20_ROM}")
-    set_tests_properties(cli-m20-boot-hybrid PROPERTIES
-        PASS_REGULAR_EXPRESSION "# engine hybrid: AOT blocks [0-9]+ \\+ interpreter fallback.*${M20_BLOCK_POINT}")
+    add_executable(ps2n-boot-missing-aot tools/ps2n-boot.cpp)
+    target_link_libraries(ps2n-boot-missing-aot PRIVATE ps2n_sdk_runtime)
+    add_test(NAME cli-m20-missing-ee-aot COMMAND ps2n-boot-missing-aot "${M20_ROM}")
+    set_tests_properties(cli-m20-missing-ee-aot PROPERTIES PASS_REGULAR_EXPRESSION "missing EE AOT")
+    add_executable(ps2n-boot-synthetic-native tools/ps2n-boot.cpp "${M20_AOT}")
+    target_compile_definitions(ps2n-boot-synthetic-native PRIVATE PS2N_BOOT_WITH_AOT=1)
+    target_link_libraries(ps2n-boot-synthetic-native PRIVATE ps2n_sdk_runtime)
+    add_test(NAME cli-m20-missing-iop-aot COMMAND ps2n-boot-synthetic-native "${M20_ROM}")
+    set_tests_properties(cli-m20-missing-iop-aot PROPERTIES PASS_REGULAR_EXPRESSION "missing IOP AOT")
 
     # M2.1: the synthetic ROM0 extended with MMI, COP0 Count, EE timers and the
     # 0x1000F500 store (blocks the real BIOS needs), plus EE register unit checks.
     set(M21_ROM "${FIXTURE_DIR}/synthetic-rom0-m21.bin")
     set(M21_AOT "${FIXTURE_DIR}/synthetic_rom0_m21_aot.cpp")
     add_custom_command(
-        OUTPUT "${M21_ROM}"
-        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M21_ROM}" bios-m21
+        OUTPUT "${M21_ROM}" "${M21_ROM}.entries"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M21_ROM}" bios-m21 "${M21_ROM}.entries"
         DEPENDS ps2n-make-fixture VERBATIM)
     add_custom_command(
         OUTPUT "${M21_AOT}"
-        COMMAND $<TARGET_FILE:ps2n-aot> "${M21_ROM}" "${M21_AOT}" --bios
-        DEPENDS ps2n-aot "${M21_ROM}" VERBATIM)
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M21_ROM}" "${M21_AOT}" --bios "--entries=${M21_ROM}.entries"
+        DEPENDS ps2n-aot "${M21_ROM}" "${M21_ROM}.entries" VERBATIM)
     add_executable(ps2n-boot-m21 tests/boot_m21.cpp "${M21_AOT}")
     target_link_libraries(ps2n-boot-m21 PRIVATE ps2n_core)
     add_test(NAME native-m21-boot COMMAND ps2n-boot-m21 "${M21_ROM}")
@@ -323,13 +339,13 @@ if(BUILD_TESTING)
     set(M22_ROM "${FIXTURE_DIR}/synthetic-rom0-m22.bin")
     set(M22_AOT "${FIXTURE_DIR}/synthetic_rom0_m22_aot.cpp")
     add_custom_command(
-        OUTPUT "${M22_ROM}"
-        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M22_ROM}" bios-m22
+        OUTPUT "${M22_ROM}" "${M22_ROM}.entries"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M22_ROM}" bios-m22 "${M22_ROM}.entries"
         DEPENDS ps2n-make-fixture VERBATIM)
     add_custom_command(
         OUTPUT "${M22_AOT}"
-        COMMAND $<TARGET_FILE:ps2n-aot> "${M22_ROM}" "${M22_AOT}" --bios
-        DEPENDS ps2n-aot "${M22_ROM}" VERBATIM)
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M22_ROM}" "${M22_AOT}" --bios "--entries=${M22_ROM}.entries"
+        DEPENDS ps2n-aot "${M22_ROM}" "${M22_ROM}.entries" VERBATIM)
     add_executable(ps2n-boot-m22 tests/boot_m22.cpp "${M22_AOT}")
     target_link_libraries(ps2n-boot-m22 PRIVATE ps2n_core)
     add_test(NAME native-m22-boot COMMAND ps2n-boot-m22 "${M22_ROM}")
@@ -339,13 +355,13 @@ if(BUILD_TESTING)
     set(M23_ROM "${FIXTURE_DIR}/synthetic-rom0-m23.bin")
     set(M23_AOT "${FIXTURE_DIR}/synthetic_rom0_m23_aot.cpp")
     add_custom_command(
-        OUTPUT "${M23_ROM}"
-        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M23_ROM}" bios-m23
+        OUTPUT "${M23_ROM}" "${M23_ROM}.entries"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M23_ROM}" bios-m23 "${M23_ROM}.entries"
         DEPENDS ps2n-make-fixture VERBATIM)
     add_custom_command(
         OUTPUT "${M23_AOT}"
-        COMMAND $<TARGET_FILE:ps2n-aot> "${M23_ROM}" "${M23_AOT}" --bios
-        DEPENDS ps2n-aot "${M23_ROM}" VERBATIM)
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M23_ROM}" "${M23_AOT}" --bios "--entries=${M23_ROM}.entries"
+        DEPENDS ps2n-aot "${M23_ROM}" "${M23_ROM}.entries" VERBATIM)
     add_executable(ps2n-boot-m23 tests/boot_m23.cpp "${M23_AOT}")
     target_link_libraries(ps2n-boot-m23 PRIVATE ps2n_core)
     add_test(NAME native-m23-boot COMMAND ps2n-boot-m23 "${M23_ROM}")
@@ -355,13 +371,13 @@ if(BUILD_TESTING)
     set(M24_ROM "${FIXTURE_DIR}/synthetic-rom0-m24.bin")
     set(M24_AOT "${FIXTURE_DIR}/synthetic_rom0_m24_aot.cpp")
     add_custom_command(
-        OUTPUT "${M24_ROM}"
-        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M24_ROM}" bios-m24
+        OUTPUT "${M24_ROM}" "${M24_ROM}.entries"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M24_ROM}" bios-m24 "${M24_ROM}.entries"
         DEPENDS ps2n-make-fixture VERBATIM)
     add_custom_command(
         OUTPUT "${M24_AOT}"
-        COMMAND $<TARGET_FILE:ps2n-aot> "${M24_ROM}" "${M24_AOT}" --bios
-        DEPENDS ps2n-aot "${M24_ROM}" VERBATIM)
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M24_ROM}" "${M24_AOT}" --bios "--entries=${M24_ROM}.entries"
+        DEPENDS ps2n-aot "${M24_ROM}" "${M24_ROM}.entries" VERBATIM)
     add_executable(ps2n-boot-m24 tests/boot_m24.cpp "${M24_AOT}")
     target_link_libraries(ps2n-boot-m24 PRIVATE ps2n_core)
     add_test(NAME native-m24-boot COMMAND ps2n-boot-m24 "${M24_ROM}")
@@ -372,13 +388,13 @@ if(BUILD_TESTING)
     set(M25_ROM "${FIXTURE_DIR}/synthetic-rom0-m25.bin")
     set(M25_AOT "${FIXTURE_DIR}/synthetic_rom0_m25_aot.cpp")
     add_custom_command(
-        OUTPUT "${M25_ROM}"
-        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M25_ROM}" bios-m25
+        OUTPUT "${M25_ROM}" "${M25_ROM}.entries"
+        COMMAND $<TARGET_FILE:ps2n-make-fixture> "${M25_ROM}" bios-m25 "${M25_ROM}.entries"
         DEPENDS ps2n-make-fixture VERBATIM)
     add_custom_command(
         OUTPUT "${M25_AOT}"
-        COMMAND $<TARGET_FILE:ps2n-aot> "${M25_ROM}" "${M25_AOT}" --bios
-        DEPENDS ps2n-aot "${M25_ROM}" VERBATIM)
+        COMMAND $<TARGET_FILE:ps2n-aot> "${M25_ROM}" "${M25_AOT}" --bios "--entries=${M25_ROM}.entries"
+        DEPENDS ps2n-aot "${M25_ROM}" "${M25_ROM}.entries" VERBATIM)
     add_executable(ps2n-boot-m25 tests/boot_m25.cpp "${M25_AOT}")
     target_link_libraries(ps2n-boot-m25 PRIVATE ps2n_core)
     add_test(NAME native-m25-boot COMMAND ps2n-boot-m25 "${M25_ROM}")
@@ -483,6 +499,15 @@ if(BUILD_TESTING)
     add_custom_command(OUTPUT "${VU_EE_SOURCE}"
         COMMAND $<TARGET_FILE:ps2n-aot> "${VU_EE_IMAGE}" "${VU_EE_SOURCE}"
         DEPENDS ps2n-aot "${VU_EE_IMAGE}" VERBATIM)
+    set(VU_CLI_IMAGE "${FIXTURE_DIR}/vu-cli.vu1")
+    set(VU_CLI_SOURCE "${FIXTURE_DIR}/vu_cli_aot.cpp")
+    add_custom_command(OUTPUT "${VU_CLI_IMAGE}"
+        COMMAND $<TARGET_FILE:ps2n-vu-aot-fixture> "${VU_CLI_IMAGE}" cli
+        DEPENDS ps2n-vu-aot-fixture VERBATIM)
+    add_custom_command(OUTPUT "${VU_CLI_SOURCE}"
+        COMMAND $<TARGET_FILE:ps2n-aot> "${VU_CLI_IMAGE}" "${VU_CLI_SOURCE}" --vu1 --entry=0 --entry=16 --entry=32
+        DEPENDS ps2n-aot "${VU_CLI_IMAGE}" VERBATIM)
+    target_sources(ps2n-vu-aot-cli PRIVATE "${VU_CLI_SOURCE}" "${VU_EE_SOURCE}")
     add_executable(ps2n-vu-aot-tests tests/vu_aot.cpp "${VU_AOT_SOURCE}" "${VU_EE_SOURCE}")
     target_link_libraries(ps2n-vu-aot-tests PRIVATE ps2n_core)
     add_test(NAME native-vu1-aot COMMAND ps2n-vu-aot-tests "${CMAKE_CURRENT_BINARY_DIR}/vu-aot-checkpoints")
@@ -500,4 +525,29 @@ set(PS2N_LAUNCHER "AUTO" CACHE STRING "Build the ps2-native desktop launcher (Qt
 set_property(CACHE PS2N_LAUNCHER PROPERTY STRINGS AUTO ON OFF)
 if(NOT PS2N_LAUNCHER STREQUAL "OFF")
     add_subdirectory(launcher)
+endif()
+
+if(BUILD_TESTING)
+    foreach(cpu IN ITEMS ee iop vu)
+        add_library(ps2n-test-${cpu}-fixtures OBJECT tests/${cpu}_native_fixture.cpp)
+        target_link_libraries(ps2n-test-${cpu}-fixtures PRIVATE ps2n_core)
+    endforeach()
+    # Thousands of constant-word IOP fixtures test correctness, not host throughput.
+    # Avoid expensive inlining across that synthetic matrix; runtime stays Release.
+    if(MSVC)
+        target_compile_options(ps2n-test-iop-fixtures PRIVATE /Od /Ob0)
+    else()
+        target_compile_options(ps2n-test-iop-fixtures PRIVATE -O0)
+    endif()
+    foreach(target IN ITEMS ps2n-boot-m20 ps2n-boot-m21 ps2n-boot-m22 ps2n-boot-m23 ps2n-boot-m24 ps2n-boot-m25 ps2n-ee-context ps2n-ee-cache ps2n-ee-fpu-knowledge
+            ps2n-ee-memory-copy ps2n-ee-mula ps2n-ee-sqrt ps2n-graphics-dma-scratchpad)
+        target_link_libraries(${target} PRIVATE ps2n-test-ee-fixtures ps2n-test-iop-fixtures ps2n-test-vu-fixtures)
+    endforeach()
+    foreach(stage RANGE 20 25)
+        target_link_libraries(ps2n-boot-m${stage} PRIVATE ps2n-test-boot-payload)
+    endforeach()
+    foreach(target IN ITEMS ps2n-iop-m25 ps2n-iop-m26 ps2n-iop-m27 ps2n-iop-memory-copy
+            ps2n-iop-bit-memory ps2n-iop-knowledge ps2n-iop-hblank ps2n-vu-micro ps2n-vu-path1)
+        target_link_libraries(${target} PRIVATE ps2n-test-iop-fixtures ps2n-test-vu-fixtures)
+    endforeach()
 endif()

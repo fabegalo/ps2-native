@@ -54,7 +54,7 @@ int main() try {
   require(events(reference.report)==events(native.report),"native CACHE preserves system events");
  }
  const auto image=parse_ee_elf(direct_test::elf({{{direct_test::text,5,m20::le_words({0xBD140000u,0u})}},0,{}, {}}));
- AotOptions options;options.interpreter_boundaries=true;
+ AotOptions options;options.unsupported_boundaries=true;
  const auto generated=generate_aot_cpp(image,options);
  require(generated.find("aot_enter_checked(ctx,")!=std::string::npos &&
          generated.find("execute_cache_instruction(ctx,")!=std::string::npos &&

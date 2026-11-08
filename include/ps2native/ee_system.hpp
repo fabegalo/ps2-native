@@ -2,7 +2,7 @@
 // Shared EE system semantics. AOT fixes opcode and word at compile time;
 // only the separate validation interpreter decodes guest instructions.
 #include "ps2native/ee_semantics.hpp"
-#include "ps2native/interpreter.hpp"
+#include "ps2native/execution.hpp"
 #include "ps2native/ee_fpu.hpp"
 #include "ps2native/hle.hpp"
 #include "ps2native/vu_float.hpp"
@@ -676,7 +676,7 @@ void execute_ee_system(ExecutionContext& ctx,std::uint32_t dynamic_word=0,System
             const auto result=subtract ? a-b : a+b;
             const auto sign=std::uint64_t{1}<<(wide ? 63u : 31u);
             const bool overflow=((a^result)&(subtract ? (a^b) : ~(a^b))&sign)!=0;
-            if constexpr(Observe)if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Interpreter);
+            if constexpr(Observe)if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Aot);
             if (overflow) {
                 enter_ee_exception(state, 12u, pc, state.delay_pending);
                 memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi)); memory.set_cache_config(state.cp0(Cop0::Config));
@@ -697,14 +697,14 @@ void execute_ee_system(ExecutionContext& ctx,std::uint32_t dynamic_word=0,System
                 if(state.delay_pending)cpu.stop(StopKind::NotModeled,"HLE syscall in a branch delay slot");
                 flush_interrupt_cache(ctx);
                 // Validation precedes retirement and any thread context switch.
-                if constexpr(Observe)if(ctx.observer)ctx.observer->on_instruction(pc,word,ExecutionEngine::Interpreter);
+                if constexpr(Observe)if(ctx.observer)ctx.observer->on_instruction(pc,word,ExecutionEngine::Aot);
                 hle->dispatch_syscall(ctx);
                 const auto frame=ee::begin(state,pc);
                 (void)ee::retire(ctx,frame);
                 hle->finish_syscall();
                 return;
             }
-            if constexpr(Observe)if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Interpreter);
+            if constexpr(Observe)if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Aot);
             enter_ee_exception(state, instruction.opcode == MipsOpcode::Syscall ? 8u : 9u, pc, state.delay_pending);
             memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi)); memory.set_cache_config(state.cp0(Cop0::Config));
             if(cpu.wants_events())cpu.event(std::string(instruction.opcode == MipsOpcode::Syscall ? "SYSCALL" : "BREAK") +
@@ -722,7 +722,7 @@ void execute_ee_system(ExecutionContext& ctx,std::uint32_t dynamic_word=0,System
         default:
             break;
     }
-    if constexpr(Observe)if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Interpreter);
+    if constexpr(Observe)if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Aot);
     const auto frame = ee::begin(state, pc);
     switch (Op) {
         case MipsOpcode::Mfc0: cpu.mfc0(instruction.rt, instruction.rd); break;

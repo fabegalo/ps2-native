@@ -78,6 +78,7 @@ public:
     [[nodiscard]] const GsRegisters& gs() const noexcept { return gs_; }
     // HOST_INPUT_BEGIN
     void set_gs_gpu_backend(std::shared_ptr<GsGpu> backend) { gs_.set_gpu_backend(std::move(backend)); }
+    void set_spu2_sample_sink(Iop::Spu2SampleSink sink) { iop_.set_spu2_sample_sink(std::move(sink)); }
     // HOST_INPUT_END
     void diagnostic_gs_scanmask_reset(unsigned mask) { gs_.diagnostic_scanmask_reset(mask); }
     void diagnostic_gs_texture_cache_reset_invalid() { gs_.diagnostic_texture_cache_reset_invalid(); }
@@ -89,9 +90,14 @@ public:
     void diagnostic_spu2_dma_wrap_to_zero() { iop_.diagnostic_spu2_dma_wrap_to_zero(); }
     void attach_speed_eeprom_words(std::span<const std::uint16_t> words,std::string_view hash) { iop_.attach_speed_eeprom_words(words,hash); }
     void diagnostic_speed_eeprom_presence(bool present) { iop_.diagnostic_speed_eeprom_presence(present); }
+    // RUNTIME_HELPERS_BEGIN
+    void diagnostic_wakeup_alarm_disabled() { iop_.diagnostic_wakeup_alarm_disabled(); }
+    // RUNTIME_HELPERS_END
     void diagnostic_dev9_control_latches() { iop_.diagnostic_dev9_control_latches(); }
     void diagnostic_dev9_power_settle_cycles(std::uint32_t cycles) { iop_.diagnostic_dev9_power_settle_cycles(cycles); }
     void diagnostic_smap_reset_cycles(std::uint32_t cycles) { iop_.diagnostic_smap_reset_cycles(cycles); }
+    void diagnostic_smap_phy_cycles(std::uint32_t cycles) { iop_.diagnostic_smap_phy_cycles(cycles); }
+    void diagnostic_smap_loopback_cycles(std::uint32_t cycles) { iop_.diagnostic_smap_loopback_cycles(cycles); }
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles) { iop_.diagnostic_sio2_infrared_timeout(cycles); }
     void diagnostic_sio2_port_timing(unsigned bits) { iop_.diagnostic_sio2_port_timing(bits); }
     void diagnostic_sio2_digital_pad(unsigned port,std::uint16_t buttons,std::uint32_t cycles) { iop_.diagnostic_sio2_digital_pad(port,buttons,cycles); }
@@ -166,12 +172,16 @@ public:
         vu_control_.add(destination,left,right,mask,broadcast,subtract,to_accumulator);
     }
     void vu_rotate(unsigned destination,unsigned source,unsigned mask) {vu_control_.rotate(destination,source,mask);}
-    void vu_product(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast,bool accumulate,bool to_accumulator,bool outer=false) {
-        vu_control_.product(destination,left,right,mask,broadcast,accumulate,to_accumulator,outer);
+    void vu_product(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast,bool accumulate,bool to_accumulator,bool outer=false,bool subtract=false) {
+        vu_control_.product(destination,left,right,mask,broadcast,accumulate,to_accumulator,outer,subtract);
     }
     void vu_vector_store_increment(unsigned source,unsigned base,unsigned mask) {
         vu_control_.vector_store_increment(source,base,mask);
     }
+    void vu_rinit(unsigned fs, unsigned fsf) { vu_control_.vu_rinit(fs, fsf); }
+    void vu_rxor(unsigned fs, unsigned fsf) { vu_control_.vu_rxor(fs, fsf); }
+    void vu_rget(unsigned ft, unsigned mask) { vu_control_.vu_rget(ft, mask); }
+    void vu_rnext(unsigned ft, unsigned mask) { vu_control_.vu_rnext(ft, mask); }
     void vu_add_integer(unsigned destination,unsigned left,unsigned right) {vu_control_.add_integer(destination,left,right);}
     [[nodiscard]] ObservedDoubleword read_vu_memory(std::uint32_t physical,std::size_t bytes) const {
         return vu_control_.read_memory(physical,bytes);

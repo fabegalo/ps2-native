@@ -15,5 +15,5 @@
 #include "ps2native/control_flow.hpp"
 #include "ps2native/sha256.hpp"
 #include "ps2native/bios.hpp"
-#include "ps2native/interpreter.hpp"
+#include "ps2native/execution.hpp"
 #include "ps2native/boot.hpp"

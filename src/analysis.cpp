@@ -190,11 +190,11 @@ AnalysisReport analyze_ee_image(const ElfImage& elf,const AnalysisOptions& optio
     }
     json<<"],\"unresolved_indirect\":[";comma=false;
     for(const auto& j:graph.unresolved_jumps) {if(comma)json<<',';comma=true;json<<"{\"pc\":"<<j.site<<",\"reason\":"<<json_string(j.reason)<<'}';}
-    json<<"],\"interpreter_boundaries\":[";comma=false;
-    for(const auto& b:graph.interpreter_boundaries) {
+    json<<"],\"unsupported_boundaries\":[";comma=false;
+    for(const auto& b:graph.unsupported_boundaries) {
         if(comma)json<<',';comma=true;json<<"{\"pc\":"<<b.address<<",\"reason\":"<<json_string(b.reason);
         try{const auto word=elf.instruction_at(b.address);const auto ins=try_decode_r5900(b.address,word);
-            json<<",\"word\":"<<word<<",\"interpreter_decodable\":"<<(ins ? "true" : "false");}catch(const std::exception&){}
+            json<<",\"word\":"<<word<<",\"instruction_decodable\":"<<(ins ? "true" : "false");}catch(const std::exception&){}
         json<<'}';
     }
     json<<"],\"aot_gaps\":[";comma=false;
@@ -207,10 +207,10 @@ AnalysisReport analyze_ee_image(const ElfImage& elf,const AnalysisOptions& optio
         }
         if(first<end){if(comma)json<<',';comma=true;json<<"{\"begin\":"<<first<<",\"end\":"<<end<<'}';}
     }
-    json<<"],\"dynamic_code\":\"not provable from a static ELF; out-of-image targets and self-modified code require explicit interpreter execution\"}\n";
+    json<<"],\"dynamic_code\":\"not provable from a static ELF; out-of-image targets and self-modified code require verified offline AOT preparation\"}\n";
     text<<"R5900 "<<hex(elf.entry)<<": "<<graph.function_entries.size()<<" verified/hinted roots, "<<graph.instructions.size()
         <<" AOT-eligible instructions in "<<executable_bytes<<" executable bytes\n"
-        <<graph.interpreter_boundaries.size()<<" interpreter boundaries, "<<graph.unresolved_jumps.size()<<" unresolved indirect jumps, "
+        <<graph.unsupported_boundaries.size()<<" unsupported AOT boundaries, "<<graph.unresolved_jumps.size()<<" unresolved indirect jumps, "
         <<graph.jump_tables.size()<<" proven bounded tables\nFunction extents are not inferred; Ghidra ranges remain hints.\n";
     report.json=json.str();report.text=text.str();report.dot=dot.str();return report;
 }

@@ -27,7 +27,7 @@ template<class C> int run_main(int argc, C** argv) {
                          "         [--resume=FILE --checkpoint-out=FILE --checkpoint-every=N]\n"
                          "         [--checkpoint-scenario=SHA256] [--checkpoint-allow-runtime-change]\n";
             std::cerr << "         [--profile] (requires -DPS2N_ENABLE_PROFILING=ON; host component timings)\n";
-            std::cerr << "         [--vu1-capture=DIR] [--vu1-interpreter] (offline VU1 AOT diagnostics)\n";
+            std::cerr << "         [--vu1-capture=DIR] (offline VU1 AOT diagnostics)\n";
             std::cerr << "         [--gs-backend=cpu|vulkan|directx] (experimental integer compute raster)\n";
             return 2;
         }

@@ -209,8 +209,11 @@ std::variant<AotConstantJump, std::string> prove_constant_target(const AotContro
 
 AotControlFlow analyze_control_flow(
     const ElfImage& image, std::span<const std::uint32_t> additional_function_entries,
-    std::span<const AotJumpTable> additional_jump_tables, bool interpreter_boundaries) {
+    std::span<const AotJumpTable> additional_jump_tables, bool unsupported_boundaries) {
     AotControlFlow graph;
+    std::uint64_t instruction_capacity = 0;
+    for (const auto& segment : image.segments)
+        if (segment.flags & 1u) instruction_capacity += segment.file_size / 4u;
     std::set<std::uint32_t> expanded_as_normal;
     std::set<std::uint32_t> boundary_addresses;
     std::queue<std::pair<std::uint32_t, bool>> pending;
@@ -218,11 +221,11 @@ AotControlFlow analyze_control_flow(
     auto boundary = [&](std::uint32_t address, const std::string& reason) {
         graph.leaders.erase(address);
         if (boundary_addresses.insert(address).second)
-            graph.interpreter_boundaries.push_back({address, reason});
+            graph.unsupported_boundaries.push_back({address, reason});
     };
-    // Instruction word, or nullopt at an interpreter boundary (hybrid mode only).
+    // Instruction word, or nullopt at an unsupported boundary (partial preparation only).
     auto fetch = [&](std::uint32_t address) -> std::optional<std::uint32_t> {
-        if (!interpreter_boundaries) return image.instruction_at(address);
+        if (!unsupported_boundaries) return image.instruction_at(address);
         try {
             return image.instruction_at(address);
         } catch (const std::exception& error) {
@@ -319,12 +322,10 @@ AotControlFlow analyze_control_flow(
             const auto [pc, is_delay_slot] = pending.front();
             pending.pop();
             if (!is_delay_slot && !expanded_as_normal.insert(pc).second) continue;
-            if (graph.instructions.size() >= 131072)
-                throw std::runtime_error("M1 AOT instruction discovery limit reached");
             if (boundary_addresses.contains(pc)) continue;
             const auto word = fetch(pc);
             if (!word) continue;
-            if (interpreter_boundaries) {
+            if (unsupported_boundaries) {
                 const auto candidate = try_decode_r5900(pc, *word);
                 if (!candidate || !mips_aot_supported(candidate->opcode)) {
                     boundary(pc, candidate ? std::string("system instruction ") +
@@ -343,6 +344,8 @@ AotControlFlow analyze_control_flow(
             const auto decoded = decode_mips(pc, *word);
             if (is_delay_slot && decoded.has_delay_slot())
                 throw std::runtime_error("Control transfer in branch delay slot is unsupported by M1");
+            if (graph.instructions.size() >= instruction_capacity && !graph.instructions.contains(pc))
+                throw std::runtime_error("AOT discovery exceeds file-backed executable instruction capacity");
             graph.instructions.emplace(pc, decoded);
             if (is_delay_slot || decoded.opcode==MipsOpcode::Eret || decoded.opcode==MipsOpcode::Break) continue;
             if (!decoded.has_delay_slot()) {

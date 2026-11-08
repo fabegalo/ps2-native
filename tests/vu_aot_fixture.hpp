@@ -17,6 +17,16 @@ inline constexpr std::uint32_t addiu(unsigned destination,unsigned source,unsign
 inline constexpr std::uint32_t upper(unsigned operation,unsigned destination,unsigned left,unsigned right,unsigned mask=15u) {
     return (mask<<21u)|(right<<16u)|(left<<11u)|(destination<<6u)|operation;
 }
+inline VuAotImage cli_micro_image() {
+    VuAotImage image;image.words.fill({0,~0u});
+    for(unsigned entry:{0u,2u,4u}) {
+        image.words[entry*2u]={addiu(1,0,17),0};
+        image.words[entry*2u+1u]={upper_nop|0x40000000u,0};
+        image.words[entry*2u+2u]={nop,0};
+        image.words[entry*2u+3u]={upper_nop,0};
+    }
+    return image;
+}
 inline std::vector<std::uint8_t> micro_image() {
     std::vector<std::uint8_t> bytes(16384u);
     const auto pair=[&](unsigned address,std::uint32_t low,std::uint32_t high=upper_nop) {

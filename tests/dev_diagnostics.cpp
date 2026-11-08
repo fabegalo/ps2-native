@@ -57,7 +57,7 @@ void discovery(const fs::path& root) {
 void recordings(const fs::path& root,const fs::path& rom) {
     const auto bios=load_bios_rom0(read_file(rom));
     for(unsigned engine=0;engine<2;++engine) {
-        Memory memory;EEState state;const auto* module=engine ? &aot_module() : nullptr;
+        Memory memory;EEState state;const auto* module=&aot_module();
         prepare_ee_boot(bios,module,state,memory);
         DiagnosticRecorder recorder(8);recorder.stream(root / std::to_string(engine) / "full.ndjson",1000000);
         recorder.watch_ram(0,32);

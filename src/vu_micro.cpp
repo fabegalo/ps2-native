@@ -165,14 +165,6 @@ void VuControl::retire_micro_integers(unsigned unit) {
     }
     state.store_writes=kept;
 }
-#ifndef PS2N_NATIVE_ONLY
-VuControl::MicroFmac VuControl::evaluate_micro_upper(unsigned unit,std::uint32_t instruction) const {
-    return evaluate_micro_upper_shared<-1,-1>(unit,instruction);
-}
-void VuControl::step_micro(unsigned unit,Gif* gif,GsRegisters* gs) {
-    issue_micro_shared<-1,-1,-1>(unit,0,0,gif,gs);
-}
-#endif
 void VuControl::step_path1(Gif* gif,GsRegisters* gs) {
     auto& transfer=*path1_;
     if(transfer.failure)throw DeviceRefusal(*transfer.failure);
@@ -246,13 +238,9 @@ void VuControl::advance_micro(std::uint64_t cycle,Gif* gif,GsRegisters* gs) {
             }
             const bool native=try_vu_aot(unit,gif,gs);
             if(!native) {
-#ifdef PS2N_NATIVE_ONLY
                 const auto identity=vu_aot_identity(capture_micro(unit),unit,diagnostic_power_two_carry_);
                 throw DeviceRefusal("missing VU"+std::to_string(unit)+" AOT identity="+identity+" pc="+hexword(state.pc)+
                     "; prepare ps2n-aot <micro-image> <output.cpp> --vu"+std::to_string(unit)+" --entry="+hexword(state.pc));
-#else
-                step_micro(unit,gif,gs);
-#endif
             }
             auto& stats=unit ? vu1_aot_stats_ : vu0_aot_stats_;
             (native ? stats.native_instructions : stats.interpreted_instructions)+=state.instructions-before;

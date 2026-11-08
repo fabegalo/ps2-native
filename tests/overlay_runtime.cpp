@@ -12,9 +12,9 @@ int main(int argc,char** argv) {
         const auto program=direct_test::build("dynamic");
         std::vector<std::string> traces[2];
         for(unsigned native=0;native<2;++native) {
-            Memory memory;EEState state;prepare_direct_elf(elf,native?&aot_module():nullptr,state,memory);
+            Memory memory;EEState state;prepare_direct_elf(elf,&aot_module(),state,memory);
             BootOptions o;o.stop_at=program.stop;o.max_instructions=1000;o.trace=TraceLevel::Full;
-            const auto before=run_ee_boot(state,memory,native?&aot_module():nullptr,o);
+            const auto before=run_ee_boot(state,memory,&aot_module(),o);
             require(before.outcome==BootOutcome::StopAddress,"guest copied code before checkpoint");
             const auto code=direct_test::dynamic_code();
             const auto snapshot=snapshot_ee_code(memory,direct_test::dynamic_address,12,sha256_hex(code));
@@ -25,8 +25,8 @@ int main(int argc,char** argv) {
             Memory other;
             rejects([&]{(void)verified.module_for(other);},"different runtime");
             o.stop_at=program.stop+16u;
-            if(native)o.aot_overlays.push_back(verified);
-            const auto after=run_ee_boot(state,memory,native?&aot_module():nullptr,o);
+            o.aot_overlays.push_back(verified);
+            const auto after=run_ee_boot(state,memory,&aot_module(),o);
             require(after.outcome==BootOutcome::StopAddress && state.reg32(2)==42,"dynamic function executed");
             if(native)require(after.interpreted_instructions==0 && after.aot_instructions==7,"offline overlay executes entirely in AOT");
             auto full=normalized(before.trace);const auto tail=normalized(after.trace);full.insert(full.end(),tail.begin(),tail.end());traces[native]=std::move(full);

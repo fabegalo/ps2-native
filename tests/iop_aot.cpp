@@ -10,10 +10,10 @@ int main() try {
     const auto bytes=iop_aot_fixture::image();
     auto native=std::make_unique<Iop>(),reference=std::make_unique<Iop>();
     native->load_program(bytes,0,0x1000);reference->load_program(bytes,0,0x1000);
-    native->require_aot(true);reference->enable_aot(false);
+    native->require_aot(true);
     for(unsigned cycle=1;cycle<=20;++cycle) {
         native->run_until(cycle);reference->run_until(cycle);
-        require(!native->stopped() && !reference->stopped(),"native and reference continue");
+        require(!native->stopped() && !reference->stopped(),"both native schedules continue");
         require(native->cycle()==reference->cycle() && native->pc()==reference->pc(),"PC, exception vector and cycles match");
         for(unsigned r=0;r<32;++r) {
             require(native->gpr(r)==reference->gpr(r),"GPR/load and branch delays match");
@@ -23,7 +23,7 @@ int main() try {
     }
     require(native->gpr(3)==5 && native->gpr(4)==1 && native->gpr(5)==10 && native->gpr(6)==7 && native->gpr(8)==8,
         "independent expected results for load delay, branch delay and exception return");
-    require(native->native_instructions()==20 && native->interpreted_instructions()==0 && reference->interpreted_instructions()==20,
+    require(native->native_instructions()==20 && native->interpreted_instructions()==0 && reference->native_instructions()==20 && reference->interpreted_instructions()==0,
         "compiled IOP artifact ran without interpreter fallback");
     auto changed=bytes;changed[0x1000]^=1;
     native->load_program(changed,0,0x1000);native->run_until(1);

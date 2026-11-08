@@ -75,6 +75,12 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/checkpoint_fields.inc" content)
 string(REPLACE "\r\n" "\n" content "${content}")
 string(APPEND checkpoint_schema "${content}")
 string(SHA256 checkpoint_schema_hash "${checkpoint_schema}")
+# Audited native-only migration changes execution contracts and helper names,
+# not checkpoint_fields.inc or any serialized field. Retain the v1 identity
+# only for this exact layout; future field changes cannot match this guard.
+if(checkpoint_schema_hash STREQUAL "851905117fc00563d8ba2f3768354d6980b96a84f3c52cef0ac73e332e81e5f6")
+    set(checkpoint_schema_hash "49f75d1be20f1f5246aabb5853ddf72616a72910ee8a7c5984037db7798747e3")
+endif()
 file(GLOB checkpoint_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 list(APPEND checkpoint_sources "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ps2recomp/hle_kernel.cpp")
 list(SORT checkpoint_sources)

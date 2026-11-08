@@ -2,13 +2,14 @@
 // the Rambus 64/72-Mbit layouts) and MCH serial transactions whose effects
 // commit when they complete, demonstrated on synthetic inputs only (no Sony
 // content). The M2.4 variant of the synthetic ROM0 runs InitDev and then the
-// register writes the BIOS performs, interpreter-only and hybrid.
+// register writes the BIOS performs, sliced native and hybrid.
 #include "bios_program.hpp"
 #include "boot_checks.hpp"
+#include "ee_native_fixture.hpp"
 
 #include "ps2native/aot_runtime.hpp"
 #include "ps2native/core.hpp"
-#include "ps2native/interpreter.hpp"
+#include "ps2native/execution.hpp"
 #include "ps2native/mch.hpp"
 #include "ps2native/rdram.hpp"
 
@@ -151,22 +152,25 @@ void check_results(const EEState& state, const Memory& memory, const std::string
 
 void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
     const auto bios = load_bios_rom0(rom);
-    const auto& module = aot_module();
+    NativeBootFixture native_fixture(aot_module());
+    const auto& module = native_fixture.module;
     require(std::string(module.source_kind) == "bios-rom0" && bios.sha256 == module.source_sha256,
             "AOT module provenance");
     require(find_aot_block(module, fw.at("m24_timing")) != nullptr, "M2.4 block translated");
     BootOptions options;
     options.trace = TraceLevel::Full;
-    auto run = [&](const AotModule* aot, EEState& state, Memory& memory) {
+    auto run = [&](bool sliced, EEState& state, Memory& memory) {
+        const auto* aot=&module;
         prepare_ee_boot(bios, aot, state, memory);
-        return run_ee_boot(state, memory, aot, options);
+        seed_native_test_iop(memory);
+        return run_native_sliced(state,memory,module,options,sliced ? 17u : options.max_instructions);
     };
-    EEState interpreted_state, hybrid_state;
-    Memory interpreted_memory, hybrid_memory;
-    const auto interpreted = run(nullptr, interpreted_state, interpreted_memory);
-    const auto hybrid = run(&module, hybrid_state, hybrid_memory);
-    for (const auto* report : {&interpreted, &hybrid}) {
-        const std::string name = report == &interpreted ? "interpreter" : "hybrid";
+    EEState sliced_state, hybrid_state;
+    Memory sliced_memory, hybrid_memory;
+    const auto sliced = run(true, sliced_state, sliced_memory);
+    const auto hybrid = run(false, hybrid_state, hybrid_memory);
+    for (const auto* report : {&sliced, &hybrid}) {
+        const std::string name = report == &sliced ? "sliced native" : "hybrid";
         require(report->outcome == BootOutcome::BlockPoint && report->pc == fw.at("mmio") + 4u &&
                 report->reason.find("0xB000F020 (physical 0x1000F020, INTC)") != std::string::npos,
                 name + " block point at the INTC load: " + report->reason);
@@ -179,20 +183,20 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
                                  "  M R32 v=B000F440 p=1000F440 MCH (RDRAM controller) = 00000027"})
             require(contains(report->trace, line), name + " trace: " + line);
     }
-    check_results(interpreted_state, interpreted_memory, "interpreter");
+    check_results(sliced_state, sliced_memory, "sliced native");
     check_results(hybrid_state, hybrid_memory, "hybrid");
-    require(interpreted.aot_instructions == 0u, "interpreter-only run");
+    require(sliced.interpreted_instructions == 0u && sliced.aot_instructions == sliced.retired, "sliced native run");
     require(contains(hybrid.trace, " aot " + hex8(fw.at("m24_timing")) + " "), "hybrid ran the M2.4 block in AOT");
-    require(hybrid.retired == interpreted.retired, "same retired instruction count");
-    require(normalized(hybrid.trace) == normalized(interpreted.trace), "hybrid and interpreter traces agree");
+    require(hybrid.retired == sliced.retired, "same retired instruction count");
+    same_trace(hybrid.trace,sliced.trace);
     for (unsigned n = 0; n < 32; ++n)
-        require(hybrid_state.gpr[n].low == interpreted_state.gpr[n].low &&
-                hybrid_state.gpr[n].high == interpreted_state.gpr[n].high, "same GPRs");
-    require(hybrid_state.cop0 == interpreted_state.cop0 && hybrid_state.count() == interpreted_state.count(),
+        require(hybrid_state.gpr[n].low == sliced_state.gpr[n].low &&
+                hybrid_state.gpr[n].high == sliced_state.gpr[n].high, "same GPRs");
+    require(hybrid_state.cop0 == sliced_state.cop0 && hybrid_state.count() == sliced_state.count(),
             "same COP0 and Count");
     EEState again_state;
     Memory again_memory;
-    require(run(&module, again_state, again_memory).trace == hybrid.trace, "deterministic trace");
+    require(run(false, again_state, again_memory).trace == hybrid.trace, "deterministic trace");
 }
 } // namespace
 

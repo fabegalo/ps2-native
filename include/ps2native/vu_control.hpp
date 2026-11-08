@@ -123,7 +123,7 @@ public:
     // Optional passive capture at genuine MSCAL/MSCNT boundaries.
     using Vu1Capture=std::function<void(const VuControl&,std::uint32_t)>;
     void set_vu1_capture(Vu1Capture capture) {vu1_capture_=std::move(capture);vu1_capture_dirty_=true;}
-    void invalidate_vu1_aot() noexcept {vu1_aot_checked_=false;vu1_aot_selected_=nullptr;vu1_capture_dirty_=true;}
+    void invalidate_vu1_aot() noexcept {vu1_aot_checked_=false;vu1_aot_selected_=nullptr;vu1_capture_dirty_=true;vu0_aot_checked_=false;vu0_aot_selected_=nullptr;}
     // HOST_INPUT_END
     void start_micro(unsigned unit,std::uint32_t instruction_address,std::uint64_t ee_cycle,
                      ObservedWord itop={0,0x3FFu},ObservedWord top={0,0x3FFu});
@@ -219,6 +219,53 @@ public:
                      static_cast<std::uint32_t>(half.unknown>>shift)};
         }
     }
+    void vu_rinit(unsigned fs, unsigned fsf) {
+        const auto& v = vectors_.at(fs);
+        const auto lane = fsf & 3u;
+        const auto word = v[lane];
+        registers_[20] = word.value & 0x7FFFFFu;
+        unknown_[20] = word.unknown & 0x7FFFFFu;
+    }
+    void vu_rxor(unsigned fs, unsigned fsf) {
+        const auto& v = vectors_.at(fs);
+        const auto lane = fsf & 3u;
+        const auto word = v[lane];
+        const auto current = registers_[20].value_or(0u);
+        registers_[20] = (current ^ (word.value & 0x7FFFFFu)) & 0x7FFFFFu;
+        unknown_[20] = (unknown_[20] | (word.unknown & 0x7FFFFFu)) & 0x7FFFFFu;
+    }
+    void vu_rget(unsigned ft, unsigned mask) {
+        if (ft == 0) return;
+        const auto r_val = registers_[20].value_or(0u) & 0x7FFFFFu;
+        const auto r_unk = unknown_[20] & 0x7FFFFFu;
+        const ObservedWord out_word{0x3F800000u | r_val, r_unk};
+        auto& v = vectors_.at(ft);
+        for (unsigned lane = 0; lane < 4u; ++lane) {
+            if (mask & (8u >> lane)) {
+                v[lane] = out_word;
+                vector_bounds_.at(ft).at(lane).reset();
+            }
+        }
+    }
+    void vu_rnext(unsigned ft, unsigned mask) {
+        const auto r_val = registers_[20].value_or(0u) & 0x7FFFFFu;
+        const auto feedback = ((r_val >> 22u) ^ (r_val >> 4u)) & 1u;
+        registers_[20] = ((r_val << 1u) & 0x7FFFFFu) | feedback;
+        const auto unk_feedback = ((unknown_[20] >> 22u) | (unknown_[20] >> 4u)) & 1u;
+        unknown_[20] = ((unknown_[20] << 1u) & 0x7FFFFFu) | unk_feedback;
+
+        if (ft == 0) return;
+        const auto new_val = *registers_[20] & 0x7FFFFFu;
+        const auto new_unk = unknown_[20] & 0x7FFFFFu;
+        const ObservedWord out_word{0x3F800000u | new_val, new_unk};
+        auto& v = vectors_.at(ft);
+        for (unsigned lane = 0; lane < 4u; ++lane) {
+            if (mask & (8u >> lane)) {
+                v[lane] = out_word;
+                vector_bounds_.at(ft).at(lane).reset();
+            }
+        }
+    }
     [[nodiscard]] std::uint64_t q_ready_cycle() const noexcept { return pending_q_ ? pending_q_->ready : 0; }
     void advance_q(std::uint64_t cycle) {
         if(!pending_q_ || cycle<pending_q_->ready)return;
@@ -310,11 +357,12 @@ public:
         unknown_[16]&=~(0xFu|(status<<6u));
     }
     void product(unsigned destination,unsigned left,unsigned right,unsigned mask,
-                 unsigned broadcast,bool accumulate,bool to_accumulator,bool outer=false) {
+                 unsigned broadcast,bool accumulate,bool to_accumulator,bool outer=false,bool subtract=false) {
         profiling::Scope profile(profiling::Phase::Vu);
         auto result=to_accumulator ? accumulator_ : vectors_.at(destination);
         std::array<std::optional<FloatBounds>,4> bounds{};
         std::uint32_t mac=0,status=0;
+        const bool sub = subtract || outer;
         for(unsigned lane=0;lane<4;++lane) {
             const auto bit=8u>>lane;
             if(!(mask&bit))continue;
@@ -341,12 +389,12 @@ public:
             if(accumulate) {
                 const auto acc=accumulator_[lane];
                 if(acc.unknown || value.unknown) {
-                    const auto sum=vu_float_add(acc,{value.value^(outer ? 0x80000000u : 0u),value.unknown},
-                        accumulator_bounds_[lane],signed_bounds(bounds[lane],outer));
+                    const auto sum=vu_float_add(acc,{value.value^(sub ? 0x80000000u : 0u),value.unknown},
+                        accumulator_bounds_[lane],signed_bounds(bounds[lane],sub));
                     if(!sum)throw DeviceRefusal("VU multiply-add consumes unknown ACC or unproven fraction/flags");
                     value=sum->word;flags=sum->flags;
                     bounds[lane]=sum->bounded ? std::optional<FloatBounds>{sum->bounds} : std::nullopt;
-                } else {value={ee_fpu_add(acc.value,value.value^(outer ? 0x80000000u : 0u),flags),0};bounds[lane].reset();}
+                } else {value={ee_fpu_add(acc.value,value.value^(sub ? 0x80000000u : 0u),flags),0};bounds[lane].reset();}
                 if(flags&0xC000u)throw DeviceRefusal("VU accumulation exception/ACC state is not modeled");
             }
             result[lane]=value;
@@ -458,15 +506,13 @@ private:
         std::optional<std::string> failure;
     };
     void reset_micro(unsigned unit);
-    void step_micro(unsigned unit,Gif* gif,GsRegisters* gs);
     void step_path1(Gif* gif,GsRegisters* gs);
     void advance_micro_q(std::uint64_t cycle);
     [[nodiscard]] ObservedWord micro_integer(unsigned unit,unsigned index,bool forwarded,unsigned bypass_delay=1) const;
     void retire_micro_integers(unsigned unit);
-    [[nodiscard]] MicroFmac evaluate_micro_upper(unsigned unit,std::uint32_t instruction) const;
     // HOST_INPUT_BEGIN
-    template<int Unit,std::int64_t Instruction> [[nodiscard]] MicroFmac evaluate_micro_upper_shared(unsigned unit,std::uint32_t instruction) const;
-    template<int Unit,std::int64_t Low,std::int64_t Upper> void issue_micro_shared(unsigned unit,std::uint32_t low,std::uint32_t upper,Gif* gif,GsRegisters* gs);
+    template<unsigned Unit,std::uint32_t Instruction> [[nodiscard]] MicroFmac evaluate_micro_upper_shared(unsigned unit,std::uint32_t instruction) const;
+    template<unsigned Unit,std::uint32_t Low,std::uint32_t Upper> void issue_micro_shared(unsigned unit,std::uint32_t low,std::uint32_t upper,Gif* gif,GsRegisters* gs);
     bool try_vu_aot(unsigned unit,Gif* gif,GsRegisters* gs);
     bool vu0_aot_enabled_{true},vu0_aot_checked_{};
     const VuAotModule* vu0_aot_selected_{};

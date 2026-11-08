@@ -27,13 +27,13 @@ void check_boundaries(const ps2native::ElfImage& elf) {
             Memory memory;memory.load(elf);EEState state;state.pc=elf.entry;
             state.set_reg32_sign_extended(31,host_return);
             BootOptions options;options.max_instructions=boundary;options.stop_at=host_return;
-            const auto* module=engine ? &aot_module() : nullptr;
+            const auto* module=&aot_module();
             const auto report=run_ee_boot(state,memory,module,options);
             if (report.retired!=boundary || report.outcome==BootOutcome::BlockPoint)
                 throw std::runtime_error("AOT boundary execution failed: "+report.reason);
             const auto hash=checkpoint_state_sha256(state,memory);
             if (!engine) reference=hash;
-            else if (hash!=reference) throw std::runtime_error("AOT boundary state differs from interpreter");
+            else if (hash!=reference) throw std::runtime_error("AOT boundary state differs between native slices");
             options.max_instructions=37u-boundary;
             const auto resumed=run_ee_boot(state,memory,module,options);
             if (resumed.outcome!=BootOutcome::StopAddress || state.reg32(2)!=37u || state.retired_instructions!=37u)
@@ -77,13 +77,13 @@ void check_boundaries(const ps2native::ElfImage& elf) {
             irq_state.set_cp0(Cop0::Status,kStatusIE|kStatusEIE|kStatusIM7);
             irq_state.set_cp0(Cop0::Compare,compare);irq_state.compare_written=true;
             BootOptions options;options.max_instructions=compare+2u;
-            const auto report=run_ee_boot(irq_state,irq_memory,engine ? &irq_module : nullptr,options);
+            const auto report=run_ee_boot(irq_state,irq_memory,&irq_module,options);
             if (report.outcome!=BootOutcome::BudgetExhausted || irq_state.pc!=0x80000208u)
                 throw std::runtime_error("AOT timer interruption boundary failed: "+report.reason);
             checked_delay_irq|=(irq_state.cp0(Cop0::Cause)&0x80000000u)!=0;
             const auto hash=checkpoint_state_sha256(irq_state,irq_memory);
             if (!engine) reference=hash;
-            else if (hash!=reference) throw std::runtime_error("AOT interrupt state differs from interpreter");
+            else if (hash!=reference) throw std::runtime_error("AOT interrupt state differs between native slices");
         }
     }
     if (!checked_delay_irq) throw std::runtime_error("AOT timer test did not exercise an interrupted delay slot");

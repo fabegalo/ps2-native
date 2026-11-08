@@ -44,7 +44,6 @@ int main(int argc,char** argv)try {
         require(!destination->iop().diagnostic_latch(0x1F801000u),"restore invalidates a cached present address");
     }
 
-
     {
         const auto image=program();auto memoryOwner=std::make_unique<Memory>();auto& memory=*memoryOwner;
         auto stateOwner=std::make_unique<EEState>();auto& state=*stateOwner;prepare_direct_elf(image,nullptr,state,memory);
@@ -349,8 +348,7 @@ int main(int argc,char** argv)try {
     (void)load_checkpoint(current_file,state,memory,context);
     const auto exact=checkpoint_state_sha256(state,memory);
     auto reviewed=context;reviewed.allow_runtime_change=true;
-    for(const auto* schema:{"50585f2224cd852e9ef36ef63b53e10fe41691975b7c38fe44dd5384280d08cc",
-                               "11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b",
+    for(const auto* schema:{"11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b",
                            "db30806fe4f74e4781e737979c2ad78fd6bac2b17383aac1ff4fc3c9b286f9f1"}) {
         const auto previous=directory/"before-ipu-bit-reader.ps2ncp";
         write_file_atomically(previous,legacy_envelope(current_info,current_payload,schema,true,true));

@@ -140,7 +140,7 @@ int main() try {
         memory.write32(0x70000000u,0u);
         require(!memory.code_matches(0x70000000u,words[0]),"scratchpad writes invalidate checked code");
     }
-    AotOptions options;options.interpreter_boundaries=true;options.additional_function_entries={start+4u,start+12u};
+    AotOptions options;options.unsupported_boundaries=true;options.additional_function_entries={start+4u,start+12u};
     {
         Memory memory;std::uint64_t clock=0;
         memory.reset_for_boot(std::vector<std::uint8_t>(Memory::kBiosRomBytes));memory.set_clock(&clock);

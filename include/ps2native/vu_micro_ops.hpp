@@ -1,6 +1,5 @@
 #pragma once
-// One independent semantic implementation for dynamic decode and offline
-// constant-operand native specializations. No host floating-point shortcuts.
+// Offline constant-operand VU execution. No host floating-point shortcuts.
 #include "ps2native/vu_control.hpp"
 #include "ps2native/gif.hpp"
 #include "ps2native/vu_fixed.hpp"
@@ -11,10 +10,13 @@ struct MicroPipelineStall {};
 inline std::string vu_micro_hexword(std::uint32_t value,unsigned width=8) {
     std::ostringstream out;out<<"0x"<<std::hex<<std::uppercase<<std::setw(static_cast<int>(width))<<std::setfill('0')<<value;return out.str();
 }
-template<int Unit,std::int64_t Instruction>
+template<unsigned Unit,std::uint32_t Instruction>
 VuControl::MicroFmac VuControl::evaluate_micro_upper_shared(unsigned dynamic_unit,std::uint32_t dynamic_instruction) const {
-    const unsigned unit=Unit<0 ? dynamic_unit : static_cast<unsigned>(Unit);
-    const std::uint32_t instruction=Instruction<0 ? dynamic_instruction : static_cast<std::uint32_t>(Instruction);
+    static_assert(Unit<2);
+    (void)dynamic_unit;
+    constexpr unsigned unit=Unit;
+    (void)dynamic_instruction;
+    constexpr std::uint32_t instruction=Instruction;
     MicroFmac result;
     const auto code=instruction&0x07FFFFFFu;
     if(code==0x2FFu)return result;
@@ -123,9 +125,11 @@ VuControl::MicroFmac VuControl::evaluate_micro_upper_shared(unsigned dynamic_uni
     }
     return result;
 }
-template<int Unit,std::int64_t Low,std::int64_t Upper>
+template<unsigned Unit,std::uint32_t Low,std::uint32_t Upper>
 void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_low,std::uint32_t dynamic_upper,Gif* gif,GsRegisters* gs) {
-    const unsigned unit=Unit<0 ? dynamic_unit : static_cast<unsigned>(Unit);
+    static_assert(Unit<2);
+    (void)dynamic_unit;
+    constexpr unsigned unit=Unit;
     auto& state=micro_[unit];retire_micro_integers(unit);
     // VU manual 3.4.9: the second XGKICK's upper half executes normally.
     // Its following LIW stalls until the preceding PATH1 transfer ends;
@@ -137,14 +141,8 @@ void VuControl::issue_micro_shared(unsigned dynamic_unit,std::uint32_t dynamic_l
         }
         ++state.next;return;
     }
-    if constexpr(Low<0) {
-        const auto& image=unit ? micro1_ : micro0_;
-        const auto low=image.at(state.pc/4u),upper=image.at(state.pc/4u+1u);
-        if(low.unknown || upper.unknown)throw DeviceRefusal("instruction fetch consumes unwritten micro memory");
-        dynamic_low=low.value;dynamic_upper=upper.value;
-    }
-    const std::uint32_t lo=Low<0 ? dynamic_low : static_cast<std::uint32_t>(Low);
-    const std::uint32_t hi=Upper<0 ? dynamic_upper : static_cast<std::uint32_t>(Upper);
+    (void)dynamic_low;(void)dynamic_upper;
+    constexpr std::uint32_t lo=Low,hi=Upper;
     if(hi&0x38000000u)throw DeviceRefusal("M/D/T microinstruction controls are not modeled");
     const bool load_i=(hi&0x80000000u)!=0u;
     // Resource/operand interlocks precede evaluation of either half. WAITQ

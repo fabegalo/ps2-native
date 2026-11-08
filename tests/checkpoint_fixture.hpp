@@ -12,10 +12,13 @@ inline std::vector<std::uint8_t> legacy_envelope(CheckpointInfo info,std::span<c
     std::vector<std::uint8_t> old_payload(payload.begin(),payload.end());
     const std::array<std::uint8_t,8> smap_tag{'S','M','A','P','R','S','T','1'};
     const auto smap=std::search(old_payload.begin(),old_payload.end(),smap_tag.begin(),smap_tag.end());
-    require(smap!=old_payload.end() && smap+18<=old_payload.end() &&
-            std::all_of(smap+8,smap+18,[](auto b){return b==0;}),
-            "legacy fixtures predate SMAP and must have no established FIFO state or timing");
-    old_payload.erase(smap,smap+18);
+    std::array<std::uint8_t,43120> absent_smap{};
+    std::copy(smap_tag.begin(),smap_tag.end(),absent_smap.begin());
+    absent_smap[2072]=absent_smap[2073]=absent_smap[2140]=absent_smap[2141]=0xFF;
+    require(smap!=old_payload.end() && smap+absent_smap.size()<=old_payload.end() &&
+            std::equal(absent_smap.begin(),absent_smap.end(),smap),
+            "legacy fixtures predate SMAP and must have no established register state or timing");
+    old_payload.erase(smap,smap+absent_smap.size());
     const std::array<std::uint8_t,8> cpu_tag{'G','P','R','B','N','D','0','1'};
     for(unsigned reg=0;!keep_cpu_bounds && reg<32;++reg) {
         const auto at=std::search(old_payload.begin(),old_payload.end(),cpu_tag.begin(),cpu_tag.end());

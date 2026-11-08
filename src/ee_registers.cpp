@@ -108,14 +108,12 @@ void EeRegisters::reset(const ConsoleHardware* hardware, std::span<const std::ui
 // before an EE access are therefore ordered before it, and both EE engines
 // see the same IOP.
 void EeRegisters::sync_iop() {
-#ifdef PS2N_NATIVE_ONLY
     const auto check_iop=[&] {
         // Direct ELF deliberately leaves the IOP dormant until a payload is supplied.
         if(iop_.stopped() && *iop_.stop_reason()!="no ROM0 mapped for the IOP")
             throw DeviceRefusal(*iop_.stop_reason());
     };
     check_iop();
-#endif
     const auto stamp = now();
     const auto iop_cycle = stamp / kEeCyclesPerIopCycle;
     const bool iop_due = iop_.synchronization_due(iop_cycle, &gs_);
@@ -130,9 +128,7 @@ void EeRegisters::sync_iop() {
     profiling::Scope profile(profiling::Phase::Sync);
     if (iop_due)
         iop_.run_until(iop_cycle, &gs_);
-#ifdef PS2N_NATIVE_ONLY
     check_iop();
-#endif
     iop_.advance_graphics(stamp,vif0_,vif1_,gif_,gs_,vu_control_);
     advance_vif_interrupts();
 }

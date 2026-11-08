@@ -1,25 +1,24 @@
 #include "boot_checks.hpp"
 #include "bios_program.hpp"
-#include "ps2native/interpreter.hpp"
+#include "ee_native_fixture.hpp"
 #include "ps2native/ee_fpu.hpp"
 #include <iostream>
 
 using namespace ps2native;
 using namespace boot_checks;
 namespace {
-void interpreter_decode_cache() {
+void native_fixture_identity() {
     auto owner=std::make_unique<Memory>();auto& memory=*owner;
-    memory.reset_for_boot(m20::build_firmware().rom);
+    reset_native_ee_fixture(memory,m20::build_firmware().rom);
     auto state=ee_reset_state();std::uint64_t executed=0;
     ExecutionContext ctx{state,memory,executed,100,0xFFFFFFFFu};
-    InterpreterDecodeCache cache;
-    const auto step=[&](std::uint32_t pc){state.pc=pc;interpret_instruction(ctx,nullptr,cache);};
+    const auto step=[&](std::uint32_t pc){state.pc=pc;compiled_fixture_step(ctx);};
     memory.write32(0x80001000u,0x24080001u);
     step(0x80001000u);step(0x80001000u);
-    require(state.reg32(8)==1 && executed==2,"cached instruction retires on a warm decode");
+    require(state.reg32(8)==1 && executed==2,"compiled_fixture retires repeated instructions");
     memory.write32(0x80001000u,0x24080002u);
     step(0x80001000u);
-    require(state.reg32(8)==2,"changed executable bytes replace the cached instruction");
+    require(state.reg32(8)==2,"changed executable bytes select their matching compiled_fixture");
     memory.write32(0x80001400u,0x24090009u);
     step(0x80001400u);step(0x80001000u);
     require(state.reg32(8)==2 && state.reg32(9)==9,"colliding decode slots retain each instruction's operands");
@@ -28,16 +27,16 @@ void interpreter_decode_cache() {
     device_refused([&]{step(0x80001000u);},"unknown RAM bits");
     require(state.retired_instructions==retired,"warm decode still refuses an unknown instruction before retirement");
     memory.write32(0x80001000u,0x4C000000u);
-    rejects([&]{step(0x80001000u);},"not implemented by the interpreter");
+    rejects([&]{step(0x80001000u);},"missing synthetic EE AOT");
     memory.write32(0x80001000u,0x24080002u);step(0x80001000u);
-    require(state.reg32(8)==2,"failed decode does not poison its cache slot");
+    require(state.reg32(8)==2,"missing fixture does not poison later valid execution");
 
     state.set_cp0(Cop0::Status,0);
     memory.write32(0x80000000u,0x24080003u);
     memory.write32(0x80002000u,0x24080007u);
     memory.tlb_write(0,{0,0x00100000u,0x1Fu,0x5Fu});
     step(0x00100000u);
-    require(state.reg32(8)==3,"cached interpreter uses the current TLB mapping");
+    require(state.reg32(8)==3,"cached compiled_fixture uses the current TLB mapping");
     memory.tlb_write(0,{0,0x00100000u,0x9Fu,0xDFu});
     step(0x00100000u);
     require(state.reg32(8)==7,"TLB remap fetches a new word before consulting decode metadata");
@@ -48,7 +47,7 @@ void interpreter_decode_cache() {
 void privilege_and_cache() {
     Memory memory;
     const auto rom=m20::build_firmware().rom;
-    memory.reset_for_boot(rom);
+    reset_native_ee_fixture(memory,rom);
     // A global kuseg mapping and a supervisor mapping, each with two 4 KiB pages.
     memory.tlb_write(0,{0,0x00100000u,0x1Fu,0x5Fu});
     memory.tlb_write(1,{0,0xC0000000u,0x1Fu,0x5Fu});
@@ -77,25 +76,25 @@ void privilege_and_cache() {
     ExecutionContext ctx{state,memory,executed,100,0xFFFFFFFFu};
     for(const auto op:{0x04u,0x07u,0x0Cu,0x12u,0x14u,0x16u}) {
         memory.write32(state.pc,0xBC000000u|(op<<16u)); // Index using unmapped VA 0
-        interpret_instruction(ctx);
+        compiled_fixture_step(ctx);
     }
     require(executed==6,"cache indices do not look up a TLB tag");
     for(const auto op:{0x18u,0x1Au,0x1Cu}) {
         memory.write32(state.pc,0xBC000000u|(op<<16u));
-        bus_fault([&]{interpret_instruction(ctx);},BusFault::TlbRefill,"no entry");
+        bus_fault([&]{compiled_fixture_step(ctx);},BusFault::TlbRefill,"no entry");
         state.pc=0x80001000u;
     }
     state.pc=0x00100000u;state.set_cp0(Cop0::Status,0x10u);
     // Restore the word via a kernel alias before attempting the user MFC0.
     memory.set_cpu_context(0,0);memory.write32(0x80000000u,0x40026000u);
-    rejects([&]{interpret_instruction(ctx);},"COP0 unusable");
+    rejects([&]{compiled_fixture_step(ctx);},"COP0 unusable");
     memory.set_cpu_context(0,0);memory.write32(0x80000000u,0xBC140000u);
     state.pc=0x00100000u;
-    rejects([&]{interpret_instruction(ctx);},"COP0 unusable");
+    rejects([&]{compiled_fixture_step(ctx);},"COP0 unusable");
     require(executed==6,"privileged COP0 cannot silently execute in user mode");
 }
 void floating_comparisons() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     struct Row {std::uint32_t a,b;bool equal,less;};
     const Row rows[]={{0,0x80000000u,true,false},{0,1,true,false},
         {0x80001337u,0,true,false},{0,0x00800000u,false,true},
@@ -107,7 +106,7 @@ void floating_comparisons() {
         state.fpr[0]=r.a;state.fpr[1]=r.b;state.fcr31=flags;
         const auto before=state.fpr;memory.write32(state.pc,0x46010030u|condition);
         std::uint64_t count=0;ExecutionContext ctx{state,memory,count,10,0xFFFFFFFFu};
-        interpret_instruction(ctx);
+        compiled_fixture_step(ctx);
         const bool expected=((condition&2u)&&r.equal)||((condition&4u)&&r.less);
         require(state.fcr31==((flags&~0x800000u)|(expected?0x800000u:0u)) && state.fpr==before,
             "EE comparison uses signed magnitude, flushed denormals and finite exponent 255; only FCC changes");
@@ -122,7 +121,7 @@ void floating_comparisons() {
     for(auto word:{0x46010034u,0x45010002u}) {
         EEState state;state.pc=0x80001000u;state.fcr31=0x0183C079u;
         memory.write32(state.pc,word);std::uint64_t count=0;ExecutionContext ctx{state,memory,count,10,0xFFFFFFFFu};
-        rejects([&]{interpret_instruction(ctx);},"Status.CU1 = 0");
+        rejects([&]{compiled_fixture_step(ctx);},"Status.CU1 = 0");
         require(state.fcr31==0x0183C079u && state.instruction_pc==0x80001000u && count==0 && !state.delay_pending,
             "disabled COP1 cannot change FCC or schedule a branch");
     }
@@ -144,7 +143,7 @@ void nested_exception() {
             state.cp0(Cop0::Cause)==0x8020u,"fresh exception clears BD and preserves IP");
 }
 void addi_exception() {
-    Memory memory; memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory; reset_native_ee_fixture(memory,m20::build_firmware().rom);
     EEState state; std::uint64_t executed=0;
     constexpr std::uint32_t pc=0x80001004u;
     const auto run=[&](std::uint32_t source,std::uint16_t immediate,unsigned target,bool delay,bool bev) {
@@ -155,10 +154,10 @@ void addi_exception() {
         memory.set_cpu_context(0,0);
         const auto word=0x21000000u|(target<<16u)|immediate;
         memory.write32(pc,word);
-        require(decode_r5900(pc,word).opcode==MipsOpcode::Addi && !mips_aot_supported(MipsOpcode::Addi),
-                "ADDI is an explicit interpreter boundary until AOT exception exits are supported");
+        require(decode_r5900(pc,word).opcode==MipsOpcode::Addi && mips_aot_supported(MipsOpcode::Addi),
+                "ADDI has a native exception exit");
         ExecutionContext ctx{state,memory,executed,100,0xFFFFFFFFu};
-        interpret_instruction(ctx);
+        compiled_fixture_step(ctx);
     };
     run(16,0xFFE0u,8,false,false);
     require(state.reg64(8)==0xFFFFFFFFFFFFFFF0ull && state.gpr[8].high==0x1122334455667788ull &&
@@ -177,11 +176,11 @@ void addi_exception() {
     state={};state.pc=pc;state.set_reg64_observed(8,0,1);
     memory.set_cpu_context(0,0);memory.write32(pc,0x21090001u);
     ExecutionContext ctx{state,memory,executed,100,0xFFFFFFFFu};
-    rejects([&]{interpret_instruction(ctx);},"consumes unknown MMIO bits");
+    rejects([&]{compiled_fixture_step(ctx);},"consumes unknown MMIO bits");
     require(state.pc==pc && state.retired_instructions==0,"unknown arithmetic does not fabricate a sum or exception");
 }
 void signed_arithmetic() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     struct Case {std::uint32_t word;std::uint64_t a,b,result;bool overflow;};
     constexpr Case cases[]{
         {0x01094020u,0x7FFFFFFFu,1,0,true}, // ADD
@@ -206,9 +205,9 @@ void signed_arithmetic() {
         memory.set_cpu_context(0,0);memory.write32(state.pc,c.word);
         std::uint64_t executed=0;ExecutionContext ctx{state,memory,executed,4,0};
         const auto instruction=decode_r5900(state.pc,c.word);
-        require(instruction.written_gpr()==8u && !mips_aot_supported(instruction.opcode),
-                "signed arithmetic decode records the correct destination and interpreter boundary");
-        interpret_instruction(ctx);
+        require(instruction.written_gpr()==8u && mips_aot_supported(instruction.opcode),
+                "signed arithmetic decode records the correct destination and native exception exit");
+        compiled_fixture_step(ctx);
         require(state.gpr[8].high==0x0123456789ABCDEFull && executed==1,
                 "signed arithmetic preserves the upper GPR half and accounts for one instruction");
         if(c.overflow)require(state.pc==0x80000180u && state.cp0(Cop0::Cause)==48 &&
@@ -275,7 +274,7 @@ void packed_copy() {
     require(state.reg128(0).low==0 && state.reg128(0).high==0,"PSUBW preserves zero register");
 }
 void micro_subroutine() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);EEState state=ee_reset_state();
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);EEState state=ee_reset_state();
     memory.set_clock(&state.retired_instructions,&state.stall_cycles);
     state.set_cp0(Cop0::Status,1u<<30);
     constexpr auto add=(8u<<21u)|(2u<<16u)|(1u<<11u)|(3u<<6u)|0x28u;
@@ -340,12 +339,12 @@ void funnel_shift() {
     state.shift_amount=8;ee::exec<MipsOpcode::Qfsrv>(state,memory,0,op);
     require(!state.unknown_gpr_bits[11] && state.unknown_gpr_high_bits[11]==(1ull<<56),"funnel shift propagates only selected unknown bits");
     for(auto invalid:{1u,128u}){state.shift_amount=invalid;rejects([&]{ee::exec<MipsOpcode::Qfsrv>(state,memory,0,op);},"byte/halfword shift");}
-    memory.reset_for_boot(m20::build_firmware().rom);
+    reset_native_ee_fixture(memory,m20::build_firmware().rom);
     memory.write32(0x80001000u,0x04180008u);memory.write32(0x80001004u,op);
     state=ee_reset_state();state.pc=0x80001000u;state.set_reg128(9,1,2);state.set_reg128(10,3,4);
-    std::uint64_t count=0;ExecutionContext ctx{state,memory,count,2,0xFFFFFFFFu};interpret_instruction(ctx);interpret_instruction(ctx);
+    std::uint64_t count=0;ExecutionContext ctx{state,memory,count,2,0xFFFFFFFFu};compiled_fixture_step(ctx);compiled_fixture_step(ctx);
     require(state.shift_amount==64 && state.reg128(11).low==4 && state.reg128(11).high==1 && state.retired_instructions==2,
-            "production interpreter dispatch uses the same SA and funnel semantics");
+            "production compiled_fixture dispatch uses the same SA and funnel semantics");
 }
 void leading_sign_count() {
     constexpr auto word=0x70000004u|(8u<<21)|(8u<<11);
@@ -371,10 +370,10 @@ void leading_sign_count() {
     require(state.reg64(0)==0,"PLZCW cannot change zero register");
 }
 void disabled_cop0_context() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     auto state=ee_reset_state();state.pc=0x80001000u;state.set_reg32(16,0x80002000);
     std::uint64_t executed=0;ExecutionContext ctx{state,memory,executed,100,0xFFFFFFFFu};
-    const auto step=[&](std::uint32_t word){memory.write32(state.pc,word);interpret_instruction(ctx);};
+    const auto step=[&](std::uint32_t word){memory.write32(state.pc,word);compiled_fixture_step(ctx);};
     step(0x4008C000);step(0x4009C800); // MFBPC/MFPS, disabled with undefined configuration
     require(state.unknown_gpr_bits[8]==0x17BF8007u && state.unknown_gpr_bits[9]==0xFFBFEu,
             "COP0 reset preserves undefined configuration but knows enables and reserved zeros");
@@ -402,7 +401,7 @@ void disabled_cop0_context() {
             "PPACW discards unselected unknown lanes while preserving selected ones");
 }
 void integer_multiply_add() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     struct Row {std::uint32_t a,b,hi,lo,signed_hi,unsigned_hi,result;};
     constexpr Row rows[]{
         {3,7,0,5,0,0,26},
@@ -411,7 +410,7 @@ void integer_multiply_add() {
         {0x80000000u,0xFFFFFFFFu,0,0,0,0x7FFFFFFFu,0x80000000u},
         {1,1,0xFFFFFFFFu,0xFFFFFFFFu,0,0,0},
         {0x80000000u,0x80000000u,0xC0000000u,0,0,0,0}};
-    for(bool second:{false,true})for(bool unsigned_product:{false,true})for(bool interpreted:{false,true})
+    for(bool second:{false,true})for(bool unsigned_product:{false,true})for(bool retired_path:{false,true})
     for(unsigned dest:{0u,8u,9u,10u})for(const auto& row:rows) {
         EEState state;state.pc=0x80001000;
         state.set_reg128(8,ee::sx32(row.a),0x123456789ABCDEFull);
@@ -429,7 +428,7 @@ void integer_multiply_add() {
             (unsigned_product ? MipsOpcode::Maddu : MipsOpcode::Madd);
         require(decoded.opcode==expected && decoded.written_gpr()==(dest ? std::optional<unsigned>{dest} : std::nullopt),
             "MADD family decodes all pipelines, signedness and destination metadata for the AOT");
-        if(interpreted) {memory.write32(state.pc,word);std::uint64_t count=0;ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};interpret_instruction(context);}
+        if(retired_path) {memory.write32(state.pc,word);std::uint64_t count=0;ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};compiled_fixture_step(context);}
         else if(second) {
             if(unsigned_product)ee::exec<MipsOpcode::Maddu1>(state,memory,0,word);else ee::exec<MipsOpcode::Madd1>(state,memory,0,word);
         } else {
@@ -476,7 +475,7 @@ void symbolic_shifts() {
 }
 void register_context() {
     EEState state;Memory memory;
-    memory.reset_for_boot(m20::build_firmware().rom);
+    reset_native_ee_fixture(memory,m20::build_firmware().rom);
     state.pc=0x80001000u;state.set_cp0(Cop0::Status,kStatusCU1);
     state.set_reg128(8,0xFEDCBA98DEADBEEFull,0x1122334455667788ull);
     state.set_reg32(10,0xFFFFFFFFu);
@@ -489,11 +488,11 @@ void register_context() {
         0x00006028u};           // MFSA t4
     for(std::size_t i=0;i<words.size();++i)memory.write32(state.pc+static_cast<std::uint32_t>(i*4u),words[i]);
     std::uint64_t executed=0;ExecutionContext ctx{state,memory,executed,100,0xFFFFFFFFu};
-    for(std::size_t i=0;i<words.size();++i)interpret_instruction(ctx);
+    for(std::size_t i=0;i<words.size();++i)compiled_fixture_step(ctx);
     require(state.fpr[1]==0xDEADBEEFu && state.reg64(9)==0xFFFFFFFFDEADBEEFull,"FPU raw transfers sign extend GPR results");
     require(state.fcr31==0x0183C079u && state.reg32(11)==0x0183C079u,"FCR31 writable and fixed fields");
     memory.write32(0x80003000u,0x46000886u); // MOV.S f2,f1
-    const auto saved_pc=state.pc;state.pc=0x80003000u;interpret_instruction(ctx);state.pc=saved_pc;
+    const auto saved_pc=state.pc;state.pc=0x80003000u;compiled_fixture_step(ctx);state.pc=saved_pc;
     require(state.fpr[2]==0xDEADBEEFu && state.fcr31==0x0183C079u,"MOV.S preserves raw payload and all FCR31 flags");
     // Raw physical sign-operation vectors from ps2autotests arithmetic.expected.
     const std::uint32_t signs[][3]={{0,0,0x80000000u},{0x80000000u,0,0},
@@ -502,14 +501,14 @@ void register_context() {
     for(const auto& row:signs)for(unsigned op=0;op<2;++op) {
         state.pc=0x80003000u;state.fpr[1]=row[0];state.fcr31=0x0183C079u;
         memory.write32(state.pc,op ? 0x46000847u : 0x46000845u); // fd == fs
-        interpret_instruction(ctx);
+        compiled_fixture_step(ctx);
         require(state.fpr[1]==row[op+1] && state.fcr31==0x01830079u,
                 "ABS/NEG preserve raw magnitude and sticky flags with aliased destination");
     }
     require(!try_decode_r5900(0,0x46010845u) && !try_decode_r5900(0,0x46010847u),
             "sign operations reject reserved ft fields");
     state.pc=0x80003000u;state.set_cp0(Cop0::Status,0);state.fpr[1]=0x1234;
-    rejects([&]{interpret_instruction(ctx);},"Status.CU1 = 0");
+    rejects([&]{compiled_fixture_step(ctx);},"Status.CU1 = 0");
     require(state.fpr[1]==0x1234,"disabled FPU sign operation preserves destination");
     state.set_cp0(Cop0::Status,kStatusCU1);state.pc=saved_pc;
     require(state.shift_amount==72 && state.reg64(12)==72 && state.reg128(8).high==0x1122334455667788ull,
@@ -517,20 +516,20 @@ void register_context() {
     require(!try_decode_r5900(0,0x444BF801u) && !try_decode_r5900(0,0x00004868u),"reserved COP1/SA transfer fields rejected");
     memory.write32(0x80002000u,0x4601009Cu); // MADD.S f2,f0,f1
     state.pc=0x80002000u;state.fpr[0]=0x80000000u;state.fpr[1]=0x40000000u;state.fpu_acc=0x3FA00000u;
-    interpret_instruction(ctx);
+    compiled_fixture_step(ctx);
     require(state.fpr[2]==state.fpu_acc && state.fpu_acc==0x3FA00000u,"zero product copies actual accumulator without changing it");
     state.pc=0x80002000u;state.fpr[0]=0x3F800000u;
-    interpret_instruction(ctx);
+    compiled_fixture_step(ctx);
     require(state.fpr[2]==0x40500000u && state.fpu_acc==0x3FA00000u,
         "certified MADD computes 1*2+1.25 exactly and preserves the accumulator");
     memory.write32(0x80002000u,0x46010018u); // ADDA.S f0,f1
     state.pc=0x80002000u;state.fpr[0]=0xC0200000u;state.fpr[1]=0x80000000u;
-    interpret_instruction(ctx);
+    compiled_fixture_step(ctx);
     require(state.fpu_acc==0xC0200000u,"ADDA with negative zero restores the actual accumulator payload");
     state.pc=0x80002000u;state.fpr[0]=0x80000000u;
-    interpret_instruction(ctx);require(state.fpu_acc==0x80000000u,"ADDA preserves two negative zeros");
+    compiled_fixture_step(ctx);require(state.fpu_acc==0x80000000u,"ADDA preserves two negative zeros");
     state.pc=0x80002000u;state.fpr[0]=0;
-    interpret_instruction(ctx);require(state.fpu_acc==0,"ADDA opposite zero signs produce positive zero");
+    compiled_fixture_step(ctx);require(state.fpu_acc==0,"ADDA opposite zero signs produce positive zero");
     state.set_reg128(8,0x0123456789ABCDEFull,0xFEDCBA9876543210ull);
     ee::exec<MipsOpcode::Pmthi>(state,memory,0,0x71000229u);
     ee::exec<MipsOpcode::Pmtlo>(state,memory,0,0x71000269u);
@@ -561,16 +560,16 @@ void adder() {
     require(ee_fpu_add(0x7FFFFFFF,0x7FFFFFFF,flags)==0x7FFFFFFF && (flags&0xC018u)==0x8018u,
             "extended exponent overflow saturates and retains sticky underflow");
     require(ee_fpu_add(0x80000001,0,flags)==0 && !(flags&0xC000u),"denormal operands are signed zeros");
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     EEState state;state.pc=0x80001000;state.set_cp0(Cop0::Status,kStatusCU1);
     state.fpr[0]=0x3F800000;state.fpr[1]=0x3E800001;
     memory.write32(state.pc,0x46010001u); // SUB.S f0,f0,f1, aliased destination
     memory.write32(state.pc+4,0x46010000u); // ADD.S f0,f0,f1
     std::uint64_t executed=0;ExecutionContext ctx{state,memory,executed,4,0};
-    interpret_instruction(ctx);require(state.fpr[0]==0x3F400000,"SUB.S uses the EE adder with sign inversion");
-    interpret_instruction(ctx);require(state.fpr[0]==0x3F800000,"ADD.S truncates without host nearest rounding");
+    compiled_fixture_step(ctx);require(state.fpr[0]==0x3F400000,"SUB.S uses the EE adder with sign inversion");
+    compiled_fixture_step(ctx);require(state.fpr[0]==0x3F800000,"ADD.S truncates without host nearest rounding");
     state.pc=0x80001000;state.set_cp0(Cop0::Status,0);
-    rejects([&]{interpret_instruction(ctx);},"Status.CU1 = 0");
+    rejects([&]{compiled_fixture_step(ctx);},"Status.CU1 = 0");
     require(state.fpr[0]==0x3F800000,"disabled COP1 cannot change the destination");
 }
 void divider() {
@@ -670,7 +669,7 @@ void vector_q() {
     for(const auto& row:roots)require(ee_fpu_sqrt(row[0])==row[1],"SRT SQRT physical/circuit result vector");
     require(!ee_fpu_sqrt(0xBF800000) && !ee_fpu_sqrt(0xFFFFFFFF),
             "negative SQRT exception behavior remains explicitly refused");
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     EEState s;s.set_cp0(Cop0::Status,1u<<30u);s.pc=0x80001000u;
     memory.set_clock(&s.retired_instructions,&s.stall_cycles);
     memory.write32(0xB0000010u,0x80u); // T0 enable, BUSCLK = EE/2
@@ -680,9 +679,9 @@ void vector_q() {
     memory.write32(s.pc+4u,0x4A0003BFu); // waitq
     std::uint64_t executed=0;ExecutionContext ctx{s,memory,executed,100,0xFFFFFFFFu};
     s.compare_written=true;s.set_cp0(Cop0::Compare,4);
-    interpret_instruction(ctx);
+    compiled_fixture_step(ctx);
     require(s.retired_instructions==1 && s.cycles()==1 && memory.read_vu_control(22)==0x40000000u,"Q remains old before completion");
-    interpret_instruction(ctx);
+    compiled_fixture_step(ctx);
     require(s.retired_instructions==2 && executed==2 && s.stall_cycles==6 && s.count()==8,"WAITQ consumes cycles, not instructions");
     require((s.cp0(Cop0::Cause)&kStatusIM7) && memory.read32(0xB0000000u)==4,"stall crosses Compare and advances device timer");
     require(memory.read_vu_control(22)==0x40A00000u,"SQRT publishes exact result after seven cycles");
@@ -701,25 +700,25 @@ void vector_q() {
             "VSUBq decoding preserves the reserved FT field");
         const ObservedQuadword initial{{0x404000003F800000ull,0},{0x40A0000040800000ull,0}};
         memory.write_vu_vector(18,initial);memory.write32(0x80001100u,sub_q);s.pc=0x80001100u;
-        const auto before=s.cycles();interpret_instruction(ctx);const auto interpreted=memory.observe_vu_vector(18);
-        require(interpreted.low.value==0xBF0000003F800000ull && interpreted.high.value==initial.high.value &&
-            !interpreted.low.unknown && !interpreted.high.unknown && memory.read_vu_control(22)==0x3F000000u &&
+        const auto before=s.cycles();compiled_fixture_step(ctx);const auto retired_path=memory.observe_vu_vector(18);
+        require(retired_path.low.value==0xBF0000003F800000ull && retired_path.high.value==initial.high.value &&
+            !retired_path.low.unknown && !retired_path.high.unknown && memory.read_vu_control(22)==0x3F000000u &&
             memory.read_vu_control(17)==0x40u && (memory.read_vu_control(16)&15u)==2u && s.cycles()==before+1u,
-            "interpreted VSUBq subtracts completed Q, preserves other lanes and Q, and publishes masked MAC/status flags");
+            "retired_path VSUBq subtracts completed Q, preserves other lanes and Q, and publishes masked MAC/status flags");
         memory.write_vu_vector(18,initial);ee::exec<MipsOpcode::VsubQ>(s,memory,0,sub_q);
         const auto native=memory.observe_vu_vector(18);
-        require(native.low.value==interpreted.low.value && native.high.value==interpreted.high.value &&
-            native.low.unknown==interpreted.low.unknown && native.high.unknown==interpreted.high.unknown,
-            "native VSUBq helper matches the independent interpreted result");
+        require(native.low.value==retired_path.low.value && native.high.value==retired_path.high.value &&
+            native.low.unknown==retired_path.low.unknown && native.high.unknown==retired_path.high.unknown,
+            "native VSUBq helper matches the independent retired_path result");
     }
     {
         constexpr auto rsqrt=0x4A6F03BEu; // Q = VF0.w / sqrt(VF15.x).
         require(try_decode_r5900(0,rsqrt)->opcode==MipsOpcode::Vrsqrt,"VRSQRT decodes its two component selectors");
         memory.write_vu_vector(15,{{0x40800000u,0},{0,0}});memory.write_vu_control(22,0x3E800000u);
         memory.write32(0x80001120u,rsqrt);s.pc=0x80001120u;const auto issued=s.cycles();
-        interpret_instruction(ctx);
+        compiled_fixture_step(ctx);
         require(memory.vu_q_ready_cycle()==issued+13u && memory.read_vu_control(22)==0x3E800000u,
-            "interpreted VRSQRT selects VF0.w/VF15.x and schedules thirteen cycles without publishing early");
+            "retired_path VRSQRT selects VF0.w/VF15.x and schedules thirteen cycles without publishing early");
         ee::exec<MipsOpcode::Vwaitq>(s,memory,0,0x4A0003BFu);
         require(s.cycles()==issued+13u && memory.read_vu_control(22)==0x3F000000u && !memory.vu_q_ready_cycle(),
             "VRSQRT completes exact 1/sqrt(4) through the existing Q stall pipeline");
@@ -738,7 +737,7 @@ void vector_q() {
     require(memory.vu_q_ready_cycle()==0 && memory.read_vu_control(22)==0x3FB504F3u,"failed SQRT leaves pipeline unchanged");
     // Manual (fsf=0) and EE assembler/ROM (fsf=1) encodings use ftf,
     // not fsf, as the input selector. Unknown unselected fields are harmless.
-    for(unsigned lane=0;lane<4u;++lane)for(unsigned fsf=0;fsf<2u;++fsf)for(bool interpreted:{false,true}) {
+    for(unsigned lane=0;lane<4u;++lane)for(unsigned fsf=0;fsf<2u;++fsf)for(bool retired_path:{false,true}) {
         std::array<std::uint32_t,4> values{},unknowns{};unknowns.fill(~0u);
         values[lane]=0x41C80000u;unknowns[lane]=0;
         memory.write_vu_vector(5,{{values[0]|(std::uint64_t{values[1]}<<32u),unknowns[0]|(std::uint64_t{unknowns[1]}<<32u)},
@@ -748,7 +747,7 @@ void vector_q() {
         require(decoded && decoded->opcode==MipsOpcode::Vsqrt,"both established VSQRT encodings decode for every ftf lane");
         memory.write_vu_control(22,0x40000000u);
         const auto cycle=s.cycles();
-        if(interpreted) {memory.write32(s.pc,word);interpret_instruction(ctx);}
+        if(retired_path) {memory.write32(s.pc,word);compiled_fixture_step(ctx);}
         else ee::exec<MipsOpcode::Vsqrt>(s,memory,0,word);
         require(memory.vu_q_ready_cycle()==cycle+7 && memory.read_vu_control(22)==0x40000000u,
             "both shared execution paths preserve the old Q and the true seven-cycle SQRT latency");
@@ -772,8 +771,8 @@ void vector_q() {
     require(vu.q_ready_cycle()==0 && vu.read(16)==0,"VU reset cancels pending FDIV flags");
 }
 void vector_nop() {
-    for(bool interpreted:{false,true}) {
-        Memory memory;memory.reset_for_boot(m20::build_firmware().rom);EEState state;
+    for(bool retired_path:{false,true}) {
+        Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);EEState state;
         state.pc=0x80001000;state.set_cp0(Cop0::Status,1u<<30u);
         memory.set_clock(&state.retired_instructions,&state.stall_cycles);
         memory.write_vu_control(22,0x40000000u);memory.vu_issue_q(0,0,0,3,3,false);
@@ -782,9 +781,9 @@ void vector_nop() {
         const auto decoded=decode_mips(state.pc,0x4A0002FFu);
         require(decoded.opcode==MipsOpcode::Vnop && !decoded.written_gpr() && !decoded.has_delay_slot(),
             "VNOP has an exact COP2 encoding and no invented destination or control-flow edge");
-        if(interpreted) {
+        if(retired_path) {
             memory.write32(state.pc,0x4A0002FFu);std::uint64_t count=0;ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};
-            interpret_instruction(context);require(count==1 && state.retired_instructions==1,"interpreted VNOP retires one real instruction");
+            compiled_fixture_step(context);require(count==1 && state.retired_instructions==1,"retired_path VNOP retires one real instruction");
         } else ee::exec<MipsOpcode::Vnop>(state,memory,0,0x4A0002FFu);
         const auto after=memory.observe_vu_vector(1);
         require(state.stall_cycles==0 && memory.vu_q_ready_cycle()==7 && memory.read_vu_control(22)==0x40000000u &&
@@ -809,15 +808,15 @@ void vector_fixed() {
         require(vu_float_to_fixed({0x7F800000u,0},fractions[kind]).value==0x7FFFFFFFu &&
             vu_float_to_fixed({0xFF800000u,0},fractions[kind]).value==0x80000000u,
             "finite PS2 exponent 255 clamps to signed integer limits");
-        for(bool interpreted:{false,true})for(unsigned destination:{4u,5u,0u}) {
-            Memory memory;memory.reset_for_boot(m20::build_firmware().rom);EEState state;
+        for(bool retired_path:{false,true})for(unsigned destination:{4u,5u,0u}) {
+            Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);EEState state;
             state.pc=0x80001000;state.set_cp0(Cop0::Status,1u<<30u);state.fcr31=0x0183FFFFu;
             memory.write_vu_vector(4,{{0xBFC000003FC00000ull,0},{0x000000017F800000ull,0}});
             const auto status=memory.read_vu_control(16),mac=memory.read_vu_control(17);
             const auto word=0x4BE0017Cu|(4u<<11u)|(destination<<16u)|kind;
             const auto decoded=decode_mips(state.pc,word);
             require(decoded.opcode==MipsOpcode::Vftoi && !decoded.written_gpr(),"all VFTOI encodings use the shared AOT vector operation");
-            if(interpreted) {memory.write32(state.pc,word);std::uint64_t count=0;ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};interpret_instruction(context);}
+            if(retired_path) {memory.write32(state.pc,word);std::uint64_t count=0;ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};compiled_fixture_step(context);}
             else ee::exec<MipsOpcode::Vftoi>(state,memory,0,word);
             const auto result=memory.observe_vu_vector(destination);
             require(!result.low.unknown && !result.high.unknown &&
@@ -834,7 +833,7 @@ void vector_fixed() {
     require(bounded.value==16 && bounded.unknown==15,"FTOI preserves the full uncertain fixed integer range");
     rejects([&]{(void)vu_float_to_fixed({0,0x80000000u},4);},"sign/exponent");
     rejects([&]{(void)vu_float_to_fixed({0,0},1);},"fractional width");
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);EEState state;state.set_cp0(Cop0::Status,1u<<30u);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);EEState state;state.set_cp0(Cop0::Status,1u<<30u);
     memory.write_vu_vector(4,{{0x3FC00000u,0xFFFFFFFF00000000ull},{0,~0ull}});
     memory.write_vu_vector(5,{{0x1234567800000000ull,0},{0xAABBCCDDEEFF0011ull,0}});
     ee::exec<MipsOpcode::Vftoi>(state,memory,0,0x4B05217Du);
@@ -846,8 +845,8 @@ void vector_fixed() {
     require(memory.observe_vu_vector(5).low.value==masked.low.value,"unproven conversion refuses transactionally");
 }
 void vector_cpu_bounds() {
-    for(bool interpreted:{false,true})for(bool cached:{false,true}) {
-        Memory memory;memory.reset_for_boot(m20::build_firmware().rom);EEState state;
+    for(bool retired_path:{false,true})for(bool cached:{false,true}) {
+        Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);EEState state;
         state.pc=0x80001000;state.set_cp0(Cop0::Status,(1u<<30)|(1u<<29));
         if(cached){memory.diagnostic_data_cache(true);state.set_cp0(Cop0::Config,0x10003);memory.set_cache_config(0x10003);}
         const FloatBounds range{0x44E59100u,0x44E594FFu};
@@ -855,7 +854,7 @@ void vector_cpu_bounds() {
         for(unsigned lane=0;lane<4;++lane)memory.restore_vu_vector_bounds(2,lane,range);
         state.set_reg32(9,0x80002000u);
         const auto execute=[&](MipsOpcode opcode,std::uint32_t word){
-            if(interpreted){memory.write32(0xA0000000u|(state.pc&0x1FFFFFFFu),word);std::uint64_t count=0;ExecutionContext ctx{state,memory,count,1,~0u};interpret_instruction(ctx);}
+            if(retired_path){memory.write32(0xA0000000u|(state.pc&0x1FFFFFFFu),word);std::uint64_t count=0;ExecutionContext ctx{state,memory,count,1,~0u};compiled_fixture_step(ctx);}
             else switch(opcode){
             case MipsOpcode::Qmfc2:ee::exec<MipsOpcode::Qmfc2>(state,memory,0,word);break;
             case MipsOpcode::Qmtc2:ee::exec<MipsOpcode::Qmtc2>(state,memory,0,word);break;
@@ -909,7 +908,7 @@ void vector_cpu_bounds() {
     }
 }
 void vector_setup() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_cp0(Cop0::Status,1u<<30);
     memory.write_vu_vector(2,{{0x2222222211111111ull,0x00000000000000FFull},{0x4444444433333333ull,0xFFFFFFFF00000000ull}});
     memory.write_vu_vector(3,{{0xBBBBBBBBAAAAAAAAull,0},{0xDDDDDDDDCCCCCCCCull,0}});
@@ -935,7 +934,7 @@ void vector_setup() {
     require(try_decode_r5900(0,add)->opcode==MipsOpcode::Vadd,"VADD decodes independently of VMUL");
     memory.write32(s.pc,add);
     std::uint64_t executed=0;ExecutionContext ctx{s,memory,executed,100,~0u};
-    interpret_instruction(ctx);
+    compiled_fixture_step(ctx);
     const auto one=memory.observe_vu_vector(1);
     require(one.low.value==0 && one.high.value==0x3F80000000000000ull &&
             !one.high.unknown && memory.read_vu_control(17)==0,"masked zero addend constructs vector one");
@@ -1022,7 +1021,7 @@ void vector_setup() {
             memory.observe_vu_vector(4).high.value==0xC0400000C0400000ull,"general vector subtraction uses actual per-lane operands");
 }
 void vector_accumulator_add() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_cp0(Cop0::Status,1u<<30);
     const ObservedQuadword source{{0x400000003F800000ull,0},{0x4080000040400000ull,0}};
     memory.write_vu_vector(1,source);
@@ -1033,13 +1032,13 @@ void vector_accumulator_add() {
         {0x40400000,0x40800000,0x40A00000,0x40C00000},
         {0x40A00000,0x40C00000,0x40E00000,0x41000000}};
     constexpr std::uint32_t original[]{0x3F800000,0x40000000,0x40400000,0x40800000};
-    for(bool interpreted:{false,true})for(unsigned bc=0;bc<4;++bc)for(unsigned mask=0;mask<16;++mask) {
+    for(bool retired_path:{false,true})for(unsigned bc=0;bc<4;++bc)for(unsigned mask=0;mask<16;++mask) {
         memory.vu_product(0,1,0,15,3,false,true);
         const auto code=0x4A00003Cu|(mask<<21u)|(2u<<16u)|(1u<<11u)|bc;
         require(decode_mips(0,code).opcode==MipsOpcode::VaddaBc,"VADDA broadcast is supported by AOT decode");
-        if(interpreted) {
+        if(retired_path) {
             memory.write32(s.pc,code);std::uint64_t executed=0;
-            ExecutionContext ctx{s,memory,executed,1,~0u};interpret_instruction(ctx);
+            ExecutionContext ctx{s,memory,executed,1,~0u};compiled_fixture_step(ctx);
         } else ee::exec<MipsOpcode::VaddaBc>(s,memory,s.pc,code);
         require(memory.read_vu_control(17)==((bc==1 && (mask&8u)) ? 8u : 0u),"VADDA MAC flags use selected results");
         require(memory.observe_vu_vector(1).low.value==source.low.value &&
@@ -1065,7 +1064,7 @@ void vector_accumulator_add() {
     rejects([&]{ee::exec<MipsOpcode::VaddaBc>(s,memory,0,0x4BE0083Cu);},"Status.CU2 = 0");
 }
 void immediate_add_knowledge() {
-    auto owner=std::make_unique<Memory>();auto& memory=*owner;memory.reset_for_boot(m20::build_firmware().rom);
+    auto owner=std::make_unique<Memory>();auto& memory=*owner;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     for(const auto mask:{0xFull,0xF00ull,0x1E000000000ull,0x8000000000000000ull})
     for(const auto raw:{0ull,0x7Full,0xFFFFFFFFFFFFFFF0ull,0x1921FA0000000000ull})
     for(const unsigned immediate:{0u,1u,0x7Fu,0xFFFFu,0x8000u})for(const unsigned destination:{0u,5u,9u}) {
@@ -1077,10 +1076,10 @@ void immediate_add_knowledge() {
             ones&=result;any|=result;
         }
         const auto unknown=any^ones;const auto word=0x64000000u|(5u<<21)|(destination<<16)|immediate;
-        for(const bool interpreter:{false,true}) {
+        for(const bool compiled_fixture:{false,true}) {
             auto state=ee_reset_state();state.pc=0x80001000u;state.set_reg128(5,0,0x123456789ABCDEFull);
             state.set_reg64_observed(5,raw,mask);state.gpr[destination].high=destination ? 0x123456789ABCDEFull : 0;
-            if(interpreter) {memory.write32(state.pc,word);std::uint64_t count=0;ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};interpret_instruction(context);}
+            if(compiled_fixture) {memory.write32(state.pc,word);std::uint64_t count=0;ExecutionContext context{state,memory,count,1,0xFFFFFFFFu};compiled_fixture_step(context);}
             else ee::exec<MipsOpcode::Daddiu>(state,memory,state.pc,word);
             require(state.gpr[destination].low==(destination ? ones : 0) && state.unknown_gpr_bits[destination]==(destination ? unknown : 0),
                 "DADDIU known bits match all independent concrete sums, including sign extension, wrap, aliases and zero");
@@ -1090,9 +1089,9 @@ void immediate_add_knowledge() {
     }
 }
 void multiply_zero_knowledge() {
-    auto owner=std::make_unique<Memory>();auto& memory=*owner;memory.reset_for_boot(m20::build_firmware().rom);
+    auto owner=std::make_unique<Memory>();auto& memory=*owner;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     for(const auto op:{MipsOpcode::Mult,MipsOpcode::Multu,MipsOpcode::Mult1,MipsOpcode::Multu1})
-    for(const bool swap:{false,true})for(const unsigned destination:{0u,4u,5u,6u})for(const bool interpreter:{false,true}) {
+    for(const bool swap:{false,true})for(const unsigned destination:{0u,4u,5u,6u})for(const bool compiled_fixture:{false,true}) {
         auto s=ee_reset_state();s.pc=0x80001000u;s.lo=11;s.hi=12;s.lo1=13;s.hi1=14;
         s.set_reg128(4,0,0x1234);s.set_reg128(5,0,0x5678);s.set_reg128(6,9,0x9ABC);
         s.set_reg64_observed(swap?4u:5u,0,~0ull);
@@ -1100,7 +1099,7 @@ void multiply_zero_knowledge() {
         const auto word=(second ? 0x70000000u : 0u)|(4u<<21)|(5u<<16)|(destination<<11)|
             ((op==MipsOpcode::Mult || op==MipsOpcode::Mult1) ? 0x18u : 0x19u);
         const auto upper=s.gpr[destination].high;
-        if(interpreter) {memory.write32(s.pc,word);std::uint64_t count=0;ExecutionContext context{s,memory,count,1,0xFFFFFFFFu};interpret_instruction(context);}
+        if(compiled_fixture) {memory.write32(s.pc,word);std::uint64_t count=0;ExecutionContext context{s,memory,count,1,0xFFFFFFFFu};compiled_fixture_step(context);}
         else switch(op) {
             case MipsOpcode::Mult:ee::exec<MipsOpcode::Mult>(s,memory,s.pc,word);break;
             case MipsOpcode::Multu:ee::exec<MipsOpcode::Multu>(s,memory,s.pc,word);break;
@@ -1116,7 +1115,7 @@ void multiply_zero_knowledge() {
     require(s.lo==11 && s.hi==12,"an unproved nonzero product refuses before changing LO/HI");
 }
 void dma_idle_knowledge() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_reg32(8,0xB000C000u);
     memory.set_clock(&s.retired_instructions);
     ee::exec<MipsOpcode::Lw>(s,memory,0,0x8D090000u);
@@ -1127,7 +1126,7 @@ void dma_idle_knowledge() {
     require(memory.read32(0xB000C000u)==0x84u,"programmed idle CHCR becomes fully known");
 }
 void dma_cop0_branches() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     EEState s;s.pc=0x80001000u;memory.set_clock(&s.retired_instructions);
     rejects([&]{(void)memory.dma_cop0_condition();},"unknown D_PCR.CPC");
     for(const bool condition:{false,true}) {
@@ -1147,10 +1146,10 @@ void dma_cop0_branches() {
             }
             memory.write32(s.pc,word);
             std::uint64_t executed=0;ExecutionContext ctx{s,memory,executed,100,0xFFFFFFFF};
-            interpret_instruction(ctx);
+            compiled_fixture_step(ctx);
             const bool taken=condition==((form&1u)!=0u);
             require(s.delay_pending==native.delay_pending && (!s.delay_pending || s.delay_target==native.delay_target),
-                "native branch semantics and interpreter agree on the DMA condition and delay slot");
+                "native branch semantics and compiled_fixture agree on the DMA condition and delay slot");
             require(s.delay_pending==!(form>=2u && !taken) &&
                 (s.delay_pending ? s.delay_target==(taken ? 0x80001010u : 0x80001008u) : s.pc==0x80001008u),
                 "BC0F/T and likely variants follow CPCOND0 and preserve or annul the delay slot");
@@ -1167,7 +1166,7 @@ void dma_cop0_branches() {
     rejects([&]{ee::exec<MipsOpcode::Bc0f>(s,memory,0,0x41000000u);},"COP0 branch unusable");
 }
 void conversions_and_partial_loads() {
-    Memory memory;memory.reset_for_boot(m20::build_firmware().rom);
+    Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_cp0(Cop0::Status,kStatusCU1);s.fcr31=0x0183C079;
     std::uint64_t retired=0;ExecutionContext ctx{s,memory,retired,100,0xFFFFFFFF};
     const std::uint32_t to_integer[][2]={{0,0},{0x80000000,0},{0x3FC00000,1},{0xBFE00000,0xFFFFFFFF},
@@ -1180,48 +1179,48 @@ void conversions_and_partial_loads() {
         for(const auto& row:words) {
             s.pc=0x80001000;s.fpr[1]=row[0];
             memory.write32(s.pc,direction ? 0x468008A0u : 0x460008A4u);
-            interpret_instruction(ctx);
+            compiled_fixture_step(ctx);
             require(s.fpr[2]==row[1] && s.fcr31==0x0183C079,"FPU conversion truncates/clamps and preserves status");
         }
     }
     for(const auto bits:{0x4329B5C0u,0xC329B5C0u}) {
         s.pc=0x80001000;s.fpr[1]=bits;s.unknown_fpr_bits[1]=0x3Fu;
-        memory.write32(s.pc,0x460008A4u);interpret_instruction(ctx);
+        memory.write32(s.pc,0x460008A4u);compiled_fixture_step(ctx);
         require(s.fpr[2]==(bits&0x80000000u ? 0xFFFFFF57u : 169u) && s.unknown_fpr_bits[2]==0 && s.fcr31==0x0183C079,
             "CVT.W.S proves discarded uncertain fractional bits cannot change the integer or status");
     }
     s.pc=0x80001000;s.fpr[1]=0x3F000000u;s.unknown_fpr_bits[1]=0x807FFFFFu;
-    memory.write32(s.pc,0x460008A4u);interpret_instruction(ctx);
+    memory.write32(s.pc,0x460008A4u);compiled_fixture_step(ctx);
     require(s.fpr[2]==0,"uncertain sub-unit magnitude and sign still truncate to a proven zero");
     s.pc=0x80001000;s.fpr[1]=0x3F000000u;s.unknown_fpr_bits[1]=0x00800000u;
-    interpret_instruction(ctx);
+    compiled_fixture_step(ctx);
     require(s.fpr[2]==0 && s.unknown_fpr_bits[2]==1 && *s.fpr_affine[2].candidates==std::vector<std::uint32_t>{0,1},
         "CVT.W.S retains both possible integers instead of selecting one across an uncertain exponent");
     s.pc=0x80001000;s.fpr[1]=0x45000000u;s.unknown_fpr_bits[1]=0x00FFFFFFu;
     s.fpr_affine[1]={memory.allocate_fpu_origin(),0,0,false,s.fpr[1],s.unknown_fpr_bits[1],0x457FFCC2u,0x4580019Fu,{},
         std::make_shared<const std::vector<FloatBounds>>(std::initializer_list<FloatBounds>{{0x457FFCC2u,0x457FFFFFu},{0x45800000u,0x4580019Fu}})};
-    interpret_instruction(ctx);
+    compiled_fixture_step(ctx);
     require(s.fpr[2]==0 && s.unknown_fpr_bits[2]==0x1FFFu && *s.fpr_affine[2].candidates==std::vector<std::uint32_t>{4095,4096},
         "CVT.W.S uses certified numeric ranges instead of widening to every value in their raw bit hull");
     s.pc=0x80001000;s.fpr[1]=0;s.unknown_fpr_bits[1]=~0u;s.fpr_affine[1]={};
-    rejects([&]{interpret_instruction(ctx);},"bounded integer domain");s.unknown_fpr_bits[1]=0;
+    rejects([&]{compiled_fixture_step(ctx);},"bounded integer domain");s.unknown_fpr_bits[1]=0;
     s.pc=0x80001000;s.fpr[1]=0x28080404u;s.unknown_fpr_bits[1]=0x03E7F9FBu;s.fpr[2]=0;s.unknown_fpr_bits[2]=0;
-    memory.write32(s.pc,0x46020834u);interpret_instruction(ctx);
+    memory.write32(s.pc,0x46020834u);compiled_fixture_step(ctx);
     require(!(s.fcr31&(1u<<23)),"C.LT.S proves a positive uncertain magnitude cannot be less than zero");
     s.pc=0x80001000;ee::exec<MipsOpcode::CLessS>(s,memory,s.pc,0x46020834u);
     require(!(s.fcr31&(1u<<23)),"shared AOT comparison uses the same certified condition");
     s.pc=0x80001000;s.fpr[1]=0x3F800000u;s.unknown_fpr_bits[1]=0x007FFFFFu;s.fpr[2]=0x3FC00000u;
-    memory.write32(s.pc,0x46020832u);rejects([&]{interpret_instruction(ctx);},"unknown FPR bits");s.unknown_fpr_bits[1]=0;
+    memory.write32(s.pc,0x46020832u);rejects([&]{compiled_fixture_step(ctx);},"unknown FPR bits");s.unknown_fpr_bits[1]=0;
     s.pc=0x80001000;s.fpr[1]=0x448619CCu;s.unknown_fpr_bits[1]=3;s.fpr[2]=0x40000000u;s.unknown_fpr_bits[2]=0;
-    s.fcr31=0x0183C079;memory.write32(s.pc,0x460208C3u);interpret_instruction(ctx);
+    s.fcr31=0x0183C079;memory.write32(s.pc,0x460208C3u);compiled_fixture_step(ctx);
     require(s.fpr[3]==0x440619CCu && s.unknown_fpr_bits[3]==3 && s.fcr31==0x0180C079 && s.fpr_affine[3].candidates->size()==4,
         "DIV.S preserves every uncertain quotient and agrees on I/D causes without clearing O/U history");
-    s.pc=0x80001000;memory.write32(s.pc,0x460108C3u);interpret_instruction(ctx);
+    s.pc=0x80001000;memory.write32(s.pc,0x460108C3u);compiled_fixture_step(ctx);
     require(s.fpr[3]==0x3F800000u && s.unknown_fpr_bits[3]==0,"DIV.S preserves correlated identical input domains");
     s.pc=0x80001000;s.fpr[1]=0x3F800000u;s.unknown_fpr_bits[1]=0;s.fpr[2]=0;s.unknown_fpr_bits[2]=0x40000000u;
-    memory.write32(s.pc,0x460208C3u);rejects([&]{interpret_instruction(ctx);},"cannot certify");s.unknown_fpr_bits[2]=0;
+    memory.write32(s.pc,0x460208C3u);rejects([&]{compiled_fixture_step(ctx);},"cannot certify");s.unknown_fpr_bits[2]=0;
     s.pc=0x80001000;s.fpr[1]=0x44400000u;s.unknown_fpr_bits[1]=0x003FFFFFu;s.fpr_affine[1]={};s.fpr[2]=0x40000000u;s.fcr31=0x0183C079;
-    memory.write32(s.pc,0x460208C3u);interpret_instruction(ctx);
+    memory.write32(s.pc,0x460208C3u);compiled_fixture_step(ctx);
     require(s.fpr[3]==0x43C00000u && s.unknown_fpr_bits[3]==0x003FFFFFu && s.fpr_affine[3].ranges && s.fcr31==0x0180C079,
         "power-of-two DIV.S preserves a large certified significand interval with common I/D causes");
     memory.write64(0x80002000,0x8776655443322110ull);
@@ -1257,6 +1256,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {interpreter_decode_cache();privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();vector_accumulator_add();immediate_add_knowledge();multiply_zero_knowledge();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
+    try {native_fixture_identity();privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();vector_accumulator_add();immediate_add_knowledge();multiply_zero_knowledge();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

@@ -88,8 +88,15 @@ void ranges() {
         require(contains(result->word,unit),"the independent exact unit endpoint remains represented");
     }
     require(!vu_float_product({0x3F800000u,0},crossing) &&
-        !vu_float_product({0x3F800000u,0},crossing,0,{},FloatBounds{0x3F7FFF00u,0x3F800000u}),
-        "opaque and excessive exponent-crossing domains still refuse");
+        !vu_float_add(crossing,crossing,FloatBounds{0x3F7FFF00u,0x3F800000u},FloatBounds{0x3F7FFF00u,0x3F800000u}),
+        "opaque product domains and excessive ADD enumeration still refuse");
+    const auto bounded=vu_float_product({0xBF000000u,0xFFFFFFu},{0x80000000u,0x7FFFFFFFu},0,
+        FloatBounds{0xBF7FFFFDu,0xBF800000u},FloatBounds{0xBFFFFFFDu,0xC0000000u});
+    require(bounded && bounded->bounded && bounded->bounds==FloatBounds{0x3FFFFFF9u,0x40000000u} &&
+        !bounded->flags && !vu_float_zero(bounded->word,bounded->bounds),
+        "crossing product domains retain the universal Booth loss margin and a proven nonzero class");
+    require(!vu_float_product({0,0x1FFFFFFu},{0x3F000000u,0},0,FloatBounds{0x00800000u,0x01000000u}),
+        "the broad product bound cannot invent flags across underflow");
     for(const auto a_sign:{0u,0x80000000u})for(const auto b_sign:{0u,0x80000000u}) {
         const ObservedWord opaque{a_sign,0x7FFFFFFFu},zero{b_sign,0x7FFFFFu};
         for(bool swap:{false,true}) {
@@ -116,6 +123,9 @@ void ranges() {
     }
     require(!vu_float_sqrt({0x35600000u,0x001FFFFFu},residual->bounds),
         "a genuinely dense wide SQRT domain still refuses instead of choosing sparse bits");
+    const auto viewport=vu_float_product({0x3C8B808Cu,0},{0x447FFE00u,0x1FFu},0,{},FloatBounds{0x447FFEFFu,0x447FFF00u});
+    require(viewport && viewport->bounded && viewport->bounds==FloatBounds{0x418B7FFFu,0x418B8000u} && viewport->word.unknown,
+        "an uncertain viewport scale must retain both distinct subpixel results");
     std::uint32_t flags=0xC000;
     require(!ee_fpu_multiply(0x3F800001,0x3F800003,flags) && flags==0xC000,
             "strict scalar multiply keeps its explicit refusal");

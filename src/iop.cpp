@@ -1292,9 +1292,6 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
                 events_.push_back({cycle_,"CDVD N command completion"});
             }
             if(cdvd_irq_) istat_|=1u<<2u;
-#ifndef PS2N_NATIVE_ONLY
-            if(!iop_aot_required_ && !instruction_observer_ && cycle-cycle_>=16u && advance_idle_loop(cycle))continue;
-#endif
             step();
             ++cycle_;
             if (timers_running_) tick_timers();
@@ -1387,48 +1384,6 @@ std::optional<std::uint64_t> Iop::idle_loop_horizon() const {
     return horizon;
 }
 
-#ifndef PS2N_NATIVE_ONLY
-bool Iop::advance_idle_loop(std::uint64_t target) {
-    if(in_delay_slot_)return false;
-    const auto horizon=idle_loop_horizon();
-    if(!horizon || *horizon<=cycle_+2u)return false;
-    const auto end=std::min(target,*horizon-1u);
-    const auto count=std::min<std::uint64_t>(end-cycle_,UINT32_MAX)&~1ull;
-    if(count<2u)return false;
-    const auto enabled=[&](std::uint32_t address,std::uint32_t mask) {
-        const auto* value=latch(address);return value && *value && ((**value&mask)==mask);
-    };
-    // run_until already pumped the first summarized instruction.
-    if((iop_sif1_[2]&kChcrStart) && enabled(0x1F801578u,1u) && enabled(0x1F801570u,0x8000u))
-        sif1_metrics_.destination_empty_cycles+=count-1u;
-    if(!ee_dma_suspended_ && (ee_dctrl_&1u) && (ee_dma_setup_[5][0].value_or(0u)&0x100u))
-        sif0_metrics_.destination_empty_cycles+=count-1u;
-    // No device/IRQ/callback edge is crossed. Only free-running counters change.
-    for(unsigned index=0;index<timers_.size();++index) {
-        auto& timer=timers_[index];
-        if(!timer.configured || timer.hblank)continue;
-        const auto total=std::uint64_t{timer.phase}+count;
-        const auto ticks=total/timer.prescale;
-        timer.phase=static_cast<std::uint32_t>(total%timer.prescale);
-        if(!ticks)continue;
-        const auto modulus=index<3u ? 65536ull : (1ull<<32u);
-        const auto old=std::uint64_t{*timer.count};
-        const bool zero_return=(timer.mode&kModeZeroReturn)!=0u;
-        if(timer.target) {
-            auto distance=(std::uint64_t{*timer.target}+modulus-old)%modulus;
-            if(!distance)distance=zero_return ? std::uint64_t{*timer.target}+1u : modulus;
-            if(ticks>=distance)timer.mode|=kModeCompareFlag;
-        }
-        if(zero_return)timer.count=static_cast<std::uint32_t>((old+ticks)%(std::uint64_t{*timer.target}+1u));
-        else {
-            if(ticks>=modulus-old)timer.mode|=kModeOverflowFlag;
-            timer.count=static_cast<std::uint32_t>((old+ticks)&(modulus-1u));
-        }
-    }
-    cycle_+=count;
-    return true;
-}
-#endif
 
 std::uint32_t Iop::ee_cdvd_read(std::uint32_t physical,std::size_t bytes) {
     if(stopped())throw DeviceRefusal("CDVD read after the IOP stopped: "+*stop_);
@@ -2446,6 +2401,32 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
         if(bytes!=2u)throw IopStop{"DEV9 POWER requires a halfword write"};
         write_dev9_power(value ? ObservedWord{*value,0} : observed ? *observed : ObservedWord{0,0xFFFFu});return;
     }
+    if(a.physical==0x10001100u || a.physical==0x10001010u) {
+        if(bytes!=(a.physical==0x10001100u ? 4u : 1u))throw IopStop{"SMAP TX FIFO data requires words; frame increments require bytes"};
+        if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
+            throw IopStop{"SMAP TX FIFO requires a measured SPEED interface with established power"};
+        const auto word=value ? ObservedWord{*value,0u} : observed ? *observed : ObservedWord{0u,~0u};
+        if(a.physical==0x10001100u)smap_.write_tx_data(word,cycle_);else smap_.increment_tx_frame(word,cycle_);
+        return;
+    }
+    if((a.physical>=0x10002004u && a.physical<0x10002068u) || a.physical==0x10000128u) {
+        if(bytes!=2u)throw IopStop{"SMAP EMAC configuration and interrupt clear require halfword writes"};
+        if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
+            throw IopStop{"SMAP EMAC requires a measured SPEED interface with established power"};
+        const auto word=value ? ObservedWord{*value,0u} : observed ? *observed : ObservedWord{0u,0xFFFFu};
+        smap_.tick(cycle_);
+        if(a.physical==0x10000128u)smap_.clear_interrupts(word);
+        else if(a.physical==0x10002008u || a.physical==0x1000200Au)smap_.write_tx_mode0(a.physical==0x1000200Au,word,cycle_);
+        else if(a.physical==0x1000205Cu || a.physical==0x1000205Eu)smap_.write_phy(a.physical==0x1000205Eu,word,cycle_);
+        else smap_.write_configuration(a.physical-0x10002000u,word);
+        return;
+    }
+    if(a.physical>=0x10003000u && a.physical<0x10003400u) {
+        if(bytes!=2u)throw IopStop{"SMAP descriptor RAM requires halfword writes"};
+        if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
+            throw IopStop{"SMAP descriptor RAM requires a measured SPEED interface with established power"};
+        smap_.tick(cycle_);smap_.write_descriptor(a.physical-0x10003000u,value ? ObservedWord{*value,0u} : observed ? *observed : ObservedWord{0u,0xFFFFu});return;
+    }
     if(a.physical==0x1F808284u) {
         if(bytes!=4u)throw IopStop{"SIO2 remote bypass requires word writes"};
         write_sio2_remote_bypass(value ? ObservedWord{*value,0u} : observed ? *observed : ObservedWord{0u,~0u},sio2_epoch);return;
@@ -2801,11 +2782,59 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         if(bytes!=2u)throw IopStop{name+": SPEED interrupt registers require halfword reads"};
         if(!dev9_power_ready())
             throw IopStop{"SPEED interrupt registers require established power and released interface reset"};
-        const auto word=physical==0x1000002Au ? speed_irq_mask_ : ObservedWord{0,0xFFFFu};
+        smap_.tick(cycle_);
+        const auto word=physical==0x1000002Au ? speed_irq_mask_ : smap_.interrupt_status();
         if(word.unknown) {
             undefined_load_="SPEED interrupt pending/mask bits are not established";
             undefined_known_=(~word.unknown&0xFFFFu)|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
         }
+        return word.value;
+    }
+    if(physical==0x10001004u || physical==0x10001200u) {
+        if(bytes!=(physical==0x10001004u ? 2u : 4u))throw IopStop{"SMAP TX pointer requires a halfword; RX FIFO data requires a word"};
+        if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
+            throw IopStop{"SMAP FIFO requires a measured SPEED interface with established power"};
+        const auto word=physical==0x10001004u ? ObservedWord{smap_.tx_write_pointer(cycle_),0} : smap_.read_rx_data(cycle_);
+        if(word.unknown){undefined_load_="SMAP RX FIFO contains unknown payload bits";
+            undefined_known_=~word.unknown|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);}
+        return word.value;
+    }
+    if(physical>=0x10002004u && physical<0x10002068u) {
+        if(bytes!=2u)throw IopStop{"SMAP EMAC configuration requires halfword reads"};
+        if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
+            throw IopStop{"SMAP EMAC requires a measured SPEED interface with established power"};
+        smap_.tick(cycle_);
+        const auto word=(physical==0x1000205Cu || physical==0x1000205Eu) ? smap_.read_phy(physical==0x1000205Eu,cycle_) :
+            (physical==0x10002008u || physical==0x1000200Au) ? smap_.read_tx_mode0(physical==0x1000200Au,cycle_) : smap_.read_configuration(physical-0x10002000u);
+        if(word.unknown){undefined_load_="SMAP EMAC configuration contains unestablished bits";
+            undefined_known_=(~word.unknown&0xFFFFu)|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);}
+        return word.value;
+    }
+    if(physical>=0x10003000u && physical<0x10003400u) {
+        if(bytes!=2u)throw IopStop{"SMAP descriptor RAM requires halfword reads"};
+        if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
+            throw IopStop{"SMAP descriptor RAM requires a measured SPEED interface with established power"};
+        smap_.tick(cycle_);const auto word=smap_.read_descriptor(physical-0x10003000u);
+        if(word.unknown){undefined_load_="SMAP descriptor RAM contains unwritten bits";
+            undefined_known_=(~word.unknown&0xFFFFu)|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);}
+        return word.value;
+    }
+    if(physical==0x10002000u || physical==0x10002002u) {
+        if(bytes!=2u)throw IopStop{"SMAP EMAC MODE0 requires halfword reads"};
+        if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
+            throw IopStop{"SMAP EMAC requires a measured SPEED interface with established power"};
+        const auto word=smap_.read_mode0(physical==0x10002002u,cycle_);
+        undefined_load_="SMAP EMAC MODE0 bits other than software reset have no established readback";
+        undefined_known_=(~word.unknown&0xFFFFu)|(std::string_view(what)=="LHU" ? 0xFFFF0000u : 0u);
+        return word.value;
+    }
+    if(physical==0x10000102u) {
+        if(bytes!=1u)throw IopStop{"SMAP descriptor mode requires byte reads"};
+        if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
+            throw IopStop{"SMAP descriptor mode requires a measured SPEED interface with established power"};
+        const auto word=smap_.read_bd_mode();
+        undefined_load_="SMAP descriptor mode unused bits have no established readback";
+        undefined_known_=(~word.unknown&0xFFu)|(std::string_view(what)=="LBU" ? 0xFFFFFF00u : 0u);
         return word.value;
     }
     if(physical==0x10001000u || physical==0x10001030u) {
@@ -3121,11 +3150,23 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         return;
     }
     const auto name = std::string("store ") + what + " of IOP register " + hex(physical);
+    if(physical==0x10000102u) {
+        if(bytes!=1u)throw IopStop{"SMAP descriptor mode requires byte writes"};
+        if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
+            throw IopStop{"SMAP descriptor mode requires a measured SPEED interface with established power"};
+        smap_.write_bd_mode({value.value_or(0),value ? 0u : ~0u});return;
+    }
+    if(physical==0x10002000u || physical==0x10002002u) {
+        if(bytes!=2u)throw IopStop{"SMAP EMAC MODE0 requires halfword writes"};
+        if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
+            throw IopStop{"SMAP EMAC requires a measured SPEED interface with established power"};
+        smap_.write_mode0(physical==0x10002002u,{value.value_or(0),value ? 0u : ~0u},cycle_);return;
+    }
     if(physical==0x10001000u || physical==0x10001030u) {
         if(bytes!=1u)throw IopStop{"SMAP FIFO control requires byte writes"};
         if(!hardware_ || !hardware_->speed_revisions || !((*hardware_->speed_revisions)[1]&1u) || !dev9_power_ready())
             throw IopStop{"SMAP FIFO requires a measured SPEED interface with established power"};
-        smap_.write(physical==0x10001030u,{value.value_or(0),value ? 0u : ~0u},cycle_);return;
+        smap_.tick(cycle_);smap_.write(physical==0x10001030u,{value.value_or(0),value ? 0u : ~0u},cycle_);return;
     }
     const auto spu2_offset=physical&0x7FFu;
     const bool unassigned_spu2=(spu2_offset>=0x346u && spu2_offset<=0x3FFu) ||
@@ -4111,13 +4152,7 @@ void Iop::step() {
     const auto word=fetch(pc_);
     if(instruction_observer_)instruction_observer_(pc_,word);
     if(iop_aot_enabled_ && execute_iop_aot(*this,word)){++native_instructions_;return;}
-#ifdef PS2N_NATIVE_ONLY
     throw IopStop{code_identity(pc_)+": "+missing_iop_aot(pc_,word)};
-#else
-    if(iop_aot_required_)throw IopStop{code_identity(pc_)+": "+missing_iop_aot(pc_,word)};
-    execute_instruction<-1>(word);
-    ++interpreted_instructions_;
-#endif
 }
 
 } // namespace ps2native

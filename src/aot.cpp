@@ -136,7 +136,7 @@ std::string generate(const ElfImage& image, const AotOptions& options,
     if (partitions && (partition_bytes < 4 || (partition_bytes & (partition_bytes-1u))))
         throw std::runtime_error("AOT partition size must be a power of two >= 4");
     const auto graph = analyze_control_flow(image, options.additional_function_entries,
-                                           options.jump_tables, options.interpreter_boundaries);
+                                           options.jump_tables, options.unsupported_boundaries);
     const auto blocks = make_blocks(graph);
     std::map<std::uint32_t,std::uint32_t> dispatch_entries;
     for (const auto& [start,block] : blocks)
@@ -156,8 +156,8 @@ std::string generate(const ElfImage& image, const AotOptions& options,
         << "; constant JR targets: " << graph.constant_jumps.size()
         << "; unresolved JR sites (runtime-checked): " << graph.unresolved_jumps.size()
         << "; unpaired R_MIPS_LO16: " << image.unpaired_lo16_relocations << "\n";
-    if (options.interpreter_boundaries)
-        out << "// Hybrid translation: interpreter boundaries: " << graph.interpreter_boundaries.size() << "\n";
+    if (options.unsupported_boundaries)
+        out << "// Partial AOT translation: unsupported boundaries: " << graph.unsupported_boundaries.size() << "\n";
     for (const auto& [type, count] : image.unused_relocation_counts)
         out << "// Relocation type " << type << " not used as evidence: " << count << " record(s)\n";
     if (image.ignored_rela_sections != 0)
@@ -174,7 +174,7 @@ std::string generate(const ElfImage& image, const AotOptions& options,
     for (const auto& rejected : graph.rejected_indirect_targets)
         out << "// Rejected code reference " << hex32(rejected.source) << " -> "
             << hex32(rejected.value) << ": " << rejected.reason << "\n";
-    for (const auto& boundary : graph.interpreter_boundaries)
+    for (const auto& boundary : graph.unsupported_boundaries)
         out << "// Interpreter boundary " << hex32(boundary.address) << ": " << boundary.reason << "\n";
     out << "#include <ps2native/aot_runtime.hpp>\n"
         << "#include <ps2native/ee_semantics.hpp>\n#include <ps2native/ee_system.hpp>\n"

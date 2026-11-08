@@ -10,11 +10,11 @@ inline std::string iop_instruction_hex(std::uint32_t value) {
 }
 template<std::uint32_t Word> void Iop::execute_native() {
     if(fetch(pc_)!=Word)throw IopExecutionStop{"IOP AOT instruction identity mismatch at "+iop_instruction_hex(pc_)};
-    execute_instruction<Word>(Word);
+    execute_instruction<Word>();
 }
-template<std::int64_t Word> void Iop::execute_instruction(std::uint32_t dynamic_word) {
+template<std::uint32_t Word> void Iop::execute_instruction() {
     const auto pc = pc_;
-    const std::uint32_t word = Word < 0 ? dynamic_word : static_cast<std::uint32_t>(Word);
+    constexpr std::uint32_t word = static_cast<std::uint32_t>(Word);
     const bool delay_slot = in_delay_slot_;
     const auto after = branch_target_;
     std::optional<std::uint32_t> target; // taken branch or jump of this instruction

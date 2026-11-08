@@ -1,4 +1,4 @@
-// End-to-end generated native code, checked against the shared interpreter.
+// Generated native code, independent value oracles, slicing and refusal boundaries.
 #include "boot_checks.hpp"
 #include "vu_aot_fixture.hpp"
 #include "ps2native/vu_aot.hpp"
@@ -49,7 +49,7 @@ void analysis_contract(const std::filesystem::path& directory) {
     (void)write_aot_sources(source,split);
 }
 void same_word(ObservedWord a,ObservedWord b,const char* field) {
-    require(a.value==b.value && a.unknown==b.unknown,std::string("native/interpreter ")+field);
+    require(a.value==b.value && a.unknown==b.unknown,std::string("native schedules ")+field);
 }
 void compare(const VuControl& a,const VuControl& b,const Gif& ga,const Gif& gb,const GsRegisters& sa,const GsRegisters& sb) {
     require(a.micro_running(1)==b.micro_running(1) && a.diagnostic_micro_pc(1)==b.diagnostic_micro_pc(1) &&
@@ -69,24 +69,30 @@ void compare(const VuControl& a,const VuControl& b,const Gif& ga,const Gif& gb,c
 struct Device {
     VuControl vu;Vif vif;Gif gif;GsRegisters gs;
     explicit Device(bool native) {
-        gs.reset(0);vu.enable_vu1_aot(native);vu_aot_fixture::upload(vu,vif,gif,gs);vu_aot_fixture::seed(vu);
+        gs.reset(0);vu.enable_vu1_aot(true);vu_aot_fixture::upload(vu,vif,gif,gs);vu_aot_fixture::seed(vu);
         vu_aot_fixture::seed_graphics(vu,gs);
     }
 };
 void equivalence(unsigned entry,bool dynamic=false) {
-    Device interpreted(false),native(true);
-    interpreted.vu.start_micro(1,entry,0,{31,0},{17,0});native.vu.start_micro(1,entry,0,{31,0},{17,0});
+    Device sliced(true),native(true);
+    sliced.vu.start_micro(1,entry,0,{31,0},{17,0});native.vu.start_micro(1,entry,0,{31,0},{17,0});
+    if(dynamic) {
+        rejects([&]{native.vu.advance_micro(80,&native.gif,&native.gs);},"missing VU1 AOT");
+        require(native.vu.vu1_aot_stats().interpreted_instructions==0 &&
+                native.vu.vu1_aot_stats().untranslated_pc>0,"indirect target without an offline root is refused, never interpreted");
+        return;
+    }
     for(unsigned cycle=0;cycle<=80u;++cycle) {
-        interpreted.vu.advance_micro(cycle,&interpreted.gif,&interpreted.gs);native.vu.advance_micro(cycle,&native.gif,&native.gs);
-        compare(interpreted.vu,native.vu,interpreted.gif,native.gif,interpreted.gs,native.gs);
+        native.vu.advance_micro(cycle,&native.gif,&native.gs);
+        if(cycle%8u==0) {
+            sliced.vu.advance_micro(cycle,&sliced.gif,&sliced.gs);
+            compare(sliced.vu,native.vu,sliced.gif,native.gif,sliced.gs,native.gs);
+        }
     }
     require(!native.vu.micro_running(1),"fixture reaches real E completion");
     const auto stats=native.vu.vu1_aot_stats();
-    require(stats.native_instructions>0,"the generated compiled translation actually retired native LIWs");
-    require(dynamic ? stats.interpreted_instructions>0 && stats.untranslated_pc>0 : stats.interpreted_instructions==0,
-        "proven PCs are native and the dynamic target falls back explicitly; entry="+std::to_string(entry)+
-        " native="+std::to_string(stats.native_instructions)+" interpreted="+std::to_string(stats.interpreted_instructions)+
-        " missing="+std::to_string(stats.missing_program)+" untranslated="+std::to_string(stats.untranslated_pc));
+    require(stats.native_instructions>0 && stats.interpreted_instructions==0,
+        "all proven VU instructions execute compiled code");
     if(entry==vu_aot_fixture::math_entry) {
         require(native.vu.observe_data(0x4350u).value==0x40400000u && !native.vu.observe_data(0x4350u).unknown,"native LOI commits the complete raw immediate");
         for(const auto [reg,value]:{std::pair{11u,0x40000000u},std::pair{12u,0x40400000u},std::pair{13u,0xBF800000u}}){const auto word=native.vu.observe_data(0x4000u+reg*16u);require(word.value==value && !word.unknown,"native ADDi uses the old paired I, followed by real MULi and SUBi");}
@@ -101,7 +107,7 @@ void equivalence(unsigned entry,bool dynamic=false) {
     }
     if(entry==vu_aot_fixture::wrap_entry)require(native.vu.observe_data(0x42F0).value==1,"BAL wrapped link and branch delay");
     if(entry==vu_aot_fixture::draw_entry || entry==vu_aot_fixture::wrap_entry) {
-        const auto left=interpreted.gs.scanout(80),right=native.gs.scanout(80);
+        const auto left=sliced.gs.scanout(80),right=native.gs.scanout(80);
         require(left.rgba==right.rgba && right.width==8 && right.height==8 && right.rgba.size()==256,
             "VU-produced sprite yields identical complete RGBA scanout");
         for(unsigned pixel=0;pixel<64;++pixel)require(right.rgba[pixel*4u]==0x10 && right.rgba[pixel*4u+1u]==0x20 &&
@@ -109,49 +115,53 @@ void equivalence(unsigned entry,bool dynamic=false) {
     }
 }
 void invalidation() {
-    Device interpreted(false),native(true);
-    interpreted.vu.start_micro(1,0,0);native.vu.start_micro(1,0,0);
-    interpreted.vu.advance_micro(1);native.vu.advance_micro(1);
+    Device sliced(true),native(true);
+    sliced.vu.start_micro(1,0,0);native.vu.start_micro(1,0,0);
+    sliced.vu.advance_micro(1);native.vu.advance_micro(1);
     require(native.vu.vu1_aot_stats().native_instructions==1,"native pair executed before executable mutation");
     const auto patch=vu_aot_fixture::addiu(11,0,123);
-    for(auto* device:{&interpreted,&native})device->vu.write_memory(0x11008008u,4,{patch,0});
-    for(unsigned cycle=2;cycle<=80;++cycle) {
-        interpreted.vu.advance_micro(cycle,&interpreted.gif,&interpreted.gs);native.vu.advance_micro(cycle,&native.gif,&native.gs);
-        compare(interpreted.vu,native.vu,interpreted.gif,native.gif,interpreted.gs,native.gs);
+    for(auto* device:{&sliced,&native})device->vu.write_memory(0x11008008u,4,{patch,0});
+    for(auto* device:{&sliced,&native}) {
+        rejects([&]{device->vu.advance_micro(80,&device->gif,&device->gs);},"missing VU1 AOT");
+        require(device->vu.vu1_aot_stats().native_instructions==1 &&
+                device->vu.vu1_aot_stats().interpreted_instructions==0 &&
+                device->vu.observe_data(0x42B0).value!=123,
+                "changed code cannot retire or execute stale native instructions");
     }
-    require(native.vu.observe_data(0x42B0).value==123 && native.vu.vu1_aot_stats().missing_program>0 &&
-        native.vu.vu1_aot_stats().interpreted_instructions>0,"changed microcode cannot execute a stale translation");
-    // MPG follows the same invalidation path as an aperture store.
-    const auto before=native.vu.vu1_aot_stats().native_instructions;
-    const auto replacement=std::uint64_t{vu_aot_fixture::addiu(12,0,55)}|(std::uint64_t{vu_aot_fixture::upper_nop|0x40000000u}<<32u);
-    native.vif.write_fifo(0x4A01000000000000ull,replacement,native.gif,native.gs,&native.vu,90);
-    native.vu.start_micro(1,0,90);native.vu.advance_micro(100,&native.gif,&native.gs);
-    require(native.vu.observe_data(0x42C0).value==55 && native.vu.vu1_aot_stats().native_instructions==before,
-        "MPG replacement selects explicit missing-program interpretation");
-    native.vu.write_memory(0x11008000u,1,{0,1});native.vu.start_micro(1,0,101);
-    rejects([&]{native.vu.advance_micro(102,&native.gif,&native.gs);},"unwritten micro memory");
+    Device mpg(true);
+    const auto replacement=std::uint64_t{vu_aot_fixture::addiu(12,0,55)}|
+        (std::uint64_t{vu_aot_fixture::upper_nop|0x40000000u}<<32u);
+    mpg.vif.write_fifo(0x4A01000000000000ull,replacement,mpg.gif,mpg.gs,&mpg.vu,90);
+    mpg.vu.start_micro(1,0,90);
+    rejects([&]{mpg.vu.advance_micro(100,&mpg.gif,&mpg.gs);},"missing VU1 AOT");
+    require(mpg.vu.vu1_aot_stats().native_instructions==0 && mpg.vu.observe_data(0x42C0).value!=55,
+        "MPG invalidates artifact selection before effects");
+    Device unknown(true);
+    unknown.vu.write_memory(0x11008000u,1,{0,1});unknown.vu.start_micro(1,0,101);
+    rejects([&]{unknown.vu.advance_micro(102,&unknown.gif,&unknown.gs);},"missing VU1 AOT");
 }
+
 void refusals() {
-    Device interpreted(false),native(true);
-    for(auto* device:{&interpreted,&native}) {
+    Device sliced(true),native(true);
+    for(auto* device:{&sliced,&native}) {
         device->vu.write_vector(31,{{0,~0ull},{0,~0ull}});device->vu.write(2,0x401u);
         device->vu.vector_store_increment(31,2,15);device->vu.start_micro(1,0,0);
     }
-    rejects([&]{interpreted.vu.advance_micro(1);},"FMAC multiply consumes unknown");
+    rejects([&]{sliced.vu.advance_micro(1);},"FMAC multiply consumes unknown");
     rejects([&]{native.vu.advance_micro(1);},"FMAC multiply consumes unknown");
-    compare(interpreted.vu,native.vu,interpreted.gif,native.gif,interpreted.gs,native.gs);
+    compare(sliced.vu,native.vu,sliced.gif,native.gif,sliced.gs,native.gs);
     require(native.vu.diagnostic_micro_instructions(1)==0 && native.vu.vu1_aot_stats().native_instructions==0 &&
         native.vu.observe_data(0x4210).value==2000,"a refused upper cannot commit its paired integer lower or claim native retirement");
 }
 void complete_state(const std::filesystem::path& directory) {
     std::vector<std::string> reference;
     for(unsigned engine=0;engine<3;++engine) {
-        auto memory=std::make_unique<Memory>();EEState state;vu_aot_fixture::initialize(*memory,state,engine==2,0);
+        auto memory=std::make_unique<Memory>();EEState state;vu_aot_fixture::initialize(*memory,state,true,0);
         state.set_cp0(Cop0::Status,kStatusIE|kStatusEIE|kStatusIM7);state.set_cp0(Cop0::Compare,7);state.compare_written=true;
         BootOptions options;options.tail_instructions=0;options.max_instructions=1;
         unsigned sample=0;
         for(unsigned cycle=1;cycle<=65;++cycle) {
-            const auto report=run_ee_boot(state,*memory,engine ? &aot_module() : nullptr,options);
+            const auto report=run_ee_boot(state,*memory,&aot_module(),options);
             require(report.outcome==BootOutcome::BudgetExhausted,"integrated EE/VU execution: "+report.reason);
             if(cycle<=8 || cycle==11 || cycle==17 || cycle==25 || cycle==40 || cycle==65) {
                 const auto hash=checkpoint_state_sha256(state,*memory);
@@ -181,7 +191,7 @@ template<class Character> int vu_aot_main(int argc,Character** argv) try {
     if(argc!=2)return 2;const auto directory=std::filesystem::path(argv[1]);ps2native::create_directories(directory);
     analysis_contract(directory);equivalence(vu_aot_fixture::math_entry);equivalence(vu_aot_fixture::draw_entry);equivalence(vu_aot_fixture::indirect_entry,true);equivalence(vu_aot_fixture::wrap_entry);
     invalidation();refusals();complete_state(directory);
-    std::cout<<"VU1 generated native equivalence: VF/VI/ACC, Q/P/flags, cycle boundaries, memory, VIF MPG, branches/delays, PATH1/GS RGBA, complete checkpoints, missing/modified/unknown fallback passed\n";return 0;
+    std::cout<<"VU1 generated native equivalence: VF/VI/ACC, Q/P/flags, cycle boundaries, memory, VIF MPG, branches/delays, PATH1/GS RGBA, complete checkpoints, missing/modified/unknown code refusal passed\n";return 0;
 } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 #ifdef _WIN32
 int wmain(int argc,wchar_t** argv){return vu_aot_main(argc,argv);}

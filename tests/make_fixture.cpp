@@ -1,5 +1,7 @@
 // Synthetic, independently-authored MIPS instructions. No Sony or game binaries.
 #include "bios_program.hpp"
+#include "direct_program.hpp"
+#include <sstream>
 #include "gs_program.hpp"
 #include "m13_program.hpp"
 #include "ps2native/io.hpp"
@@ -33,7 +35,12 @@ std::uint32_t i(unsigned op, unsigned rs, unsigned rt, std::int16_t imm) {
 
 template <typename Character>
 int fixture_main(int argc, Character** argv) {
-    if (argc != 2 && argc != 3) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym|jump-table|jump-table-nosym|m13|m13-stripped|bios|bios-m21|bios-m22|bios-m23|bios-m24|bios-m25]\n"; return 2; }
+    if (argc < 2 || argc > 4) { std::cerr << "Usage: ps2n-make-fixture <output.elf> [ops|indirect|indirect-nosym|jump-table|jump-table-nosym|m13|m13-stripped|bios|bios-m21|bios-m22|bios-m23|bios-m24|bios-m25]\n"; return 2; }
+    if(argc==3 && std::filesystem::path(argv[2])=="bios-payload") {
+        direct_test::Program p;p.segments.push_back({m20::kPayloadRam&0x1FFFFFFFu,5,m20::le_words(m20::payload_code())});
+        auto bytes=direct_test::elf(p);direct_test::put(bytes,24,m20::kPayloadRam&0x1FFFFFFFu);
+        return write_fixture(argv[1],bytes) ? 0 : 1;
+    }
     constexpr std::uint32_t start = 0x00100000u;
     if (argc == 3 && std::filesystem::path(argv[2]) == std::filesystem::path("gs")) {
         if (!write_fixture(std::filesystem::path(argv[1]), m29::build().rom)) return 1;
@@ -42,7 +49,7 @@ int fixture_main(int argc, Character** argv) {
     }
 
     // Synthetic M2.0 (and M2.1-M2.5 variants) boot firmware in the ROM0 container format (not Sony code).
-    if (argc == 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("bios") ||
+    if (argc >= 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("bios") ||
                       std::filesystem::path(argv[2]) == std::filesystem::path("bios-m21") ||
                       std::filesystem::path(argv[2]) == std::filesystem::path("bios-m22") ||
                       std::filesystem::path(argv[2]) == std::filesystem::path("bios-m23") ||
@@ -56,12 +63,16 @@ int fixture_main(int argc, Character** argv) {
                                                   : mode == std::filesystem::path("bios-m21") ? m20::Stage::M21
                                                                                               : m20::Stage::M20);
         if (!write_fixture(std::filesystem::path(argv[1]), firmware.rom)) return 1;
+        if(argc==4) {
+            std::ostringstream roots;for(const auto& [name,pc]:firmware.labels){(void)name;roots<<pc<<'\n';}
+            (void)ps2native::write_text_if_changed(argv[3],roots.str());
+        }
         std::cout << "Created synthetic ROM0, ROMDIR at 0x" << std::hex << firmware.romdir_offset << '\n';
         return 0;
     }
 
     // Synthetic M1.3: relocation evidence, bounded jump tables, R5900 integer subset.
-    if (argc == 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("m13") ||
+    if (argc >= 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("m13") ||
                       std::filesystem::path(argv[2]) == std::filesystem::path("m13-stripped"))) {
         const bool with_sections = std::filesystem::path(argv[2]) == std::filesystem::path("m13");
         const auto b = m13::build_elf(m13::build_program(), with_sections);
@@ -71,7 +82,7 @@ int fixture_main(int argc, Character** argv) {
     }
 
     // Synthetic M1.2: two valid function pointers, one non-executable pointer.
-    if (argc == 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("jump-table") ||
+    if (argc >= 3 && (std::filesystem::path(argv[2]) == std::filesystem::path("jump-table") ||
                       std::filesystem::path(argv[2]) == std::filesystem::path("jump-table-nosym"))) {
         const bool with_relocations = std::filesystem::path(argv[2]) == std::filesystem::path("jump-table");
         constexpr std::uint32_t table = start + 0x1000u;

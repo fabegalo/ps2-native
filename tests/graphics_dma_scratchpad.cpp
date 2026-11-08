@@ -1,7 +1,7 @@
 // Synthetic DMA sources exercise the shared RAM/SPR bytes, never firmware.
 #include "boot_checks.hpp"
 #include "ps2native/iop.hpp"
-#include "ps2native/interpreter.hpp"
+#include "ee_native_fixture.hpp"
 #include <iostream>
 using namespace ps2native;
 using namespace boot_checks;
@@ -85,7 +85,7 @@ void gif_and_boundaries() {
     require(preserved.v1.read_register(0x30)==0x5555,"loading an IOP development image preserves shared EE SPR attachment");
 }
 void memory_attachment() {
-    Memory memory;std::vector<std::uint8_t> rom(4u*1024u*1024u);memory.reset_for_boot(rom);
+    Memory memory;std::vector<std::uint8_t> rom(4u*1024u*1024u);reset_native_ee_fixture(memory,rom);
     std::uint64_t clock=0;memory.set_clock(&clock);
     memory.tlb_write(0,{0,0x70000000u,0x80000007u,7u});
     memory.set_translation_context(0,false);
@@ -171,8 +171,8 @@ void mfifo_transport() {
     require(!(strict.dma.ee_dma_observe(0x1000A000u).value&0x100u),"unknown initial QWC cannot arm GIF");
 }
 void numeric_packet_transport() {
-    for(const bool interpreted:{false,true})for(const bool certified:{false,true}) {
-        Memory memory;std::vector<std::uint8_t> rom(4u*1024u*1024u);memory.reset_for_boot(rom);
+    for(const bool retired_path:{false,true})for(const bool certified:{false,true}) {
+        Memory memory;std::vector<std::uint8_t> rom(4u*1024u*1024u);reset_native_ee_fixture(memory,rom);
         std::uint64_t clock=0;memory.set_clock(&clock);memory.tlb_write(0,{0,0x70000000u,0x80000007u,7u});memory.set_translation_context(0,false);
         const ObservedWord scale{0x447FFE00u,0x1FFu};
         memory.store128_observed(0x70003A00u,{{scale.value,scale.unknown},{0x3F80000000000000ull,0}});
@@ -181,7 +181,7 @@ void numeric_packet_transport() {
         EEState state;state.set_reg32(1,0x70003A00u);state.set_reg32(3,0x70000110u);
         const auto instruction=[&](std::uint32_t word) {
             state.pc=0x80001000u;memory.write32(state.pc,word);std::uint64_t retired=0;
-            if(interpreted){ExecutionContext ctx{state,memory,retired,100,0xFFFFFFFFu};interpret_instruction(ctx);}
+            if(retired_path){ExecutionContext ctx{state,memory,retired,100,0xFFFFFFFFu};compiled_fixture_step(ctx);}
             else if(word==0x78220000u)ee::exec<MipsOpcode::Lq>(state,memory,state.pc,word);
             else ee::exec<MipsOpcode::Sq>(state,memory,state.pc,word);
         };

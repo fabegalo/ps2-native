@@ -80,8 +80,8 @@ int aot_main(int argc, Character** argv) {
             } else if (flag.starts_with("--split=")) {
                 split_output = true;
                 partition_bytes=parse_u32(flag.substr(8),"--split address bucket size");
-            } else if (flag == "--hybrid") {
-                options.interpreter_boundaries = true;
+            } else if ((flag == "--allow-partial" || flag == "--hybrid")) {
+                options.unsupported_boundaries = true;
             } else if (flag == "--bios") {
                 bios_input = true;
             } else if (flag == "--disc") {
@@ -126,7 +126,7 @@ int aot_main(int argc, Character** argv) {
         if (!split_output && ps2native::file_exists(manifest))
             throw std::runtime_error("Existing partitioned AOT output requires --split");
         if(iop_input) {
-            if(!iop_base || !options.jump_tables.empty() || options.interpreter_boundaries)
+            if(!iop_base || !options.jump_tables.empty() || options.unsupported_boundaries)
                 throw std::runtime_error("--iop requires --base and --entry; input must be loaded/relocated bytes, not an unlinked IRX");
             const auto identity=ps2native::sha256_hex(input);
             if(expected_sha256 && *expected_sha256!=identity)throw std::runtime_error("IOP input SHA-256 mismatch");
@@ -145,7 +145,7 @@ int aot_main(int argc, Character** argv) {
             return 0;
         }
         if(vu1_input) {
-            if(!options.jump_tables.empty() || options.interpreter_boundaries)
+            if(!options.jump_tables.empty() || options.unsupported_boundaries)
                 throw std::runtime_error("--vu1 does not accept EE --table/--hybrid options");
             auto image=ps2native::VuAotImage{};
             if(!vu_unit && input.size()==4096u) {
@@ -199,7 +199,7 @@ int aot_main(int argc, Character** argv) {
             // only, interpreter boundaries listed; nothing is embedded but code.
             if (!options.jump_tables.empty()) throw std::runtime_error("--table is not supported with --bios");
             const auto bios = ps2native::load_bios_rom0(input, {expected_sha256});
-            options.interpreter_boundaries = true;
+            options.unsupported_boundaries = true;
             options.source_kind = "bios-rom0";
             options.source_sha256 = bios.sha256;
             const bool updated = generate(ps2native::bios_code_image(bios));

@@ -192,9 +192,14 @@ public:
     void diagnostic_spu2_dma_wrap_to_zero() { registers_.diagnostic_spu2_dma_wrap_to_zero(); }
     void attach_speed_eeprom_words(std::span<const std::uint16_t> words,std::string_view hash) { registers_.attach_speed_eeprom_words(words,hash); }
     void diagnostic_speed_eeprom_presence(bool present) { registers_.diagnostic_speed_eeprom_presence(present); }
+    // RUNTIME_HELPERS_BEGIN
+    void diagnostic_wakeup_alarm_disabled() { registers_.diagnostic_wakeup_alarm_disabled(); }
+    // RUNTIME_HELPERS_END
     void diagnostic_dev9_control_latches() { registers_.diagnostic_dev9_control_latches(); }
     void diagnostic_dev9_power_settle_cycles(std::uint32_t cycles) { registers_.diagnostic_dev9_power_settle_cycles(cycles); }
     void diagnostic_smap_reset_cycles(std::uint32_t cycles) { registers_.diagnostic_smap_reset_cycles(cycles); }
+    void diagnostic_smap_phy_cycles(std::uint32_t cycles) { registers_.diagnostic_smap_phy_cycles(cycles); }
+    void diagnostic_smap_loopback_cycles(std::uint32_t cycles) { registers_.diagnostic_smap_loopback_cycles(cycles); }
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles) { registers_.diagnostic_sio2_infrared_timeout(cycles); }
     void diagnostic_sio2_port_timing(unsigned bits) { registers_.diagnostic_sio2_port_timing(bits); }
     void diagnostic_sio2_digital_pad(unsigned port,std::uint16_t buttons,std::uint32_t cycles) { registers_.diagnostic_sio2_digital_pad(port,buttons,cycles); }
@@ -239,6 +244,7 @@ public:
     [[nodiscard]] const VuAotStats& vu1_aot_stats() const {return registers_.vu1_aot_stats();}
     [[nodiscard]] VuAotImage capture_vu1_micro() const {return registers_.capture_vu1_micro();}
     void set_vu1_capture(VuControl::Vu1Capture capture) {registers_.set_vu1_capture(std::move(capture));}
+    void set_spu2_sample_sink(Iop::Spu2SampleSink sink) { registers_.set_spu2_sample_sink(std::move(sink)); }
     // HOST_INPUT_END
     void diagnostic_vu_power_two_carry() {registers_.diagnostic_vu_power_two_carry();}
     // External-reference hypothesis only; not a measured scalar EE carry tree.
@@ -267,12 +273,16 @@ public:
         registers_.vu_add(destination,left,right,mask,broadcast,subtract,to_accumulator);
     }
     void vu_rotate(unsigned destination,unsigned source,unsigned mask) {registers_.vu_rotate(destination,source,mask);}
-    void vu_product(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast,bool accumulate,bool to_accumulator,bool outer=false) {
-        registers_.vu_product(destination,left,right,mask,broadcast,accumulate,to_accumulator,outer);
+    void vu_product(unsigned destination,unsigned left,unsigned right,unsigned mask,unsigned broadcast,bool accumulate,bool to_accumulator,bool outer=false,bool subtract=false) {
+        registers_.vu_product(destination,left,right,mask,broadcast,accumulate,to_accumulator,outer,subtract);
     }
     void vu_vector_store_increment(unsigned source,unsigned base,unsigned mask) {
         registers_.vu_vector_store_increment(source,base,mask);
     }
+    void vu_rinit(unsigned fs, unsigned fsf) { registers_.vu_rinit(fs, fsf); }
+    void vu_rxor(unsigned fs, unsigned fsf) { registers_.vu_rxor(fs, fsf); }
+    void vu_rget(unsigned ft, unsigned mask) { registers_.vu_rget(ft, mask); }
+    void vu_rnext(unsigned ft, unsigned mask) { registers_.vu_rnext(ft, mask); }
     void vu_add_integer(unsigned destination,unsigned left,unsigned right) {registers_.vu_add_integer(destination,left,right);}
     // Runs the IOP up to the current EE time (boot mapping, clock attached).
     void sync_iop() { registers_.sync_iop(); }

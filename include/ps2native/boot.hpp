@@ -107,7 +107,7 @@ void prepare_direct_elf(const ElfImage& elf, const AotModule* aot, EEState& stat
                         const DirectElfEnvironment& environment = {});
 
 // Runs the EE from its current state: AOT blocks where the module has a block
-// for the exact PC, the interpreter (explicitly traced) everywhere else. Never
+// for the exact PC; absent or mismatching code is refused. Never
 // throws for guest behavior: the first fault or unmodeled behavior is the
 // reported block point.
 [[nodiscard]] BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot,

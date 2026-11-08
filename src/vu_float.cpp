@@ -42,15 +42,15 @@ std::optional<VuFloatResult> normal_identity(ObservedWord word,std::optional<Flo
        ((*bounds)[0]&0x7FFFFFFFu)<0x00800000u)return {};
     return VuFloatResult{{word.value&~word.unknown,word.unknown},0,*bounds,true};
 }
+std::optional<FloatBounds> certified_normal_bounds(ObservedWord word,std::optional<FloatBounds> bounds) {
+    if(!word.unknown)return FloatBounds{word.value,word.value};
+    const auto value=normal_identity(word,bounds);
+    return value ? std::optional<FloatBounds>{value->bounds} : std::nullopt;
+}
 template<typename Operation>
 std::optional<VuFloatResult> enumerate_normal_domains(ObservedWord a,ObservedWord b,
     std::optional<FloatBounds> a_bounds,std::optional<FloatBounds> b_bounds,Operation operation) {
-    const auto certified=[](ObservedWord word,std::optional<FloatBounds> bounds)->std::optional<FloatBounds> {
-        if(!word.unknown)return FloatBounds{word.value,word.value};
-        const auto value=normal_identity(word,bounds);
-        return value ? std::optional<FloatBounds>{value->bounds} : std::nullopt;
-    };
-    const auto ar=certified(a,a_bounds),br=certified(b,b_bounds);
+    const auto ar=certified_normal_bounds(a,a_bounds),br=certified_normal_bounds(b,b_bounds);
     if(!ar || !br || (std::uint64_t{(*ar)[1]}-(*ar)[0]+1u)*
         (std::uint64_t{(*br)[1]}-(*br)[0]+1u)>256u)return {};
     std::uint32_t low=~0u,high=0,common_flags=0;bool first=true;
@@ -150,10 +150,24 @@ std::optional<VuFloatResult> vu_float_product(ObservedWord a,ObservedWord b,unsi
         return value;
     }
     profiling::Scope profile(profiling::Phase::Bounds);
-    if(!fraction_only(a) || !fraction_only(b))return enumerate_normal_domains(a,b,a_bounds,b_bounds,
-        [diagnostic](std::uint32_t left,std::uint32_t right,std::uint32_t& flags) {
-            return ee_fpu_multiply(left,right,flags,diagnostic);
-        });
+    if(!fraction_only(a) || !fraction_only(b)) {
+        if(auto exact=enumerate_normal_domains(a,b,a_bounds,b_bounds,
+            [diagnostic](std::uint32_t left,std::uint32_t right,std::uint32_t& flags) {
+                return ee_fpu_multiply(left,right,flags,diagnostic);
+            }))return exact;
+        const auto ar=certified_normal_bounds(a,a_bounds),br=certified_normal_bounds(b,b_bounds);
+        if(!ar || !br || ((*ar)[0]&0x7FFFFFFFu)<0x00800000u || ((*br)[0]&0x7FFFFFFFu)<0x00800000u)return {};
+        const auto endpoint=[&](unsigned end) {
+            const auto av=(*ar)[end],bv=(*br)[end];
+            return packed(std::uint64_t{(av&0x7FFFFFu)|0x800000u}*((bv&0x7FFFFFu)|0x800000u),
+                static_cast<int>((av>>23u)&255u)+static_cast<int>((bv>>23u)&255u)-127,(av^bv)&0x80000000u);
+        };
+        const auto low=endpoint(0),high=endpoint(1);
+        if(low.flags || high.flags || (low.word.value&0x7FFFFFFFu)<=0x00800000u)return {};
+        // The existing Booth loss bound is 2^18 product units, below even
+        // the 2^22-unit ULP below a normalization boundary: at most one encoding.
+        return hull(low.word.value-1u,high.word.value,0,true);
+    }
     const auto ar=input_bounds(a,a_bounds),br=input_bounds(b,b_bounds);
     if(!ar || !br)return {};
     const auto [amin,amax]=*ar;const auto [bmin,bmax]=*br;

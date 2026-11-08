@@ -11,20 +11,14 @@ template<class C> int run(int argc,C** argv) try {
     const auto image=parse_ee_elf(read_file(std::filesystem::path(argv[1])));
     auto memory=std::make_unique<Memory>();EEState state;memory->load(image);state.pc=image.entry|0x80000000u;
     BootOptions options;options.max_instructions=100;options.stop_at=0x80100024u;
-#ifdef PS2N_NATIVE_ONLY
     const auto report=run_ee_boot(state,*memory,&aot_module(),options);
     require(report.aot_instructions==13 && report.interpreted_instructions==0,"all EE system instructions executed compiled AOT");
-#else
-    const auto report=run_ee_boot(state,*memory,nullptr,options);
-    require(report.aot_instructions==0 && report.interpreted_instructions==13,"independent validation interpreter path");
-#endif
     require(report.outcome==BootOutcome::StopAddress && report.retired==13,"native system path reaches stop after syscall/ERET");
     require(state.reg32(2)==0 && state.reg32(4)==0x1234 && state.reg32(5)==~0u && state.reg32(6)==0 && state.reg32(7)==0x1000,
         "independent expected Count, COP0 transfer, signed arithmetic and PREF results");
     require(state.cp0(Cop0::Epc)==0x80100014u && !(state.cp0(Cop0::Status)&kStatusEXL) &&
         (state.cp0(Cop0::Cause)&0x7Cu)==32u,"exception EPC/Cause and ERET restore original context");
     std::cout<<"EE_SYSTEM_STATE "<<checkpoint_state_sha256(state,*memory)<<'\n';
-#ifdef PS2N_NATIVE_ONLY
     memory->load_direct_elf(image);
     std::uint64_t clock=8;memory->set_clock(&clock);
     memory->sync_iop();
@@ -38,7 +32,6 @@ template<class C> int run(int argc,C** argv) try {
     catch(const DeviceRefusal& error){refused=std::string(error.what()).find("missing IOP AOT")!=std::string::npos;}
     require(refused && iop.cycle()==0 && iop.native_instructions()==0 && iop.interpreted_instructions()==0,
         "native synchronization reports absent IOP translation before further guest effects");
-#endif
     return 0;
 } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 #ifdef _WIN32

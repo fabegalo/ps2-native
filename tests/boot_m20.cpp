@@ -1,11 +1,12 @@
 // M2.0 end-to-end: synthetic ROM0 (tests/bios_program.hpp) -> BIOS loader ->
 // EE bus/TLB/COP0 reset state -> execution from the reset vector, once with
-// the interpreter only and once hybrid with the AOT translation generated from
+// native fixture execution only and once hybrid with the AOT translation generated from
 // the same ROM0 by `ps2n-aot --bios` (compiled into this executable). Both runs
 // must retire the same instructions, produce the same trace (engine aside),
 // reach the same final state and stop at the same unmodeled device access.
 #include "bios_program.hpp"
 #include "boot_checks.hpp"
+#include "ee_native_fixture.hpp"
 
 #include "ps2native/aot_runtime.hpp"
 #include "ps2native/core.hpp"
@@ -222,8 +223,11 @@ BootReport run_patched(const std::vector<std::uint8_t>& rom, std::uint32_t word)
     const auto bios = load_bios_rom0(patched);
     EEState state;
     Memory memory;
-    prepare_ee_boot(bios, nullptr, state, memory);
-    return run_ee_boot(state, memory, nullptr, {});
+    const AotBlock block{m20::kResetVector,[](ExecutionContext& ctx){compiled_fixture_step(ctx);}};
+    const AotModule module{&block,1,nullptr,0,"bios-rom0",bios.sha256.c_str()};
+    prepare_ee_boot(bios,&module,state,memory);
+    BootOptions options;options.max_instructions=1;
+    return run_ee_boot(state,memory,&module,options);
 }
 void check_interpreter_stops(const std::vector<std::uint8_t>& rom) {
     auto expect = [&](std::uint32_t word, const std::string& category, const std::string& reason) {
@@ -240,18 +244,21 @@ void check_interpreter_stops(const std::vector<std::uint8_t>& rom) {
         put32(patched, 0, word);
         EEState state;
         Memory memory;
-        prepare_ee_boot(load_bios_rom0(patched), nullptr, state, memory);
+        const auto bios=load_bios_rom0(patched);
+        const AotBlock block{m20::kResetVector,[](ExecutionContext& ctx){compiled_fixture_step(ctx);}};
+        const AotModule module{&block,1,nullptr,0,"bios-rom0",bios.sha256.c_str()};
+        prepare_ee_boot(bios,&module,state,memory);
         BootOptions options;
         options.stop_at = 0xBFC00380u;
-        const auto report = run_ee_boot(state, memory, nullptr, options);
+        const auto report = run_ee_boot(state, memory, &module, options);
         require(report.outcome == BootOutcome::StopAddress && report.retired == 1 &&
                 state.cp0(Cop0::Epc) == m20::kResetVector &&
                 (state.cp0(Cop0::Cause) & 0x7Cu) == (word == 0xCu ? 8u : 9u) * 4u &&
                 (state.cp0(Cop0::Status) & kStatusEXL), "synchronous exception enters bootstrap vector");
     }
-    expect(0x46000804u, "unsupported", "(COP1/FPU) not implemented by the interpreter"); // SQRT.S reserved FS
-    expect(0x70000040u, "unsupported", "(MMI) not implemented"); // MADD reserved sa != 0
-    expect(0xC0080000u, "unsupported", "(other)"); // LL is absent on the R5900.
+    expect(0x46000804u, "unsupported", "missing synthetic EE AOT"); // SQRT.S reserved FS
+    expect(0x70000040u, "unsupported", "missing synthetic EE AOT"); // MADD reserved sa != 0
+    expect(0xC0080000u, "unsupported", "missing synthetic EE AOT"); // LL is absent on the R5900.
     expect(0x42000006u, "not modeled", "TLBWR");
     expect(0xBC000000u, "not modeled", "CACHE operation 0x00000000");
     // These retire nothing before failing, but they do start executing.
@@ -286,12 +293,13 @@ void check_final_state(const EEState& state, const Memory& memory, const m20::Fi
 
 void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
     const auto bios = load_bios_rom0(rom);
-    const auto& module = aot_module();
+    NativeBootFixture native_fixture(aot_module());
+    const auto& module = native_fixture.module;
     require(std::string(module.source_kind) == "bios-rom0" && bios.sha256 == module.source_sha256,
             "AOT module provenance");
     require(find_aot_block(module, fw.at("sum_loop")) != nullptr, "checksum loop translated");
     require(find_aot_block(module, m20::kResetVector) != nullptr, "MFC0 at the reset vector is compiled AOT");
-    require(find_aot_block(module, fw.at("after_eret")) == nullptr, "ERET target is not statically known");
+    require(find_aot_block(module, fw.at("after_eret")) != nullptr, "explicit offline ERET root is translated");
 
     const auto graph = analyze_control_flow(bios_code_image(bios), {}, {}, true);
     require(graph.instructions.at(m20::kResetVector).opcode==MipsOpcode::Mfc0 &&
@@ -302,19 +310,21 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
     BootOptions options;
     options.trace = TraceLevel::Full;
     const auto mmio = fw.at("mmio") + 4u;
-    auto run = [&](const AotModule* aot, EEState& state, Memory& memory) {
+    auto run = [&](bool sliced, EEState& state, Memory& memory) {
+        const auto* aot=&module;
         prepare_ee_boot(bios, aot, state, memory);
+        seed_native_test_iop(memory);
         require(state.pc == m20::kResetVector && state.cp0(Cop0::PRid) == 0x2E20u &&
                 state.cp0(Cop0::Status) == (kStatusBEV | kStatusERL) && state.cp0(Cop0::Config) == 0x440u,
                 "EE reset state");
-        return run_ee_boot(state, memory, aot, options);
+        return run_native_sliced(state,memory,module,options,sliced ? 17u : options.max_instructions);
     };
-    EEState interpreted_state, hybrid_state;
-    Memory interpreted_memory, hybrid_memory;
-    const auto interpreted = run(nullptr, interpreted_state, interpreted_memory);
-    const auto hybrid = run(&module, hybrid_state, hybrid_memory);
-    for (const auto* report : {&interpreted, &hybrid}) {
-        const std::string name = report == &interpreted ? "interpreter" : "hybrid";
+    EEState sliced_state, hybrid_state;
+    Memory sliced_memory, hybrid_memory;
+    const auto sliced = run(true, sliced_state, sliced_memory);
+    const auto hybrid = run(false, hybrid_state, hybrid_memory);
+    for (const auto* report : {&sliced, &hybrid}) {
+        const std::string name = report == &sliced ? "sliced native" : "hybrid";
         require(report->outcome == BootOutcome::BlockPoint && report->category == "bus: device not implemented",
                 name + " stop category: " + report->category + " " + report->reason);
         require(report->pc == mmio && report->word == 0x8D09F020u && !report->in_delay_slot,
@@ -331,38 +341,38 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
         require(report->tail.size() == 32u && report->tail.back().find(hex8(mmio)) != std::string::npos,
                 name + " instruction tail ends at the block point");
     }
-    check_final_state(interpreted_state, interpreted_memory, fw, "interpreter");
+    check_final_state(sliced_state, sliced_memory, fw, "sliced native");
     check_final_state(hybrid_state, hybrid_memory, fw, "hybrid");
-    require(interpreted.aot_instructions == 0u && interpreted.interpreted_instructions == interpreted.retired,
-            "interpreter-only coverage excludes the unretired faulting instruction");
-    require(hybrid.aot_instructions == 562u && hybrid.interpreted_instructions == 20u && hybrid.engine_switches == 1u,
-            "native firmware followed by the untranslated ERET continuation uses exactly two engine runs; AOT="+
-            std::to_string(hybrid.aot_instructions)+" reference="+std::to_string(hybrid.interpreted_instructions)+
-            " switches="+std::to_string(hybrid.engine_switches));
-    require(hybrid.retired == interpreted.retired, "same retired instruction count");
+    require(sliced.aot_instructions==sliced.retired && sliced.interpreted_instructions==0,
+            "sliced execution retires every covered instruction natively");
+    require(hybrid.aot_instructions==hybrid.retired && hybrid.interpreted_instructions==0,
+            "ROM and copied RAM payload execute compiled code without fallback");
+    require(hybrid.retired == sliced.retired, "same retired instruction count");
     require(contains(hybrid.trace, "E aot (host-compiled block) at ") &&
             !contains(hybrid.trace, "E interpreter (no AOT block) at BFC00000"), "engine changes traced");
-    require(normalized(hybrid.trace) == normalized(interpreted.trace), "hybrid and interpreter traces agree");
+    require(normalized(hybrid.trace) == normalized(sliced.trace), "hybrid and sliced native traces agree");
     for (unsigned n = 0; n < 32; ++n)
-        require(hybrid_state.gpr[n].low == interpreted_state.gpr[n].low &&
-                hybrid_state.gpr[n].high == interpreted_state.gpr[n].high, "same GPRs");
-    require(hybrid_state.cop0 == interpreted_state.cop0, "same COP0");
+        require(hybrid_state.gpr[n].low == sliced_state.gpr[n].low &&
+                hybrid_state.gpr[n].high == sliced_state.gpr[n].high, "same GPRs");
+    require(hybrid_state.cop0 == sliced_state.cop0, "same COP0");
 
     // Reproducible: a second run produces a byte-identical trace.
     EEState again_state;
     Memory again_memory;
-    require(run(&module, again_state, again_memory).trace == hybrid.trace, "deterministic trace");
+    require(run(false, again_state, again_memory).trace == hybrid.trace, "deterministic trace");
 
     // Budget and stop address end the run without inventing a block point.
-    for (const auto* aot : {static_cast<const AotModule*>(nullptr), &module}) {
+    for (const auto* aot : {&module}) {
         EEState state;
         Memory memory;
         prepare_ee_boot(bios, aot, state, memory);
+        seed_native_test_iop(memory);
         BootOptions short_run;
         short_run.max_instructions = 10;
         const auto limited = run_ee_boot(state, memory, aot, short_run);
         require(limited.outcome == BootOutcome::BudgetExhausted && limited.retired == 10u, "budget");
         prepare_ee_boot(bios, aot, state, memory);
+        seed_native_test_iop(memory);
         BootOptions until;
         until.stop_at = fw.at("after_eret");
         const auto stopped = run_ee_boot(state, memory, aot, until);
@@ -377,9 +387,11 @@ void check_boot(const std::vector<std::uint8_t>& rom, const m20::Firmware& fw) {
     EEState state;
     Memory memory;
     rejects([&] { prepare_ee_boot(other_bios, &module, state, memory); }, "firmware revisions are never mixed");
-    // And the interpreter still boots it (only the date in ROMVER differs).
+    // And native fixture execution still boots it (only the date in ROMVER differs).
     prepare_ee_boot(other_bios, nullptr, state, memory);
-    require(run_ee_boot(state, memory, nullptr, {}).pc == mmio, "other revision boots in the interpreter");
+    const auto missing=run_ee_boot(state,memory,nullptr,{});
+    require(missing.retired==0 && missing.reason.find("missing EE AOT")!=std::string::npos,
+            "another firmware revision requires its own prepared artifact");
 }
 } // namespace
 
@@ -395,7 +407,7 @@ int main(int argc, char** argv) {
         check_translation_reuse(rom);
         check_interpreter_stops(rom);
         check_boot(rom, fw);
-        std::cout << "M2.0 boot: loader, EE bus/TLB, COP0, interpreter and hybrid AOT checks passed\n";
+        std::cout << "M2.0 boot: loader, EE bus/TLB, COP0, sliced native and hybrid AOT checks passed\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "boot_m20: " << error.what() << '\n';

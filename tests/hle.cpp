@@ -17,11 +17,7 @@ template<class C> int run(int argc,C** argv)try {
     require(argc==3,"ELF and scratch directory required");
     const auto fixture=hle_test::program();const auto image=parse_ee_elf(read_file(argv[1]));
     auto memory=std::make_unique<Memory>();EEState state;
-#ifdef PS2N_NATIVE_ONLY
     const auto* module=&aot_module();
-#else
-    const AotModule* module=nullptr;
-#endif
     prepare_direct_elf(image,module,state,*memory);
     {
         HleKernel kernel(state,*memory);
@@ -65,11 +61,7 @@ template<class C> int run(int argc,C** argv)try {
     std::vector<std::uint8_t> data(0x3000);
     for(unsigned i=0;i<data.size();++i)data[i]=memory->read8(hle_test::data+i);
     std::cout<<"HLE_GUEST_RESULT "<<sha256_hex(data)<<" pc="<<state.pc<<" cycles="<<state.cycles()<<'\n';
-#ifdef PS2N_NATIVE_ONLY
     require(total==aot && interpreted==0,"all guest instructions used static AOT");
-#else
-    require(total==interpreted && aot==0,"independent reference execution is interpreted");
-#endif
     // Unsupported services and symbolic descriptors must fail before publication.
     prepare_direct_elf(image,module,state,*memory);
     {

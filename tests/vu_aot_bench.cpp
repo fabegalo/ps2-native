@@ -15,7 +15,7 @@ using Clock=std::chrono::steady_clock;
 namespace {
 double seconds(Clock::time_point start){return std::chrono::duration<double>(Clock::now()-start).count();}
 void isolated(bool native,unsigned repeats) {
-    VuControl vu;Vif vif;Gif gif;GsRegisters gs;gs.reset(0);vu.enable_vu1_aot(native);
+    VuControl vu;Vif vif;Gif gif;GsRegisters gs;gs.reset(0);vu.enable_vu1_aot(true);
     vu_aot_fixture::upload(vu,vif,gif,gs);vu_aot_fixture::seed(vu);
     const auto start=Clock::now();
     for(unsigned round=0;round<repeats;++round) {
@@ -27,21 +27,21 @@ void isolated(bool native,unsigned repeats) {
     }
     const auto elapsed=seconds(start);const auto stats=vu.vu1_aot_stats();
     const auto instructions=stats.native_instructions+stats.interpreted_instructions;
-    require(native ? stats.native_instructions==instructions && instructions>0 : !stats.native_instructions && instructions>0,
+    require(stats.native_instructions==instructions && instructions>0,
         "benchmark engine coverage is explicit");
-    std::cout<<(native ? "vu1-native" : "vu1-interpreter")<<','<<elapsed<<','<<instructions<<','<<instructions/elapsed<<','
+    std::cout<<"vu1-native"<<','<<elapsed<<','<<instructions<<','<<instructions/elapsed<<','
         <<elapsed/repeats<<','<<stats.native_instructions<<','<<stats.interpreted_instructions<<'\n';
 }
 std::string integrated(unsigned engine) {
-    auto memory=std::make_unique<Memory>();EEState state;vu_aot_fixture::initialize(*memory,state,engine==2,vu_aot_fixture::draw_entry);
+    auto memory=std::make_unique<Memory>();EEState state;vu_aot_fixture::initialize(*memory,state,true,vu_aot_fixture::draw_entry);
     BootOptions options;options.max_instructions=100;options.tail_instructions=0;options.copy_device_histories=false;
     const auto start=Clock::now();
-    const auto draw=run_ee_boot(state,*memory,engine ? &aot_module() : nullptr,options);
+    const auto draw=run_ee_boot(state,*memory,&aot_module(),options);
     require(draw.outcome==BootOutcome::BudgetExhausted,"integrated graphics workload");
     vu_aot_fixture::MemoryVu adapter{*memory};vu_aot_fixture::seed_integer(adapter,1,2000);vu_aot_fixture::seed_integer(adapter,2,0);
     memory->write128(0xB0005000u,0x14000000u|vu_aot_fixture::loop_entry,0);
     options.max_instructions=20000;
-    const auto report=run_ee_boot(state,*memory,engine ? &aot_module() : nullptr,options);
+    const auto report=run_ee_boot(state,*memory,&aot_module(),options);
     const auto elapsed=seconds(start);const auto stats=memory->vu1_aot_stats();
     require(report.outcome==BootOutcome::BudgetExhausted,"integrated loop workload: "+report.reason);
     require(!engine || report.interpreted_instructions==0,"EE AOT baseline retains full proven coverage");
@@ -49,7 +49,7 @@ std::string integrated(unsigned engine) {
     require(frame.rgba.size()==256 && frame.rgba[0]==0x10,"integrated native VU generated real pixels");
     const auto vu_instructions=stats.native_instructions+stats.interpreted_instructions;
     require(engine!=2 || stats.native_instructions==vu_instructions,"integrated VU native coverage");
-    const char* label=engine==0 ? "ee-interpreter-vu1-interpreter-gs" : engine==1 ? "ee-aot-vu1-interpreter-gs" : "ee-aot-vu1-native-gs";
+    const char* label="ee-aot-vu1-native-gs";
     std::cout<<label<<','<<elapsed<<','<<report.retired+draw.retired<<','<<(report.retired+draw.retired)/elapsed<<','
         <<elapsed<<','<<stats.native_instructions<<','<<stats.interpreted_instructions<<'\n';
     return checkpoint_state_sha256(state,*memory);

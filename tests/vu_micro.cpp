@@ -496,6 +496,6 @@ int main() try {
         vu.reset();instruction(vu,unit,0,nop,upper_nop|0x40000000u);instruction(vu,unit,1,store);
         vu.start_micro(unit,0,0);rejects([&]{vu.advance_micro(2);},"store in the E delay slot");
     }
-    VuControl cold;cold.start_micro(1,0,0);rejects([&]{cold.advance_micro(1);},"unwritten micro memory");
+    VuControl cold;cold.start_micro(1,0,0);rejects([&]{cold.advance_micro(1);},"missing VU1 AOT");
     std::cout<<"Clocked VU integer LIW, bypass/S visibility, BAL delay, E drain, reset and refusals passed\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

@@ -244,6 +244,14 @@ public:
         if(cycle_)throw DeviceRefusal("SMAP reset timing must be selected before guest execution");
         smap_.diagnostic_reset_cycles(cycles);
     }
+    void diagnostic_smap_phy_cycles(std::uint32_t cycles) {
+        if(cycle_)throw DeviceRefusal("SMAP PHY timing must be selected before guest execution");
+        smap_.diagnostic_phy_cycles(cycles);
+    }
+    void diagnostic_smap_loopback_cycles(std::uint32_t cycles) {
+        if(cycle_)throw DeviceRefusal("SMAP loopback timing must be selected before guest execution");
+        smap_.diagnostic_loopback_cycles(cycles);
+    }
     void diagnostic_sio2_infrared_timeout(std::uint32_t cycles);
     void diagnostic_sio2_reset_clears_completion() {
         if(cycle_)throw DeviceRefusal("SIO2 reset-latch experiment requires reset state before execution");
@@ -418,14 +426,13 @@ private:
     void step();
     // RUNTIME_HELPERS_BEGIN
     bool begin_instruction();
-    template<std::int64_t Word> void execute_instruction(std::uint32_t dynamic_word);
+    template<std::uint32_t Word> void execute_instruction();
     bool iop_aot_required_{};
     bool iop_aot_enabled_{true};
     std::uint64_t native_instructions_{},interpreted_instructions_{};
     InstructionObserver instruction_observer_;
     // RUNTIME_HELPERS_END
     // RUNTIME_HELPERS_BEGIN
-    bool advance_idle_loop(std::uint64_t target);
     // RUNTIME_HELPERS_END
     void commit(const PendingLoad& load);
     // R3000A exception entry: EPC, Cause.ExcCode/BD, SR mode stack, vector.

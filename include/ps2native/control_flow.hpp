@@ -55,7 +55,7 @@ struct AotUnresolvedJump {
 };
 // Hybrid discovery only: where static translation stops and execution must
 // continue in the interpreter (system instruction, code outside the image).
-struct AotInterpreterBoundary {
+struct AotUnsupportedBoundary {
     std::uint32_t address{};
     std::string reason;
 };
@@ -71,11 +71,11 @@ struct AotControlFlow {
     std::vector<AotRecognizedJumpTable> jump_tables;
     std::vector<AotConstantJump> constant_jumps;
     std::vector<AotUnresolvedJump> unresolved_jumps;
-    std::vector<AotInterpreterBoundary> interpreter_boundaries;
+    std::vector<AotUnsupportedBoundary> unsupported_boundaries;
 };
 
 [[nodiscard]] AotControlFlow analyze_control_flow(
     const ElfImage& image, std::span<const std::uint32_t> additional_function_entries,
     std::span<const AotJumpTable> additional_jump_tables = {},
-    bool interpreter_boundaries = false);
+    bool unsupported_boundaries = false);
 } // namespace ps2native

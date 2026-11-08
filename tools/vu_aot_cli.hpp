@@ -11,20 +11,12 @@ namespace ps2native::cli {
 // Explicit, local offline workflow. Capture is opt-in and never compiles code.
 struct VuAotOptions {
     std::filesystem::path directory;
-    bool interpreter{};
     std::map<std::string,std::set<std::uint32_t>> captured;
     std::vector<std::filesystem::path> protected_inputs;
     bool capture_limit_reported{};
     static constexpr std::size_t capture_limit=256;
     template<class C> bool parse(const std::string& flag,const C* native) {
-        if(flag=="--vu1-interpreter") {
-#ifdef PS2N_NATIVE_ONLY
-            throw std::runtime_error("--vu1-interpreter is available only in validation executables");
-#else
-            interpreter=true;
-#endif
-        }
-        else if(flag.starts_with("--vu1-capture=")) {
+        if(flag.starts_with("--vu1-capture=")) {
             directory=std::filesystem::path(native).native().substr(14);
             if(directory.empty())throw std::runtime_error("--vu1-capture requires a directory");
         } else return false;
@@ -37,7 +29,6 @@ struct VuAotOptions {
     }
     void attach(Memory& memory,std::span<const std::filesystem::path> inputs) {
         protected_inputs.assign(inputs.begin(),inputs.end());
-        memory.enable_vu1_aot(!interpreter);
         if(directory.empty())return;
         memory.set_vu1_capture([this](const VuControl& vu,std::uint32_t entry) {
             const auto image=vu.capture_vu1_micro();
@@ -90,7 +81,7 @@ struct VuAotOptions {
                  <<" interpreted="<<stats.interpreted_instructions
                  <<" identity_checks="<<stats.identity_checks
                  <<" missing_program="<<stats.missing_program<<" untranslated_pc="<<stats.untranslated_pc
-                 <<" mode="<<(interpreter ? "interpreter" : "verified-offline-aot")<<'\n';
+                 <<" mode="<<"verified-offline-aot"<<'\n';
     }
 };
 } // namespace ps2native::cli

@@ -2,13 +2,7 @@ set(PS2N_VU0_AOT_SOURCES "" CACHE STRING "Semicolon-separated offline ps2n-aot -
 # VU1 uses the existing content-verified AOT source manifest/build machinery.
 # These are local artifacts; no compiler is launched by the runtime.
 set(PS2N_VU1_AOT_SOURCES "" CACHE STRING "Semicolon-separated offline ps2n-aot --vu1 source dispatchers")
-foreach(target IN ITEMS ps2n-boot ps2n-boot-hybrid ps2n-run ps2n-run-hybrid)
-    if(TARGET ${target})
-        foreach(source IN LISTS PS2N_VU1_AOT_SOURCES PS2N_VU0_AOT_SOURCES)
-            ps2n_target_aot_source(${target} "${source}")
-        endforeach()
-    endif()
-endforeach()
+
 if(BUILD_TESTING)
     add_executable(ps2n-vu0-aot-fixture tests/vu0_aot_make_fixture.cpp)
     target_link_libraries(ps2n-vu0-aot-fixture PRIVATE ps2n_core)

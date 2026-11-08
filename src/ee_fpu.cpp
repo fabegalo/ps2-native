@@ -155,7 +155,12 @@ std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std
     const bool coarse=(significand_a&0x3FFFFu)==0;
     const bool assumed_early=(diagnostic_early_digit_carry==PowerTwoEarlyDigits && significand_a==0x800000u) ||
                              (diagnostic_early_digit_carry==CoarseEarlyDigits && coarse);
-    if((coarse && (b&2u)) || (assumed_early && (b&0x2A8u))) {
+    if(diagnostic_early_digit_carry==CoarseEarlyDigits && coarse && !(b&0x3FFu)) {
+        // Only six low-column digit bits remain for this coarse class.
+        // Opt-in reference-model loss/no-loss, not a console-calibrated tree.
+        constexpr std::uint64_t late_loss=0xCC333333CCCCCCCCull;
+        if((late_loss>>((b>>10u)&63u))&1u)product-=std::uint64_t{1}<<15u;
+    } else if((coarse && (b&2u)) || (assumed_early && (b&0x2A8u))) {
         // For A divisible by 2^18, every Booth input below column 15 is
         // identical to A=2^23: positive rows have zero low payload and each
         // negative row has the same complement/correction bits. Carry loss
@@ -171,12 +176,14 @@ std::optional<std::uint32_t> ee_fpu_multiply(std::uint32_t a,std::uint32_t b,std
         // restriction; the separate scalar experiment selects the coarse class.
         product-=std::uint64_t{1}<<15u;
     } else if(std::has_single_bit(negative_digit) && negative_digit<=0x8000u &&
+       negative_digit!=0x1000u && negative_digit!=0x2000u &&
        ((static_cast<std::uint64_t>(significand_a)*negative_digit)&0x7FFFu)==0) {
         // If the low 16 multiplier bits are -2^k, their Booth expansion
         // contains one negative digit; every later digit starts at >=16.
         // When A*2^k has 15 clear low bits, the complemented row plus its
         // separate sign correction produce a carry into column 15. Cutting
-        // both low portions loses that carry. Covers k=15 for every A and
+        // both low portions loses that carry. Stage-6 correction placement
+        // (k=12/13) is not established; keep those strict cases ambiguous. Covers k=15 for every A and
         // e.g. k=0 for A divisible by 2^15. See FIRST-GAME-STATUS.md.
         product-=std::uint64_t{1}<<15u;
     } else if(b&0xFFFFu) {

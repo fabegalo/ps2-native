@@ -1,13 +1,13 @@
 #include "boot_checks.hpp"
 #include "bios_program.hpp"
-#include "ps2native/interpreter.hpp"
+#include "ee_native_fixture.hpp"
 #include <iostream>
 
 using namespace ps2native;
 using namespace boot_checks;
 namespace {
 void initialize(Memory& m) {
-    m.reset_for_boot(m20::build_firmware().rom);
+    reset_native_ee_fixture(m,m20::build_firmware().rom);
     m.diagnostic_data_cache();
     m.set_cache_config(0x10443u);
     m.set_cpu_context(0,0);
@@ -111,7 +111,7 @@ void mapping_and_locks() {
     rejects([&]{op(m,0x12,1,{0x8028u,0});},"locking both");
     rejects([&]{op(m,0x12,0,{0x5028u,0});},"relock");
     rejects([&]{op(m,0x12,1,{0,0x20u});},"unknown tag");
-    m.reset_for_boot(m20::build_firmware().rom);
+    reset_native_ee_fixture(m,m20::build_firmware().rom);
     require(!m.data_cache_enabled(),"reset removes opt-in cache experiment");
     rejects([&]{op(m,0x10,0);},"explicit functional cache");
     m.diagnostic_data_cache(true);m.set_cache_config(0x10443u);
@@ -119,17 +119,17 @@ void mapping_and_locks() {
     op(m,0x18,0xA0004000u);
     require(m.read32(0xA0004000u)==0x12345678u,"explicit uncached-hit hypothesis translates to real dirty physical line");
 }
-void interpreter_and_shared_memory() {
+void compiled_fixture_and_shared_memory() {
     Memory m;initialize(m);
     EEState s;s.pc=0xA0010000u;s.set_cp0(Cop0::Config,0x10443u);
     std::uint64_t executed=0;ExecutionContext ctx{s,m,executed,100,0xFFFFFFFFu};
     m.write32(s.pc,0xBC100000u); // DXLTG index 0
     m.write32(s.pc+4,0x4002E000u); // MFC0 v0,TagLo
-    interpret_instruction(ctx);interpret_instruction(ctx);
+    compiled_fixture_step(ctx);compiled_fixture_step(ctx);
     require(s.unknown_gpr_bits[2]==0xFFFFFFFFFFFFFF87ull,"unknown PFN sign propagates through MFC0");
     op(m,0x12,0,{0,0});
     m.write32(0x80008000u,0x11223344u);
-    s.pc=0xA0010000u;interpret_instruction(ctx);interpret_instruction(ctx);
+    s.pc=0xA0010000u;compiled_fixture_step(ctx);compiled_fixture_step(ctx);
     require(s.gpr[2].low==0x8070u && s.unknown_gpr_bits[2]==0xF87u,"MFC0 exposes actual cache tag and undefined reserved bits");
     // The AOT's shared load/store semantics access this same cache instance.
     s.set_reg32(8,0x80008000u);s.set_reg32(9,0x12345678u);
@@ -231,6 +231,6 @@ void native_byte_lanes() {
     }
 }
 int main() try {
-    visibility_and_tags();replacement_and_knowledge();mapping_and_locks();interpreter_and_shared_memory();gif_dma_visibility();cached_provenance();provenance_visibility_and_ways();native_byte_lanes();
+    visibility_and_tags();replacement_and_knowledge();mapping_and_locks();compiled_fixture_and_shared_memory();gif_dma_visibility();cached_provenance();provenance_visibility_and_ways();native_byte_lanes();
     std::cout<<"EE D-cache: visibility, tags, LRF, knowledge, mapping, locks and shared CPU semantics passed\n";
 } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}

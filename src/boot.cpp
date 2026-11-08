@@ -1,6 +1,6 @@
 #include "ps2native/boot.hpp"
 #include "ps2native/hle.hpp"
-#include "ps2native/interpreter.hpp"
+#include "ps2native/execution.hpp"
 #include "ps2native/sha256.hpp"
 #include "ps2native/diagnostics.hpp"
 
@@ -57,7 +57,7 @@ public:
             if (engine_) ++report_.engine_switches;
             engine_ = engine;
             if (wants_system_events()) trace(std::string("E ") + (engine == ExecutionEngine::Aot
-                ? "aot (host-compiled block) at " : "interpreter (no AOT block) at ") + hex32(pc));
+                ? "aot (host-compiled block) at " : "legacy event at ") + hex32(pc));
         }
         if (options_.trace == TraceLevel::Full) {
             trace(instruction_line(r));
@@ -255,9 +255,6 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
     // An unaligned stop address can never match an instruction PC.
     ExecutionContext ctx{state, memory, executed, options.max_instructions, 0xFFFFFFFFu, &tracer};
     AotDispatchCache dispatch;
-#ifndef PS2N_NATIVE_ONLY
-    InterpreterDecodeCache interpreter_decode;
-#endif
     const auto start_retired = state.retired_instructions;
     ObserverScope scope(memory, &tracer, options, state);
     {
@@ -302,13 +299,9 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                         throw std::runtime_error("AOT block at " + hex32(state.pc) + " made no progress");
                 } else {
                     flush_interrupt_cache(ctx);
-#ifdef PS2N_NATIVE_ONLY
                     throw std::runtime_error("missing EE AOT: "+memory.code_identity(state.pc)+" pc="+hex32(state.pc)+
                         " instruction="+hex32(memory.fetch32(state.pc))+
                         "; prepare the matching BIOS/kernel/loaded overlay offline with ps2n-dev prepare and link its AOT artifact");
-#else
-                    interpret_instruction(ctx, &tracer,interpreter_decode);
-#endif
                 }
             }
             report.pc = state.pc;

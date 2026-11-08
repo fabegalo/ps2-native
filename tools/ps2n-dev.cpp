@@ -71,9 +71,9 @@ std::uint64_t disk_bytes(const fs::path& root) {
 }
 int run(Profile p, const fs::path& replay, bool prepare_only=false) {
     const auto source=p.path("source"), build=p.path("build"), input=p.path("input"), cmake=p.path("cmake");
-    const auto config=p.get("config","Release"), engine=p.get("engine","aot");
-    if (engine!="native" && engine!="aot" && engine!="interpreter") throw std::runtime_error("engine must be native, aot or interpreter");
-    const bool use_aot=engine!="interpreter";
+    const auto config=p.get("config","Release"), engine=p.get("engine","native");
+    if (engine!="native" && engine!="aot") throw std::runtime_error("engine must be native or aot (offline AOT only)");
+    constexpr bool use_aot=true;
     if (config.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
         throw std::runtime_error("invalid build configuration");
     const auto timeout = static_cast<unsigned>(cli::decimal(p.get("timeout","300"),86400));
@@ -81,9 +81,8 @@ int run(Profile p, const fs::path& replay, bool prepare_only=false) {
     if (!cli::decimal(p.get("ring","256"),1'000'000)) throw std::runtime_error("ring must be nonzero");
     (void)cli::decimal(p.get("stream_bytes","0"),1ull<<40);
     const auto kind=identify(input,p.get("kind","auto")); p.values["kind"]=kind;
-    const auto target=engine=="native" ? std::string(kind=="bios" ? "ps2n-native" : "ps2n-run-native")
-        : std::string(kind=="bios" ? "ps2n-boot" : "ps2n-run")+(use_aot ? "-hybrid" : "");
-    const std::string execution_policy=engine=="native" ? "native-aot" : use_aot ? "hybrid-aot" : "interpreter";
+    const auto target=std::string(kind=="bios" ? "ps2n-native" : "ps2n-run-native");
+    const std::string execution_policy="native-aot";
     const auto input_hash=sha256_file(input);
     if (!p.get("input_sha256").empty() && p.get("input_sha256")!=input_hash) throw std::runtime_error("input SHA-256 changed; update the profile deliberately");
     p.values["input_sha256"]=input_hash;

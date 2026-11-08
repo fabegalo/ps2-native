@@ -14,8 +14,8 @@ struct AotOptions {
     std::vector<AotJumpTable> jump_tables;
     // Hybrid translation (firmware or Direct ELF): discovery stops at instructions the
     // AOT does not translate and at targets outside the static image; those
-    // addresses are listed as interpreter boundaries instead of failing.
-    bool interpreter_boundaries{};
+    // addresses are listed as unsupported boundaries instead of failing.
+    bool unsupported_boundaries{};
     // Provenance exported by the generated module ("elf", "bios-rom0") and the
     // SHA-256 of the input; computed from the ELF bytes when left empty.
     std::string source_kind{"elf"};
