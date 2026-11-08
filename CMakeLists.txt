@@ -30,7 +30,8 @@ endif()
 
 # Launcher core: content identification, the persistent library and runtime
 # contracts. No GUI dependency, so it builds and is tested on every host.
-add_library(ps2n_frontend STATIC src/frontend/content.cpp src/frontend/library.cpp src/frontend/runtime.cpp)
+add_library(ps2n_frontend STATIC src/frontend/content.cpp src/frontend/library.cpp src/frontend/runtime.cpp
+    src/frontend/session.cpp)
 target_link_libraries(ps2n_frontend PUBLIC ps2n_core)
 if(MSVC)
     target_compile_options(ps2n_frontend PRIVATE /W4 /permissive- /utf-8)

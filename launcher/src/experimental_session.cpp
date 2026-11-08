@@ -3,7 +3,7 @@
 #include "qt_support.hpp"
 #include "ps2native/boot.hpp"
 #include "ps2native/checkpoint.hpp"
-#include "ps2native/frontend/content.hpp"
+#include "ps2native/frontend/session.hpp"
 #include "ps2native/sha256.hpp"
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -133,51 +133,24 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
         const auto config=original?QJsonObject{}:readManifest(request.experimental_manifest);
         const auto base=request.experimental_manifest.parent_path();
         const auto path=[&](const char* name){auto f=fspath(qstr(required(config,name)));return f.is_absolute()?f:base/f;};
-        auto memory=std::make_unique<Memory>();EEState ee;
+        frontend::SessionSupervisor supervisor;
+        auto* memory=&supervisor.memory();auto& ee=supervisor.ee();
         std::shared_ptr<GsGpu> selectedGpu;
-        // IOP keeps a pointer to the validated NVM for the entire session.
-        std::optional<NvmImage> sessionNvm;
         CheckpointContext context;CheckpointInfo info;
         std::vector<AotBlock> blocks;AotModule merged{};const AotModule* module=nullptr;
         if(original){
-            if(request.renderer!=frontend::RendererMode::GsFaithful)throw std::runtime_error("Native renderer is unavailable for original boot");
-            if(request.expected_rom0_sha256.empty())throw std::runtime_error("Original boot requires the identified ROM0 SHA-256");
-            const auto bios=load_bios_rom0(read_file(request.rom0),BiosLoadOptions{request.expected_rom0_sha256});
-            const auto* hardware=request.console_profile.empty()?nullptr:find_console_hardware(request.console_profile);
-            if(!request.console_profile.empty() && !hardware)throw std::runtime_error("Unknown console profile");
-            if(!request.nvm.empty()){
-                if(!hardware || request.expected_nvm_sha256.empty())throw std::runtime_error("NVM requires an identified console profile and SHA-256");
-                sessionNvm=load_nvm_image(read_file(request.nvm),*hardware,NvmLoadOptions{request.expected_nvm_sha256});
-            }
-            if(!request.disc)throw std::runtime_error("No game disc selected");
-            const auto probe=frontend::probe_disc(*request.disc);
-            if(probe.status!=frontend::ProbeStatus::Valid || !probe.info.contains("platform") || probe.info.at("platform")!="PlayStation 2")
-                throw std::runtime_error("Disc refused: "+probe.error);
-            if(request.expected_disc_boot.empty() || probe.info.at("boot")!=request.expected_disc_boot)
-                throw std::runtime_error("Disc BOOT2 differs from the identified library entry; reidentify the disc");
-            auto discPath=*request.disc;
-            if(probe.info.contains("cue_tracks")){
-                const auto sheet=frontend::parse_cue_sheet(discPath);
-                if(!sheet.data_track())throw std::runtime_error("CUE has no data track");
-                discPath=sheet.data_track()->file;
-            }
-            auto disc=std::make_shared<DiscImage>(discPath);
-            (void)disc->boot_path();
 #ifdef PS2N_SESSION_BIOS_AOT
             module=&session_bios_aot_module();
 #endif
-            prepare_ee_boot(bios,module,ee,*memory,hardware,sessionNvm?&*sessionNvm:nullptr);
-            const auto medium=probe.info.find("media");
-            memory->mount_disc(std::move(disc),medium!=probe.info.end() && medium->second=="DVD"?Iop::DiscMedium::Ps2Dvd:Iop::DiscMedium::Ps2Cd,true);
+            supervisor.prepare_original(request,module);
         }else{
         const auto bios=load_bios_rom0(read_file(path("rom0")),BiosLoadOptions{required(config,"rom0_sha256")});
         const auto* hardware=find_console_hardware(required(config,"console"));if(!hardware)throw std::runtime_error("Unknown console profile");
-        sessionNvm=load_nvm_image(read_file(path("nvm")),*hardware,NvmLoadOptions{required(config,"nvm_sha256")});
-        const auto& nvm=*sessionNvm;
+        const auto nvm=load_nvm_image(read_file(path("nvm")),*hardware,NvmLoadOptions{required(config,"nvm_sha256")});
         const auto r=config.value("rom1_identity").toObject();
         Rom1Identity identity{required(r,"rom0_sha256"),required(r,"romver"),required(r,"model"),required(r,"mainboard"),required(r,"sha256"),required(r,"build"),required(r,"dvd_version"),required(r,"provenance")};
         const auto rom1=load_bios_rom1(read_file(path("rom1")),bios,*hardware,identity);
-        prepare_ee_boot(bios,nullptr,ee,*memory,hardware,&nvm,nullptr,&rom1);
+        supervisor.prepare_firmware(bios,nullptr,hardware,&nvm,nullptr,&rom1);
         if(config.contains("rtc_epoch_utc")) {
             bool valid=false;const auto epoch=config.value("rtc_epoch_utc").toString().toULongLong(&valid);
             if(!valid)throw std::runtime_error("rtc_epoch_utc must be a decimal UTC epoch string");
@@ -299,7 +272,7 @@ void ExperimentalSession::start(const frontend::SessionRequest& request){
                 }catch(const std::exception& error){std::lock_guard lock(p_->mutex);p_->status=QStringLiteral("Falha no salvamento: %1").arg(qstr(std::string(error.what())));}
                 continue;
             }
-            boundary=run_ee_boot(ee,*memory,module,options);
+            boundary=supervisor.run(module,options);
             {
                 std::lock_guard lock(p_->mutex);p_->cycles=ee.cycles();p_->aot+=boundary.aot_instructions;p_->interpreted+=boundary.interpreted_instructions;
                 p_->iopAot=iop.native_instructions();p_->iopInterpreted=iop.interpreted_instructions();

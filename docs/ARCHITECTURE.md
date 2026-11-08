@@ -2,15 +2,33 @@
 
 ## Diretriz
 
-Uma base C++20 compartilhada para Windows x64/ARM64, Linux x64/ARM64 (inclui Steam Deck) e macOS Intel/Apple Silicon. O modelo aprovado segue o x360-native: **código original de sistema/jogos em AOT + serviços HLE nativos**. EE/R5900, IOP/R3000A e VU0/VU1 não podem interpretar instruções nos executáveis de produção; interpretadores ficam em binários separados de validação. Código dinâmico precisa de artefatos AOT preparados offline, com identidade, relocação e invalidação corretas.
+Uma base C++20 compartilhada para Windows x64/ARM64, Linux x64/ARM64 (inclui Steam Deck) e macOS Intel/Apple Silicon. Em 07/11/2026, o mantenedor validou a migração gradual para os sete componentes do x360-native: launcher de gerenciamento; conteúdo/catálogo; preparação e execução nativa/AOT; runtime de compatibilidade com HLE explícita; GPU Original/Native; sistema original e jogos; supervisor de sessões e adaptadores de plataforma.
+
+A preparação produz artefatos AOT verificados e reutilizáveis para EE/R5900, IOP/R3000A e VU0/VU1, com identidade, relocação e invalidação. Preservam-se os caminhos existentes durante a migração: o launcher atual liga `ps2n_core_native` (`PS2N_NATIVE_ONLY`) e recusa traduções ausentes; ferramentas e testes de referência ligam `ps2n_core`, com interpretação explícita nas regiões não traduzidas. Isto descreve a implementação atual, não estabelece uma proibição permanente de fallback nem autoriza introduzir JIT ou eliminar o interpretador. Mudanças dessa política exigem validação do mantenedor.
 
 A **BIOS/Browser original, System Configuration e Memory Card continuam obrigatórios**, como a dashboard original no x360-native. Sua interface deve executar código original traduzido e usar recursos da revisão correspondente. HLE pode fornecer kernel, syscalls e serviços IOP; não autoriza telas inventadas, sucesso falso ou efeitos convidados omitidos. Não é necessário executar cada instrução do kernel original para executar a interface original. GS, DMA, SPU2, controles, memória e temporização continuam no núcleo compartilhado.
 
-A sessão HLE assistida deve ser identificada separadamente do reset de hardware e dos checkpoints experimentais. BIOS e jogos são alvos do produto; concluir o boot de hardware não deve bloquear trabalho independente no caminho de um jogo. Esta diretriz define o contrato exigido, não certifica que a implementação já o cumpra.
+A opção validada é híbrida e seletiva: definir contratos de syscalls/kernel, threads/eventos e serviços IOP de arquivos, CDVD, entrada, áudio e armazenamento, substituindo cada serviço somente com equivalência demonstrada. HLE e firmware usam o mesmo `EEState`, `Memory`, IOP, dispositivos, relógios, buffers e persistência. Firmware integral reutiliza o diagnóstico, mas exige maior cobertura de hardware; HLE abrangente reduz essa dependência e aumenta os contratos a validar. Não há HLE completa implementada ou seleção de serviços específicos certificada por esta decisão.
+
+A sessão HLE assistida deve ser identificada separadamente do reset de hardware e dos checkpoints experimentais. BIOS e jogos são alvos do produto; concluir o boot de hardware não deve bloquear trabalho independente no caminho de um jogo. Original e Native compartilham estado e contratos GS; aprimoramentos exigem equivalência de efeitos, lógica e temporização. Esta diretriz define o contrato exigido, não certifica que a implementação já o cumpra.
+
+## Implementação e migração
+
+| Componente | Base existente e fronteira restante |
+| --- | --- |
+| Launcher | Qt/QML em `launcher/`: catálogo, configuração e início; não substitui o Browser. O worker mantém a adaptação Qt e os comandos de pausa/parada. |
+| Conteúdo/catálogo | `frontend/content` e `library`: identificação, caminhos, perfis e persistência sem copiar originais. A seleção de todas as dependências AOT antes de Play ainda não é automática. |
+| Preparação/AOT | `ps2n-dev`, `ps2n-aot`, análise e partições CMake: traduções EE/IOP/VU. O launcher recebe módulos ligados na compilação; módulo existente não prova cobertura do conteúdo. |
+| Runtime + HLE | `boot`, `Memory`, EE/IOP e dispositivos conservam estado e semântica compartilhados. Serviços continuam acoplados ao modelo de hardware; contratos HLE por serviço permanecem por implementar/validar. |
+| GPU Original/Native | `gs_*`, shaders e backends software/Vulkan/DirectX. API gráfica de host não equivale ao modo Native aprimorado, ainda indisponível. |
+| Sistema e jogos | ROM/NVM, disco, reset, ELF diagnóstico e checkpoints têm identidades distintas. Browser completo e gameplay não são estabelecidos por builds ou fixtures. |
+| Supervisor/adaptadores | `frontend::SessionSupervisor` possui EE/memória/NVM e prepara/executa a mesma sessão para boot e restauração. `ExperimentalSession` adapta esse núcleo a Qt, entrada, áudio e apresentação. Retorno autêntico sistema↔jogo e contratos completos de serviços/adaptadores continuam pendentes. |
+
+Primeira migração: retirar do worker Qt a preparação do boot original e a posse do estado do console, preservando validações de revisão, módulos, checkpoints e recusas. Não se cria outro runtime nem outro estado para GPU/HLE. A restauração experimental usa a mesma instância; sua leitura de manifesto e a seleção de módulos ainda estão no adaptador Qt.
 
 ## Contratos registrados nos marcos anteriores
 
-As tabelas e seções históricas abaixo descrevem implementações e evidências de cada marco. Fallback interpretado e dependência de boot integral nelas registrados não são autorização para produção; prevalece a diretriz acima.
+As tabelas e seções históricas abaixo descrevem implementações e evidências de cada marco. Não impõem boot integral, ausência de HLE ou política permanente de fallback; prevalece a diretriz validada acima.
 
 | Componente | Entrada | Saída | Garantias / falhas |
 |---|---|---|---|
@@ -58,7 +76,7 @@ arbitragem concorrente falham. Contratos, métricas, instruções e limites em [
 ## Organização futura (interfaces propostas, NÃO implementadas)
 
 - **disc/importer:** detectar disco, serial, região, hash e preservar caminho original; biblioteca indexada sem copiar ISOs.
-- **EE ISA/dispatch:** cobertura R5900/MMI/FPU/COP0, descoberta de funções, ELF relocável, overlays, saltos indiretos, syscalls e cache de tradução. Separar AOT de produção dos interpretadores de validação; sem JIT ou fallback interpretado em produção.
+- **EE ISA/dispatch:** cobertura R5900/MMI/FPU/COP0, descoberta de funções, ELF relocável, overlays, saltos indiretos, syscalls e cache de tradução. Preservar os alvos AOT e de referência existentes durante a migração; mudanças da política de fallback/JIT exigem validação.
 - **EE memory/bus:** tradução de endereços, scratchpad, DMA, dispositivos, interrupções, atomicidade, proteção e invalidação de código modificado.
 - **IOP:** R3000A, IRX, SIF/RPC, CDVD e sincronização.
 - **VU0/VU1 + VIF/GIF/DMA:** macro/micro, tempos e semântica vetorial reais.

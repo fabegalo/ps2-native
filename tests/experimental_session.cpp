@@ -7,6 +7,7 @@
 #include "iso_image.hpp"
 #include "ps2native/boot.hpp"
 #include "ps2native/checkpoint.hpp"
+#include "ps2native/frontend/session.hpp"
 #include "ps2native/sha256.hpp"
 #include <QGuiApplication>
 #include <QElapsedTimer>
@@ -149,14 +150,24 @@ int main(int argc,char** argv)try {
     // Reference dispatcher, including DMA/IRQ/PCM, versus 100k worker slices.
     std::vector<Iop::Spu2Sample> pcm[2];std::vector<std::string> frames[2];std::string states[2];
     for(unsigned run=0;run<2;++run) {
-        (void)load_checkpoint(saved,state,*resumed,live);
-        const_cast<Iop&>(resumed->iop()).set_spu2_sample_sink([&](unsigned c,const auto& s){if(c==1)pcm[run].push_back(s);});
+        frontend::SessionSupervisor supervised;
+        if(run){
+            // The supervisor owns NVM after this temporary image is destroyed.
+            const auto nvm=fixture.nvm;
+            supervised.prepare_firmware(fixture.bios,nullptr,fixture.hardware,&nvm,nullptr,&fixture.rom1);
+            supervised.memory().configure_rtc(1794028522ull);
+            supervised.memory().mount_disc(std::make_shared<DiscImage>(fixture.root/"disc.iso"),Iop::DiscMedium::Ps2Cd,true);
+        }
+        auto& currentState=run?supervised.ee():state;
+        auto& currentMemory=run?supervised.memory():*resumed;
+        (void)load_checkpoint(saved,currentState,currentMemory,live);
+        const_cast<Iop&>(currentMemory.iop()).set_spu2_sample_sink([&](unsigned c,const auto& s){if(c==1)pcm[run].push_back(s);});
         BootOptions options;options.tail_instructions=0;options.max_trace_events=1;
         options.copy_device_histories=run==0;
         options.max_instructions=run?100000:300000;
         options.on_frame=[&](const Framebuffer& f){frames[run].push_back(sha256_hex(f.rgba));};
-        for(unsigned n=0;n<(run?3u:1u);++n)require(run_ee_boot(state,*resumed,nullptr,options).outcome==BootOutcome::BudgetExhausted,"reference execution");
-        states[run]=checkpoint_state_sha256(state,*resumed);
+        for(unsigned n=0;n<(run?3u:1u);++n)require((run?supervised.run(nullptr,options):run_ee_boot(state,*resumed,nullptr,options)).outcome==BootOutcome::BudgetExhausted,"reference execution");
+        states[run]=checkpoint_state_sha256(currentState,currentMemory);
     }
     require(states[0]==states[1] && states[0]!=frozen,"worker slicing preserves complete state, cycles, DMA and IRQ");
     require(pcm[0].size()==pcm[1].size() && std::equal(pcm[0].begin(),pcm[0].end(),pcm[1].begin(),[](const auto& a,const auto& b){return a.cycle==b.cycle && a.left==b.left && a.right==b.right;}) && !pcm[0].empty() && std::any_of(pcm[0].begin(),pcm[0].end(),[](const auto& s){return s.left||s.right;}),"identical live synthesized PCM across slice boundaries");
