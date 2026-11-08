@@ -41,4 +41,10 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/dev-cli" "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_COMMAND}"
         "${CMAKE_GENERATOR}" "${CMAKE_CXX_COMPILER}" "${CMAKE_MAKE_PROGRAM}" "${CMAKE_GENERATOR_PLATFORM}")
     set_tests_properties(dev-cli-pipeline PROPERTIES TIMEOUT 600)
+    add_test(NAME dev-native-pipeline COMMAND ps2n-dev-cli-tests
+        $<TARGET_FILE:ps2n-dev> $<TARGET_FILE:ps2n-debug>
+        "${CMAKE_CURRENT_BINARY_DIR}/dev-cli" "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_COMMAND}"
+        "${CMAKE_GENERATOR}" "${CMAKE_CXX_COMPILER}" "${CMAKE_MAKE_PROGRAM}" "${CMAKE_GENERATOR_PLATFORM}" --native-only)
+    set_tests_properties(dev-native-pipeline PROPERTIES TIMEOUT 600)
+    set_tests_properties(dev-cli-pipeline dev-native-pipeline PROPERTIES RESOURCE_LOCK ps2n_dev_cli_build)
 endif()

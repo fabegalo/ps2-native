@@ -1,5 +1,26 @@
 # Ferramentas de desenvolvimento
 
+## Preparação nativa explícita
+
+Use `engine=native` no perfil existente e execute `ps2n-dev prepare perfil.ps2n`
+ou `ps2n-dev run perfil.ps2n`. BIOS seleciona `ps2n-native`; ELF e BOOT2 de
+disco selecionam `ps2n-run-native`. Ambos ligam `ps2n_core_native`, sem
+interpretadores EE/IOP/VU: código ausente é recusado, com identidade/PC para
+preparação offline. Módulos IOP/VU opcionais usam as definições CMake existentes
+`PS2N_IOP_AOT_SOURCES`, `PS2N_VU0_AOT_SOURCES` e `PS2N_VU1_AOT_SOURCES`.
+
+`engine=aot` conserva o caminho **híbrido** anterior; `engine=interpreter`
+conserva a referência interpretada. O manifesto e a saída indicam
+`execution_policy` e `runner_target`; AOT reutilizada não certifica cobertura.
+Trocar entre nativo e híbrido reutiliza as mesmas traduções verificadas, mas
+liga o núcleo correspondente. `prepare` não executa o convidado.
+
+ELF/BOOT2 aqui continuam diagnósticos bare-metal: não instalam serviços Sony
+ou HLE nem equivalem ao boot original do disco. Browser, gameplay e HLE completa
+não são estabelecidos por esse pipeline. O teste focado `dev-native-pipeline`
+usa conteúdo sintético, compara a execução nativa à referência, verifica a
+recusa de callback não traduzido e a reutilização exata do executável.
+
 ## Boot com ROM1 pareada — 07/11/2026
 
 `ps2n-boot` e seus runners híbridos aceitam o mesmo carregador ROM1 do núcleo:

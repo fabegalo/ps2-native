@@ -66,7 +66,8 @@ std::uint64_t disk_bytes(const fs::path& root) {
 int run(Profile p, const fs::path& replay, bool prepare_only=false) {
     const auto source=p.path("source"), build=p.path("build"), input=p.path("input"), cmake=p.path("cmake");
     const auto config=p.get("config","Release"), engine=p.get("engine","aot");
-    if (engine!="aot" && engine!="interpreter") throw std::runtime_error("engine must be aot or interpreter");
+    if (engine!="native" && engine!="aot" && engine!="interpreter") throw std::runtime_error("engine must be native, aot or interpreter");
+    const bool use_aot=engine!="interpreter";
     if (config.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
         throw std::runtime_error("invalid build configuration");
     const auto timeout = static_cast<unsigned>(cli::decimal(p.get("timeout","300"),86400));
@@ -74,6 +75,9 @@ int run(Profile p, const fs::path& replay, bool prepare_only=false) {
     if (!cli::decimal(p.get("ring","256"),1'000'000)) throw std::runtime_error("ring must be nonzero");
     (void)cli::decimal(p.get("stream_bytes","0"),1ull<<40);
     const auto kind=identify(input,p.get("kind","auto")); p.values["kind"]=kind;
+    const auto target=engine=="native" ? std::string(kind=="bios" ? "ps2n-native" : "ps2n-run-native")
+        : std::string(kind=="bios" ? "ps2n-boot" : "ps2n-run")+(use_aot ? "-hybrid" : "");
+    const std::string execution_policy=engine=="native" ? "native-aot" : use_aot ? "hybrid-aot" : "interpreter";
     const auto input_hash=sha256_file(input);
     if (!p.get("input_sha256").empty() && p.get("input_sha256")!=input_hash) throw std::runtime_error("input SHA-256 changed; update the profile deliberately");
     p.values["input_sha256"]=input_hash;
@@ -199,7 +203,7 @@ int run(Profile p, const fs::path& replay, bool prepare_only=false) {
         // objects across input/tool revisions. Every unit is verified by hash;
         // the profile owner still isolates firmware revisions and regions.
         const auto source_path=cache / "sources" / "partitioned" / "module.cpp";
-        if(engine=="aot" && file_exists(proof)) {
+        if(use_aot && file_exists(proof)) {
             const auto hash=read_text(proof);
             if(hash.size()==64 && hash.find_first_not_of("0123456789abcdef")==std::string::npos) {
                 try {
@@ -207,7 +211,7 @@ int run(Profile p, const fs::path& replay, bool prepare_only=false) {
                 } catch(const std::exception&) { /* Regenerate a missing/corrupt source set. */ }
             }
         }
-        if(!reused && engine=="aot") {
+        if(!reused && use_aot) {
             translation=source_path;
             std::string previous;
             try {previous=aot_sources_sha256(translation);} catch(const std::exception&) {}
@@ -219,19 +223,18 @@ int run(Profile p, const fs::path& replay, bool prepare_only=false) {
             content_reused=previous==hash;
             save_text(proof,hash);
         }
-        if(engine=="aot") {
+        if(use_aot) {
             save_text(directory / "aot-reference.txt",path_utf8(translation));
             save_text(directory / "aot-key-reference.txt",path_utf8(proof));
         }
         if(kind=="disc") stage("identify-disc",executable(build,config,"ps2n-disc"),{input});
-        configure.push_back(option("-DPS2N_BIOS_AOT_SOURCE=",engine=="aot" && kind=="bios" ? translation : fs::path{}));
-        configure.push_back(option("-DPS2N_ELF_AOT_SOURCE=",engine=="aot" && kind!="bios" ? translation : fs::path{}));
+        configure.push_back(option("-DPS2N_BIOS_AOT_SOURCE=",use_aot && kind=="bios" ? translation : fs::path{}));
+        configure.push_back(option("-DPS2N_ELF_AOT_SOURCE=",use_aot && kind!="bios" ? translation : fs::path{}));
         const auto configure_key=digest([&]{std::string s=source_hash;for(const auto& v:configure)s+=path_utf8(v)+'\n';return s;}());
         const auto key_file=build / "ps2n-dev" / "configure.sha256";
         if(!file_exists(key_file) || read_text(key_file)!=configure_key) {
             stage("configure-runtime",cmake,configure); save_text(key_file,configure_key);
         }
-        const auto target=std::string(kind=="bios" ? "ps2n-boot" : "ps2n-run")+(engine=="aot" ? "-hybrid" : "");
         stage("build-runtime",cmake,{"--build",build,"--config",config,"--target",target,"--parallel","2"});
         if(source_identity(source)!=source_hash) throw std::runtime_error("source changed during build; retry for a consistent runtime/ABI");
         const auto runner=executable(build,config,target);
@@ -274,6 +277,7 @@ int run(Profile p, const fs::path& replay, bool prepare_only=false) {
         }
     } catch(const std::exception& e) { error=e.what();std::cerr << error << '\n'; result=2; }
     const auto manifest="{\"schema\":\"ps2n-dev-run-v1\",\"status\":"+json_string(status)+",\"error\":"+json_string(error)+
+        ",\"execution_policy\":"+json_string(execution_policy)+",\"runner_target\":"+json_string(target)+
         ",\"profile\":"+json_string(p.serialize())+",\"source_sha256\":"+json_string(source_hash)+",\"input_sha256\":"+json_string(input_hash)+
         ",\"git_commit\":"+json_string(commit)+",\"git_dirty\":"+(dirty ? "true" : "false")+
         ",\"runtime_sha256\":"+json_string(runtime_hash)+",\"cmake_cache_sha256\":"+json_string(cache_hash)+
@@ -281,7 +285,8 @@ int run(Profile p, const fs::path& replay, bool prepare_only=false) {
         ",\"aot_content_reused\":"+(content_reused ? "true" : "false")+
         ",\"aot_reused\":"+(reused ? "true" : "false")+",\"disk_bytes\":"+std::to_string(disk_bytes(build))+",\"stages\":["+stages+"]}\n";
     save_text(directory / "manifest.json",manifest);
-    std::cout << "run=" << path_utf8(directory) << "\naot_reused=" << (reused ? "true" : "false") << '\n';
+    std::cout << "run=" << path_utf8(directory) << "\nexecution_policy=" << execution_policy << "\nrunner_target=" << target
+        << "\naot_reused=" << (reused ? "true" : "false") << '\n';
     return result;
 }
 template<class C> int dev_main(int argc,C** argv) {

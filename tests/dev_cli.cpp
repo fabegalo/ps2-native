@@ -61,18 +61,21 @@ void content_build(const fs::path& root,const fs::path& cmake,const fs::path& re
 }
 template<class C> int test_main(int argc,C** argv) {
     if(argc==2 && path_utf8(fs::path(argv[1]))=="--sleep") {std::this_thread::sleep_for(std::chrono::seconds(15));return 0;}
-    require(argc==10,"dev, debug, root, source, cmake, generator, compiler, make program, architecture");
+    const bool native_only=argc==11 && path_utf8(fs::path(argv[10]))=="--native-only";
+    require(argc==10 || native_only,"dev, debug, root, source, cmake, generator, compiler, make program, architecture [--native-only]");
     const auto tool=fs::absolute(fs::path(argv[1])),debug=fs::absolute(fs::path(argv[2])),root=fs::absolute(fs::path(argv[3]));
     ps2native::create_directories(root);
+    if(!native_only){
     const auto self=fs::absolute(fs::path(argv[0]));
     const auto timed=process(self,{"--sleep"},root / "timeout.log",1);
     require(timed.timed_out && timed.exit_code==124 && timed.milliseconds<6000,"bounded child timeout kills and reaps process");
     content_build(root,fs::path(argv[5]),fs::absolute(fs::path(argv[4])),path_utf8(fs::path(argv[6])),fs::path(argv[7]),fs::path(argv[8]),path_utf8(fs::path(argv[9])));
+    }
     const auto elf=root / fs::path(u8"fixture ação & literal.elf");
     // The callback address comes from data, so static CFG cannot prove it.
     // Offline observed entry discovery must close that interpreter boundary.
     m20::Assembler a(direct_test::text);a.la(m20::t0,direct_test::data);a.lw(m20::t0,0,m20::t0);
-    a.jalr(m20::t0);a.nop();a.raw(0x7000003Fu);
+    a.jalr(m20::t0);a.nop();const auto return_pc=a.here();a.raw(0x7000003Fu);
     while(a.here()<direct_test::text+0x100u)a.nop();
     a.addiu(m20::v0,m20::zero,42);a.jr(m20::ra);a.nop();
     direct_test::Program program{{{direct_test::text,5,m20::le_words(a.finish())},
@@ -96,12 +99,51 @@ template<class C> int test_main(int argc,C** argv) {
     profile.values["stream_bytes"]="1048576";
     profile.values["name"]=std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     profile.values["input"]=path_utf8(elf);profile.values["input_sha256"]=hash;profile.values["kind"]="elf";
+    profile.values["engine"]=native_only?"native":"aot";
+    profile.values.erase("observed");profile.aot_args.clear();
     profile.cmake_args.clear();profile.runtime_args={"--budget=1000000"};
     if(profile.get("generator").find("Visual Studio")!=std::string::npos)profile.values["architecture"]=path_utf8(fs::path(argv[9]));
     else {
         profile.cmake_args.push_back("-DCMAKE_CXX_COMPILER="+path_utf8(fs::path(argv[7])));
         profile.cmake_args.push_back("-DCMAKE_MAKE_PROGRAM="+path_utf8(fs::path(argv[8])));
         profile.cmake_args.push_back("-DCMAKE_TRY_COMPILE_CONFIGURATION=Release");
+    }
+    if(native_only){
+        profile.runtime_args.push_back("--stop="+std::to_string(return_pc));
+        save_text(file,profile.serialize());
+        invoke("native-missing",{"run",file},1);
+        const auto missing=cli::utf8_path(read_text(profile.path("build")/"ps2n-dev/last.txt"));
+        require(read_text(missing/"manifest.json").find("\"runner_target\":\"ps2n-run-native\"")!=std::string::npos &&
+            read_text(missing/"diagnostic/report.json").find("missing EE AOT")!=std::string::npos &&
+            read_text(missing/"diagnostic/report.json").find("\"interpreted\":0")!=std::string::npos,
+            "native pipeline refuses an untranslated callback without interpreting it");
+        profile.aot_args.push_back("--entry="+std::to_string(direct_test::text+0x100u));
+        save_text(file,profile.serialize());invoke("native-covered",{"run",file},0);
+        const auto covered=cli::utf8_path(read_text(profile.path("build")/"ps2n-dev/last.txt"));
+        require(read_text(covered/"manifest.json").find("\"execution_policy\":\"native-aot\"")!=std::string::npos &&
+            read_text(covered/"diagnostic/report.json").find("\"interpreted\":0")!=std::string::npos,
+            "prepared native executable reaches the stop address with AOT only");
+        invoke("native-warm",{"replay",file},0);
+        const auto warm=cli::utf8_path(read_text(profile.path("build")/"ps2n-dev/last.txt"));
+        require(read_text(warm/"runtime.sha256")==read_text(covered/"runtime.sha256") &&
+            read_text(warm/"manifest.json").find("\"aot_reused\":true")!=std::string::npos &&
+            read_text(warm/"build-runtime.log").find("Building CXX")==std::string::npos,
+            "native replay reuses the exact executable and verified partitions");
+        invoke("native-prepare",{"prepare",file},0);
+        const auto prepared=cli::utf8_path(read_text(profile.path("build")/"ps2n-dev/last-prepared.txt"));
+        require(!file_exists(prepared/"execute.log") && read_text(prepared/"runtime.sha256")==read_text(warm/"runtime.sha256"),
+            "native prepare preserves artifacts without running guest code");
+        profile.values["engine"]="aot";save_text(file,profile.serialize());invoke("native-reference",{"run",file},0);
+        const auto reference=cli::utf8_path(read_text(profile.path("build")/"ps2n-dev/last.txt"));
+        require(read_text(reference/"manifest.json").find("\"execution_policy\":\"hybrid-aot\"")!=std::string::npos &&
+            read_text(reference/"aot-reference.txt")==read_text(covered/"aot-reference.txt") &&
+            read_text(reference/"diagnostic/state.json")==read_text(covered/"diagnostic/state.json"),
+            "native and hybrid reuse AOT and preserve the same guest state");
+        const auto compare=process(debug,{"compare",covered/"diagnostic/full-events.ndjson",reference/"diagnostic/full-events.ndjson"},root/"native-compare.log",15);
+        require(compare.exit_code==0,"native/hybrid complete guest events match");
+        require(sha256_file(elf)==hash,"native preparation preserves its original input");
+        std::cout<<"Native preparation, missing-code refusal, exact reuse and reference equivalence passed\n";
+        return 0;
     }
     save_text(file,profile.serialize());
     const auto cold=invoke("cold",{"run",file},1);
