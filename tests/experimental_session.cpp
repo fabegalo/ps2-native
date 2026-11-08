@@ -1,6 +1,7 @@
 // Exercises the real Qt worker and shared EE/IOP/GS/SPU2 runtime. Original
 // synthetic firmware/data only; no physical-hardware or commercial claims.
 #include "experimental_session.hpp"
+#include "gamepad_retry.hpp"
 #include "launcher.hpp"
 #include "qt_support.hpp"
 #include "bios_program.hpp"
@@ -119,6 +120,18 @@ struct Fixture {
 };
 }
 int main(int argc,char** argv)try {
+    GamepadRetry retry;
+    require(!retry.throttled(0,2000),"first controller probe");
+    retry.observed(0,false,2000);
+    require(retry.throttled(0,2999) && !retry.throttled(0,3000),"absent slot retries once per second");
+    require(retry.throttled(1,2249) && !retry.throttled(1,2250),"absent slot scans are staggered");
+    retry.observed(1,true,2250);
+    require(!retry.throttled(1,2251),"connected controller remains responsive");
+    retry.observed(1,false,2252);
+    require(retry.throttled(1,3251) && !retry.throttled(1,3252),"disconnect schedules reconnect probe");
+    retry.observed(1,true,3252);
+    require(!retry.throttled(1,3253) && retry.throttled(4,4000),"reconnect and slot bounds");
+
     QGuiApplication app(argc,argv);QTemporaryDir temporary;
     app.setOrganizationName("ps2n-session-test");app.setApplicationName("session-test");
     QSettings::setDefaultFormat(QSettings::IniFormat);

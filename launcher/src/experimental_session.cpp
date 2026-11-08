@@ -1,5 +1,6 @@
 #include "experimental_session.hpp"
 #include "host_audio.hpp"
+#include "gamepad_retry.hpp"
 #include "qt_support.hpp"
 #include "ps2native/boot.hpp"
 #include "ps2native/checkpoint.hpp"
@@ -84,6 +85,7 @@ struct ExperimentalSession::Impl {
     HMODULE xinput{};
     using GetState=DWORD(WINAPI*)(DWORD,XINPUT_STATE*);
     GetState getState{};
+    GamepadRetry gamepadRetry;
     ~Impl(){if(xinput)FreeLibrary(xinput);}
 #endif
 };
@@ -314,11 +316,21 @@ void ExperimentalSession::presented(){std::lock_guard lock(p_->mutex);++p_->pain
 void ExperimentalSession::tick(){
     QImage frame;QByteArray packet;bool refresh=false;
     const bool audioBuffered=p_->audio.buffered();
+#ifdef _WIN32
+    // Device enumeration can block; never hold the execution/audio mutex here.
+    XINPUT_STATE gamepad{};bool connected=false;
+    const auto pollTime=GetTickCount64();
+    if(p_->getState)for(DWORD i=0;i<4;++i) {
+        if(p_->gamepadRetry.throttled(i,pollTime))continue;
+        const auto result=p_->getState(i,&gamepad);
+        const bool present=result==ERROR_SUCCESS;
+        p_->gamepadRetry.observed(i,present,pollTime);
+        if(present){connected=true;break;}
+    }
+#endif
     {
         std::lock_guard lock(p_->mutex);
 #ifdef _WIN32
-        XINPUT_STATE gamepad{};bool connected=false;
-        if(p_->getState)for(DWORD i=0;i<4;++i)if(p_->getState(i,&gamepad)==ERROR_SUCCESS){connected=true;break;}
         p_->gamepadStatus=connected?QStringLiteral("XInput conectado (mapeamento no manifesto)"):QStringLiteral("sem gamepad XInput");
         std::uint16_t buttons=0xFFFF;
         if(connected && p_->focused)for(unsigned i=0;i<16;++i)if(p_->mapping[i] && (gamepad.Gamepad.wButtons&p_->mapping[i]))buttons=static_cast<std::uint16_t>(buttons&~(1u<<i));
