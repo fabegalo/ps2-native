@@ -1,6 +1,7 @@
 // Synthetic firmware/disc; checks the shared supervisor without Qt or user data.
 #include "bios_program.hpp"
 #include "iso_image.hpp"
+#include "hle_fixture.hpp"
 #include "ps2native/frontend/session.hpp"
 #include "ps2native/frontend/content.hpp"
 #include "ps2native/checkpoint.hpp"
@@ -87,6 +88,12 @@ int main(int argc, char** argv) try {
     rejects([&] { session.prepare_original(invalid, nullptr); }, "experimental manifest");
     session.prepare_original(request, nullptr);
     require(session.ee().pc == kEeResetVector, "Session can restart after refused preparation");
+    const auto assisted=parse_ee_elf(direct_test::elf(hle_test::program()));
+    session.prepare_hle_elf(assisted,nullptr);
+    require(session.memory().hle_kernel()!=nullptr,"Supervisor owns the explicit HLE session");
+    session.prepare_original(request,nullptr);
+    require(session.memory().hle_kernel()==nullptr && session.ee().pc==kEeResetVector,
+            "Original boot detaches HLE before resetting the same console");
     std::cout << "Session supervisor identity refusals, shared state and execution accounting passed\n";
     return 0;
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

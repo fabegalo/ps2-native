@@ -3,6 +3,7 @@
 #include "ps2native/io.hpp"
 #include "ps2native/sha256.hpp"
 #include "ps2native/disc.hpp"
+#include "ps2native/hle.hpp"
 #include "diagnostic_cli.hpp"
 #include "checkpoint_cli.hpp"
 #include "vu_aot_cli.hpp"
@@ -18,7 +19,8 @@ template<class C> int run_main(int argc, C** argv) {
         if (argc < 2) {
             std::cerr << "Usage: ps2n-run <owned-ps2.elf> [--budget=N] [--stop=ADDRESS] [--frame=out.bmp]\n"
                          "         [--disc] [--trace=events|full] [--trace-out=FILE] [--tail=N]\n"
-                         "         [--iop-image=raw.bin --iop-load=ADDRESS --iop-entry=ADDRESS]\n";
+                         "         [--iop-image=raw.bin --iop-load=ADDRESS --iop-entry=ADDRESS]\n"
+                         "         [--hle] (PS2Recomp EE kernel services; incomplete, no original boot)\n";
             std::cerr << "         [--diagnostic-dir=DIR --diagnostic-ring=N --diagnostic-stream-bytes=N]\n"
                          "         [--diagnostic-ram=ADDRESS:BYTES] (passive backing RAM)\n"
                          "         [--resume=FILE --checkpoint-out=FILE --checkpoint-every=N]\n"
@@ -38,6 +40,7 @@ template<class C> int run_main(int argc, C** argv) {
         std::optional<std::uint32_t> iop_load, iop_entry;
         std::filesystem::path trace_out;
         bool disc_input=false;
+        bool hle=false;
         for (int i = 2; i < argc; ++i) {
             const auto flag = ps2native::path_utf8(std::filesystem::path(argv[i]));
             const auto number = [&](std::size_t offset, std::uint64_t max) {
@@ -56,6 +59,7 @@ template<class C> int run_main(int argc, C** argv) {
             else if (flag.starts_with("--iop-load=")) iop_load = static_cast<std::uint32_t>(number(11,0xFFFFFFFFu));
             else if (flag.starts_with("--iop-entry=")) iop_entry = static_cast<std::uint32_t>(number(12,0xFFFFFFFFu));
             else if (flag == "--disc") disc_input=true;
+            else if (flag == "--hle") hle=true;
             else if (flag == "--trace=full") options.trace=ps2native::TraceLevel::Full;
             else if (flag == "--trace=events") options.trace=ps2native::TraceLevel::Events;
             else if (flag.starts_with("--trace-out=")) trace_out=std::filesystem::path(argv[i]).native().substr(12);
@@ -71,6 +75,11 @@ template<class C> int run_main(int argc, C** argv) {
         module = &ps2native::aot_module();
 #endif
         ps2native::prepare_direct_elf(elf, module, state, memory);
+        std::unique_ptr<ps2native::HleKernel> kernel;
+        if(hle) {
+            if(!checkpoint.resume.empty() || !checkpoint.output.empty())throw std::runtime_error("HLE kernel checkpoints are not implemented");
+            kernel=std::make_unique<ps2native::HleKernel>(state,memory);
+        }
         if (!iop_image.empty() || iop_load || iop_entry) {
             if (iop_image.empty() || !iop_load || !iop_entry)
                 throw std::runtime_error("IOP image requires explicit --iop-image, --iop-load and --iop-entry");
@@ -88,12 +97,13 @@ template<class C> int run_main(int argc, C** argv) {
         diagnostic.finish(report, state, memory);
         graphics.print(memory);
         const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-start).count();
-        std::cout << "Direct ELF bare-metal (no BIOS services), sha256 " << ps2native::sha256_hex(elf.bytes)
+        std::cout << (hle ? "HLE-assisted ELF (PS2Recomp kernel, incomplete), sha256 " : "Direct ELF bare-metal (no BIOS services), sha256 ") << ps2native::sha256_hex(elf.bytes)
                   << "\n" << ps2native::boot_outcome_name(report.outcome) << " pc=0x" << std::hex << report.pc
                   << std::dec << " retired=" << report.retired << " aot=" << report.aot_instructions
                   << " interpreted=" << report.interpreted_instructions << " switches=" << report.engine_switches
                   << " runtime_ms=" << elapsed << '\n' << report.reason << '\n';
         checkpoint.print_execution_metrics(report);
+        if(kernel)std::cout<<"HLE syscalls="<<kernel->syscall_count()<<" current_thread="<<kernel->current_thread_id()<<'\n';
         vu1.print(memory);
         std::cout << "status=0x" << std::hex << state.cp0(ps2native::Cop0::Status)
                   << " cause=0x" << state.cp0(ps2native::Cop0::Cause) << " epc=0x" << state.cp0(ps2native::Cop0::Epc)

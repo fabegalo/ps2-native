@@ -1,4 +1,5 @@
 #include "ps2native/boot.hpp"
+#include "ps2native/hle.hpp"
 #include "ps2native/interpreter.hpp"
 #include "ps2native/sha256.hpp"
 #include "ps2native/diagnostics.hpp"
@@ -261,6 +262,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
     ObserverScope scope(memory, &tracer, options, state);
     {
         try {
+            if(auto* hle=memory.hle_kernel())hle->check_running();
             while (true) {
                 if (options.stop_at && !state.delay_pending && state.pc == *options.stop_at) {
                     report.outcome = BootOutcome::StopAddress;
@@ -270,6 +272,8 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                     report.outcome = BootOutcome::BudgetExhausted;
                     break;
                 }
+                if(state.pc==0 && memory.hle_kernel())
+                    throw std::runtime_error("HLE thread return trampoline is not implemented; use ExitThread");
                 state.instruction_pc=state.pc;
                 state.instruction_in_delay_slot=state.delay_pending;
                 (void)poll_ee_interrupts_cached(ctx);

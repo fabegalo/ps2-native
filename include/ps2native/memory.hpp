@@ -12,6 +12,9 @@
 #include <unordered_map>
 #include <vector>
 namespace ps2native {
+    // RUNTIME_HELPERS_BEGIN
+class HleKernel;
+    // RUNTIME_HELPERS_END
 // Physical EE bus regions. Main RAM, the BIOS ROM and the scratchpad are
 // backed by storage; EE register regions (0x10000000..0x1000FFFF) go to
 // EeRegisters, which models some registers and refuses the rest; every other
@@ -97,6 +100,11 @@ public:
         HardwareReset
     };
     Memory();
+    // RUNTIME_HELPERS_BEGIN
+    [[nodiscard]] HleKernel* hle_kernel() const noexcept { return hle_kernel_; }
+    [[nodiscard]] bool hle_checkpoint_incomplete() const noexcept { return hle_used_; }
+    void flush_hle_cache(unsigned operation);
+    // RUNTIME_HELPERS_END
     void load(const ElfImage& elf);
     void load_direct_elf(const ElfImage& elf);
     // Explicit optional R3000A bare-metal payload for Direct ELF development.
@@ -296,6 +304,11 @@ public:
     [[nodiscard]] const std::string& sio_output() const noexcept { return registers_.sio_output(); }
 
 private:
+    // RUNTIME_HELPERS_BEGIN
+    friend class HleKernel;
+    HleKernel* hle_kernel_{}; // host attachment; active HLE checkpoints are refused
+    bool hle_used_{}; // reset, not detach, establishes a serializable v1 console
+    // RUNTIME_HELPERS_END
     struct Target {
         std::uint32_t physical{};
         BusRegion region{BusRegion::Unmapped};

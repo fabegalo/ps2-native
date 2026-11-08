@@ -1,6 +1,7 @@
 #pragma once
 #include "ps2native/boot.hpp"
 #include "ps2native/frontend/runtime.hpp"
+#include "ps2native/hle.hpp"
 #include <memory>
 
 namespace ps2native::frontend {
@@ -15,6 +16,8 @@ public:
     SessionSupervisor& operator=(SessionSupervisor&&) = delete;
 
     void prepare_original(const SessionRequest& request, const AotModule* module);
+    void prepare_hle_elf(const ElfImage& elf, const AotModule* module,
+                         const DirectElfEnvironment& environment = {});
     void prepare_firmware(const BiosImage& bios, const AotModule* module,
                           const ConsoleHardware* hardware = nullptr, const NvmImage* nvm = nullptr,
                           const DiagnosticAssumptions* assumptions = nullptr, const Rom1Image* rom1 = nullptr);
@@ -27,6 +30,7 @@ private:
     std::optional<NvmImage> nvm_;
     std::unique_ptr<Memory> memory_;
     EEState ee_;
+    std::unique_ptr<HleKernel> hle_;
     bool prepared_{};
 };
 } // namespace ps2native::frontend

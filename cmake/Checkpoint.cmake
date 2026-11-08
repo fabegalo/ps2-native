@@ -13,6 +13,8 @@ list(FILTER checkpoint_headers EXCLUDE REGEX "/mips[.]hpp$")
 list(FILTER checkpoint_headers EXCLUDE REGEX "/vu_fixed[.]hpp$")
 list(FILTER checkpoint_headers EXCLUDE REGEX "/iop_(aot|ops)[.]hpp$")
 list(FILTER checkpoint_headers EXCLUDE REGEX "/ee_system[.]hpp$")
+# HLE is a host attachment with its own kernel objects; v1 checkpoints refuse it.
+list(FILTER checkpoint_headers EXCLUDE REGEX "/hle[.]hpp$")
 # Boot options/reports and host profiling counters are never serialized.
 list(FILTER checkpoint_headers EXCLUDE REGEX "/(boot|profile)[.]hpp$")
 # Offline code-generation artifacts contain no serialized machine state.
@@ -74,6 +76,7 @@ string(REPLACE "\r\n" "\n" content "${content}")
 string(APPEND checkpoint_schema "${content}")
 string(SHA256 checkpoint_schema_hash "${checkpoint_schema}")
 file(GLOB checkpoint_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+list(APPEND checkpoint_sources "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ps2recomp/hle_kernel.cpp")
 list(SORT checkpoint_sources)
 set(checkpoint_runtime "${checkpoint_schema_hash}\n${CMAKE_CXX_COMPILER_ID}\n${CMAKE_CXX_COMPILER_VERSION}\n${CMAKE_BUILD_TYPE}\n${CMAKE_CXX_FLAGS}\n${PS2N_ENABLE_PROFILING}\n")
 string(APPEND checkpoint_runtime "${PS2N_ENABLE_VULKAN}\n${PS2N_ENABLE_DIRECTX}\n${PS2N_GS_DXC_SHA256}\n")

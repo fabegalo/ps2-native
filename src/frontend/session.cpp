@@ -10,6 +10,7 @@ void SessionSupervisor::prepare_firmware(const BiosImage& bios, const AotModule*
                                         const ConsoleHardware* hardware, const NvmImage* nvm,
                                         const DiagnosticAssumptions* assumptions, const Rom1Image* rom1) {
     prepared_ = false;
+    hle_.reset();
     nvm_ = nvm ? std::optional<NvmImage>{*nvm} : std::nullopt;
     prepare_ee_boot(bios, module, ee_, *memory_, hardware, nvm_ ? &*nvm_ : nullptr, assumptions, rom1);
     prepared_ = true;
@@ -46,6 +47,15 @@ void SessionSupervisor::prepare_original(const SessionRequest& request, const Ao
     prepared_ = false;
     const auto medium = probe.info.find("media");
     memory_->mount_disc(std::move(disc), medium != probe.info.end() && medium->second == "DVD" ? Iop::DiscMedium::Ps2Dvd : Iop::DiscMedium::Ps2Cd, true);
+    prepared_ = true;
+}
+
+void SessionSupervisor::prepare_hle_elf(const ElfImage& elf, const AotModule* module,
+                                      const DirectElfEnvironment& environment) {
+    prepared_ = false;
+    hle_.reset();
+    prepare_direct_elf(elf,module,ee_,*memory_,environment);
+    hle_=std::make_unique<HleKernel>(ee_,*memory_);
     prepared_ = true;
 }
 

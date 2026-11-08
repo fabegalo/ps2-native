@@ -324,6 +324,7 @@ void CheckpointAccess::validate_boundary(const EEState& s,const Memory& m) {
         throw std::runtime_error("checkpoint has foreign DMA RAM bindings");
 }
 std::string checkpoint_state_sha256(const EEState& state,const Memory& memory) {
+    if(memory.hle_checkpoint_incomplete())throw std::runtime_error("HLE kernel objects are not supported by the checkpoint format");
     checkpoint_detail::Writer a;auto clock=CheckpointAccess::clock(memory),stalls=CheckpointAccess::stalls(memory);
     a(clock,stalls,const_cast<EEState&>(state),const_cast<Memory&>(memory));return sha256_hex(a.output);
 }
@@ -336,6 +337,7 @@ void refine_checkpoint_texture_precision(const EEState& state,Memory& memory,uns
 }
 void save_checkpoint(const std::filesystem::path& path,const EEState& state,const Memory& memory,
                      const BootReport& boundary,const CheckpointContext& context) {
+    if(memory.hle_checkpoint_incomplete())throw std::runtime_error("HLE kernel objects are not supported by the checkpoint format");
     using namespace checkpoint_detail;validate_context(context);CheckpointAccess::validate_boundary(state,memory);
     if((boundary.outcome!=BootOutcome::BudgetExhausted && boundary.outcome!=BootOutcome::StopAddress) || boundary.pc!=state.pc)throw std::runtime_error("refused/partial instructions are not checkpoint boundaries; keep the previous successful checkpoint");
     if(iop_execution_refused(memory))
@@ -354,6 +356,7 @@ void save_checkpoint(const std::filesystem::path& path,const EEState& state,cons
 CheckpointInfo inspect_checkpoint(const std::filesystem::path& path){return checkpoint_detail::parse(path).info;}
 #ifndef PS2N_CHECKPOINT_SAVE_ONLY
 CheckpointInfo load_checkpoint(const std::filesystem::path& path,EEState& state,Memory& memory,const CheckpointContext& context) {
+    if(memory.hle_checkpoint_incomplete())throw std::runtime_error("HLE kernel objects are not supported by the checkpoint format");
     using namespace checkpoint_detail;validate_context(context);CheckpointAccess::validate_boundary(state,memory);auto parsed=parse(path);const auto& info=parsed.info;
     // Q/RSQRT/product/PRNG and VADDA helpers changed methods only, without wire fields.
     // Older approved layouts predate SMAP; its new registers start unknown.

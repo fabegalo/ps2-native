@@ -206,6 +206,8 @@ std::size_t Memory::physical_address(std::uint32_t address, std::size_t size) {
 }
 
 void Memory::load(const ElfImage& elf) {
+    if(hle_kernel_)throw std::runtime_error("Detach HLE before replacing console memory");
+    hle_used_=false;
     reset_tlb_cache();
     reset_data_cache();
     diagnostic_ee_early_digit_carry_=false;fpu_arithmetic_started_=false;
@@ -226,8 +228,10 @@ void Memory::load(const ElfImage& elf) {
 void Memory::reset_for_boot(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardware,
                             const NvmImage* nvm, const DiagnosticAssumptions* assumptions,
                             std::span<const std::uint8_t> rom1) {
+    if(hle_kernel_)throw std::runtime_error("Detach HLE before resetting the console");
     if (rom0.size() != kBiosRomBytes)
         throw std::runtime_error("BIOS ROM0 must be exactly 4 MiB to be mapped at 0x1FC00000");
+    hle_used_=false;
     reset_tlb_cache();
     mapping_ = Mapping::HardwareReset;
     reset_data_cache();

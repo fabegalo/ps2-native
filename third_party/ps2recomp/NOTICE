@@ -1,0 +1,23 @@
+PS2Recomp HLE kernel adaptation
+Upstream: https://github.com/ran-j/PS2Recomp
+Revision: e5636981a1c9de368f6b71e819c3dc188dfedbf4
+License: GPL-3.0 (see LICENSE in this directory)
+Credit: PS2Recomp contributors. Existing ps2-native code retains its BSD notices.
+
+Adapted source files:
+ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp
+ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
+ps2xRuntime/src/lib/Kernel/Syscalls/Sync.cpp
+ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h
+
+The adaptation reuses kernel object allocation, EE descriptors/error codes,
+semaphore/event algorithms and thread lifecycle. Context/memory access,
+dispatch and scheduling use ps2-native EEState, Memory and clocks.
+No upstream PS2Runtime, second memory/device state, host-clock VBLANK scheduler,
+game overrides or success stubs are linked. Device IRQ wakeups, alarms, file/RPC
+services and HLE checkpoint serialization are not implemented in this subset.
+
+Combined binaries linking this GPL component must be distributed under the
+GPL-3.0 terms, with corresponding source and the applicable license notices.

@@ -14,12 +14,35 @@ A sessão HLE assistida deve ser identificada separadamente do reset de hardware
 
 ## Implementação e migração
 
+Após nova validação do mantenedor em 07/11/2026, o kernel HLE do PS2Recomp
+foi adaptado em `third_party/ps2recomp`, com GPL e créditos preservados
+(ver `LICENSE-DECISION.md`). `HleKernel` conecta os serviços ao despacho comum
+AOT/referência e à mesma instância de EE/memória. `ps2n-run --hle` / `ps2n-run-native --hle`
+e `SessionSupervisor::prepare_hle_elf` iniciam uma sessão assistida explícita,
+com acesso COP1/COP2 habilitado pelo ambiente HLE. O reset original e o
+diagnóstico bare-metal mantêm seus próprios estados e não ativam HLE.
+
+A cobertura inicial inclui criação/início/saída/prioridade/espera de threads,
+semáforos e eventos, SetupThread, SetupHeap/EndOfHeap, GetMemorySize e FlushCache
+(com writeback/invalidação no modelo compartilhado). O escalonamento ocorre nas
+fronteiras de syscall; IRQs, alarmes, arquivos/RPC, callbacks de retorno de
+thread e inicialização completa de jogos/Browser continuam pendentes. Um
+serviço desconhecido ou ausência de thread executável produz recusa explícita.
+O formato v1 de checkpoints recusa sessões HLE, inclusive exportação de hash
+de estado completo, até incluir os objetos do kernel. Desligar HLE não torna
+esse estado serializável: é necessário um novo reset/preparo. Saves antigos não mudam.
+
+Nos diagnósticos ELF assistidos, God of War (USA) alcançou 267.298 instruções
+AOT sem interpretação até SetSyscall (0x74), com estado observado igual à
+referência. Super Bust-A-Move (USA), pela referência interpretada, passou
+FlushCache e parou em acesso MMIO sem TLB. Não demonstram gameplay ou boot original.
+
 | Componente | Base existente e fronteira restante |
 | --- | --- |
 | Launcher | Qt/QML em `launcher/`: catálogo, configuração e início; não substitui o Browser. O worker mantém a adaptação Qt e os comandos de pausa/parada. |
 | Conteúdo/catálogo | `frontend/content` e `library`: identificação, caminhos, perfis e persistência sem copiar originais. A seleção de todas as dependências AOT antes de Play ainda não é automática. |
 | Preparação/AOT | `ps2n-dev`, `ps2n-aot`, análise e partições CMake: traduções EE/IOP/VU. O launcher recebe módulos ligados na compilação; módulo existente não prova cobertura do conteúdo. |
-| Runtime + HLE | `boot`, `Memory`, EE/IOP e dispositivos conservam estado e semântica compartilhados. Serviços continuam acoplados ao modelo de hardware; contratos HLE por serviço permanecem por implementar/validar. |
+| Runtime + HLE | `boot`, `Memory`, EE/IOP e dispositivos conservam estado e semântica compartilhados. O kernel HLE inicial está conectado às syscalls; cobertura de sistema/IOP e equivalência comercial ainda são parciais. |
 | GPU Original/Native | `gs_*`, shaders e backends software/Vulkan/DirectX. API gráfica de host não equivale ao modo Native aprimorado, ainda indisponível. |
 | Sistema e jogos | ROM/NVM, disco, reset, ELF diagnóstico e checkpoints têm identidades distintas. Browser completo e gameplay não são estabelecidos por builds ou fixtures. |
 | Supervisor/adaptadores | `frontend::SessionSupervisor` possui EE/memória/NVM e prepara/executa a mesma sessão para boot e restauração. `ExperimentalSession` adapta esse núcleo a Qt, entrada, áudio e apresentação. Retorno autêntico sistema↔jogo e contratos completos de serviços/adaptadores continuam pendentes. |
@@ -88,7 +111,7 @@ arbitragem concorrente falham. Contratos, métricas, instruções e limites em [
 
 ## Posição sobre referências
 
-- **PS2Recomp**: `ps2xRecomp/src/lib/{elf_parser,control_flow_analyzer,r5900_decoder,vu_translator}.cpp` e `ps2xRuntime/`: base experimental madura como referência de questões R5900, mas ainda com tradução incompleta, limites em controle de fluxo e componentes stub. GPL-3.0 => não integrar código neste projeto BSD.
+- **PS2Recomp**: kernel HLE incorporado por adaptação da revisão `e5636981…`, conforme validação acima. GPL-3.0 e proveniência preservadas; limites e stubs do upstream não são prova de compatibilidade. O restante permanece disponível para integrações revisadas, sem substituir silenciosamente o runtime compartilhado.
 - **PCSX2**: `pcsx2/Interpreter.cpp`, `pcsx2/Memory.cpp`, diretórios R5900, GS, SPU2, IOP: referência principal para especificação observável e testes futuros; não reaproveitar código GPL-3.0+.
 - **Play!**: HLE do sistema é candidato aos serviços nativos autorizados; executar a interface original ainda exige seus próprios artefatos AOT e recursos. Licença tipo BSD 2 cláusulas, mas conteúdo deve ser revisado caso a caso antes de integrar.
 - **N64Recomp**: modelo útil de separação compilador/runtime (licença MIT); arquitetura de N64 não é compatível com o PS2 sem projeto específico de hardware.

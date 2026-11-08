@@ -28,6 +28,26 @@ void Memory::reset_data_cache() {
     std::erase_if(fpu_relations_,[](const auto& entry){return (entry.first&0x40000000u)!=0;});
     for(auto& set:data_cache_) for(auto& line:set) line.unknown.fill(0xFFu);
 }
+void Memory::flush_hle_cache(unsigned operation) {
+    // EE FlushCache: 0 writeback D-cache, 1 invalidate D-cache, 2 invalidate I-cache.
+    if(operation>2)throw DeviceRefusal("unsupported HLE FlushCache operation");
+    if(operation==0 && data_cache_model_) {
+        for(unsigned index=0;index<data_cache_.size();++index)for(const auto& line:data_cache_[index])if(line.tag&dirty) {
+            if(!(line.tag&valid) || !line.pfn_known)
+                throw DeviceRefusal("HLE FlushCache dirty line has no known valid physical tag");
+            if(((line.tag&0xFFFFF000u)|(index<<6u))>=kMainRamBytes)
+                throw DeviceRefusal("HLE FlushCache writeback outside main RAM is not modeled");
+        }
+        for(unsigned index=0;index<data_cache_.size();++index)for(auto& line:data_cache_[index])writeback_data_cache(line,index);
+    } else if(operation==1 && data_cache_model_) {
+        for(unsigned index=0;index<data_cache_.size();++index)for(auto& line:data_cache_[index]) {
+            discard_cached_relation(fpu_relations_,line,index);line.tag&=~(valid|dirty|locked);
+        }
+    } else if(operation==2) {
+        for(auto& entry:fetch_pages_)entry.key=UINT64_MAX;
+        for(auto& entry:code_checks_)entry.key=UINT64_MAX;
+    }
+}
 void Memory::diagnostic_data_cache(bool translate_uncached_hits) {
     if(mapping_==Mapping::ElfProgram || data_cache_model_ ||
        (cache_clock_ && *cache_clock_) || (cache_config_&0x10000u))

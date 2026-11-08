@@ -8,7 +8,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/fabegalo/ps2-native/build.yml?branch=main&label=CI)](https://github.com/fabegalo/ps2-native/actions/workflows/build.yml)
 [![Experimental](https://img.shields.io/badge/status-experimental-orange)](STATUS.md)
-[![BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause%20%2B%20GPL--3.0-blue)](docs/LICENSE-DECISION.md)
 
 [English](README.md) · [Português (Brasil)](README.pt-BR.md) · [Current status](STATUS.md) · [Documentation](docs/README.md) · [Contributing](CONTRIBUTING.md)
 
@@ -86,4 +86,4 @@ Contributions should include focused tests and evidence, keep a shared C++20 cor
 
 ## License
 
-Original ps2-native code is licensed under **[BSD-3-Clause](LICENSE)**. PCSX2 and PS2Recomp are behavioral references, **not copied or linked GPL implementations**. Firmware, games, device-specific NVM and copyrighted translated code are not part of this repository. See [licensing decisions](docs/LICENSE-DECISION.md).
+Original ps2-native code retains **[BSD-3-Clause](LICENSE)**. The adapted [PS2Recomp HLE kernel](third_party/ps2recomp/NOTICE) is **[GPL-3.0](third_party/ps2recomp/LICENSE)**; combined binaries must comply with GPL-3.0, including corresponding source. PCSX2 remains a behavioral reference. Firmware, games, device-specific NVM and proprietary translated code are not included. See [licensing decisions](docs/LICENSE-DECISION.md).

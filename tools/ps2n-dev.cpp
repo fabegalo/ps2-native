@@ -27,6 +27,8 @@ std::string source_identity(const fs::path& source) {
         for (const auto& e : fs::recursive_directory_iterator(native_io_path(source / directory)))
             if (e.is_regular_file()) paths.push_back(display_path(e.path()));
     paths.push_back(source / "CMakeLists.txt");
+    const auto hle_source=source / "third_party/ps2recomp/hle_kernel.cpp";
+    if(file_exists(hle_source))paths.push_back(hle_source);
     std::sort(paths.begin(),paths.end());
     std::string entries;
     for (const auto& path : paths) entries += path_utf8(path.lexically_relative(source))+'\n'+sha256_file(path)+'\n';

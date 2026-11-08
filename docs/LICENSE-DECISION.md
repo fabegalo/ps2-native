@@ -1,5 +1,25 @@
 # Decisão de licença — 2026-11-03
 
+## Incorporação HLE do PS2Recomp — decisão de 07/11/2026
+
+O mantenedor autorizou incorporar o código e validou a adaptação do kernel HLE
+ao estado único do ps2-native, incluindo os termos GPL da distribuição combinada.
+`third_party/ps2recomp/hle_kernel.cpp` deriva de `EeScheduler.cpp`,
+`Syscalls/{Dispatcher,Thread,Sync,System}.cpp` e `Syscalls/Helpers/State.h` da
+revisão `e5636981a1c9de368f6b71e819c3dc188dfedbf4`. Licença integral e origem
+estão em `third_party/ps2recomp/{LICENSE,NOTICE}`; créditos do upstream preservados.
+
+O código original mantém seus avisos BSD-3-Clause. Os binários que ligam este
+componente GPL devem ser distribuídos sob os termos GPL-3.0, com código-fonte
+correspondente e avisos aplicáveis; não são uma distribuição exclusivamente BSD.
+As decisões M0 abaixo são históricas e anteriores a esta incorporação.
+
+Não foram importados outro runtime/memória/GPU, overrides por jogo ou stubs de
+sucesso. A primeira adaptação cobre syscalls de threads, semáforos e eventos,
+SetupThread, SetupHeap/EndOfHeap, GetMemorySize e FlushCache (adaptada ao cache
+compartilhado, sem usar o stub de sucesso do upstream). Serviços ausentes são
+recusados explicitamente.
+
 ## Reutilização efetiva: leitor do IPU — 07/11/2026
 
 A rotina `bits_at` de [ps2-web-recomp, revisão

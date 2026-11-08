@@ -11,7 +11,7 @@ add_library(ps2n_core STATIC
     src/interpreter.cpp src/ee_system.cpp src/boot.cpp src/diagnostics.cpp src/analysis.cpp src/ee_registers.cpp
     src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp src/nvm.cpp
     src/video_encoder.cpp src/gif.cpp src/gs_vram.cpp src/gs_renderer.cpp src/framebuffer.cpp src/vu_micro.cpp src/vu_aot.cpp
-    src/iop_spu2.cpp src/audio.cpp src/iop_aot.cpp)
+    src/iop_spu2.cpp src/audio.cpp src/iop_aot.cpp third_party/ps2recomp/hle_kernel.cpp)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 include(cmake/GsVulkan.cmake)
 include(cmake/GsDirectX.cmake)
@@ -489,6 +489,7 @@ if(BUILD_TESTING)
 endif()
 
 include(cmake/NativeRuntime.cmake)
+include(cmake/Hle.cmake)
 
 # Desktop launcher (Qt 6 Quick). Optional: AUTO builds it only when Qt is found,
 # so headless and core-only builds never depend on a GUI toolkit.
