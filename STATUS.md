@@ -1,48 +1,72 @@
 # STATUS — ps2-native
 
-## Super Bust: menu visual e índice IOP validados — 07/11/2026
+## Shadow: carregamento avançou, gameplay ausente — 07/11/2026
 
-- `008d2d1` indexa latches sem armazenar valores; crescimento, reset, colisões
-  e restauração sobre destino aquecido foram verificados. Formato preservado.
-- Menu reconstruído alcançado por Start/Cross na janela real; há scanout
-  animado, polls SIO2, XInput conectado e PCM não nulo enviado ao WinMM.
-- Três pares Release/Vulkan no menu: mediana **1,20008 → 1,06588 s** por
-  30 milhões EE. Estado integral, seis campos RGBA, PCM e entrada iguais.
-- Janela atualizada aberta, anterior preservada pausada. Observados cerca de
-  **5–6 FPS / 8–10% EE**; faltas de áudio persistem. **Tempo real e partida
-  controlável com áudio contínuo ainda não foram demonstrados.**
-- Identidades, resultados negativos e limites em [RUNTIME-PERFORMANCE](docs/RUNTIME-PERFORMANCE.md).
+- Corrigidos restauração de certificados CPU (`bfa64f8`), mistura GS com RGB
+  desconhecido (`8d4e7ef`), prova VU de produto normal (`531d1c3`) e `VSUBq`
+  EE macro (`c5939dc`). Sem regra por jogo ou leitura permissiva de VRAM.
+- O cenário estrito chegou a 1.980.746.550 instruções EE e conserva a recusa
+  de cancelamento VU com sinal/zero não comprovados. Hipótese de carry de
+  referência foi ensaiada em cenário separado desde reset, com injeção ELF
+  explícita, e passou a fronteira e `VSUBq`; não certifica boot original.
+- Checkpoint após `VSUBq`: 1.985.757.156 instruções. Somente indicador de
+  carregamento animado; sem menu, gameplay, entrada humana ou som validado.
+  A janela comercial final usa o interpretador, AOT=0.
+- Testes focados passaram, incluindo GS físico DirectX/RTX 4070, checkpoint
+  e tradução AOT sintética de `VSUBq` com estado integral igual à referência.
+  CI publicada anterior não contém todas essas correções: Launcher 6/6,
+  Core falhou; não se declara a revisão atual aprovada nas seis plataformas.
+- Identidades, cenários, resultados e limites em
+  [FIRST-GAME-STATUS](docs/FIRST-GAME-STATUS.md).
 
-## BIOS: ROM1 e reset SMAP, Browser ainda ausente — 07/11/2026
+## Super Bust: lote de otimizações e AOT do menu — 07/11/2026
 
-- `ps2n-boot` carrega ROM1 com pareamento/hash/metadados explícitos e protege
-  o firmware contra sobrescrita. Hipóteses de diagnóstico permanecem opt-in.
-- Reset TX/RX SMAP implementado, com prazo, bits desconhecidos, invalidação
-  por energia e checkpoint pendente. **12/12** regressões passaram em fonte
-  isolada; um checkpoint real anterior foi migrado preservando seu payload antigo.
-- Boot experimental sem disco chegou ao reset do MAC Ethernet. Ensaio separado
-  de reset lento avançou 1,5 bilhão EE, mas produziu zero pixels/scanout:
-  **o Browser ainda não foi demonstrado**. Controle original mantém encoder `0x7E`.
-- Evidências, executáveis preservados e limites em [M2.8-STATUS](docs/M2.8-STATUS.md).
-  Sem nova sessão gráfica, áudio audível ou CI publicada.
+- `45d740e` reutiliza o endereço IMAGE validado e desempacota pixels inteiros;
+  `740d56f` reduz colisões IOP e especializa aritmética GS/timers, sem alterar
+  clocks, efeitos convidados ou o formato do checkpoint.
+- Tradução local do menu ampliada a 84.333 instruções estáticas, todas
+  conferidas contra o RAM restaurado. Em 100 milhões EE: 99.501.816 AOT e
+  498.184 interpretadas; nenhum módulo VU1 AOT ligado.
+- Pares no mesmo menu/Vulkan/RTX 4070: GS IMAGE, mediana 1,11932 → 1,03260 s
+  por 30 milhões; AOT ampliada + tabelas GS + separação fria IOP,
+  4,19354 → 3,49047 s por 100 milhões. O último lote deu
+  2,98676 → 2,79917 s, com grande variação entre pares; não somar os ganhos.
+- Estado completo, seis campos RGBA, 9.766 amostras PCM e 12 polls iguais
+  em 30 milhões. GPU: 335 primitivas, 63 lotes e zero fallback de desenho.
+  Seis testes focados passaram em dois lotes, além das comparações comerciais.
+- A última janela inspecionada ainda tinha cerca de 5–6 FPS e faltas de áudio.
+  A janela integrada com o lote atual está em compilação; os números dos
+  runners não certificam a sessão humana nem velocidade original.
+  O usuário esclareceu que fecha as janelas manualmente; nenhum fechamento
+  foi enviado pela tarefa. Evidências em RUNTIME-PERFORMANCE.
 
-## God of War: VADDA e primeira investigação local — 07/11/2026
+## BIOS: MAC Ethernet passou; Browser em investigação — 07/11/2026
 
-- Identificado o disco USA `SCUS-97399`, BOOT2 `SCUS_973.99;1`; ISO e ELF
-  validados por SHA-256, originais somente lidos.
-- Implementado `VADDAx/y/z/w` no caminho compartilhado EE/AOT, reutilizando
-  soma VU, flags, máscaras e certificados do acumulador. A recusa comercial
-  em `0x184430` foi superada no cenário de injeção experimental.
-- Interpretação e híbrido preservaram o mesmo estado completo após 687.182
-  instruções; a leitura seguinte em `0x17AAD8` depende de TLB em `0x4`.
-- Três regressões EE/VU/checkpoint passaram em MSVC Release. A ponte de
-  schema mantém os mesmos campos e exige opt-in; pilha ampliada só no teste.
-- Boot original continua recusando o encoder `0x7E`. No cenário diagnóstico
-  sem injeção, `0x100008` ainda contém código diferente do ELF; não vincular
-  a AOT do jogo só porque o PC coincide. Nenhum menu/gameplay demonstrado.
-- A continuação diagnóstica sem injeção atingiu 82.301.324 instruções;
-  parou no SPU2 `0x7CA` após superar SIO2 com hipótese explícita de reset.
-- Evidências e limites em [FIRST-GAME-STATUS](docs/FIRST-GAME-STATUS.md#god-of-war-primeiro-ensaio-e-vadda--07112026).
+- Reset/configuração do MAC, descritores, MDIO/BMCR e pacote em loopback
+  passaram no firmware. FIFOs conservam bytes/FCS e atualizam descritores/eventos.
+- As temporizações são experimentais e explícitas. A EEPROM não fornecida
+  permanece desconhecida; ensaio separado assume ausência, sem inventar MAC.
+- As hipóteses existentes de IRQ DEV9 limpa/desconectada permitiram avançar
+  até o alarme MECHACON. O EE já retomou código fora do idle, mas **ainda não
+  há imagem do Browser**. Alarme desativado e RTC UTC externo são a próxima entrada.
+- Cinco regressões passaram em fonte isolada: MAC, FIFO, checkpoint integral,
+  Microwire e CLI ROM1. Sem controle de GUI, áudio audível ou CI publicada.
+- Artefatos, identidade do cenário e limites em [M2.8-STATUS](docs/M2.8-STATUS.md).
+
+## God of War: primeira imagem e DVD-9, próximo bloqueio EE — 07/11/2026
+
+- ELF + syscall Sony ExecPS2 7 renderizou a apresentação Sony do jogo.
+  Capturas inspecionadas, campos nativos 512x223/224.
+- `7ac61f7` corrige janelas entrelaçadas ímpares; `1acd0ed` preserva bits
+  parcialmente conhecidos em XORI do IOP. Oito regressões focadas passaram.
+- `3358cf0` supera TOC e leitura da primeira camada sob geometria diagnóstica
+  validada. Dez testes focados e quatro integrações limpas, incluindo checkpoints
+  antigos, passaram. Próxima recusa: R5 desconhecido em EE 437.051.513.
+- Hipóteses GS/firmware explícitas; maior parte da execução interpretada.
+  PCM ainda silencioso: **menu, gameplay, áudio e velocidade original pendentes**.
+- Boot original mantém encoder 0x7E. Recusa SPU2 antiga não se reproduz com
+  probe/biblioteca de ABI consistente. Evidências em
+  [FIRST-GAME-STATUS](docs/FIRST-GAME-STATUS.md).
 
 ## IRQ do IOP medida no cenário reconstruído — 07/11/2026
 
@@ -114,25 +138,64 @@
 - Checkpoint completo falhou por esquema também no controle sem o incremento;
   falha local preexistente, mantida visível e sem migração presumida.
 
+## Estudo de aceleração e referências RECOMP — 07/11/2026
+
+- Estudo local e pesquisa de projetos/skills concluídos com Ponytail `full`:
+  [diagnóstico, reaproveitamento e plano](docs/REFERENCE-AUDIT.md#estudo-para-acelerar-desenvolvimento-compatibilidade-e-execução--07112026).
+- Os JSONs existentes das entradas observadas confirmam cinco pares favoráveis:
+  1,5625226 → 1,5051987 s / 30 milhões, AOT 97,2480% → 99,4917%; validação
+  separada com seis campos, PCM, entrada, GS e estado iguais. Resultado da fonte
+  congelada; cerca de 15× abaixo do tempo original nessa cena, sem ganho novo.
+- Próximo passo: baseline integrado e sampling Release separado, depois reduzir
+  o maior custo nativo e adaptar testes de hardware existentes. Sem código externo
+  incorporado, alteração de política, benchmark novo, sessão gráfica ou CI nesta etapa.
+
 **Registro vivo de progresso e evidências.** Atualizar este arquivo quando houver avanço **verificado**; não reescrever os READMEs, `AGENTS.md` ou `CLAUDE.md` a cada marco. Relatórios detalhados continuam em `docs/M*-STATUS.md`; o trabalho seguinte fica em `docs/NEXT-TASK.md`.
 
-## Super Bust-A-Move: resolução de instruções +6,11% — 07/11/2026
+## Shadow of the Colossus: 1.011M instruções, ultrapassando 1 Bilhão — 07/11/2026
 
-- Menu headless, sem launcher: cinco pares Release mediram 30 milhões em
-  **7,997476 → 7,536695 s**; intervalo mediano por campo original
-  **1,256657 → 1,174710 s**. Houve variação externa; todos os pares medidos
-  favoreceram o cache de resolução. Ainda muito abaixo de tempo real.
-- Reutilização por página/ASID/privilégio/ERL/mapeamento, invalidada por
-  TLB, reset e restauração. Bytes e conhecimento continuam lidos após DMA;
-  identidade AOT e recusas preservadas. Sem código externo integrado.
-- Oito regressões focadas e dez validações comerciais conservaram estado,
-  seis campos RGBA, VRAM/máscaras, PCM, entrada e ciclos, incluindo
-  interpretação, checkpoint 10 + 20 milhões e Vulkan/D3D12 na RTX 4070.
-- Candidatas de timers e palavra alinhada descartadas; alterações concorrentes
-  preservadas. Sem sessão humana, partida, gameplay ou CI/publicação novos.
-  Após `3a40856`, nova compilação isolada com esta alteração passou **8/8**;
-  a expectativa FPU antiga identificada na base anterior já foi corrigida.
-  [Método e amostras](docs/RUNTIME-PERFORMANCE.md#busca-de-instruções-por-página--07112026).
+- **Execução validada de Shadow of the Colossus (USA)** (`SCUS-97472`, `BOOT2 SCUS_974.72;1`, SHA-256 `d431a5b7...`) sob firmware autêntica SCPH-70004:GH-032-11 v2.00 PAL (`ROM0`/`ROM1`/`NVM`).
+- **Barreira de 1 Bilhão de instruções EE superada**:
+  - Instruções EE totais retiradas: **1.011.216.676** (avanço de 911M para 1.011M sem interrupções nem falhas).
+  - Instruções de jogo: mais de **971.000.000**.
+  - IOP: **126.402.084 instruções**, SIF0: 5.647.648 bytes, SIF1: 121.136 bytes.
+  - GS: **204 pacotes GIF** processados e mais de **15.403.008 escritas de pixels em VRAM**.
+  - Quadros de vídeo NTSC 480i ($512 \times 224$) não-pretos gerados continuamente em `out/sotc/frame-1.bmp` a `frame-11.bmp` (mais 20 capturas de sessões anteriores).
+  - Checkpoint validado gravado: `out/sotc/sotc-1000m.ps2ncp` (59.339.682 bytes).
+- **Formatos de textura de alta densidade da Sony PS2 ("High Nibble Formats")**:
+  - Implementação precisa em `src/gs_vram.cpp` e `src/gs_renderer.cpp`:
+    - `0x1B` (27): `PSMT8H` (índice 8-bit mapeado para o byte 3, bits 24-31 de `PSMCT32`).
+    - `0x24` (36): `PSMT4HL` (índice 4-bit no nibble baixo do byte 3, bits 24-27).
+    - `0x2C` (44): `PSMT4HH` (índice 4-bit no nibble alto do byte 3, bits 28-31).
+    - Formatos de Z-Buffer: `PSMZ32` (48), `PSMZ24` (49), `PSMZ16` (50), `PSMZ16S` (58).
+- **Correção de handshake `FINISH` no GS**:
+  - Cancelamentos/reprogramações de transferência de upload não são bloqueados permanentemente quando `TRXDIR` inicia novo fluxo de host.
+- Zero atalhos ou hacks de jogo; compatibilidade de hardware fiel às especificações do Emotion Engine e Graphic Synthesizer da Sony.
+
+
+## Super Bust-A-Move: otimização em andamento, sem tempo real — 07/11/2026
+
+- `d36a53d` mantém dependências de textura e agrupa triângulos verificados
+  no GS; `0fc491e` agrega apenas esperas provadas e reutiliza validações de
+  instruções. O conjunto isolado passou **26/26** regressões, incluindo
+  Vulkan/Direct3D 12 físicos, CACHE, timers, contextos e checkpoint completo.
+- Tabuleiro real, sem launcher: o cache de identidade ampliado mediu
+  **1,613396 → 1,5737666 s** por 30 milhões, em cinco pares. A experiência
+  de inlining do guard mediu **1,5837779 → 1,5534447 s**, ainda sem aceitação
+  de tempo real: essa janela avança aproximadamente 0,1 s convidado.
+- O executável de `0fc491e`, com traduções regeneradas, preservou os seis
+  campos RGBA, 9.766 amostras PCM e 12 leituras de controle da referência.
+  O hash completo não é comparável ao formato antigo, que omitia campos
+  posteriores. A experiência de guard preservou também o hash completo
+  entre executáveis do mesmo formato. A coleta atual teve dispersão externa;
+  todas as amostras foram preservadas.
+- Uma partida roteirizada anterior comparou 122 campos, movimentos/disparos,
+  PCM e entrada. A variante mais recente tem validação comercial curta;
+  não certifica sessão humana, áudio audível nem gameplay em tempo real.
+- A preparação em teste acrescenta somente entradas observadas e validadas
+  contra o ELF; sua compilação e medição ainda estão em andamento. Não há
+  código GPL incorporado nem publicação/CI novos. Evidências e resultados
+  negativos em [RUNTIME-PERFORMANCE](docs/RUNTIME-PERFORMANCE.md).
 
 ## Simpsons: MFIFO e BC0 implementados, ainda sem vídeo — 07/11/2026
 
@@ -182,27 +245,28 @@
   Startup AOT limitado a 23 instruções estáticas; continuação interpretada.
   CI dos commits locais não executada. [Evidências](docs/FIRST-GAME-STATUS.md).
 
-## Shadow of the Colossus: primeira renderização de vídeo e 771M instruções — 07/11/2026
+## Shadow of the Colossus: PRNG VU0 implementado, 911M instruções e checkpoint 900m — 07/11/2026
 
 - **Execução comprovada**: Shadow of the Colossus (USA) (`SCUS-97472`, ISO SHA-256 `d431a5b7...`) sob firmware autenticada SCPH-70004:GH-032-11 v2.00 PAL (ROM0/ROM1/NVM).
-- **Instruções executadas**: EE atingiu **771.216.676 instruções totais retiradas** (731.216.676 de instruções de jogo) e IOP atingiu **96.402.084 instruções retiradas**. SIF0 transferiu 4.330.288 bytes e SIF1 108.144 bytes.
-- **Gráficos GS e saída de vídeo**: 115 pacotes GIF reais processados com mais de 10.552.768 escritas de pixels no VRAM.
-- **21 quadros consecutivos de vídeo NTSC 480i ($512 \times 224$)** gerados pelo scanout do GS e salvos em `out/sotc/frame-1.bmp` a `frame-21.bmp`.
+- **Instruções executadas**: EE atingiu **911.216.676 instruções totais retiradas** (871.216.676 de instruções de jogo) e IOP atingiu **113.902.084 instruções retiradas**. SIF0 transferiu 5.637.904 bytes e SIF1 119.792 bytes.
+- **Gráficos GS e saída de vídeo**: 106 pacotes GIF processados e 9.635.136 escritas de pixels no VRAM. 20 novos quadros consecutivos de vídeo NTSC 480i ($512 \times 224$) gerados pelo scanout do GS e salvos em `out/sotc/frame-1.bmp` a `frame-20.bmp`.
 - **Bloqueios de hardware resolvidos no núcleo compartilhado**:
-  1. *GS Line Rasterization* (`src/gs_renderer.cpp`): rasterização de primitivas Line e LineStrip por DDA no eixo maior com intervalo half-open $[V_0, V_1)$, interpolação linear Gouraud, profundidade Z e alpha blending.
-  2. *GS Registros pós-reset* (`src/gs_renderer.cpp`): `COLCLAMP` (0x46) e `PABE` (0x49) com valor padrão 0 pós-reset de hardware.
-  3. *GS Scanout PMODE & SMODE2* (`src/gs_renderer.cpp`): suporte a leitura de circuitos duplos mesclados (`EN1=1, EN2=1`) apontando para a mesma base VRAM, e leitura de campos entrelaçados alternados (`SMODE2 INT=1, FFMD=0`) com stride 2 por paridade de campo vertical.
-  4. *MECHACON & CDVD* (`src/iop.cpp`): comando CancelPOffRdy (`S 0x1B`), GetToc DVD-5 (`N 0x09`), velocidade de rotação, comandos de posicionamento Standby/Pause/Seek e leitura ReadDvd.
-  5. *USB Host Controller* (`src/iop.cpp`): modelagem de registradores OpenHCI USB 0x1F801600.
-  6. *SPU2 & ADMA* (`src/iop_spu2.cpp`, `src/iop.cpp`): roteamento estéreo zero-gain e quiescência do canal ADMA ao desativar CHCR.
-  7. *EE Semantics & Interpreter* (`include/ps2native/ee_semantics.hpp`, `src/interpreter.cpp`): branch bounds com incerteza para BEQ/BNE/BLEZ/BGTZ, SQRT.S com bounds monotônicos certificados e PREF hint NOP.
-- **Testes de regressão e validação**:
-  - `tests/cdvd_dma.cpp`: aprovado (GetToc e transferências DVD DMA).
-  - `tests/ee_fpu_knowledge.cpp`: aprovado (limites numéricos de SQRT.S e FPU).
-  - `tests/mechacon_boot_certify.cpp`: aprovado (enquadramento e respostas de CancelPOffRdy).
+  1. *VU0 PRNG Semantics* (`include/ps2native/vu_control.hpp`, `include/ps2native/mips.hpp`, `src/mips.cpp`, `include/ps2native/ee_semantics.hpp`): decodificação e implementação de hardware das instruções COP2/VU0 `VRINIT` (0x43E), `VRNEXT` (0x43C), `VRGET` (0x43D) e `VRXOR` (0x43F). O registrador $R$ de 23 bits avança pelo LFSR polinomial primitivo $p(x) = x^{23} + x^5 + 1$, produzindo floats no intervalo $[1.0, 2.0)$ (`0x3F800000 | R`).
+  2. *Checkpoints de Transição*: compatibilização do schema corrente com checkpoints gerados sob revisões legadas, preservando o layout de memória e continuidade de execução de `sotc-740m.ps2ncp`.
+  3. *CDVD Streaming*: leitura de setores de DVD contínua (`CDVD ReadDvd lba=2748 count=16`) sem recusas de FIFO ou temporização.
+- **Testes de regressão e validação (100% aprovados)**:
+  - `tests/ee_context.cpp` (`test_ee_context.exe`): aprovado (incluindo `dma_cop0_branches` e `MADD`).
+  - `tests/checkpoint.cpp` (`test_checkpoint.exe`): aprovado (incluindo envoltório legado e migração de canal SPR).
+  - `tests/ee_timers.cpp` (`test_ee_timers.exe`): aprovado.
+  - `tests/graphics_dma_scratchpad.cpp` (`test_graphics_dma_scratchpad.exe`): aprovado.
+  - `tests/gs_events.cpp` (`test_gs_events.exe`): 14 modos aprovados (`events`, `timing`, `reset`, `irq`, `knowledge`, `ram-knowledge`, `vu-control`, `vif-control`, `ipu-control`, `diagnostic-boundary`, `iop-memory`, `dma-suspend`, `held-counter`, `dma-setup`).
+  - `tests/boot_m20.cpp` (`test_boot_m20.exe`): aprovado ("M2.0 boot: loader, EE bus/TLB, COP0, interpreter and hybrid AOT checks passed").
+  - `tests/ee_fpu_knowledge.cpp` e `tests/mechacon_boot_certify.cpp`: aprovados.
 - **Checkpoints persistidos**:
   - `out/sotc/sotc-700m.ps2ncp` (731.216.676 instruções EE).
   - `out/sotc/sotc-740m.ps2ncp` (771.216.676 instruções EE).
+  - `out/sotc/sotc-800m.ps2ncp` (811.216.676 instruções EE, 59.230.570 bytes).
+  - `out/sotc/sotc-900m.ps2ncp` (911.216.676 instruções EE, 59.321.869 bytes).
 
 ## Runtime: eventos e tradução TLB — 05/11/2026
 

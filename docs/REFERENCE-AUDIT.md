@@ -1,6 +1,21 @@
 # Referências técnicas versus requisitos do ps2-native — 03/11/2026
 
-## Reset FIFO SMAP consultado — 07/11/2026
+## Geometria DVD-9 e TOC consultadas — 07/11/2026
+
+Consultados [ECMA-267, seção Physical Format Information](https://ecma-international.org/wp-content/uploads/ECMA-267_1st_edition_december_1997.pdf)
+e [ps2sdk cdvdman](https://github.com/ps2dev/ps2sdk/blob/d41ea62946e53d9a0c8788bb9eb8c8faf488b559/iop/cdvd/cdvdman/src/cdvdman.c)
+para campos PFI, endereços físicos, track path e consumo convidado da TOC.
+O leitor ISO local foi reutilizado. Play! Cdvdman é acoplado ao HLE; PCSX2
+foi apenas comparação de layout, sem copiar/adaptar código GPL. A implementação
+local usa o formato documentado e testes sintéticos independentes.
+
+Uma ISO de setores de usuário não comprova a PFI física: a candidata exige
+`DiagnosticDvdGeometry` explícita, valida os dois volumes e inclui o parâmetro
+na identidade imutável dos checkpoints. PFI opaca continua desconhecida;
+nenhuma geometria específica do God of War foi codificada no runtime.
+A divisão inferida da imagem e OTP assumido no probe não são medição física.
+
+## MAC/PHY e reset FIFO SMAP consultados — 07/11/2026
 
 Referência primária fixada: ps2sdk `d41ea62946e53d9a0c8788bb9eb8c8faf488b559`,
 [`smapregs.h`](https://github.com/ps2dev/ps2sdk/blob/d41ea62946e53d9a0c8788bb9eb8c8faf488b559/common/include/smapregs.h),
@@ -9,6 +24,15 @@ e [`ps2dev9.c`](https://github.com/ps2dev/ps2sdk/blob/d41ea62946e53d9a0c8788bb9e
 O driver escreve RESET nas portas de byte TX/RX e aguarda sua limpeza. O bit de
 capacidade SMAP é separado da revisão SPEED. Isso fundamenta o protocolo,
 mas não mede sua latência física.
+
+A mesma revisão fundamenta MODE0 high-halfword-first, BD_SWAP por halfword,
+64 descritores de oito bytes por anel, FIFOs de 4 KiB TX/16 KiB RX, W1C,
+BMCR no PHY de endereço um e o teste de loopback do driver. Foram reutilizados
+esses contratos de registradores e o fluxo como evidência; a máquina de estados,
+filas e CRC são implementação local, sem copiar o driver. O PHY DP83846A e
+seus bits reset/loopback são identificados pelo próprio `smapregs.h`.
+Prazos de MDIO, reset e pacote permanecem hipóteses explícitas. O vetor CRC32
+`123456789` e um programa convidado sintético verificam os bytes recebidos.
 
 `SmapFifos` é implementação original: estado desconhecido antes da escrita,
 conclusão por prazo IOP explicitamente selecionado, FIFO vazia após reset,
@@ -56,6 +80,203 @@ temporização do doador. Nenhum jogo, vídeo completo, sessão do launcher ou
 ganho de FPS foi validado nesta etapa; não se declara um título novo compatível.
 
 > Observações baseadas no README e em arquivos específicos dos repositórios consultados. Não são prova de que todo código desses projetos funciona em jogos reais. As auditorias anteriores registram consultas sem integração; a incorporação efetiva do leitor IPU está documentada acima.
+
+## Estudo para acelerar desenvolvimento, compatibilidade e execução — 07/11/2026
+
+### Conclusão e escopo
+
+O maior retorno provável é reduzir o trabalho repetido no caminho nativo e
+reutilizar testes e componentes pequenos de outros projetos. Aumentar somente
+a porcentagem AOT, começar outro renderer ou abrir muitos jogos simultaneamente
+não resolve a distância atual até tempo real. Esta é uma conclusão de engenharia
+com base nas evidências abaixo; o próximo gargalo exclusivo ainda exige sampling.
+
+Estudo do checkout em `main`, HEAD `9b1a20f`, com alterações concorrentes já
+presentes em CPU/VU/GS/checkpoint e relatórios. Essas alterações foram preservadas.
+Foram examinados os fluxos de geração, execução, memória, IOP, checkpoint,
+preparação e sessão experimental, os relatórios atuais e referências externas.
+Não foi uma auditoria linha a linha de todo o núcleo. Ponytail `full` aplicado
+a partir da skill local; skills externas abaixo foram estudadas, sem instalação.
+Nenhum jogo, sessão gráfica, instalação ou benchmark novo foi iniciado.
+
+### O que os números locais estabelecem
+
+As séries existentes foram relidas e as medianas recalculadas nesta investigação.
+Não somar ganhos de séries com executáveis, hashes de estado ou cenas diferentes.
+
+| Experiência local | Antes → depois | Interpretação |
+|---|---|---|
+| Entradas EE observadas, tabuleiro, cinco pares | 1,5625226 → 1,5051987 s / 30 milhões; cinco vitórias | +3,81% de throughput; tempo −3,67%; AOT 97,2480% → 99,4917% |
+| Cache de identidade 1024 → 4096, cinco pares | 1,6133960 → 1,5737666 s | Melhora pequena e consistente nessa série, já contemplada no código inspecionado |
+| Experiência anterior de observação, três pares | 1,6274629 → 1,7525385 s | Regressão de 7,69% no tempo mediano; preservar como resultado negativo |
+| Partições AOT, relatório estrutural anterior | incremental 125,877 → 26,867 s; completo 124,015 → 131,721 s | Reuso incremental demonstrado; build completo ficou mais caro |
+
+Fontes locais: `out/realtime-observed-aot-{primary,validate}-results.json`,
+`out/realtime-gameplay-observed-evidence.json`,
+`out/realtime-code-capacity-primary-results.json`,
+`out/realtime-observer-primary-results.json` e
+[AOT-STRUCTURAL-PERFORMANCE](AOT-STRUCTURAL-PERFORMANCE.md#particionamento-aot--3c3a5b5).
+Na validação separada das entradas observadas, conferiram-se os seis campos
+RGBA, PCM, entrada, estado GS e hash completo: iguais no par do mesmo formato
+`550e7840…`. O artefato de geração registra zero palavras divergentes do ELF,
+1.006 entradas adicionais e 93.437 instruções estáticas. Sua aceitação escrita
+ainda dizia pendente; a conferência dos JSONs não certifica integração na HEAD.
+
+Esses seis campos representam aproximadamente 0,1 s convidado: 1,5052 s de host
+ainda significa cerca de 15 vezes abaixo da velocidade original. Cobertura AOT
+conta instruções, não participação no tempo host. Eliminar 10% do tempo total
+permite no máximo 1,11× de aceleração; chegar a 15× exige eliminar cerca de
+93,3% do custo atual para a mesma progressão. É uma conta de escala, não uma
+previsão de ganho. Cinco intervalos entre seis campos não permitem estimar p99.
+
+Os caches inspecionados usam MSVC Release `/O2 /Ob2 /DNDEBUG`, profiling OFF.
+O build do teste aponta para `out/realtime-cpu-review-source`; o launcher aponta
+para o checkout principal e ainda configura traduções em
+`out/aot-partition64-code/optimized.cpp` e `out/aot-opt-build/optimized-idle.cpp`.
+Portanto, o ganho do executável headless não demonstra melhora da janela do
+mantenedor. O cache CMake não prova quais bytes estão no executável instalado.
+
+### Por que traduzir mais não basta
+
+- `src/aot.cpp::emit_block` emite `aot_enter_checked`, `ee::begin`, a semântica
+  compartilhada e `ee::retire` para cada instrução. O gerador já chama diretamente
+  alguns delay slots; encadear blocos/chamadas é uma extensão, não partir do zero.
+- `include/ps2native/ee_semantics.hpp::aot_enter_checked` ainda verifica PC,
+  orçamento, interrupções, identidade do código e observação. O runtime já tem
+  janelas de IRQ e agregação de esperas provadas. Não repetir o experimento de
+  agrupar aritmética que ficou mais lento em `RUNTIME-PERFORMANCE`.
+- `src/memory.cpp::code_matches` consulta versões por página e geração DMA;
+  pode sincronizar IOP antes do hit. Reutilizar uma prova exige invalidá-la por
+  stores, cache/writeback, TLB, DMA, observadores e restauração, quando aplicável.
+- `src/boot.cpp::Tracer` permanece ligado durante a execução. O trace cheio já
+  evita parte da formatação, mas ainda há contabilidade por instrução. A hipótese
+  de outro observador mais barato precisa de medida: uma tentativa anterior perdeu.
+- `src/iop.cpp::run_until` já tem `synchronization_due` e `advance_idle_loop`,
+  porém também executa R3000A e bombeia dispositivos por ciclo. Avançar por eventos
+  ou especializar trechos conhecidos são candidatas se o perfil atual apontar IOP.
+- As máscaras de conhecimento e provas numéricas participam da correção e dos
+  checkpoints. Representação compacta/caminho de valores conhecidos pode reduzir
+  custo; apagar essa informação altera o contrato e não é uma otimização equivalente.
+
+O perfil instrumentado histórico ajuda a localizar chamadas, mas lê o relógio
+milhões de vezes. Suas porcentagens não quantificam os gargalos da variante de
+99,49% AOT. Usar sampling do Release com símbolos correspondentes, em execução
+separada da medição primária; a [documentação Microsoft](https://learn.microsoft.com/en-us/visualstudio/profiling/cpu-usage?view=visualstudio)
+descreve a ferramenta existente. Não criar outro profiler para iniciar esta etapa.
+
+### Projetos pesquisados e reaproveitamento concreto
+
+Consulta em 07/11/2026. Links `main`/`master` são móveis; fixar o commit e o
+conteúdo dos arquivos no incremento que realmente os incorporar. Afirmações
+de gameplay/desempenho dos doadores não foram reproduzidas aqui. Priorizar
+adaptações que mantenham o núcleo comum, sua identidade e seus testes.
+
+| Referência primária examinada | O que aproveitar | Integração e limite técnico |
+|---|---|---|
+| [N64Recomp, `cgenerator.cpp`](https://github.com/N64Recomp/N64Recomp/blob/main/src/cgenerator.cpp) e [overlays](https://github.com/N64Recomp/N64Recomp/blob/main/README.md#overlays) | Chamadas estáticas diretas; lookup para indiretas e imagens carregadas | Adaptar em `aot.cpp`/dispatcher. Manter saída por budget, IRQ, exceção, stop e retorno não convencional; os registradores locais do N64 não provam equivalência R5900 |
+| [gow-native-pc, patch 28](https://github.com/Vnnc1/gow-native-pc/blob/main/engine/patches/28-recomp-direct-jal.patch) e [patch 30](https://github.com/Vnnc1/gow-native-pc/blob/main/engine/patches/30-mem-fast-path.patch) | Chamada leve com referência completa; classificação rápida de RAM e casos de borda | Reusar testes e adaptar o algoritmo. A máscara de espelhos não substitui TLB, permissões, cache ou conhecimento do ps2-native |
+| [PS2Recomp](https://github.com/ran-j/PS2Recomp/blob/main/README.md) e [`ps2xIOP`](https://github.com/ran-j/PS2Recomp/blob/main/ps2xIOP/README.md) | Ghidra/entradas sintéticas e catálogo de serviços/imports IRX; comparar tratamento de módulos e RPC | `ps2n-dev` já aceita raízes e CSV. Automatizar essa passagem; virtual kernel/HLE é outra fronteira de execução, não uma substituição transparente da BIOS |
+| [LightVelox/PS2Recomp, VIF](https://github.com/LightVelox/PS2Recomp/blob/main/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp) | UNPACK escalar/SIMD, seleção por formato e manutenção de lanes | Adaptar somente após demanda medida, com caminho portátil, wrap, máscaras, ROW/COL e bytes desconhecidos. Não impor SSE/AVX a ARM64 |
+| [sotc-vibe-pc, benchmark VU1](https://github.com/LightVelox/sotc-vibe-pc/blob/main/Port/tools/vu1_bench.cpp) e [método de performance](https://github.com/LightVelox/sotc-vibe-pc/blob/main/Docs/PERFORMANCE.md) | Restauração por invocação, comparação VU, fila limitada e separação entre medição e hashes | Adaptar ao capturador VU1 existente. Não reutilizar endereços, estados, hipóteses de HLE ou timings da versão PAL no nosso disco USA |
+| [ps2-web-recomp, gerador](https://github.com/snuri00/ps2-web-recomp/blob/main/recomp/codegen.cpp) e [fontes runtime](https://github.com/snuri00/ps2-web-recomp/tree/main/runtime/src) | Outro AOT R5900; inventário de DMA/VIF/IOP/IPU e chamadas/tail calls | Forte candidato a doador de rotinas isoladas. `clang::musttail` precisa de alternativa MSVC; não importar JIT ou kernel alternativo por arrasto |
+| [ps2-native-recomp, autotests](https://github.com/exoteric33/ps2-native-recomp/blob/main/scripts/autotests.py), [replay](https://github.com/exoteric33/ps2-native-recomp/blob/main/README.md#saves-and-checks) e [speedcheck](https://github.com/exoteric33/ps2-native-recomp/blob/main/scripts/speedcheck.py) | Executor de resultados esperados, classificação de falhas e corpus de entrada reproduzível | Adaptar a comparação ao `ps2n-run`/`ps2n-boot`; o script chama seu próprio `port.sh`. Sua medição lê título de janela Windows e cenas GoW2: não copiar como contador genérico |
+| [ps2autotests](https://github.com/unknownbrackets/ps2autotests) | Programas EE/IOP, DMA, GS, memória e VU acompanhados de `.expected` | Maior retorno imediato para confiança compartilhada. Começar pelo subconjunto que o loader/SIO já consegue executar; ELF/IRX com serviços de kernel ausentes deve ser bloqueado, não aprovado |
+| [Play!, `Source/ee`](https://github.com/jpd002/Play-/tree/master/Source/ee) | DMAC, VIF, timers, tabelas IPU e testes/algoritmos pequenos | Interfaces CMIPS/Framework e HLE tornam a cópia integral cara. `Ee_IdleEvaluator` observa semáforos/threads: não é prova direta de polling MMIO; `FpMulTruncate` contém tratamento IEEE que exige conferir diferenças PS2 |
+| [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs/blob/main/README.md) | Rastreamento de dependências, replay GS e investigação de shaders | Usar quando GS/fences forem gargalo ou houver falha visual. O próprio projeto declara limites de precisão de AA1/interpolação; outro renderer inteiro não resolve o EE lento |
+| [GT4Recomp, arquitetura](https://github.com/moesuito/gt4-staticrecomp/blob/main/docs/ARCHITECTURE.md) | Registro AOT VU por identidade, fila assíncrona e separação de relógios | Relato específico de título/revisão; documentação de arquitetura e README têm escopos diferentes. Não tomar cobertura anunciada como prova sobre nossa VU ou sobre todos os jogos |
+| [XenonRecomp](https://github.com/hedge-dev/XenonRecomp#optimizations) e [ReXGlue](https://github.com/rexglue/rexglue-sdk) | Metadados de função, redução de acessos ao contexto e toolkit reaproveitado | Referências de organização/otimização; instruções PPC, ABI e hardware Xbox não são implementações para PS2. Nenhuma alteração em x360-native |
+
+A unidade útil de cópia é uma rotina, tabela, teste ou transformação com contrato
+identificado. Para cada candidata: fixar fonte, preservar origem/avisos, listar
+dependências, adaptar ao estado comum, executar resultado independente e comparação
+com o caminho anterior. Só integrar se reduzir trabalho ou custo total. Este estudo
+não incorporou código externo nem alterou a licença do repositório.
+
+### Skills: usar poucas e no ponto certo
+
+A skill Ponytail local está disponível e cobre o fluxo necessário. Foram lidas
+também as skills upstream [ponytail-audit](https://github.com/DietrichGebert/ponytail/blob/main/skills/ponytail-audit/SKILL.md)
+e [ponytail-gain](https://github.com/DietrichGebert/ponytail/blob/main/skills/ponytail-gain/SKILL.md).
+A primeira orienta mapear fluxos e priorizar problemas com caso concreto; a segunda
+exibe números de um benchmark externo, sem medir este projeto. Instalar ambas não
+produz FPS nem validação adicional por si só. `ponytail-review` é candidata para
+revisão de incrementos; seu conteúdo não foi auditado nesta etapa.
+
+Foi examinada [console-anywhere](https://github.com/Jakeschincariol/console-skill/blob/main/console-anywhere/SKILL.md):
+serve para toolchain, planos e empacotamento de `ps2EntryRunner`/PS2Recomp. Não
+serve diretamente ao núcleo/CMake do ps2-native e não otimiza o runtime. Adiar
+instalação/empacotamento; reaproveitar apenas verificações que faltarem nas CLIs
+existentes. Não criar uma skill que duplique `AGENTS.md` e os relatórios.
+
+### Regras e mecanismos que estão custando avanço
+
+| Regra/mecanismo atual | Diagnóstico e mudança recomendada |
+|---|---|
+| Só continuar quando um valor consumido estiver conhecido/provado | Preserva honestidade, mas torna pesquisa numérica e reset um caminho serial. Adotar resultados de testes de console e perfis de hipóteses explícitas já permitidos; não exigir nova medição física para um fato que já possui evidência pública aplicável. Hipótese continua hipótese |
+| Boot original e núcleo próprio como contrato | Explica parte da distância para ports com HLE. Manter o objetivo e executar compatibilidade experimental por pontos completos separados, já existentes. Transformar o boot original em pré-requisito de toda otimização repete o bloqueio do encoder sem ajudar a cena medida |
+| Conferência de código/IRQ/observação por instrução | O contrato é invalidar corretamente e preservar eventos. `AGENTS.md` já permite especializar, mover ou cachear validações; não exige repetir o mesmo trabalho. Implementar provas reutilizáveis com invalidação, nunca desligar as verificações |
+| Hash de esquema derivado do texto dos cabeçalhos | `cmake/Checkpoint.cmake` filtra helpers/marcadores e normaliza trechos para evitar incompatibilidade artificial. A auditoria de helpers VU já interrompeu integrações 25/26. Planejar assinatura explícita do formato serializado e runtime separado, com teste de alteração de campo/tipo/ordem; não remover o guard nem aceitar qualquer hash |
+| Exigir seis hosts/hardware em cada experiência | Não é o que a política pede: testes focados no incremento e matriz na revisão publicada. Fazer exploração local curta, integração coerente e só então CI. Os seis alvos permanecem compromisso de portabilidade |
+| Arquivos de contexto com tarefas antigas ainda imperativas | `NEXT-TASK` contém “não trocar de título” e “primeira partida não demonstrada” de etapas anteriores; relatório atual já demonstra partida headless. Usar somente a fronteira atual por título; histórico não pode revogar o pedido novo |
+| Nenhuma dependência/framework sem necessidade | Não é proibição de reutilizar código pronto. Aprovar pelo encaixe no contrato e custo de manutenção; copiar um subsistema inteiro acoplado pode custar mais que adaptar uma rotina |
+| Core genérico, sem hacks por jogo, sem JIT | É uma escolha de produto que custa esforço, não burocracia dispensável. Perfis por hash, raízes observadas, metadados Ghidra e AOT offline já são permitidos. HLE de serviços ou outro motor exigem decisão arquitetural própria e não são premissa deste plano |
+
+Não há evidência de que remover testes, proteção de saves, identidade regional,
+direitos de autoria ou limites de execução acelere corretamente o produto. O
+pedido de priorizar reaproveitamento foi aplicado ao estudo técnico; nenhum aviso
+de autoria foi removido. Não houve mudança automática de `AGENTS.md`/`CLAUDE.md`.
+
+### Ordem de execução proposta
+
+| Ordem | Entrega pequena e verificável | Arquivos/fluxo existente | Critério de conclusão |
+|---|---|---|---|
+| 0 | Baseline integrado único do tabuleiro, revisão/diff e AOT efetivo identificados | `ps2n-dev`, cenário/checkpoint atuais, `launcher/CMakeLists.txt`, sessão Qt | Mesmo estado/frames/PCM/input; cinco pares sem compilação concorrente; sampling separado. Confirmar o executável do launcher antes de atribuir-lhe ganho |
+| 1 | Redução do maior custo CPU identificado: guard/memória, despacho ou IOP | `aot.cpp`, `aot_runtime.cpp`, `ee_semantics.hpp`, `memory*.cpp`, `iop.cpp` | Uma candidata por vez; manter referência; ganho total pareado e ausência de divergências. Encadear blocos só se o despacho for relevante; preservar saídas arbitrárias |
+| 2 | Primeiro lote de testes de hardware reaproveitados | `ps2autotests` + adaptação mínima ao runner e CTest atuais | Resultados `.expected` independentes, versão fixada, timeout e bloqueios explícitos; começar por ALU/branches/memória e VU conforme suporte, depois DMA/GS/IOP |
+| 3 | Descoberta observada integrada na preparação | `ps2n-dev` → analisador → `--entry`/`--table` → partições existentes | Não depender de scripts avulsos em `out/`; rejeitar bytes divergentes/raízes fora da imagem; rebuild sem mudança reutiliza objetos; invalidar por identidade e gerar offline |
+| 4 | Uma correção compartilhada de compatibilidade com efeito entre títulos | Perfis e checkpoints dos três jogos; DMA/SIF/CDVD/VU/GS conforme primeira recusa | Regressão própria antes da correção e novo limite real depois. Consultar a implementação doadora antes de escrever outra; demonstrar que os outros cenários continuam iguais |
+| 5 | VU1/GS/SIMD e apresentação, conforme uma cena que os exerça | Captura VU1, compute Vulkan/D3D12 e frontend existentes | Invocação/primitivas realmente executadas; ganho integrado; portabilidade/capabilities; RGBA/PCM/IRQ/checkpoint. VU1 ociosa não recebe otimização comercial fictícia |
+| 6 | Sessão jogável e expansão controlada do catálogo | Launcher com os mesmos módulos aceitos; perfis isolados | Entrada, som ouvido, saves quando suportados, pacing e avanço original em cena prolongada. Só depois classificar mais revisões como jogáveis |
+
+As ordens indicam dependências e prioridade, não prazos prometidos. Testes de
+compatibilidade podem avançar enquanto não houver medição concorrente; nunca
+compilar e medir no mesmo host ao mesmo tempo. Evitar abrir várias modificações
+de cabeçalhos/ABI em paralelo: primeiro concluir e congelar um incremento.
+
+Na exploração usar a janela de 30 milhões para rejeitar candidatas rapidamente;
+para aceitar desempenho, ampliar à sequência existente de movimento/disparo e
+depois a uma sessão prolongada. Registrar tempo convidado/host, intervalos de
+campos, travadas, saída de áudio e custo de geração/build. A meta é progressão
+original e áudio contínuo, sem forçar 30 FPS ou PAL a 60 atualizações.
+
+### Seleção de jogos e definição de suporte
+
+| Título local | Evidência atual | Próxima prova que vale mais que contar instruções |
+|---|---|---|
+| Super Bust-A-Move | ROUND A1 com movimento/disparo em harness; equivalência de campos/PCM; cerca de 15× abaixo do tempo real na janela recente | Tornar o executável efetivamente usado mais rápido, depois validar sessão visível com som e controles |
+| The Simpsons: Hit & Run | MFIFO/BC0 implementados; cenário de injeção e boot convidado têm bloqueios distintos; sem vídeo jogável | Identificar produtor do bit desconhecido após SCMD 0x15 no boot convidado; no cenário separado, resolver inicialização de QWC/CPC sem inventar bits |
+| Shadow of the Colossus | Contadores, transferências, campos não-pretos e checkpoints registrados; não certificam uma cena controlável | Identificar visualmente o conteúdo e sua resposta à entrada; capturar VU real se executada; medir progresso audiovisual da mesma cena |
+
+Manter uma linha por hash/revisão/cenário com níveis distintos: identificado,
+preparado, boot, menu, partida controlável, sessão validada e desempenho medido.
+Uma correção genérica deve ser reaplicada aos três casos, mas não promover todos
+ao mesmo nível de suporte. Só adicionar outro título quando testar um recurso
+que esses três não exercitem ou compartilhar um bloqueio cuja correção esteja
+pronta. Tempo para localizar/corrigir a primeira falha e regressões entre títulos
+são métricas de desenvolvimento mais úteis que bilhões de instruções retiradas.
+
+### Limites desta entrega
+
+Conferência estática e reanálise de resultados existentes; nenhum teste C++,
+benchmark novo, sessão humana, coleta sampling ou CI remota foi executado.
+Foram conferidos os cinco pares recentes e a igualdade de campos/PCM/input/GS/
+estado nos JSONs de validação correspondentes. Não se provou ganho novo nem
+compatibilidade adicional. O próximo incremento recomendado é a ordem 0 e,
+com seu perfil, uma única otimização estrutural da ordem 1.
+
+---
+
+## Comparação inicial — 03/11/2026 (histórico)
 
 | Subsistema / necessidade | PS2Recomp (GPL-3.0) | PCSX2 (GPL-3.0+) | Diretriz ps2-native |
 |---|---|---|---|

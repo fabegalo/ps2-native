@@ -1,5 +1,77 @@
 # Runtime: fronteiras de evento e tradução de memória — 05/11/2026
 
+## Super Bust: IMAGE, traduções observadas e lote integrado — 07/11/2026
+
+Incrementos `45d740e` e `740d56f`, posteriores à seção histórica abaixo.
+O checkpoint do menu, entradas imutáveis, opções Release e GPU são os mesmos;
+nenhuma hipótese de hardware ou clock foi relaxada. Os fontes congelados são
+v5 (IMAGE), v6 (tabelas GS e separação fria da busca IOP) e v7 (índice IOP
+aberto para colisões/halfwords e divisão de timer BUSCLK especializada).
+As tabelas GS são geradas em compilação pela álgebra já existente, mantendo
+validação e caminhos gerais; não incorporam implementação externa.
+O índice mantém busca geral para listas que excedam seus 4.095 elementos;
+crescimento/reset/restore continuam invalidando posições, nunca valores.
+
+Uma captura bounded de seis milhões EE (`menu-coverage/full-events.ndjson`)
+foi validada com o comparador existente. Palavras observadas foram conferidas
+contra o ELF antes de alimentar raízes explícitas ao `ps2n-aot`. A tradução
+local `menu-aot-79439d486ee153fc/module.cpp` contém 84.333 instruções e 3.590
+entradas indiretas verificadas. Todas as 84.333 entradas foram verificadas
+contra o RAM restaurado pelo mesmo critério eager da janela. Game + loader
+somente: 99.501.816 AOT / 498.184 interpretadas no trecho de 100 milhões,
+contra 94.975.340 / 5.024.660 antes. Não foi ligado AOT do vetor KSEG ou VU1.
+Os artefatos derivados permanecem somente no `out/` ignorado.
+
+Comparações primárias alternadas no menu, sem hashes/timers intrusivos,
+com chunks de 100 mil, prioridade/afinidade normais. Esta tarefa não compilou
+nem testou durante cada série; outras tarefas do usuário não foram encerradas.
+Todos os tempos são segundos, preservados nos logs locais:
+
+| Lote | Controle | Candidata | Medianas |
+| --- | --- | --- | --- |
+| IMAGE, 30 M EE, cinco pares | 1,09232; 1,13115; 1,13919; 1,11932; 1,09830 | 1,03260; 1,00416; 1,00218; 1,04563; 1,03819 | 1,11932 → 1,03260 |
+| AOT ampliada + GS/IOP v6, 100 M, três pares | 4,13030; 4,41613; 4,19354 | 3,48093; 3,49047; 3,50318 | 4,19354 → 3,49047 |
+| IOP/timers v7, 100 M, três pares | 2,87019; 2,98676; 3,62720 | 2,79917; 2,62287; 2,85788 | 2,98676 → 2,79917 |
+
+Última série tem variação grande: não extrapolar os 6,28% da mediana, nem
+somar percentuais entre séries com cargas externas diferentes. Os 100 M
+representam aproximadamente 0,339 s convidado e 20 campos originais: o alvo
+de velocidade original continua ausente. Logs `menu-transfer-timing-*`,
+`menu-batch-100m-timing-*`, `menu-collision-100m-*`.
+
+Validação comercial separada, 30 M EE, v5/v6/v7 contra o controle histórico:
+mesmos ciclos 21.194.531.422, PC 0x81FC0 e 58.903.258 bytes de payload,
+SHA-256 `64cb95d8b7487dd0a909152868ad6b78844a33b6e3e426fa1c0ba599ad1dfc74`.
+Seis campos RGBA, 9.766 amostras PCM e 12 polls têm os hashes da seção abaixo.
+RTX 4070: 335 primitivas / 63 lotes, zero fallback de desenho em todos os motivos.
+Esquema `11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b`;
+runtime v6 `3fbb70d1f509b65428b93a61857cddd5392c81ecf98607c3166a8ec3d6f67a85`,
+v7 `90510c2ce867f4acba6d402fe5d1b6aca0dc7c2067a3c2b7f6f9dc9da54ba4ad`.
+Headers de AOT conferidos byte a byte antes de reutilizar objetos no runner;
+a janela é compilada normalmente pelo CMake com os fontes v7 e módulos atuais.
+
+Verificações do lote: IOP, VRAM, GIF e GS (4/4); após revisão do índice,
+IOP e EE timers (2/2). Os testes cobrem crescimento/reset, colisão ausente,
+halfwords vizinhos com valores distintos, padding e transferências inteiras.
+IMAGE também passou checkpoint completo, GS físico Vulkan/DirectX e CT16.
+Três testes GS de expectativas antigas falham igualmente no controle v4:
+`native-m29-drawing`, `native-gs-filter`, `native-gs-triangles`; nenhuma asserção
+foi relaxada. Esses snapshots não contêm correções concorrentes posteriores.
+CI das seis plataformas não foi executada para estes fontes locais.
+
+Perfil separado de v6: 6.469 amostras no worker, busca fria IOP 10,56%, espera
+9,72%, timer EE 5,04%, canais gráficos 4,00%, endereço VRAM 3,54%. Isso motivou
+v7. O perfil antigo de IMAGE com somente 161 amostras é inconclusivo e foi
+preservado. A execução amostrada terminou seu orçamento de dois bilhões EE
+com sucesso; seu tempo não é benchmark. Logs `menu-batch-sampling.log` e
+`menu-batch-sampled.log`. Próximo perfil deve usar a versão integrada atual.
+
+A sessão humana anterior demonstrou menu/entrada e PCM enviado, com 5–6 FPS
+e underruns. O usuário informou que fecha as janelas manualmente. Nenhuma
+janela foi fechada pela tarefa. A compilação da janela v7 ainda está em curso;
+os resultados acima são do runner com o mesmo núcleo, módulos e chunks,
+não uma certificação de partida com som contínuo ou de boot original.
+
 ## Menu real: índice de latches e GPU física — 07/11/2026
 
 Incremento `008d2d1`. A janela foi acompanhada até a intro animada e o menu,
@@ -554,3 +626,233 @@ O núcleo permanece original BSD. A autorização para usar referências GPL
 não resultou em incorporação nesta etapa. Sem sessão humana, áudio ouvido,
 launcher, primeira partida ou certificação de outros dispositivos. A melhoria
 medida pertence ao menu headless. CI/publicação não executadas nesta etapa.
+
+## Super Bust-A-Move: partida e otimizações em investigação — 07/11/2026
+
+O caminho headless com controle SIO2 alcançou ROUND A1, movimentou o lançador
+e disparou bolhas. Não houve injeção de estado de jogo para selecionar a
+partida. O checkpoint local `out/realtime-board3.ps2ncp` permite repetir a
+mesma cena; não é um artefato distribuível. Ainda **não há tempo real**.
+
+Snapshots isolados de `8af295e` mantêm separadas as experiências e as mudanças
+concorrentes de compatibilidade. Os experimentos incluem agrupamento exato
+de esperas EE/IOP até o próximo evento, validação de código por gerações de
+página, triângulos AA1 no compute existente e janelas comprovadas de amostragem
+de interrupções. O backend usa primitivas reais na RTX 4070. Nenhuma chamada
+de cache, efeito de DMA, imagem ou síntese SPU2 foi removida para obter ganho.
+Esses protótipos ainda exigem integração e validação na revisão corrente.
+
+No tabuleiro, cinco pares Release/Vulkan de 30 milhões de instruções, sem
+instrumentação intrusiva, reduziram a mediana de 2,5427510 para 2,1623833 s
+com as janelas de IRQ/DMA. Cada par favoreceu a alteração. Os seis campos
+originais representam cerca de 0,1 s de jogo; o resultado permanece muito
+abaixo da velocidade original. Estado completo em todos os pares:
+`ebbde2076edc85ecfb03129d03678664175fe477a8547c52c107614d58560042`.
+O rasterizador CPU também produziu esse estado na mesma janela. Logs e
+amostras: `out/realtime-irq-gameplay-measure-results.json`.
+
+Uma continuação com 600 milhões de instruções e movimento/disparos produziu
+122 campos, 244 polls e 195.314 amostras PCM. As 122 imagens, entradas,
+PCM, estado GS e estado completo coincidiram antes/depois. Tempos de
+validação: 54,3015537 e 46,7071104 s; não são uma série primária pareada.
+O primeiro ensaio posterior recusou sobrescrever um WAV existente após
+terminar a execução convidada. A repetição com prefixos exclusivos concluiu
+em 46,8851845 s e preservou os mesmos resultados. Estado final:
+`de2dddd1a3336270e39f17f1b61b95a2728563932d3e42f3b4a14807ee182516`.
+Evidências: `out/realtime-gameplay-control-before-0.log`,
+`out/realtime-gameplay-control2-after-0.log` e respectivas capturas/WAVs.
+PCM comparado não constitui uma sessão de áudio ouvida.
+
+O observador diagnóstico existente identificou uma rotina de manutenção de
+D-cache entre os maiores grupos ainda interpretados. Capturaram-se somente
+bytes executáveis conhecidos do checkpoint, com identidade da imagem e
+guardas de código mantidas, para tradução AOT local do alias observado.
+A tradução parcial ficou mais lenta: resultado negativo preservado em
+`out/realtime-kernel-native-results.json`. Traduzir também CACHE, reutilizando
+sua implementação existente, reduziu trocas de engine, mas sem uma janela
+de ordenação adequada também ficou mais lento nos três pares registrados
+em `out/realtime-kernel-cache-results.json`. A versão que admite apenas
+DXWBIN na janela quiescente comprovada passou na comparação de imagem,
+PCM, controle e estado; três pares deram medianas de 2,1546817 e 2,0356066 s
+(`out/realtime-kernel-inert-results.json`). A cobertura nativa aumentou em
+645.006 instruções nessa janela. Os 104 pares diferenciais de CACHE
+detectaram uma diferença na falha de privilégio antes de `begin`; a correção
+preserva PC/estado, recusa, aposentadoria e eventos. Passaram também o
+resultado independente de bytes/máscaras após writeback e os casos de CACHE
+intercalado com deadlines de IRQ, tracing completo e budgets arbitrários.
+
+Uma alteração posterior evita construir mensagens CACHE e mudanças de
+engine depois de um observador limitado encher seu registro. Observadores
+externos continuam interessados por padrão; diagnósticos permanecem ativos
+mesmo com o trace cheio. Três pares Release/Vulkan reduziram a mediana de
+2,0298109 para 1,7669221 s, com o mesmo estado completo. A validação separada
+preservou todos os campos, PCM e entradas. Artefatos:
+`out/realtime-trace-primary-results.json` e
+`out/realtime-trace-validate-results.json`. Novo perfil separado em
+`out/realtime-trace-profile-results.json`; não usar seus tempos intrusivos
+como desempenho do executável normal.
+
+A integração local dessas alterações com a árvore corrente passou **25/26**
+regressões focadas, incluindo os dois backends físicos e os novos testes de
+CACHE/IRQ. O teste de checkpoint completo mantém a recusa de esquema vista
+antes dessas integrações, nas alterações concorrentes de VU; nenhum hash de
+esquema foi inventado ou admitido para contornar a falha. Logs:
+`out/realtime-integration3-build-retry.log` e
+`out/realtime-integration3-tests.log`. Não há CI publicado nem aceitação de
+tempo real. Triângulos texturizados no compute são a investigação seguinte.
+
+O primeiro protótipo de triângulos texturizados passou nos dois backends
+físicos: 32 combinações de formato, winding, filtragem e AA1, texel
+independente e linha mantida no rasterizador CPU. O esquema permanece
+`5662ca9c…`: os novos métodos de observação/CACHE não têm campos de máquina
+e foram marcados como helpers de execução, preservando a identidade anterior
+sem admitir hashes novos. O checkpoint completo passou nessa base isolada.
+
+Na cena comercial, todos os campos, PCM, entrada e estado completo
+coincidiram. A cobertura GPU subiu de 1.508 para 1.893 primitivas e os
+fallbacks caíram de 731 para 346, mas os lotes aumentaram de 729 para 792.
+Três pares primários deram medianas de 1,7628481 para 1,7279783 s: ganho
+pequeno, sem aceitação de tempo real. Evidências:
+`out/realtime-triangle-{validate,primary}-results.json`,
+`out/realtime-triangle-tests-gpu3.log` e
+`out/realtime-triangle-tests-retry.log` (este último contém também as duas
+falhas anteriores de fixture/validação, corrigidas na rodada GPU seguinte).
+As falhas e amostras anteriores foram preservadas.
+
+Essa versão só aceita páginas de textura já presentes no cache lógico;
+TEXFLUSH ainda descarrega a fila. A experiência seguinte combina a prova de
+uma amostra em um único tile lógico (preserva exatamente seu par de páginas)
+com invalidação sem espera de host. Leituras, sobrescritas e FINISH continuam
+exigindo a conclusão das dependências. Testes e medição dessa experiência
+estão pendentes; nenhuma conclusão de ganho é atribuída a ela.
+
+Referências adicionais efetivamente consultadas: rastreamento de páginas do
+[paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs/blob/be775c796503f21d00d8b78ced4039b43605b992/gs/page_tracker.cpp),
+[backend GL do PS2Recomp](https://github.com/LightVelox/PS2Recomp/blob/67bbd44ca258b279515cceab082468b0b11d5078/ps2xRuntime/src/lib/gs/gpu/gs_gpu_backend.cpp),
+[esperas do interpretador PCSX2](https://github.com/PCSX2/pcsx2/blob/c09e8f34dd5c84fc1c39f2e8231a0589fdd2c4ef/pcsx2/Interpreter.cpp)
+e [operações de cache do PCSX2](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Cache.cpp).
+DXWBIN escreve a linha suja e a invalida; não é uma instrução descartável.
+A autorização do mantenedor para reutilizar GPL está registrada no pedido,
+mas estas experiências não incorporaram código externo.
+
+Atualização da mesma cena, 07/11: a prova de tile frio e o TEXFLUSH sem
+submissão incondicional passaram nos dois backends físicos
+(`out/realtime-triangle-queue-tests-gpu4.log`). Cinco pares Release/Vulkan
+deram mediana de 1,7225732 para 1,6300283 s por 30 milhões de instruções,
+reduzindo 792 para 244 lotes. A validação separada preservou o estado
+`ebbde2076edc85ecfb03129d03678664175fe477a8547c52c107614d58560042`,
+os seis campos, PCM e entrada (`out/realtime-triangle-queue-validate-results.json`).
+Isso representa aproximadamente 0,1 s convidado; continua longe de tempo real.
+
+A formatação de erros do GS somente quando necessários preservou a comparação
+completa e reduziu a mediana de cinco pares de 1,6286384 para 1,6068984 s
+(`out/realtime-lazy-primary-results.json`). Três tentativas sem ganho foram
+retiradas: janela de IRQ enquanto o IOP executa (1,6532963/1,7091519 s,
+`out/realtime-step-validate-results.json`), formatação tardia no IOP
+(medianas de três pares 1,6022163/1,627348 s,
+`out/realtime-lazy-iop-primary-results.json`) e dicas de índice para buscar
+latches (validação 1,631034/1,6759709 s,
+`out/realtime-latch-validate-results.json`). Todas preservaram a comparação
+da cena; equivalência sem melhora não cumpre a meta de desempenho.
+
+A integração na árvore corrente passou 25/26 regressões, incluindo Vulkan
+e Direct3D 12 físicos (`out/realtime-integration4-tests.log`). A restauração
+de checkpoint continua recusando uma diferença de esquema na árvore com
+alterações concorrentes de VU. Nenhum hash foi admitido sem auditoria do
+codec. Os resultados comerciais acima pertencem à fonte congelada e
+identificada em cada build, não certificam a árvore corrente.
+
+O conjunto gráfico validado foi registrado em `d36a53d`. A auditoria do
+checkpoint foi concluída em `2a91994`: entre `1f3b1fb` e os helpers VU
+atuais, `checkpoint_fields.inc`, os campos de EEState e os demais campos
+armazenados não mudaram. Somente o par de esquemas revisado
+`26777753…`/`db30806f…` é aceito, com opt-in de runtime e reserialização
+idêntica do payload. A cadeia de migrações e a nova fixture passaram em
+`out/realtime-integration5-wire-tests.log` (39,70 s). Os 25 testes restantes
+da integração, incluindo os dois backends físicos, já haviam passado.
+
+O agrupamento experimental de trechos aritméticos AOT foi retirado:
+`out/realtime-linear-validate-results.json` preservou estado/campos/PCM/entrada,
+mas passou de 1,6332603 para 1,7098904 s. Sua tradução adicional mudou
+25.001 para 25.014 instruções estáticas; isso também não produziu ganho.
+O experimento expôs uma representação de âncora de timer diferente da
+amostragem por instrução. A regressão aritmética sem agrupamento reproduz
+a diferença no orçamento 32 sem a correção e passa com a materialização
+do último tick antes de finalizar a amostragem adiada
+(`out/realtime-arithmetic-anchor-before-tests.log` e
+`out/realtime-arithmetic-anchor-tests.log`). Nenhum tick/efeito foi removido.
+
+Um perfil separado e limitado do mesmo tabuleiro encontrou 18.472 pares
+PC/palavra, sem exceder o limite de 65.536; exclui as instruções já
+agregadas. A espera mais frequente consulta CHCR do DMA VIF1
+(`0x10009000`). O cache de identidade recebeu 4.553.243 consultas:
+4.046.124 hits, 497.308 falhas de chave, 9.699 falhas de geração DMA e
+112 falhas de versão CPU. Houve 1.661.018 pedidos de sincronização DMA
+na validação de código (`out/realtime-pc-hot-vulkan.{log,err}`). Esse build
+é diagnóstico, com instrumentação adicional no profiler existente, e não
+fornece as medições primárias abaixo.
+
+Aumentar o cache de 1.024 para 4.096 entradas preservou a validação completa
+e melhorou os cinco pares: mediana de 1,613396 para 1,5737666 s
+(`out/realtime-code-capacity-primary-results.json`). Todos os pares
+favoreceram a mudança. As regressões de polling/timers/identidade do código
+e cache passaram (`out/realtime-code-capacity-tests.log`, 2/2, 25,27 s).
+A validação comercial separada continua com o estado `ebbde207…`, seis
+campos e os mesmos PCM/inputs. Continua aproximadamente 16 vezes abaixo
+do tempo original; não há aceitação de tempo real.
+
+### Super Bust-A-Move: preparação AOT ampliada e validação corrente
+
+A escolha normal de inlining para `aot_enter_checked` preservou as mesmas
+validações e melhorou cinco pares na fonte congelada: mediana
+1,5837779 → 1,5534447 s (`out/realtime-guard-primary-results.json`). O
+executável caiu de 20.541.952 para 13.501.440 bytes. O conjunto corrente
+passou as regressões de CACHE, polling e identidade (3/3); a reconstrução
+completa de `9b1a20f` mais essa linha passou 24 testes de CPU/software e os
+dois testes físicos Vulkan/D3D12 (`out/realtime-latest-cpu-tests.log`,
+`out/realtime-latest-physical-tests.log`).
+
+A preparação existente foi executada com mais 1.006 entradas observadas,
+verificadas contra segmentos executáveis e palavras do ELF local, sem
+palavras divergentes. A tradução passou de 25.014 para 93.437 instruções
+estáticas. Cinco pares no mesmo esquema preservaram o estado completo
+`550e7840…`, os seis campos RGBA, PCM e entrada: mediana
+1,5625226 → 1,5051987 s (`out/realtime-observed-aot-primary-results.json`).
+O interpretador caiu de 825.587 para 152.500 instruções por 30 milhões.
+Isso permanece aproximadamente 15 vezes aquém da velocidade original.
+
+A partida com entrada roteirizada avançou 600 milhões de instruções e
+122 campos, incluindo movimentos e disparos. Antes/depois preservaram o
+estado completo `348d8085…`, todos os campos RGBA, PCM e consultas do pad
+(`out/realtime-scripted-entries-validation-results.json`). A captura do
+campo 120 foi inspecionada: tabuleiro e personagens visíveis. A execução
+ocorreu durante compilações; seus tempos não são amostras primárias. Há
+PCM/WAV capturado, mas isso não certifica uma sessão interativa com som
+ouvido e pacing de áudio em tempo real.
+
+A revisão `9b1a20f` mais o guard e as novas traduções também preservou RGBA,
+PCM, entrada e estado GS na janela curta
+(`out/realtime-latest-commercial-results.json`). O novo esquema de provas
+numéricas muda a serialização: o hash completo entre essas duas revisões
+não é comparável e não foi anunciado como igual.
+
+O perfil diagnóstico atual recompilou integralmente core e traduções com
+os mesmos cabeçalhos e profiling habilitado. Ele substitui atribuições de
+perfis antigos que reutilizaram objetos AOT com outro cabeçalho do
+profiler. Os pares PC/palavra anteriormente usados na preparação foram
+verificados contra o ELF e o resultado AOT teve comparação completa
+independente; os benchmarks primários não usam profiling.
+
+`out/realtime-current-profile-time-vulkan.log` registra aproximadamente
+26% de EE exclusivo, 14% de GS, 14% de observação, 9% de interrupções e
+8% de IOP. Os contadores separados registram 5.229.468 verificações de
+código e 2.066.351 pedidos de sincronização DMA. O perfil instrumentado é
+somente diagnóstico e não fornece throughput primário.
+
+A instrumentação limitada de elegibilidade do horizonte preservou o mesmo
+estado e encontrou 104.729 recusas pelo estado do IOP, 33.360 por VIF1/DMA
+ativo e 25.102 aceitações (`out/realtime-current-profile-time-vulkan.err`).
+Ainda não foi implementada uma ampliação dessa prova. A experiência de
+observação agrupada anterior foi descartada: preservou estado, mas piorou
+a mediana de 1,6274629 para 1,7525385 s. Todos os resultados negativos
+permanecem locais. Tempo real continua pendente.

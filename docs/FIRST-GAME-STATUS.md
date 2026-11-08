@@ -2,12 +2,102 @@
 
 ## God of War: primeiro ensaio e VADDA — 07/11/2026
 
-Pedido atual: fazer God of War rodar no ps2-native. **Ainda sem menu,
-imagem, áudio validado ou gameplay.** Disco USA `SCUS-97399`, volume
+Pedido atual: fazer God of War rodar no ps2-native. **Apresentação Sony
+renderizada na rota experimental; menu, áudio e gameplay ainda pendentes.** Disco USA `SCUS-97399`, volume
 `GODOFWAR`, 8.522.792.960 bytes; BOOT2 `SCUS_973.99;1`, entrada `0x100008`.
 ISO SHA-256 `0a41e19fae36ec8bd1f2a36d4ea42f120f525973d19b6d548eae792d1a15a338`;
 ELF SHA-256 `ec9397d252f14d4412daffaad6be1f1931769e56222b5dbb9b39a947fc8ad71c`.
 Não foram copiados firmware, disco ou traduções para o controle de versão.
+
+### Continuação: ExecPS2 e primeira imagem — 07/11/2026
+
+Fontes congeladas em `out/gow/continuation/source`, MSVC Release `/O2 /Ob2
+/DNDEBUG`, GS software. Probe e biblioteca usam os mesmos headers congelados.
+Com ABI consistente, a recusa SPU2 em 82 milhões descrita abaixo não se reproduz;
+não há evidência atual de perda do latch após reset. A rota sem injeção avançou
+até DEV9/SMAP, ainda sem imagem.
+
+Na rota experimental, o ELF identificado é carregado sobre firmware parcial e
+o kernel Sony executa o syscall 7 (ExecPS2) real. argc 1 e argv0 vêm do BOOT2;
+workspace separado acima do BSS, previamente validado. Não houve mapeamento
+artificial da página zero ou HLE/sucesso simulado do syscall. Boot original
+continua separado e recusa o encoder 0x7E.
+
+As hipóteses anteriores continuam explícitas. Duas novas experiências GS,
+desativadas por padrão, assumem CLAMP de reset REPEAT/REPEAT (apenas quatro bits
+conhecidos) e ausência de efeito dos bits não definidos de SMODE2 (palavra
+completa preservada). Nenhuma constitui medição de hardware. `7ac61f7` corrige
+o recorte entrelaçado de 447 linhas, expondo 223/224 linhas por campo, sem
+duplicação ou deinterlace. Há teste independente de cores por linha/paridade.
+
+`crop.log`: capturas inspecionadas mostram a apresentação Sony e o copyright
+do God of War, produzidos pelo jogo via DMA/GIF/GS. Ciclos EE 62.211.741 e
+67.130.991, 512x223/224; SHA-256 RGBA
+`c6d81d717994f47e6a2ff12c7b4b55e9d05685cb2094269c5ae6cecccd235fc9` e
+`ec4627ccc6d1b84e2bf0eb6ede5df78c3eb68d10f70767717038c50158033b73`.
+Arquivos locais `crop-safe-frame-{1,2}.bmp`. Somente 267.199 instruções usaram
+AOT nesse ensaio; o restante usou o interpretador de referência.
+
+`1acd0ed` preserva bits parcialmente conhecidos em XORI do IOP, incluindo
+aliases, $zero e load delay. Oito regressões passaram em
+`xor-tests-verified.log`, com a sequência DVD sobre disco sintético.
+`xor.log` superou a recusa e chegou a GetToc: IOP `0x290C0` / 20.368.156
+instruções; EE 172.416.676 no limite do chunk. O runtime exige DVD-5, mas
+o disco é DVD-9. IOP parado não significa boot concluído apesar do OUTCOME EE
+indicar orçamento. Zero amostras PCM nessa janela; gameplay não demonstrado.
+
+### TOC DVD-9 e primeira leitura — 07/11/2026
+
+`3358cf0` adiciona geometria DVD diagnóstica explícita, validada contra dois
+volumes ISO, sem regra de título. A imagem local contém PVD0 de 2.080.560 setores
+e PVD1 nesse LBA, com 2.080.976 setores; perfil experimental layer0=2.080.544,
+OTP. O track path físico não é comprovado pela ISO. O modo padrão não o assume.
+A TOC usa ECMA-267; dados opacos de lead-in continuam desconhecidos. ReadDvd
+aceita somente a primeira camada da geometria fornecida; envelopes brutos da
+segunda camada continuam recusados antes de iniciar a transferência.
+
+`dvd.log` confirma DMA3 de 2064 bytes da TOC em IOP 20.381.937; o driver segue
+para ReadDvd LBA 16. `dvd-read.log` supera essa etapa, carrega módulos, transfere
+8.784 bytes SIF1/4.368 SIF0 e produz 31.892 amostras PCM silenciosas por core.
+Há 77 campos da mesma apresentação Sony; nenhum menu/gameplay ainda. A próxima
+recusa é consumo EE de R5 desconhecido, relatório PC `0x28458C`, total
+437.051.513 EE; a coleta seguinte registra também instruction_pc e máscaras
+sem consumi-las. Não inferir a instrução culpada somente pelo PC do relatório.
+
+Dez regressões focadas passaram em `dvd-read-tests-final.log`. Validação limpa
+de `3358cf0` sobre base `c5939dc`, em `out/gow/validated/source`/`build`:
+quatro testes completos de mídia/DMA/geometria/checkpoint aprovados em
+`validated/tests.log`, incluindo fixtures antigas. Schema preservado
+`c99a8d52d58c7f9121106ef35cad7d3287f90332a518e187bf394a24532e8cc2`;
+runtime `867e8b62bfd87a7c47c216cb7cabf1f70498d7d6a5629ffc8da9c9bdf5779228`.
+A geometria imutável entra no vínculo de identidade, não no payload serializado;
+configurações diferentes recusam restore sem modificar o destino. A cópia
+anterior `continuation/source` usa codec experimental anterior à extensão
+marcada SMAP e falhou nas fixtures antigas; não usar esse resultado para
+atribuir a falha ao incremento publicado. Preservada para reproduzir os ensaios.
+
+### Inteiros EE com bits parciais — 07/11/2026
+
+`ee-block.log` preservou `ee-boundary.ps2ncp` em 432.416.676 EE, antes da
+recusa. A coleta não consumidora confirmou `instruction_pc=0x284588`, delay
+slot, palavra `0x64A5007F` (DADDIU), e não ANDI em `0x28458C`, o PC já avançado.
+R5: valor canônico `0x1921FA0000000000`, máscara `0x1E000000000`, sem domínio
+finito registrado. Não há base para escolher esses quatro bits.
+
+`de1710d` reutiliza `add_observed` em DADDIU com fonte parcial, preservando o
+caminho conhecido e domínios finitos anteriores. Testes independentes enumeram
+todas as somas concretas para máscaras, sinais, wrap, aliases e $zero, via
+semântica compartilhada e intérprete. Sete testes focados passaram; cinco
+integrações limpas, incluindo checkpoint completo/legado, passaram em
+`validated/daddu-tests.log` (77,10 s totais, sem benchmark de execução).
+
+`daddu.log` restaura o prefixo com identidades completas e opt-in de runtime.
+Superou a soma e avançou 195 instruções até MULT em `0x283EC8` (relatório já
+em `0x283ECC`), total 437.051.708 EE. R4 possui máscara `0x1E0`, mas R3 é zero
+conhecido; o produto é determinável independentemente da incerteza. A candidata
+MULT/MULTU/MULT1/MULTU1 reconhece esse caso e conserva a recusa transacional
+dos outros produtos parciais. Sete testes focados passaram; continuação real
+`mult-zero.log` e regressão limpa ainda em andamento.
 
 ### Correção compartilhada
 
@@ -95,6 +185,192 @@ do SCPH-70004:GH-032-11; a proveniência integral do chip DVD não é autenticad
 HEAD mais somente esta alteração também passou os três testes em fonte
 isolada (`out/gow/commit-source`, `validate-commit.log`, 66,22 s). Não é
 aprovação das demais alterações concorrentes ou da matriz de CI.
+
+## Shadow: restauração dos certificados CPU corrigida — 07/11/2026
+
+O checkpoint local `out/sotc/sotc-1100m.ps2ncp` existe, mas seu envelope
+registra **733.416.676** instruções EE, PC `0x128424`, não 1,1 bilhão.
+Seu schema é `11a100b3f0fda71733f6772b12b4d4748ef162dc10fd182c2b64cf6fe2dd1e0b`
+e contém os 32 marcadores `GPRBND01`. A restauração no núcleo atual falhava
+com `checkpoint shared domain reference is invalid`: a seleção de migração
+removia logicamente os certificados CPU mesmo nos aliases de helpers IPU
+auditados como byte-idênticos. A fixture desses aliases também os removia,
+ocultando o defeito. Agora esses aliases mantêm os campos e continuam exigindo
+opt-in, identidades, checksum e reserialização integral do payload antigo.
+
+MSVC x64 Release `/O2 /Ob2 /DNDEBUG`, CMake/Ninja em
+`out/acceleration-build`, source root conferido: núcleo e AOT local
+recompilados. `native-complete-checkpoint` passou em **56,23 s**, incluindo
+aliases com certificados CPU preenchidos, domínios compartilhados, igualdade
+de estado completo, continuação e recusas transacionais existentes.
+
+A ISO SCUS-97472 SHA-256
+`d431a5b7e6c7009713d743c22ac5fd61077da40d5f7923e3250fe072a226eacb`,
+ROM0/ROM1/NVM e cenário `5070746f00000000000000000000000000000000000000000000000000000002`
+foram revalidados pelo loader. O diagnóstico local recompilado preserva o
+Status restaurado `0x70030C11`, sem limpar KSU nem habilitar leituras VRAM ou
+acessos KSEG permissivos. Mantém as hipóteses de dispositivos/textura do cenário
+experimental; o prefixo desde reset original não foi revalidado nesta etapa.
+
+Primeira continuação de 20 milhões salvou estado válido em
+`out/sotc-investigation/continued-fixed.ps2ncp`, EE **753.416.676**.
+Outra janela de 300 milhões alcançou **1.053.416.676**, sem recusa,
+61 campos, 436 novos pacotes GIF e 35.328.720 escritas de pixels.
+As imagens mostram somente um pequeno indicador de carregamento animado no
+canto inferior direito, 22–26 pixels não pretos; isso não demonstra menu ou
+gameplay. AOT disponível cobre 23 instruções de startup; não se atribui
+execução nativa ao código restante. Logs, capturas e binários privados ficam
+em `out/sotc-investigation/` (`strict.log`, `fixed.log`, `horizon.log`,
+`check.log`). Sem sessão humana, som audível, desempenho aceito ou CI.
+
+**Mistura com destino desconhecido:** em **1.074.636.211**, PC `0x12713C`,
+o GS recusou RGB ainda não escrito em `0x3FC000`, CT32, largura 64,
+pixel (0,0). Era um sprite preto com alfa 8 e `ALPHA=0x44`, misturado sobre
+o destino, não uma prova de que a VRAM deveria começar zerada. `8d4e7ef`
+propaga a máscara desconhecida por essa aritmética em CT32/24: enumera os
+bytes admissíveis somente quando necessário e conserva todos os bits que
+variam. Leituras observáveis continuam recusando esses bits. Alfa de destino
+indeterminado, profundidade e CT16 mantêm suas validações anteriores.
+O acesso observado materializa apenas a página necessária e não altera o codec.
+
+Na cópia isolada do índice em `out/sotc-investigation/staged-source`, passaram
+**seis testes executados**, incluindo 108 combinações de mistura com resultado
+independente, VRAM/GIF, vídeo sintético, checkpoint completo (52,66 s) e
+DirectX físico na **RTX 4070** (11,06 s). Vulkan foi pulado, desativado nesse
+build. A bateria `drawing` encontrou a expectativa antiga de recusa de linhas;
+o controle sem a mistura simbólica reproduziu a mesma falha (`control.log`).
+A falha foi mantida durante essa medição; posteriormente `9b7ad1c` substituiu
+essa expectativa obsoleta por verificações independentes dos pixels da linha.
+Não se declara toda a suíte aprovada.
+
+A continuação comercial passou da recusa e salvou **1.083.416.676** em
+`after-blend.ps2ncp`; depois chegou a **1.383.416.676**, checkpoint
+`after-loading.ps2ncp`, sem recusa. Nessa última janela de 300 milhões houve
+61 campos, 5.307 novos pacotes GIF e 50.490.432 escritas de pixels, ainda
+somente o indicador de carregamento. Logs `after-blend.log`, `after-loading.log`,
+`blend-focused.log`, `gpu-check-final.log` e `staged-check.log` no diretório local.
+
+Uma tentativa posterior (`long.log`) foi recusada por mudança concorrente
+de schema ao integrar estado SMAP no IOP; não se inventou migração. A
+continuação usa arquivo estático pré-SMAP congelado do controle, restaura
+o renderer corrigido e recompila harness/AOT com cabeçalhos do mesmo layout.
+Binário, biblioteca, cabeçalhos e hashes estão em `out/sotc-investigation/`
+(`probe-frozen.exe`, `frozen_core.lib`, `frozen-include`, `frozen-artifacts.json`).
+Isso preserva as identidades e o formato do checkpoint comercial; não certifica
+o estado IOP concorrente posterior. A restauração está em `bfa64f8` e a mistura
+em `8d4e7ef`; nenhuma dessas correções estabelece boot original ou gameplay.
+
+**Fronteira numérica VU:** o cenário estrito chegou a **1.980.746.542**,
+`VMUL` em `0x0122DBA0`. Os operandos tinham limites certificados normais;
+o produto perto de 1 cruzava apenas a fronteira de expoente. `531d1c3`
+conserva esse intervalo e sua incerteza quando sinal, zero e flags são
+comprováveis. Identidades com ±1/±0 conservam os certificados, sem escolher
+um valor arredondado. VU macro/micro, conhecimento FPU EE e checkpoint
+completo passaram em fonte isolada (56,56 s no conjunto).
+O cenário avança oito instruções, até **1.980.746.550**: `VSUB` em
+`0x0122DBC0` subtrai esse intervalo de 1 e pode cruzar zero/sinal. A recusa
+permanece correta; não se apagaram os bits desconhecidos para continuar.
+Checkpoint anterior `before-vu.ps2ncp`, logs `vu-detail.log` e
+`vu-identities-detail.log`.
+
+**Experimento separado desde reset:** a tentativa de refinar o histórico
+estrito foi recusada por falta de certificação (`audit-prefix.log`, sem
+aposentar instruções nem salvar estado). Um cenário novo seleciona a hipótese
+de referência já existente `PowerTwoEarlyDigits` antes da primeira instrução;
+não a habilita retroativamente no checkpoint estrito. Manifesto
+`vu-reference-profile.json`, cenário
+`7355f195460145926f0aa84b6adbccc1ec6d0085f27580863f448f16a174a11c`.
+Executa firmware até `0x82000`, depois injeta explicitamente o ELF: não é
+boot original completo nem calibração em console. Sem carry escalar coarse,
+VRAM permissiva ou correção de KSU. Essa hipótese passou a fronteira anterior
+e chegou a **1.984.757.160**, mas encontrou `VSUBq` ausente: opcode
+`0x4A8004A4`, PC `0x001BDEEC` (`vu-reference-ee2032m.log`). O checkpoint
+intermediário desse arquivo contém **1.832.416.676**, não 2,032 bilhões.
+A imagem continua limitada ao indicador de carregamento. As janelas finais
+têm AOT=0 e execução no interpretador; não são desempenho nativo entregue.
+
+`c5939dc` implementa `VSUBq` no decoder e helper EE compartilhado, reutilizando
+SUB VU e a validação CU2. FT reservado continua recusado. A instrução comercial
+passou e o experimento salvou **1.985.757.156** em
+`vu-reference-after-subq.ps2ncp`, um milhão de instruções após o checkpoint
+anterior. `native-ee-context` passou na fonte exata do índice (2,30 s);
+o build integrado congelado passou também VU float (6,52 s no conjunto).
+O teste local `subq-native.cpp` usa o gerador real, compila a tradução e
+aposenta uma instrução AOT sem fallback. Resultado independente, componentes
+preservados, Q e MAC/STATUS corretos; estado integral igual ao interpretador:
+`f2a733a24b56097c1a85eef52ec182e9ae3ff5221afe6ad4e7f373e1aadbd4f1`.
+Esse teste é sintético; a continuação comercial usa o interpretador.
+Fundamento: [VU User's Manual, VSUBq, p. 317](https://docs.alexrp.com/mips/ee_vu.pdf).
+
+**RSQRT limitado:** a janela seguinte encontrou `VRSQRT` em `0x001B94C4`,
+EE **2.260.208.278**. `VF15.x` tem domínio certificado
+`0x3F7FFFFE..0x3F7FFFFF`; o numerador `VF0.w` é exatamente 1. O caminho
+local de RSQRT recusava todo operando desconhecido. `4bbc8d8` integra esse
+caminho EE/AOT e reutiliza a enumeração limitada de SQRT para avaliar também
+a divisão de cada raiz. Publica somente bits e flags comuns, conservando os
+limites; não pressupõe monotonicidade do SRT. Numerador desconhecido, domínio
+excessivo, raiz negativa e certificado inválido continuam recusados antes de
+agendar Q. Mantém latência de 13 ciclos, Q anterior, MAC e conclusão comum.
+
+EE, VU e checkpoint completo passaram na fonte isolada do índice: **66,65 s**,
+checkpoint 64,51 s. O novo destino `dd82d588...` é auditado na família SMAP
+com os mesmos campos; opt-in, identidades e reserialização permanecem exigidos.
+Os marcadores dos helpers novos não alteram o wire format. No teste AOT local,
+RSQRT+WAITQ aposentam duas instruções, 14 ciclos incluindo a aposentadoria de
+WAITQ, sem fallback. Estado integral igual ao interpretador tanto em
+`1/sqrt(4)` (`6835c6fa...`) quanto no operando incerto real (`f6b05429...`);
+neste último ambas as possibilidades produzem Q `0x3F800001` conhecido.
+Logs `rsqrt-index-final.log`, `rsqrt-native-final.log` e código sintético
+`rsqrt-native.cpp` ficam locais. A primeira fixture tentou escrever MAC
+diretamente e falhou; a final estabelece MAC por uma soma VU normal.
+
+A continuação comercial supera RSQRT, avança **9.773.706** instruções e para
+em **2.269.981.962**, EE `0x1C5B0C`: sprite `PRIM=0x4E`, IIP=1,
+FGE=AA1=0, era recusado como sombreamento ausente. Ainda somente carregamento
+animado (`vu-reference-after-rsqrt.log`), AOT=0. Checkpoint anterior a RSQRT:
+`vu-reference-before-rsqrt.ps2ncp`, **2.260.208.256** instruções.
+
+**Sombreamento fixo (`935b234`):** o GS fixa pontos e sprites em flat, mesmo com IIP
+escrito. A correção calcula o modo efetivo sem alterar PRIM/PRMODE do jogo;
+mantém as verificações de fog, AA e demais primitivas. Testes com vértices de
+cores diferentes verificam os quatro pixels do sprite e um ponto, pelas duas
+fontes de atributos. Drawing, vídeo sintético e DirectX físico/RTX 4070
+passaram na fonte exata do índice (**17,13 s**, GPU 16,22 s). O caso GPU
+mantém IIP=1 e exige o batch/scanout acelerado, sem cair em Gouraud.
+Fundamento: [GS User's Manual 6.0, 3.2.2 e 3.2.8](https://www.scribd.com/document/784545197/GS-Users-Manual).
+
+A continuação supera esse desenho e chega a **2.270.089.821**,
+`VMUL` em `0x011FF464`: `VF11.w` tem limites `0x3F7FFFFE..0x3F800000`,
+enquanto `VF12.w` é `-0`. O filtro de fração recusava o expoente incerto
+antes de provar o produto zero. `8139e7a` admite essa prova por bits somente
+quando um expoente é comprovadamente zero e os dois sinais são conhecidos.
+Conserva o XOR dos sinais e flags de exceção zeradas; sinal indeterminado
+continua recusado para não inventar MAC. Nenhum bit do operando é apagado.
+Testes cobrem ambos os lados, quatro pares de sinais, magnitudes opacas,
+denormais, recusa de sinal desconhecido e execução macro/micro com Z/S.
+EE e VU passaram no índice isolado em **1,78 s** (`zero-index.log`).
+Checkpoint anterior: `vu-reference-before-zero.ps2ncp`, **2.270.089.796**.
+
+As continuações usam fonte/runtime congelados compatíveis com o schema
+`50585f22...`; não certificam todas as mudanças concorrentes da main. Ao
+integrar o teste de flat, um build detectou API `write_addressed` nova com
+headers antigos. Ele foi corrigido usando o renderer compatível anterior à
+otimização IMAGE, preservando a hipótese de textura 125 e aplicando o ajuste
+flat. Nenhum binário desse build falho foi usado como validação. O core,
+harness e AOT foram recompilados juntos; identidades em `flat-artifacts.json`
+e logs `flat-matched.log`/`flat-index.log`. Nenhuma medição de velocidade foi
+atribuída a esse ensaio.
+
+**Regressões de CI:** `9b7ad1c` também conserva a recusa de scanout interlaced
+sem paridade conhecida, corrige as coordenadas da mensagem de linha e reusa
+a transformação real de fixtures legadas no teste RTC. Cinco testes passaram
+em `regression-source/build`: drawing, vídeo sintético, RTC, triângulos e
+checkpoint completo (93,81 s no conjunto). O run de Core no tip `008d2d1`
+não continha essa correção e acusou as três expectativas antigas no macOS
+ARM64; Core terminou com falha nos seis alvos, sem nova execução dessas
+correções publicada. Não se atribui seu resultado à revisão posterior.
+Launcher passou nas seis plataformas nesse tip. Nenhum desses resultados demonstra gameplay,
+entrada humana, áudio audível ou velocidade original de Shadow.
 
 Execução local atualizada em 05/11/2026. **A meta de gameplay não foi atingida.**
 O diagnóstico experimental sintetiza áudio real e alcança título/menu originais,

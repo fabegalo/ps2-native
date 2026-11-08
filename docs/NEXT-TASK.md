@@ -1,62 +1,81 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
+## Shadow — fronteiras distintas verificadas em 07/11/2026
+
+Preservar a recusa estrita de `VSUB` em `0x0122DBC0`, EE 1.980.746.550:
+o intervalo certificado cruza zero/sinal. O refinamento tardio de histórico
+foi recusado; não escolher bits para continuar esse checkpoint.
+
+O experimento separado `7355f195...` selecionou o carry VU de referência
+antes do reset e injeta ELF após firmware parcial. Manifesto, binários,
+hashes e checkpoints em `out/sotc-investigation/`. `VSUBq` em `0x1BDEEC`
+foi implementada em `c5939dc`; `vu-reference-after-subq.ps2ncp` contém
+1.985.757.156 instruções e mantém o cenário próprio. Continuar a investigar
+o primeiro bloqueio desse cenário sem promovê-lo a boot original ou gameplay.
+As capturas mostram somente o indicador de carregamento; AOT comercial
+limitada ao startup, janela final interpretada. Verificar menu, entrada e
+áudio antes de afirmar que Shadow roda. Evidências em FIRST-GAME-STATUS.
+
 ## Super Bust — prioridade explícita: velocidade original
 
-O menu foi reconstruído e o índice IOP (`008d2d1`) entregue numa janela
-Vulkan separada, preservando a anterior aberta. Ainda há cerca de 5–6 FPS
-e faltas de áudio. Não promover para gameplay em tempo real.
+Concluir a integração visual de `source-frozen-v7` / `collision-core-build`
+com AOT local ampliada do menu; a compilação da janela está em andamento.
+`45d740e` e `740d56f` preservaram estado, RGBA, PCM e entrada no checkpoint
+comercial, mas não demonstraram velocidade original ou áudio contínuo.
+O usuário fecha manualmente as janelas: não atribuir isso ao runtime e não
+fechar ou reiniciar sessões existentes para medir.
 
-O perfil da janela atual aponta espera GPU, endereçamento VRAM e transferência
-IMAGE. Validar a candidata que reutiliza o endereço já conferido e desempacota
-pixels inteiros, preservando RGB24 parcial, máscaras, padding e erro. Comparar
-estado/RGBA/PCM/entrada, medir pares no menu e depois a partida, e amostrar
-novamente. Candidata em `out/reconstruction/source-frozen-v5`; a janela usa
-`source-frozen-v4`. Nenhum resultado da candidata foi atribuído à janela.
+Agrupar mudanças e executar apenas verificações necessárias ao contrato e
+medições de lotes relevantes, conforme preferência do mantenedor. Amostrar
+novamente o executável integrado antes de escolher outra otimização estrutural.
+O laço observado de DMA VIF1 é evidência local, não uma regra por endereço
+no núcleo; qualquer agrupamento precisa preservar IRQ, DMA, código, áudio e
+fronteiras visíveis. Logs, todos os pares e resultados negativos estão em
+RUNTIME-PERFORMANCE e `out/reconstruction/superbust/`.
 
-## BIOS — fronteira verificada em 07/11/2026
+## BIOS — MAC superado, fechar o Browser
 
-ROM1 pela CLI e reset TX/RX SMAP estão implementados/testados. No cenário
-experimental sem disco, a próxima operação recusada foi o reset MODE0 do MAC
-Ethernet, IOP `0xA7594`, escrita `0x2000` em `0x10002000`. Há trabalho concorrente
-local de EMAC; conferir a implementação e seus testes antes de duplicá-lo.
-O incremento FIFO foi validado separadamente para preservar esse trabalho.
+O cenário experimental passou pelos resets FIFO/MAC, descritores, configuração,
+PHY e pacote em loopback. `out/bios-browser/loopback-fixed.log` chegou à EEPROM
+SPEED sem conteúdo fornecido. A hipótese separada de EEPROM ausente percorreu
+seu erro; reset IRQ limpo/linha desconectada permitiram avançar até SCMD 22.
 
-Estados e argumentos em `out/bios-boot/`. Os binários `fifo-reset-build` preservam
-os estados intermediários; `clean-build` corresponde ao incremento validado com
-checkpoint marcado. O checkpoint pré-SMAP de 400 milhões foi migrado com opt-in
-para `legacy-400m-normalized.ps2ncp`. Uma extensão MAC de campos precisa de sua
-própria revisão de esquema/migração; não aceitar hashes arbitrários nem descartar
-estado FIFO conhecido. Usar o runtime compatível ou reconstruir o cenário.
+`dev9-irq.log`: IOP `0x24F84` consome o segundo de alarme desconhecido em
+`0x1E88E2`. Conectar a opção já existente de alarme desativado e o RTC externo
+explícito pela CLI, retomar o ensaio desde o reset e seguir a primeira recusa
+até obter uma imagem original do Browser. Usar o novo checkpoint só com suas
+identidades/runtime/cenário; preservar os prefixos e registrar todas as hipóteses.
+O idle tem oito words AOT verificados, demais regiões usam fallback de referência.
 
-O cenário de reset lento terminou 1,5 bilhão EE sem recusa, mas ainda sem imagem;
-inspecionar threads/timers e a resposta de erro do convidado antes de estender o
-orçamento. Não chamar o idle de boot concluído nem anunciar Browser por contagem.
-O boot padrão continua exigindo evidência do encoder `0x7E` e reset GS.
-Relatório: [M2.8-STATUS](M2.8-STATUS.md). Nenhuma sessão gráfica foi aberta.
+Cinco regressões passaram na fonte isolada. Confirmar CLI atualizada e RTC,
+e conferir imagem/estado antes de declarar boot; nenhum teste sintético ou
+contador EE substitui o Browser. O caminho padrão ainda mantém o encoder `0x7E`.
 
-## God of War — pedido de execução, 07/11/2026
+## God of War — execução em andamento, 07/11/2026
 
-Usar os artefatos novos em `out/gow/`, não os checkpoints de outros títulos.
-`VADDAx/y/z/w` já está implementado. O cenário de ELF injetado tem estado
-completo igual em interpretação/híbrido no ponto `0x17AAD8`, mas não é boot
-original: a próxima leitura usa `0x4` sem TLB. Não mapear a página zero ou
-inventar argumentos para fazer essa rota avançar.
+Usar `out/gow/continuation/source`/`build` e probes com os mesmos headers.
+ELF + syscall Sony ExecPS2 7 apresenta a tela Sony em campos 512x223/224.
+`1acd0ed` corrigiu XORI no IOP; `7ac61f7`, o recorte entrelaçado ímpar.
+Oito testes focados passaram. Menu, gameplay, entrada e áudio ainda pendentes.
 
-O cenário diagnóstico sem injeção chegou a `0x100008` após 47.413.743
-instruções e foi salvo em `disc-entry.ps2ncp`. A RAM contém `0x3C020016`,
-enquanto a AOT do jogo espera `0x70000C28`: primeiro acompanhar o código
-intermediário e confirmar carregamento/identidade do ELF, depois ligar sua
-tradução. Manter as hipóteses de firmware/SIO2/SPU2/GS explícitas e a rota
-original separada; o encoder ainda exige evidência externa do perfil.
-Na continuação sem AOT/injeção (`disc-loader.log`), o próximo bloqueio é
-o reset CTRL SIO2 em IOP `0x4E638` / 10.248.670 instruções; EE `0x80005F00`
-recusa SIF depois da parada do IOP. A hipótese existente exige ativação
-desde o reset, não pode ser ligada ao restaurar esse checkpoint.
-O ensaio separado `disc-sio2-cold.log` supera essa etapa e para no SPU2
-`0x7CA` em IOP `0x4E890` / 10.287.664 instruções (82.301.324 EE totais).
-Verificar a propagação do latch diagnóstico após os resets do IOP: o probe
-o solicitou no início, mas ele está desativado nessa fronteira. Preservar
-as recusas no modo original; não assumir efeitos físicos desse registrador.
+`3358cf0` superou GetToc/ReadDvd da primeira camada. Dez testes focados e
+quatro integrações em fonte limpa passaram, incluindo checkpoints antigos.
+A geometria OTP é entrada diagnóstica, não medição física. Nenhuma regra do
+God of War foi inserida no runtime.
+
+`ee-boundary.ps2ncp` é o prefixo válido de 432.416.676 EE. A recusa posterior
+foi DADDIU no delay slot em `0x284588`, não ANDI no PC já avançado. `de1710d`
+superou-a; cinco integrações limpas, incluindo checkpoints antigos, passaram.
+
+Fronteira de `daddu.log`: MULT `0x283EC8`, total 437.051.708 EE. R4 parcial,
+R3 zero conhecido. A candidata de produto zero passou sete testes focados;
+verificar `mult-zero.log` e a suíte limpa antes de registrá-la. Continuar até
+menu/gameplay; PCM produzido ainda é silêncio. Preservar máscaras/LO/HI e
+recusas quando o produto não pode ser provado.
+
+O antigo bloqueio SPU2 em 82 milhões não se reproduz com ABI consistente.
+Não corrigir reset com base naquele probe. Boot original continua no encoder
+0x7E; no caminho sem injeção, verificar bytes antes de ligar AOT em 0x100008.
 
 ## Continuar o cenário reconstruído e medido — 07/11/2026
 
@@ -129,21 +148,44 @@ Release/AOT, validar saídas, recolher sampling separado e só então escolher
 a otimização CPU. Simpsons e Shadow também precisam de seus cenários
 restabelecidos antes de alegar avanço nas fronteiras históricas.
 
+## Prioridade após o estudo RECOMP — 07/11/2026
+
+Seguir o [plano priorizado](REFERENCE-AUDIT.md#ordem-de-execução-proposta),
+preservando as fronteiras e hipóteses de cada título abaixo. Primeiro integrar
+e identificar um baseline único do tabuleiro com as entradas observadas, validar
+estado/RGBA/PCM/input e coletar sampling Release com símbolos correspondentes,
+em execução separada da medição primária. Os resultados já existentes foram
+conferidos: 1,5625226 → 1,5051987 s / 30 milhões em cinco pares; 99,4917% AOT
+ainda fica cerca de 15× abaixo do tempo original nessa janela.
+
+Escolher uma mudança estrutural pelo maior custo atual: guard/memória, despacho
+ou IOP. Consultar os doadores identificados antes de reimplementar. Em seguida,
+adaptar um primeiro lote executável de `ps2autotests` e integrar a descoberta
+observada em `ps2n-dev`, reutilizando parser, gerador e partições atuais.
+Não repetir otimizações rejeitadas sem nova evidência. Validar o executável e
+os módulos efetivamente usados pelo launcher antes de atribuir-lhe ganho.
+Nenhuma sessão gráfica foi retomada por este estudo.
+
 ## Desempenho de Super Bust-A-Move, sem launcher — 07/11/2026
 
-O cache de resolução de instruções venceu cinco pares no menu headless:
-7,997476 → 7,536695 s por 30 milhões (+6,11% de throughput). Estado completo,
-RGBA, PCM/entrada e ciclos coincidiram em CPU, interpretação, checkpoint
-10 + 20 milhões, Vulkan e D3D12. Ainda 1,174710 s por campo original;
-não registrar tempo real ou gameplay como entregue.
+Prosseguir até medir velocidade original, sem launcher e sem retomar
+Computer Use. O conjunto de CPU/GS registrado em `d36a53d`/`0fc491e` passou
+26/26 regressões e a janela comercial curta preserva RGBA, PCM e entrada.
+Os últimos pares na fonte congelada ficaram perto de 1,55 s para 0,1 s
+convidado; ainda não há entrega de tempo real.
 
-Usar o perfil posterior ao cache para escolher o próximo custo de execução,
-memória ou observação; não reutilizar as proporções anteriores. Preservar
-amostras negativas de timers/palavras alinhadas, alterações concorrentes e
-checkpoints originais. O pedido não exige launcher nem retoma Computer Use.
-Perfil posterior: EE/interrupções/observação continuam à frente do GS CPU;
-as proporções incluem overhead dos timers. Isolar esses caminhos numa
-coleta Release antes de outra mudança, mantendo identidade AOT e efeitos.
+A preparação com 1.006 entradas adicionais foi medida: cinco pares
+1,5625226 → 1,5051987 s, preservando estado completo, RGBA, PCM e entrada.
+A partida roteirizada de 600 milhões/122 campos também preservou essas
+saídas; ainda faltam aproximadamente 15 vezes para tempo real. A revisão
+9b1a20f com guard normal e traduções reconstruídas passou 26/26 regressões
+e comparação comercial de RGBA/PCM/entrada/GS; os hashes completos entre
+esquemas diferentes não são comparáveis.
+Selecionar a próxima mudança pelo perfil totalmente recompilado em
+out/realtime-current-profile-*: sincronizações, interrupções, observação e
+GS ainda dominam. A maioria das recusas do horizonte decorre do IOP em
+execução. A experiência de observação agrupada piorou e foi retirada.
+Preservar todas as amostras negativas, checkpoints e dados do usuário.
 Evidências em [RUNTIME-PERFORMANCE](RUNTIME-PERFORMANCE.md).
 
 ## Simpsons — pedido atual, 07/11/2026
@@ -186,12 +228,12 @@ o Simpsons.
 
 Método, hipóteses e limites em [FIRST-GAME-STATUS](FIRST-GAME-STATUS.md).
 
-## Shadow of the Colossus — após a primeira saída de vídeo (771M instruções) — 07/11/2026
+## Shadow of the Colossus — após 1.011M instruções e checkpoint 1000m — 07/11/2026
 
-- **Estado atingido**: 771.216.676 instruções EE e 96.402.084 instruções IOP. 21 quadros consecutivos de vídeo NTSC 480i capturados em `out/sotc/frame-1.bmp` a `frame-21.bmp`. Checkpoints válidos em `out/sotc/sotc-700m.ps2ncp` e `out/sotc/sotc-740m.ps2ncp`.
+- **Estado atingido**: 1.011.216.676 instruções EE (mais de 1 Bilhão!), 126.402.084 instruções IOP, 204 pacotes GIF, mais de 15.403.008 escritas de pixels na VRAM do GS. Novos quadros não-pretos capturados em `out/sotc/frame-1.bmp` a `frame-11.bmp`. Checkpoints válidos em `out/sotc/sotc-700m.ps2ncp`, `out/sotc/sotc-800m.ps2ncp`, `out/sotc/sotc-900m.ps2ncp` e `out/sotc/sotc-1000m.ps2ncp` (59,3MB).
 - **Próximo passo operacional**:
-  1. Continuar a execução a partir do checkpoint `out/sotc/sotc-740m.ps2ncp` até a sequência de logos/introdução e a tela de título do Shadow of the Colossus.
-  2. Monitorar comandos de DMA de textura e primitivas tridimensionais (triângulos texturizados e VU1 microcode) conforme a cena do templo/introdução é instanciada.
+  1. Continuar a execução a partir do checkpoint `out/sotc/sotc-1000m.ps2ncp` em direção a 1.100.000.000 e 1.200.000.000 de instruções.
+  2. Monitorar os fluxos de áudio ADPCM/SPU2 e novos formatos gráficos conforme a engine avança na introdução cinematográfica do jogo.
   3. Preservar rigorosamente a fidelidade de hardware da Sony PS2 sem atalhos ou hacks de título.
 
 ## Desempenho após eventos/TLB — 05/11/2026
