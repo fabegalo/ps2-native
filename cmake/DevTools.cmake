@@ -3,6 +3,15 @@ target_link_libraries(ps2n-debug PRIVATE ps2n_core)
 add_executable(ps2n-analyze tools/ps2n-analyze.cpp)
 target_link_libraries(ps2n-analyze PRIVATE ps2n_core)
 add_executable(ps2n-dev tools/ps2n-dev.cpp)
+target_sources(ps2n-dev PRIVATE tools/ps2recomp_prepare.cpp)
+target_link_libraries(ps2n-dev PRIVATE ps2_analyzer_lib nlohmann_json::nlohmann_json)
+file(READ "${PS2N_LOCK_FILE}" sdk_lock)
+string(REPLACE "\r\n" "\n" sdk_lock "${sdk_lock}")
+string(SHA256 sdk_lock_hash "${sdk_lock}")
+string(JSON sdk_revision GET "${sdk_lock}" ps2recomp_sdk commit)
+target_compile_definitions(ps2n-dev PRIVATE
+    PS2N_PS2RECOMP_REVISION="${sdk_revision}"
+    PS2N_PS2RECOMP_LOCK_SHA256="${sdk_lock_hash}")
 target_link_libraries(ps2n-dev PRIVATE ps2n_core)
 target_compile_definitions(ps2n-dev PRIVATE
     PS2N_DEV_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}"
@@ -10,6 +19,24 @@ target_compile_definitions(ps2n-dev PRIVATE
 
 include(${CMAKE_CURRENT_LIST_DIR}/DevContent.cmake)
 if(BUILD_TESTING)
+    add_executable(ps2n-sdk-prepare-tests tests/ps2recomp_prepare.cpp)
+    target_link_libraries(ps2n-sdk-prepare-tests PRIVATE ps2n_core nlohmann_json::nlohmann_json)
+    add_dependencies(ps2n-sdk-prepare-tests ps2n-dev)
+    set(sdk_native_test_args "")
+    if(MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|aarch64")
+        list(APPEND sdk_native_test_args "${CMAKE_CXX_COMPILER}"
+            "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include"
+            "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xIOP/include"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/ps2recomp_native.cpp")
+    endif()
+    add_test(NAME sdk-prepare-pipeline COMMAND ps2n-sdk-prepare-tests
+        $<TARGET_FILE:ps2n-dev> "${CMAKE_CURRENT_BINARY_DIR}/ps2recomp-integration" ${sdk_native_test_args})
+    set_tests_properties(sdk-prepare-pipeline PROPERTIES TIMEOUT 120 RESOURCE_LOCK ps2n_sdk_prepare)
+    add_test(NAME sdk-lock-controls COMMAND "${CMAKE_COMMAND}"
+        "-DPS2N_LOCK_FILE=${PS2N_LOCK_FILE}" "-DPS2N_PS2RECOMP_SOURCE_DIR=${PS2N_PS2RECOMP_SOURCE_DIR}"
+        "-DSCRATCH=${CMAKE_CURRENT_BINARY_DIR}/ps2recomp-integration"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/ps2recomp_lock.cmake")
+    set_tests_properties(sdk-lock-controls PROPERTIES TIMEOUT 30 RESOURCE_LOCK ps2n_sdk_prepare)
     add_executable(ps2n-autotests-fixture tests/ps2autotests_fixture.cpp)
     target_link_libraries(ps2n-autotests-fixture PRIVATE ps2n_core)
     set(autotests_expected "${CMAKE_CURRENT_SOURCE_DIR}/tests/ps2autotests/alu.expected")

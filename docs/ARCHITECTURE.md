@@ -14,6 +14,61 @@ A sessão HLE assistida deve ser identificada separadamente do reset de hardware
 
 ## Implementação e migração
 
+### Fluxo obrigatório aprovado pelo mantenedor — 07/11/2026
+
+O fluxo de produto é **Importar ISO → Preparar → Jogar**, pelo launcher:
+
+1. Identificar automaticamente o ELF principal (`BOOT2`), módulos IRX,
+   código EE/IOP/VU, dependências e recursos, preservando os originais.
+2. Analisar e descobrir automaticamente o código e seus destinos de execução.
+3. Usar PS2Recomp como SDK-base, no mesmo papel do ReXGlue no x360-native,
+   para AOT genérico de R5900, IOP e VU0/VU1 para C++ nativo.
+4. Compilar e manter cache por SHA-256, reutilizando artefatos verificados,
+   recompilando apenas o que mudou e suas dependências invalidadas, sem
+   duplicações desnecessárias.
+5. Executar no PS2Runtime central com HLE, integrando os componentes próprios
+   superiores no mesmo estado do console, através de GS Original ou Native.
+
+A preparação é automática e universal como mecanismo: não exige ports nem
+criação manual de um projeto AOT por título. Isso não garante compatibilidade
+com qualquer jogo. Quando a análise não comprovar um destino de execução,
+deve informar a limitação; não pode inventar código, sucesso ou recorrer a
+interpretação em produção, inclusive para IOP e VU.
+
+HLE atende aos serviços necessários sem depender da execução integral da
+BIOS, preservando o Browser do PS2 e sua interface autêntica. A diferença
+entre os consoles fica nas instruções, serviços e hardware específicos,
+dentro dos mesmos módulos, fronteiras e ciclo de vida do x360-native.
+Este contrato orienta a migração; as lacunas de implementação descritas
+abaixo continuam explícitas e não representam o fluxo completo funcionando.
+
+### Estado da integração
+
+Decisão do mantenedor em 07/11/2026: PS2Recomp é o SDK central, com revisão
+fixada em `deps.lock.json`. `PS2Runtime` será o núcleo principal e proprietário
+do estado único do console. Os componentes próprios de AOT EE/IOP/VU,
+hardware/DMA, GS Vulkan/D3D12 e checkpoints serão integrados nesse núcleo;
+o runtime antigo completo fica temporariamente isolado para comparação.
+A execução principal permanece AOT, sem fallback interpretado. A autorização
+de interpretação exclusivamente para validação não introduz esse executor.
+
+Primeiro incremento: o build consome `ps2xAnalyzer` e `ps2xRecomp` na revisão
+fixada, com dependências verificadas e patches reproduzíveis em
+`patches/ps2recomp`. Reutiliza-se um checkout via `PS2N_PS2RECOMP_SOURCE_DIR`
+(o submódulo reutiliza `out/ps2recomp-reference`). Em uma cópia nova, executar
+`git submodule update --init out/ps2recomp-reference` e aplicar os patches
+listados em `deps.lock.json`, na ordem; o CMake recusa revisão/patch incompatível.
+`ps2n-dev prepare-sdk <ELF|ISO> <diretório> [--disc]` valida a entrada com
+os parsers existentes, analisa e gera C++ pelo SDK, sem adotar automaticamente
+patches, funções omitidas ou stubs sugeridos pelo analisador. A identidade
+inclui entrada, lock do SDK e hashes das saídas para reutilização verificada.
+Este incremento **não liga `PS2Runtime` ao launcher nem certifica execução**;
+o recibo informa `runtime_ready=false`. O próximo limite é substituir a
+posse do estado e adaptar o ABI `R5900Context`/serviços, sem duplicar a memória
+atual. O interpretador e a memória privados de `ps2xIOP` não estão ligados;
+carregamento/relocação IRX e serviços RPC precisam usar AOT IOP antes de
+habilitar esse caminho. GPU e checkpoints atuais permanecem preservados.
+
 Após nova validação do mantenedor em 07/11/2026, o kernel HLE do PS2Recomp
 foi adaptado em `third_party/ps2recomp`, com GPL e créditos preservados
 (ver `LICENSE-DECISION.md`). `HleKernel` conecta os serviços ao despacho comum

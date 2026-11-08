@@ -9,6 +9,10 @@
 #include <chrono>
 #include <iostream>
 
+namespace ps2native::dev {
+int prepare_ps2recomp(const std::filesystem::path&,const std::filesystem::path&,bool);
+}
+
 namespace {
 using namespace ps2native;
 using namespace ps2native::dev;
@@ -296,10 +300,15 @@ template<class C> int dev_main(int argc,C** argv) {
         if(argc<3) {
             std::cout << "Usage: ps2n-dev init <input> <local-profile.ps2n> [--kind=auto|elf|bios|disc]\n"
                          "       ps2n-dev prepare <profile.ps2n>\n"
+                         "       ps2n-dev prepare-sdk <ELF|ISO> <output-directory> [--disc]\n"
                          "       ps2n-dev run <profile.ps2n>\n       ps2n-dev replay <profile.ps2n|run-directory>\n";
             return 2;
         }
         const auto command=path_utf8(fs::path(argv[1]));
+        if(command=="prepare-sdk" && (argc==4 || argc==5)) {
+            if(argc==5 && fs::path(argv[4])!="--disc")throw std::runtime_error("expected --disc");
+            return prepare_ps2recomp(fs::path(argv[2]),fs::path(argv[3]),argc==5);
+        }
         if(command=="init" && (argc==4 || argc==5)) {
             const auto input=fs::absolute(fs::path(argv[2])), file=fs::absolute(fs::path(argv[3]));
             if(file_exists(file))throw std::runtime_error("profile already exists");

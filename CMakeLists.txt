@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(cmake/PS2Recomp.cmake)
+
 add_library(ps2n_core STATIC
     src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/memory_cache.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp

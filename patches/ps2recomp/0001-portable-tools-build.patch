@@ -1,0 +1,46 @@
+--- a/ps2xRecomp/CMakeLists.txt
++++ b/ps2xRecomp/CMakeLists.txt
+@@ -130,7 +130,7 @@
+     DESTINATION include
+ )
+ 
+-include("${CMAKE_SOURCE_DIR}/ps2xRuntime/cmake/ReleaseMode.cmake")
++include("${CMAKE_CURRENT_SOURCE_DIR}/../ps2xRuntime/cmake/ReleaseMode.cmake")
+ 
+ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+     EnableFastReleaseMode(ps2_recomp_lib)
+--- a/ps2xAnalyzer/CMakeLists.txt
++++ b/ps2xAnalyzer/CMakeLists.txt
+@@ -27,8 +27,8 @@
+ 
+ target_include_directories(ps2_analyzer_lib PUBLIC
+     ${CMAKE_CURRENT_SOURCE_DIR}/include
+-    ${CMAKE_SOURCE_DIR}/ps2xRecomp/include
+-    ${CMAKE_SOURCE_DIR}/ps2xRuntime/include
++    ${CMAKE_CURRENT_SOURCE_DIR}/../ps2xRecomp/include
++    ${CMAKE_CURRENT_SOURCE_DIR}/../ps2xRuntime/include
+ )
+ 
+ target_link_libraries(ps2_analyzer_lib PUBLIC
+@@ -50,7 +50,7 @@
+     ARCHIVE DESTINATION lib
+ )
+ 
+-include("${CMAKE_SOURCE_DIR}/ps2xRuntime/cmake/ReleaseMode.cmake")
++include("${CMAKE_CURRENT_SOURCE_DIR}/../ps2xRuntime/cmake/ReleaseMode.cmake")
+ 
+ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+     EnableFastReleaseMode(ps2_analyzer_lib)
+--- a/ps2xRuntime/cmake/ReleaseMode.cmake
++++ b/ps2xRuntime/cmake/ReleaseMode.cmake
+@@ -3,6 +3,10 @@
+ check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
+ 
+ function(EnableFastReleaseMode TargetName)
++    # The embedding platform owns ISA, floating-point and security flags.
++    if(PS2N_PS2RECOMP_INTEGRATION)
++        return()
++    endif()
+     message("> Enabling optimization for: ${TargetName}")
+     if(MSVC)
+         target_compile_options(${TargetName} PRIVATE

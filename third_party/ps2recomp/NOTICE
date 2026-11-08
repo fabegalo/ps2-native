@@ -21,3 +21,17 @@ services and HLE checkpoint serialization are not implemented in this subset.
 
 Combined binaries linking this GPL component must be distributed under the
 GPL-3.0 terms, with corresponding source and the applicable license notices.
+
+SDK integration: ps2xAnalyzer and ps2xRecomp are built from the same pinned
+PS2Recomp revision through cmake/PS2Recomp.cmake. Sources remain in the SDK
+checkout (PS2N_PS2RECOMP_SOURCE_DIR); deps.lock.json records the revision,
+transitive dependency revisions and reproducible patches in patches/ps2recomp.
+Local changes: embeddable CMake paths, host-controlled compiler policy and
+UTF-8 file paths, checked output writes and explicit error queries in the
+recompiler. Upstream authorship/notices are preserved.
+The upstream PS2Runtime and ps2xIOP execution engines are not yet linked into
+the platform runtime by this increment. The existing HLE adaptation above
+continues to use the platform state. SDK tools and combined binaries require
+GPL-3.0 distribution terms and corresponding source, including these patches;
+the original platform code retains its BSD-3-Clause notices. Dependencies
+retain their own licenses and notices in their pinned source trees.

@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "ps2recomp_sdk": {
+    "url": "https://github.com/ran-j/PS2Recomp.git",
+    "commit": "e5636981a1c9de368f6b71e819c3dc188dfedbf4",
+    "license": "GPL-3.0",
+    "patches": [
+      {
+        "file": "patches/ps2recomp/0001-portable-tools-build.patch",
+        "sha256": "e4b5d7cfa4aff0648d837c83c07de3ab9f9d27fdc19f063d70296e07d012a7ac",
+        "base_files": {
+          "ps2xRecomp/CMakeLists.txt": "9527576addff4609663ab8bf47ad7d4477fdc4c3ffa8ab74a50c2dd3d07c8487",
+          "ps2xAnalyzer/CMakeLists.txt": "21b320dd8fb3a3e6585361f7162b573f79569216c2eb0339db77e1525a8c48e5",
+          "ps2xRuntime/cmake/ReleaseMode.cmake": "66a8b82f682c0b0d3e69f9bd870f2542db29207951fa096c85b91a367c8350d0"
+        },
+        "files": {
+          "ps2xRecomp/CMakeLists.txt": "cec58f721d389783702d2e917fc29267f45de783c9e56b15a0d0c77c043a59aa",
+          "ps2xAnalyzer/CMakeLists.txt": "ab3b3a4fa8ae371517d4481a01c8f95544facd615244de9836b7009a7b36667d",
+          "ps2xRuntime/cmake/ReleaseMode.cmake": "75aedc3a6cc4de75a7e2d636c69eb8ae0288425165c9d3709ab4edd6acd8ca0a"
+        }
+      },
+      {
+        "file": "patches/ps2recomp/0002-utf8-recompiler-paths.patch",
+        "sha256": "5f79a687e416125bf7963b22c3af3a961384f8752178df9ccf6f4a1854a692b6",
+        "base_files": {
+          "ps2xRecomp/src/lib/elf_parser.cpp": "0867461f05f870191219d6a43d41c9bf75b2a956c97cf6662b32a2e25fff24be",
+          "ps2xRecomp/src/lib/config_manager.cpp": "5367d142de74ec8172598ee6430b3c3e8d4482aa2921832f5fe2d3aa14d528d5",
+          "ps2xRecomp/src/lib/ps2_recompiler.cpp": "96fdb6b3b8aad6f52134ab0be977fdb9b9637492dac0dab9944a987d901d8bad",
+          "ps2xRecomp/include/ps2recomp/ps2_recompiler.h": "a89ac276a0f4853dc8212affa401d3083f7a8c32566b27a656a1f679c31afb65"
+        },
+        "files": {
+          "ps2xRecomp/src/lib/elf_parser.cpp": "3d605b0c710a1eda29a290c19b617fac57588622f3cd891ce7d30b8bdadb70cf",
+          "ps2xRecomp/src/lib/config_manager.cpp": "584ba38d23c32e0ee587a431001bda908f157216ea3629e705cb039aaa78fd58",
+          "ps2xRecomp/src/lib/ps2_recompiler.cpp": "eba2ec9902fbfa2d356416845494ec937e0acff7c3a0472cadfd9b5b9a5de8b1",
+          "ps2xRecomp/include/ps2recomp/ps2_recompiler.h": "993d86ce4d01c860722831d074f64d984fd7b180fa42564d0f009df9922969a1"
+        }
+      }
+    ],
+    "path": "out/ps2recomp-reference"
+  },
+  "dependencies": {
+    "elfio": {
+      "repository": "serge1/ELFIO",
+      "tag": "Release_3.12",
+      "commit": "8ae6cec5d60495822ecd57d736f66149da9b1830"
+    },
+    "toml11": {
+      "repository": "ToruNiina/toml11",
+      "tag": "v4.4.0",
+      "commit": "be08ba2be2a964edcdb3d3e3ea8d100abc26f286"
+    },
+    "fmt": {
+      "repository": "fmtlib/fmt",
+      "tag": "12.1.0",
+      "commit": "407c905e45ad75fc29bf0f9bb7c5c2fd3475976f"
+    },
+    "libdwarf": {
+      "repository": "davea42/libdwarf-code",
+      "tag": "v2.2.0",
+      "commit": "2e088b983562860f497b4fd789a3e61524eb857c"
+    },
+    "rabbitizer": {
+      "repository": "Decompollaborate/rabbitizer",
+      "tag": "1.14.3",
+      "commit": "d5804fa488474830a47fbf9f3693048ec1e45589"
+    },
+    "nlohmann_json": {
+      "repository": "nlohmann/json",
+      "tag": "v3.11.3",
+      "commit": "9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03"
+    }
+  }
+}

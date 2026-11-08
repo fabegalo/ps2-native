@@ -7,8 +7,16 @@
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace {
+template<std::uint32_t Pc> void irq_nop(ps2native::ExecutionContext& ctx) {
+    using namespace ps2native;
+    if (!aot_enter(ctx,Pc,0,false)) return;
+    const auto frame=ee::begin(ctx.state,Pc);
+    ee::exec<MipsOpcode::Sll,0>(ctx.state,ctx.memory,Pc,0);
+    (void)ee::retire(ctx,frame);
+}
 void check_boundaries(const ps2native::ElfImage& elf) {
     using namespace ps2native;
     constexpr std::uint32_t host_return=0xfffffff0u;
@@ -55,6 +63,12 @@ void check_boundaries(const ps2native::ElfImage& elf) {
         throw std::runtime_error("AOT did not reject a same-block executable write at its exact boundary");
 
     bool checked_delay_irq=false;
+    // The interrupt test executes two zero words in reset RAM; translate them explicitly.
+    auto irq_module=aot_module();
+    std::vector<AotBlock> irq_blocks(irq_module.blocks,irq_module.blocks+irq_module.block_count);
+    irq_blocks.push_back({0x80000200u,irq_nop<0x80000200u>});
+    irq_blocks.push_back({0x80000204u,irq_nop<0x80000204u>});
+    irq_module.blocks=irq_blocks.data();irq_module.block_count=irq_blocks.size();
     for (const auto compare : {1u,5u,6u,7u}) {
         std::string reference;
         for (unsigned engine=0;engine<2;++engine) {
@@ -63,7 +77,7 @@ void check_boundaries(const ps2native::ElfImage& elf) {
             irq_state.set_cp0(Cop0::Status,kStatusIE|kStatusEIE|kStatusIM7);
             irq_state.set_cp0(Cop0::Compare,compare);irq_state.compare_written=true;
             BootOptions options;options.max_instructions=compare+2u;
-            const auto report=run_ee_boot(irq_state,irq_memory,engine ? &aot_module() : nullptr,options);
+            const auto report=run_ee_boot(irq_state,irq_memory,engine ? &irq_module : nullptr,options);
             if (report.outcome!=BootOutcome::BudgetExhausted || irq_state.pc!=0x80000208u)
                 throw std::runtime_error("AOT timer interruption boundary failed: "+report.reason);
             checked_delay_irq|=(irq_state.cp0(Cop0::Cause)&0x80000000u)!=0;

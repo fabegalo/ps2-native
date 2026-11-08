@@ -2,6 +2,7 @@
 *.cpp text eol=lf
 *.hpp text eol=lf
 *.h text eol=lf
+*.patch text eol=lf -whitespace
 *.md text eol=lf
 *.yml text eol=lf
 CMakeLists.txt text eol=lf
