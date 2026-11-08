@@ -14,7 +14,7 @@
 
 </div>
 
-> **Experimental research software, not a playable PS2 launcher.** The project can analyze and recompile a verified subset of PS2 code and execute part of original firmware using a hybrid AOT/interpreter runtime. It does **not** complete the original Browser boot or run commercial games. Passing CI does not prove gameplay or platform-level runtime compatibility.
+> **Experimental research software, not a playable PS2 launcher.** The project can analyze and recompile a verified subset of PS2 code and execute part of original firmware using an offline AOT/native runtime that explicitly refuses missing translations. It does **not** complete the original Browser boot or run commercial games. Passing CI does not prove gameplay or platform-level runtime compatibility.
 
 ## What is ps2-native?
 
@@ -29,7 +29,7 @@ The **original PlayStation 2 Browser** and system configuration screens are targ
 | Subsystem | Demonstrated | Still missing |
 |---|---|---|
 | **Native AOT** | Validated ELF32/MIPS analysis, conservative control-flow discovery, generated C++ and synthetic end-to-end execution | Broad commercial-game translation and dynamic-code coverage |
-| **Emotion Engine** | Partial R5900 semantics, memory/TLB, hardware boot and hybrid AOT/interpreter | Full CPU behavior, precise timing and exceptions |
+| **Emotion Engine** | Partial R5900 semantics, memory/TLB, hardware boot and offline AOT/native execution | Full CPU behavior, precise timing and exceptions |
 | **IOP and firmware** | Partial R3000A boot, hardware registers, external NVM support, SIF flags and VBLANK | Complete BIOS/Browser boot, full interrupts, SIF DMA and peripheral services |
 | **Graphics** | GS/GIF control registers, timing and a limited GIF PATH3 packet path | Framebuffer rendering, full GS/VU/VIF and game graphics |
 | **Games and user experience** | Developer tools and synthetic fixtures | Playable games, launcher, installers and public releases |

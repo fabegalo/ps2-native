@@ -4,7 +4,9 @@
 
 Uma base C++20 compartilhada para Windows x64/ARM64, Linux x64/ARM64 (inclui Steam Deck) e macOS Intel/Apple Silicon. Em 07/11/2026, o mantenedor validou a migração gradual para os sete componentes do x360-native: launcher de gerenciamento; conteúdo/catálogo; preparação e execução nativa/AOT; runtime de compatibilidade com HLE explícita; GPU Original/Native; sistema original e jogos; supervisor de sessões e adaptadores de plataforma.
 
-A preparação produz artefatos AOT verificados e reutilizáveis para EE/R5900, IOP/R3000A e VU0/VU1, com identidade, relocação e invalidação. Preservam-se os caminhos existentes durante a migração: o launcher atual liga `ps2n_core_native` (`PS2N_NATIVE_ONLY`) e recusa traduções ausentes; ferramentas e testes de referência ligam `ps2n_core`, com interpretação explícita nas regiões não traduzidas. Isto descreve a implementação atual, não estabelece uma proibição permanente de fallback nem autoriza introduzir JIT ou eliminar o interpretador. Mudanças dessa política exigem validação do mantenedor.
+A preparação produz artefatos AOT verificados e reutilizáveis para EE/R5900, IOP/R3000A e VU0/VU1, com identidade, relocação e invalidação. Em 07/11/2026 o mantenedor determinou a remoção completa dos interpretadores, mantendo a arquitetura comum do x360-native. Launcher, CLIs e testes usam agora o mesmo `ps2n_core` AOT/nativo; `ps2n_core_native` é apenas um alias de compatibilidade, não outro runtime. Código sem tradução válida para e informa o artefato faltante. Não há fallback interpretado nem JIT. Fixtures sintéticas de regressão usam palavras constantes compiladas, não um decodificador executável alternativo. Contadores legados de interpretação permanecem para compatibilidade diagnóstica e devem ficar em zero.
+
+Os executáveis/checkpoints históricos em `out/` são evidência preservada; não demonstram o comportamento deste build. O menu anteriormente medido em 7,92–8,91 FPS usava o caminho híbrido antigo. Traduções EE, IOP e VU necessárias devem estar ligadas antes de certificar novamente esse percurso no executável atual.
 
 A **BIOS/Browser original, System Configuration e Memory Card continuam obrigatórios**, como a dashboard original no x360-native. Sua interface deve executar código original traduzido e usar recursos da revisão correspondente. HLE pode fornecer kernel, syscalls e serviços IOP; não autoriza telas inventadas, sucesso falso ou efeitos convidados omitidos. Não é necessário executar cada instrução do kernel original para executar a interface original. GS, DMA, SPU2, controles, memória e temporização continuam no núcleo compartilhado.
 
@@ -90,7 +92,7 @@ habilitar esse caminho. GPU e checkpoints atuais permanecem preservados.
 Após nova validação do mantenedor em 07/11/2026, o kernel HLE do PS2Recomp
 foi adaptado em `third_party/ps2recomp`, com GPL e créditos preservados
 (ver `LICENSE-DECISION.md`). `HleKernel` conecta os serviços ao despacho comum
-AOT/referência e à mesma instância de EE/memória. `ps2n-run --hle` / `ps2n-run-native --hle`
+AOT/nativo e à mesma instância de EE/memória. `ps2n-run --hle` / `ps2n-run-native --hle`
 e `SessionSupervisor::prepare_hle_elf` iniciam uma sessão assistida explícita,
 com acesso COP1/COP2 habilitado pelo ambiente HLE. O reset original e o
 diagnóstico bare-metal mantêm seus próprios estados e não ativam HLE.

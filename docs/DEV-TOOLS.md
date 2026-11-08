@@ -9,11 +9,12 @@ interpretadores EE/IOP/VU: código ausente é recusado, com identidade/PC para
 preparação offline. Módulos IOP/VU opcionais usam as definições CMake existentes
 `PS2N_IOP_AOT_SOURCES`, `PS2N_VU0_AOT_SOURCES` e `PS2N_VU1_AOT_SOURCES`.
 
-`engine=aot` conserva o caminho **híbrido** anterior; `engine=interpreter`
-conserva a referência interpretada. O manifesto e a saída indicam
-`execution_policy` e `runner_target`; AOT reutilizada não certifica cobertura.
-Trocar entre nativo e híbrido reutiliza as mesmas traduções verificadas, mas
-liga o núcleo correspondente. `prepare` não executa o convidado.
+`engine=aot` é um alias de `engine=native`; `engine=interpreter` é recusado.
+Todos os executáveis usam o mesmo `ps2n_core` AOT/nativo; o nome
+`ps2n_core_native` é apenas um alias CMake. O manifesto e a saída indicam
+`execution_policy=native-aot` e `runner_target`. Traduções verificadas e objetos
+são compartilhados entre os nomes de compatibilidade dos CLIs; isso não
+certifica cobertura. `prepare` não executa o convidado.
 
 ELF/BOOT2 aqui continuam diagnósticos bare-metal: não instalam serviços Sony
 ou HLE nem equivalem ao boot original do disco. Browser, gameplay e HLE completa
@@ -45,9 +46,13 @@ nenhuma é ativada automaticamente. Consulte `ps2n-boot` sem argumentos para
 as unidades e os limites. Para ensaios longos, use `--diagnostic-dir` com
 anel limitado e checkpoints por cenário, preservando o último ponto válido.
 
-`--assume-smap-reset-cycles` seleciona a latência experimental do novo reset
-TX/RX SMAP, em ciclos IOP. O padrão recusa sua conclusão sem essa entrada;
-DMA e tráfego Ethernet continuam explicitamente não implementados.
+`--assume-smap-reset-cycles` seleciona a latência experimental de reset
+TX/RX e MAC SMAP, em ciclos IOP. `--assume-smap-phy-cycles` seleciona MDIO/reset
+PHY e `--assume-smap-loopback-cycles`, a conclusão do pacote em loopback local.
+Essas temporizações não têm padrão medido. O modelo conserva bytes, FCS,
+descritores e eventos; DMA, tráfego externo e encadeamento de múltiplos pacotes
+continuam recusados. `--assume-speed-eeprom-absent` seleciona explicitamente
+EEPROM desconectada com entrada em nível alto; não fornece conteúdo nem MAC.
 
 `cli-rom1-boot` usa somente firmware sintético e verifica o pareamento,
 metadados obrigatórios, hashes incorretos, opções experimentais e preservação
@@ -196,7 +201,7 @@ continuam opções explícitas; nenhuma é ativada pelo orquestrador.
 `generator` e `architecture` selecionam o gerador e a plataforma CMake;
 `cmake_arg=-D...` permite definições repetidas de compilador/toolchain.
 Com Ninja/MSVC, execute no ambiente de desenvolvimento do compilador.
-`engine=interpreter` permite comparar com o motor sem AOT.
+`engine=interpreter` não existe mais. Compare os artefatos nativos e seus estados em fronteiras equivalentes; código ausente deve ser preparado offline.
 `aot_arg` aceita somente raízes `--entry` e tabelas `--table` explícitas.
 
 `observed=/caminho/diagnostic/events.ndjson` acrescenta entradas descobertas

@@ -14,7 +14,7 @@
 
 </div>
 
-> **Software experimental de pesquisa, não um launcher de PS2 jogável.** O projeto analisa e recompila um subconjunto verificado de código do PS2 e executa parte do firmware original num runtime híbrido AOT/interpretador. Ainda **não** completa o boot do Browser original nem executa jogos comerciais. CI aprovada não comprova jogabilidade ou compatibilidade funcional em cada plataforma.
+> **Software experimental de pesquisa, não um launcher de PS2 jogável.** O projeto analisa e recompila um subconjunto verificado de código do PS2 e executa parte do firmware original num runtime AOT/nativo offline que recusa explicitamente traduções ausentes. Ainda **não** completa o boot do Browser original nem executa jogos comerciais. CI aprovada não comprova jogabilidade ou compatibilidade funcional em cada plataforma.
 
 ## O que é o ps2-native?
 
@@ -29,7 +29,7 @@ O **Browser original do PlayStation 2** e as telas de configuração do sistema 
 | Subsistema | Demonstrado | Ainda falta |
 |---|---|---|
 | **AOT nativo** | Análise ELF32/MIPS validada, descoberta conservadora de fluxo, geração de C++ e testes sintéticos de ponta a ponta | Tradução abrangente de jogos comerciais e código dinâmico |
-| **Emotion Engine** | Semântica parcial R5900, memória/TLB, boot de hardware e execução híbrida AOT/interpretador | CPU completa, temporização e exceções precisas |
+| **Emotion Engine** | Semântica parcial R5900, memória/TLB, boot de hardware e execução AOT/nativa offline | CPU completa, temporização e exceções precisas |
 | **IOP e firmware** | Boot parcial R3000A, registradores de hardware, NVM externa, flags SIF e VBLANK | Boot completo da BIOS/Browser, interrupções, DMA SIF e serviços restantes |
 | **Gráficos** | Controle GS/GIF, temporização e um caminho limitado de pacotes GIF PATH3 | Renderização de framebuffer, GS/VU/VIF completos e gráficos de jogos |
 | **Jogos e experiência** | Ferramentas técnicas e fixtures sintéticos | Jogos jogáveis, launcher, instaladores e Releases públicas |
