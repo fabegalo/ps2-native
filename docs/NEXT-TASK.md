@@ -1,5 +1,13 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
+## Pré-requisito após a remoção do interpretador — 08/11/2026
+
+As seções abaixo partem de checkpoints e janelas do executável híbrido
+anterior. Antes de retomá-las, preparar os títulos pelo PS2Recomp
+(`ps2n-dev prepare-sdk`) e confirmar que EE, IOP e VU da janela-alvo têm
+tradução ligada em `ps2n_core`; onde faltar, registrar o artefato ausente
+em vez de continuar por interpretação.
+
 ## Shadow — fronteiras distintas verificadas em 07/11/2026
 
 Preservar a recusa estrita de `VSUB` em `0x0122DBC0`, EE 1.980.746.550:

@@ -4,10 +4,15 @@
 
 O mantenedor autorizou incorporar o código e validou a adaptação do kernel HLE
 ao estado único do ps2-native, incluindo os termos GPL da distribuição combinada.
-`third_party/ps2recomp/hle_kernel.cpp` deriva de `EeScheduler.cpp`,
-`Syscalls/{Dispatcher,Thread,Sync,System}.cpp` e `Syscalls/Helpers/State.h` da
-revisão `e5636981a1c9de368f6b71e819c3dc188dfedbf4`. Licença integral e origem
-estão em `third_party/ps2recomp/{LICENSE,NOTICE}`; créditos do upstream preservados.
+A migração aprovada em 08/11/2026 compila HLE e escalonador diretamente do
+SDK fixado, com patches reproduzíveis de interfaces em `patches/ps2recomp`.
+O kernel derivado local foi removido. Interfaces de contexto, memória e
+hardware permanecem em `src/sdk_hle.cpp`, `src/sdk/` e no backend integrado.
+Licença integral e origem estão em `licenses/PS2Recomp/{LICENSE,NOTICE}`;
+créditos e licenças de DirectXTK e ps2-web-recomp estão em `licenses/`.
+Também são compilados do SDK o carregador IRX, o kernel IOP, CDVD, RPC e
+imports do `ps2xIOP` (`cmake/PS2Runtime.cmake`); CPU, RAM e interpretador
+independentes do IOP upstream não são ligados.
 
 O código original mantém seus avisos BSD-3-Clause. Os binários que ligam este
 componente GPL devem ser distribuídos sob os termos GPL-3.0, com código-fonte
@@ -28,14 +33,14 @@ foi copiada e adaptada em `include/ps2native/ipu.hpp`: troca a fila global pela
 fila da instância e acrescenta `const`. A extração MSB-first de até oito bytes
 mantém o algoritmo original; o chamador local verifica a disponibilidade total
 antes de publicar a tabela. Copyright Samir Nuri, MIT, preservado em
-`third_party/ps2-web-recomp/LICENSE`. Não adiciona dependência externa.
+`licenses/ps2-web-recomp/LICENSE`. Não adiciona dependência externa.
 
 O despacho, retenção da qword parcial, limites da FIFO, estado desconhecido,
 IRQ, checkpoints e testes usam os contratos existentes do ps2-native. Não
 foram importados o decoder MPEG completo, HLE, ordenação zigzag interna do
 doador ou suposições de temporização. As tabelas locais mantêm ordem de entrada.
 
-**Decisão para o M0:** BSD-3-Clause para código original independente (`LICENSE`). Nenhum código de GPL foi copiado, ligado, distribuído ou incorporado. Nenhuma dependência C++ externa foi adicionada. A matriz CI usa `actions/checkout` fixado no SHA da versão v4.2.2.
+**Decisão para o M0 (histórica, superada pela incorporação GPL de 07–08/11/2026 acima):** BSD-3-Clause para código original independente (`LICENSE`). No M0, nenhum código de GPL foi copiado, ligado, distribuído ou incorporado. Nenhuma dependência C++ externa foi adicionada. A matriz CI usa `actions/checkout` fixado no SHA da versão v4.2.2.
 
 | Projeto consultado | Arquivos oficiais verificados | Licença declarada | Uso no M0 |
 |---|---|---|---|
@@ -72,7 +77,7 @@ As implementações Direct ELF, Count/Compare, SIF1, VIF1 e overlays são origin
 | Referência | Evidência auditada | Decisão |
 |---|---|---|
 | [gow-native-pc](https://github.com/Vnnc1/gow-native-pc/blob/d28a63d3fd0f2a412ff9018b52d2a9a3cbdb18fd/CREDITS.md) | LICENSE/CREDITS GPL-3.0; `engine/runtime.toml` fixa runtime Tobiichi; `games/gow1/game.toml` lista mapa, overrides e geradores | Arquitetura de pipeline como referência; não incorporar launcher, patches, runtime ou overrides |
-| [PS2Recomp](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/LICENSE) | GPL-3.0; README e `ps2xIOP/README.md` distinguem compilador, runtime, IRX e HLE | Referência de organização; nenhuma cópia, tradução de fonte ou vínculo |
+| [PS2Recomp](https://github.com/ran-j/PS2Recomp/blob/e5636981a1c9de368f6b71e819c3dc188dfedbf4/LICENSE) | GPL-3.0; README e `ps2xIOP/README.md` distinguem compilador, runtime, IRX e HLE | Referência de organização em 03/11; superada pela incorporação de 07–08/11/2026 |
 | [Play!](https://github.com/jpd002/Play-/blob/1f27232772e484bfb79364b751b84f41f4c87481/License.txt) | Licença permissiva de duas cláusulas; interfaces DMAC/INTC/SIF/VIF/VU/GS e IopBios consultadas | Reutilização potencial exige manter aviso/disclaimer e auditar dependências por arquivo. Não houve incorporação: adaptação de componentes completos traria CMIPS, JIT/Framework e serviços HLE acoplados |
 | [PCSX2](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/Docs/License.txt) | GPL-3.0-or-later verificada novamente | Continua referência comportamental; nenhuma integração |
 

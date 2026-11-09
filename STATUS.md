@@ -1,5 +1,14 @@
 # STATUS — ps2-native
 
+## Runtime atual: somente AOT/nativo com PS2Recomp — 08/11/2026
+
+- Interpretadores removidos (07/11/2026). `ps2n_core` é o único runtime;
+  tradução ausente para com erro explícito. HLE EE e serviços IOP vêm do
+  PS2Recomp fixado (`deps.lock.json`), sem a CPU/interpretador IOP upstream.
+- As seções abaixo mediram o executável híbrido anterior: contagens
+  "interpretadas", AOT=0 e FPS não valem para este build. Jogos e Browser
+  precisam ser certificados novamente com traduções EE/IOP/VU ligadas.
+
 ## Shadow: carregamento avançou, gameplay ausente — 07/11/2026
 
 - Corrigidos restauração de certificados CPU (`bfa64f8`), mistura GS com RGB

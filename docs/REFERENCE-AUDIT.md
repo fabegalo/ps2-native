@@ -46,7 +46,7 @@ Resultados e limitações em [M2.8-STATUS](M2.8-STATUS.md).
 **Código incorporado:** `bits_at` de Samir Nuri, [ps2-web-recomp,
 e026b971324068773eed88bf502437de9e581b6b](https://github.com/snuri00/ps2-web-recomp/blob/e026b971324068773eed88bf502437de9e581b6b/runtime/src/ipu/ipu.cpp),
 adaptado para a fila por instância em `include/ps2native/ipu.hpp`.
-Atribuição e MIT preservados em `third_party/ps2-web-recomp/LICENSE`;
+Atribuição e MIT preservados em `licenses/ps2-web-recomp/LICENSE`;
 escopo em [LICENSE-DECISION](LICENSE-DECISION.md#reutilização-efetiva-leitor-do-ipu--07112026).
 
 Antes, o runtime recusava `SETIQ` com FB diferente de zero e cargas de tabelas
