@@ -1,53 +1,53 @@
 <div align="center">
 
-<img src="docs/assets/ps2-native-banner.webp" alt="ps2-native — banner de recompilação nativa do PlayStation 2" width="100%" />
+<img src="docs/assets/ps2-native-banner.webp" alt="ps2-native â€” banner de recompilaÃ§Ã£o nativa do PlayStation 2" width="100%" />
 
 # ps2-native
 
-**Projeto aberto de pesquisa para executar software original do PlayStation 2 por recompilação nativa antecipada (AOT).**
+**Projeto aberto de pesquisa para executar software original do PlayStation 2 por recompilaÃ§Ã£o nativa antecipada (AOT).**
 
 [![CI](https://img.shields.io/github/actions/workflow/status/fabegalo/ps2-native/build.yml?branch=main&label=CI)](https://github.com/fabegalo/ps2-native/actions/workflows/build.yml)
 [![Experimental](https://img.shields.io/badge/estado-experimental-orange)](STATUS.md)
-[![Licença](https://img.shields.io/badge/licen%C3%A7a-BSD--3--Clause%20%2B%20GPL--3.0-blue)](docs/LICENSE-DECISION.md)
+[![LicenÃ§a](https://img.shields.io/badge/licen%C3%A7a-BSD--3--Clause%20%2B%20GPL--3.0-blue)](docs/LICENSE-DECISION.md)
 
-[English](README.md) · [Português (Brasil)](README.pt-BR.md) · [Estado atual](STATUS.md) · [Documentação](docs/README.md) · [Como contribuir](CONTRIBUTING.md)
+[English](README.md) Â· [PortuguÃªs (Brasil)](README.pt-BR.md) Â· [Estado atual](STATUS.md) Â· [DocumentaÃ§Ã£o](docs/README.md) Â· [Como contribuir](CONTRIBUTING.md)
 
 </div>
 
-> **Software experimental de pesquisa, não um launcher de PS2 jogável.** O projeto analisa e recompila um subconjunto verificado de código do PS2 e executa parte do firmware original num runtime AOT/nativo offline que recusa explicitamente traduções ausentes. Ainda **não** completa o boot do Browser original nem executa jogos comerciais. CI aprovada não comprova jogabilidade ou compatibilidade funcional em cada plataforma.
+> **Software experimental de pesquisa, nÃ£o um launcher de PS2 jogÃ¡vel.** O projeto analisa e recompila um subconjunto verificado de cÃ³digo do PS2 e executa parte do firmware original num runtime AOT/nativo offline que recusa explicitamente traduÃ§Ãµes ausentes. Ainda **nÃ£o** completa o boot do Browser original nem executa jogos comerciais. CI aprovada nÃ£o comprova jogabilidade ou compatibilidade funcional em cada plataforma.
 
-## O que é o ps2-native?
+## O que Ã© o ps2-native?
 
-O objetivo é executar a **BIOS/interface e os jogos originais do PlayStation 2** em computadores modernos, seguindo o modelo do x360-native: código original traduzido estaticamente (**AOT**) e serviços de sistema implementados por **HLE nativo**. Instruções de EE/R5900, IOP/R3000A e VU0/VU1 que executarem devem estar compiladas para o host. GS, DMA, SPU2, controles, memória e temporização continuam necessários no runtime compartilhado.
+O objetivo Ã© executar a **BIOS/interface e os jogos originais do PlayStation 2** em computadores modernos, seguindo o modelo do x360-native: cÃ³digo original traduzido estaticamente (**AOT**) e serviÃ§os de sistema implementados por **HLE nativo**. InstruÃ§Ãµes de EE/R5900, IOP/R3000A e VU0/VU1 que executarem devem estar compiladas para o host. GS, DMA, SPU2, controles, memÃ³ria e temporizaÃ§Ã£o continuam necessÃ¡rios no runtime compartilhado.
 
-Interpretadores são restritos a binários de validação, fora dos executáveis de produção. Módulos dinâmicos exigem preparação AOT offline; HLE pode fornecer serviços de BIOS/kernel e IOP sem interpretar instruções. Isso não autoriza recriar as telas da BIOS ou ignorar efeitos convidados. Esta é a política de execução exigida; não é uma afirmação de implementação completa ou gameplay validado.
+Interpretadores sÃ£o restritos a binÃ¡rios de validaÃ§Ã£o, fora dos executÃ¡veis de produÃ§Ã£o. MÃ³dulos dinÃ¢micos exigem preparaÃ§Ã£o AOT offline; HLE pode fornecer serviÃ§os de BIOS/kernel e IOP sem interpretar instruÃ§Ãµes. Isso nÃ£o autoriza recriar as telas da BIOS ou ignorar efeitos convidados. Esta Ã© a polÃ­tica de execuÃ§Ã£o exigida; nÃ£o Ã© uma afirmaÃ§Ã£o de implementaÃ§Ã£o completa ou gameplay validado.
 
-O **Browser original do PlayStation 2** e as telas de configuração do sistema são alvos próprios. Um futuro launcher desktop gerenciará o conteúdo local do usuário; ele não substituirá os menus da Sony por imitações.
+O **Browser original do PlayStation 2** e as telas de configuraÃ§Ã£o do sistema sÃ£o alvos prÃ³prios. O launcher desktop de gerenciamento oferece **Importar â†’ Preparar â†’ Jogar** por mÃ³dulos nativos verificados, usando a toolchain local configurada. TraduÃ§Ãµes e serviÃ§os ausentes param explicitamente; o launcher nÃ£o substitui os menus da Sony por imitaÃ§Ãµes.
 
 ## Estado atual
 
 | Subsistema | Demonstrado | Ainda falta |
 |---|---|---|
-| **AOT nativo** | Análise ELF32/MIPS validada, descoberta conservadora de fluxo, geração de C++ e testes sintéticos de ponta a ponta | Tradução abrangente de jogos comerciais e código dinâmico |
-| **Emotion Engine** | Semântica parcial R5900, memória/TLB, boot de hardware e execução AOT/nativa offline | CPU completa, temporização e exceções precisas |
-| **IOP e firmware** | Boot parcial R3000A, registradores de hardware, NVM externa, flags SIF e VBLANK | Boot completo da BIOS/Browser, interrupções, DMA SIF e serviços restantes |
-| **Gráficos** | Controle GS/GIF, temporização e um caminho limitado de pacotes GIF PATH3 | Renderização de framebuffer, GS/VU/VIF completos e gráficos de jogos |
-| **Jogos e experiência** | Ferramentas técnicas e fixtures sintéticos | Jogos jogáveis, launcher, instaladores e Releases públicas |
+| **AOT nativo** | AnÃ¡lise ELF32/MIPS validada, descoberta conservadora de fluxo, geraÃ§Ã£o de C++ e testes sintÃ©ticos de ponta a ponta | TraduÃ§Ã£o abrangente de jogos comerciais e cÃ³digo dinÃ¢mico |
+| **Emotion Engine** | SemÃ¢ntica parcial R5900, memÃ³ria/TLB, boot de hardware e execuÃ§Ã£o AOT/nativa offline | CPU completa, temporizaÃ§Ã£o e exceÃ§Ãµes precisas |
+| **IOP e firmware** | Boot parcial R3000A, registradores de hardware, NVM externa, flags SIF e VBLANK | Boot completo da BIOS/Browser, interrupÃ§Ãµes, DMA SIF e serviÃ§os restantes |
+| **GrÃ¡ficos** | Controle GS/GIF, temporizaÃ§Ã£o e um caminho limitado de pacotes GIF PATH3 | RenderizaÃ§Ã£o de framebuffer, GS/VU/VIF completos e grÃ¡ficos de jogos |
+| **Jogos e experiÃªncia** | Biblioteca desktop, preparaÃ§Ã£o de mÃ³dulos nativos, ferramentas tÃ©cnicas e fixtures sintÃ©ticos | Jogos jogÃ¡veis, instaladores e Releases pÃºblicas |
 
-**O registro atualizado e baseado em evidências fica em [STATUS.md](STATUS.md).** Ele separa execuções de firmware real, hipóteses de diagnóstico, resultados da CI e funcionalidades ausentes. Os detalhes de cada marco ficam nos [relatórios técnicos](docs/README.md), sem serem copiados para este README a cada mudança.
+**O registro atualizado e baseado em evidÃªncias fica em [STATUS.md](STATUS.md).** Ele separa execuÃ§Ãµes de firmware real, hipÃ³teses de diagnÃ³stico, resultados da CI e funcionalidades ausentes. Os detalhes de cada marco ficam nos [relatÃ³rios tÃ©cnicos](docs/README.md), sem serem copiados para este README a cada mudanÃ§a.
 
 ## Como funciona
 
-1. Carregar e validar firmware fornecido pelo usuário ou um executável MIPS obtido legalmente. Isolar cada revisão/região de BIOS e seus recursos correspondentes.
-2. Analisar código comprovadamente alcançável e gerar blocos AOT em C++20 somente com semântica suportada.
-3. Executar os artefatos AOT preparados com os serviços HLE nativos necessários. Código ausente exige preparação offline e diagnóstico preciso; não há fallback interpretado permitido no produto.
-4. Melhorar a fidelidade ao hardware com evidências técnicas, testes sintéticos reproduzíveis e observações documentadas de execuções de firmware real. Operações não implementadas nunca devem retornar sucesso silencioso.
+1. Carregar e validar firmware fornecido pelo usuÃ¡rio ou um executÃ¡vel MIPS obtido legalmente. Isolar cada revisÃ£o/regiÃ£o de BIOS e seus recursos correspondentes.
+2. Analisar cÃ³digo comprovadamente alcanÃ§Ã¡vel e gerar blocos AOT em C++20 somente com semÃ¢ntica suportada.
+3. Executar os artefatos AOT preparados com os serviÃ§os HLE nativos necessÃ¡rios. CÃ³digo ausente exige preparaÃ§Ã£o offline e diagnÃ³stico preciso; nÃ£o hÃ¡ fallback interpretado permitido no produto.
+4. Melhorar a fidelidade ao hardware com evidÃªncias tÃ©cnicas, testes sintÃ©ticos reproduzÃ­veis e observaÃ§Ãµes documentadas de execuÃ§Ãµes de firmware real. OperaÃ§Ãµes nÃ£o implementadas nunca devem retornar sucesso silencioso.
 
-**Performance-first, correctness-preserving:** otimizar recompilador, CPU, memória e gráficos preservando o comportamento do console. Um futuro modo gráfico aprimorado deverá preservar lógica, física e sincronização dos jogos.
+**Performance-first, correctness-preserving:** otimizar recompilador, CPU, memÃ³ria e grÃ¡ficos preservando o comportamento do console. Um futuro modo grÃ¡fico aprimorado deverÃ¡ preservar lÃ³gica, fÃ­sica e sincronizaÃ§Ã£o dos jogos.
 
 ## Compilar e testar
 
-Requisitos: **CMake 3.21+**, **compilador C++20** e **Ninja** (ou gerador nativo compatível). Não há SDK externo obrigatório nem exigência de instruções AVX.
+Requisitos: **CMake 3.21+**, **compilador C++20** e **Ninja** (ou gerador nativo compatÃ­vel). NÃ£o hÃ¡ SDK externo obrigatÃ³rio nem exigÃªncia de instruÃ§Ãµes AVX.
 
 ```sh
 cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -55,9 +55,9 @@ cmake --build out/build --parallel
 ctest --test-dir out/build --output-on-failure
 ```
 
-No Windows, também é possível usar o gerador Visual Studio do CMake; em builds com várias configurações, usar `--config Release` para compilar e testar.
+No Windows, tambÃ©m Ã© possÃ­vel usar o gerador Visual Studio do CMake; em builds com vÃ¡rias configuraÃ§Ãµes, usar `--config Release` para compilar e testar.
 
-O GitHub Actions compila e testa **Windows x86-64/ARM64, Linux x86-64/ARM64 (incluindo a arquitetura do Steam Deck) e macOS Intel/Apple Silicon**. Compilar nos seis alvos não comprova que os jogos de PS2 funcionam neles.
+O GitHub Actions compila e testa **Windows x86-64/ARM64, Linux x86-64/ARM64 (incluindo a arquitetura do Steam Deck) e macOS Intel/Apple Silicon**. Compilar nos seis alvos nÃ£o comprova que os jogos de PS2 funcionam neles.
 
 ### Ferramentas de desenvolvimento
 
@@ -65,25 +65,25 @@ O GitHub Actions compila e testa **Windows x86-64/ARM64, Linux x86-64/ARM64 (inc
 # Gerar C++ nativo a partir de um ELF MIPS suportado e obtido legalmente.
 ./out/build/ps2n-aot entrada.elf out/build/generated/programa.cpp
 
-# Diagnosticar o boot de uma ROM0 fornecida pelo usuário.
+# Diagnosticar o boot de uma ROM0 fornecida pelo usuÃ¡rio.
 ./out/build/ps2n-boot bios/sua-rom0.bin --console=MODELO:PLACA --trace=events
 
-# Caso exista, fornecer a NVM extraída do mesmo console.
+# Caso exista, fornecer a NVM extraÃ­da do mesmo console.
 ./out/build/ps2n-boot bios/sua-rom0.bin --console=MODELO:PLACA --nvm=bios/sua-nvm.nvm --trace=events
 ```
 
-`ps2n-aot` gera C++ que precisa ser ligado a um host compatível; não produz sozinho um jogo executável. `ps2n-boot` é uma ferramenta de diagnóstico e pode parar em hardware não implementado. O encerramento do processo não deve ser confundido com uma BIOS inicializada com sucesso.
+`ps2n-aot` gera C++ que precisa ser ligado a um host compatÃ­vel; nÃ£o produz sozinho um jogo executÃ¡vel. `ps2n-boot` Ã© uma ferramenta de diagnÃ³stico e pode parar em hardware nÃ£o implementado. O encerramento do processo nÃ£o deve ser confundido com uma BIOS inicializada com sucesso.
 
-ROM0, ROM1/ROM2, NVM, jogos e traduções proprietárias geradas **não são fornecidos**. Mantenha esses arquivos localmente e não os publique no repositório. A correspondência BIOS/NVM deve ser validada, não presumida pelo nome.
+ROM0, ROM1/ROM2, NVM, jogos e traduÃ§Ãµes proprietÃ¡rias geradas **nÃ£o sÃ£o fornecidos**. Mantenha esses arquivos localmente e nÃ£o os publique no repositÃ³rio. A correspondÃªncia BIOS/NVM deve ser validada, nÃ£o presumida pelo nome.
 
 ## Roadmap
 
-A direção é **AOT genérico de EE/IOP/VU + serviços HLE nativos → BIOS/Browser original e jogos, com GS/DMA/SPU2, controles e temporização fiéis → launcher multiplataforma e velocidade original medida**. BIOS e jogos são alvos obrigatórios; concluir o boot de hardware não é pré-requisito para avançar no caminho de um jogo. Isso não é uma promessa de compatibilidade nem um cronograma de lançamento. Acompanhe a [próxima tarefa de engenharia](docs/NEXT-TASK.md) para o trabalho ativo.
+A direÃ§Ã£o Ã© **AOT genÃ©rico de EE/IOP/VU + serviÃ§os HLE nativos â†’ BIOS/Browser original e jogos, com GS/DMA/SPU2, controles e temporizaÃ§Ã£o fiÃ©is â†’ launcher multiplataforma e velocidade original medida**. BIOS e jogos sÃ£o alvos obrigatÃ³rios; concluir o boot de hardware nÃ£o Ã© prÃ©-requisito para avanÃ§ar no caminho de um jogo. Isso nÃ£o Ã© uma promessa de compatibilidade nem um cronograma de lanÃ§amento. Acompanhe a [prÃ³xima tarefa de engenharia](docs/NEXT-TASK.md) para o trabalho ativo.
 
-## Contribuição e documentação
+## ContribuiÃ§Ã£o e documentaÃ§Ã£o
 
-Contribuições devem incluir testes focados e evidências, manter um núcleo único em C++20 para todas as plataformas e evitar hacks por jogo, fallbacks silenciosos e cópias desnecessárias. Consulte [CONTRIBUTING.md](CONTRIBUTING.md), [arquitetura](docs/ARCHITECTURE.md), [documentação técnica](docs/README.md) e [status](STATUS.md).
+ContribuiÃ§Ãµes devem incluir testes focados e evidÃªncias, manter um nÃºcleo Ãºnico em C++20 para todas as plataformas e evitar hacks por jogo, fallbacks silenciosos e cÃ³pias desnecessÃ¡rias. Consulte [CONTRIBUTING.md](CONTRIBUTING.md), [arquitetura](docs/ARCHITECTURE.md), [documentaÃ§Ã£o tÃ©cnica](docs/README.md) e [status](STATUS.md).
 
-## Licença
+## LicenÃ§a
 
-O código original conserva **[BSD-3-Clause](LICENSE)**. O [kernel HLE adaptado do PS2Recomp](third_party/ps2recomp/NOTICE) usa **[GPL-3.0](third_party/ps2recomp/LICENSE)**; binários combinados devem cumprir a GPL-3.0, incluindo o código-fonte correspondente. PCSX2 continua como referência de comportamento. Firmware, jogos, NVM específica de aparelho e traduções proprietárias não estão incluídos. Veja as [decisões de licenciamento](docs/LICENSE-DECISION.md).
+O cÃ³digo original conserva **[BSD-3-Clause](LICENSE)**. O [kernel HLE compilado diretamente do PS2Recomp](licenses/PS2Recomp/NOTICE) usa **[GPL-3.0](licenses/PS2Recomp/LICENSE)**; binÃ¡rios combinados devem cumprir a GPL-3.0, incluindo o cÃ³digo-fonte correspondente. PCSX2 continua como referÃªncia de comportamento. Firmware, jogos, NVM especÃ­fica de aparelho e traduÃ§Ãµes proprietÃ¡rias nÃ£o estÃ£o incluÃ­dos. Veja as [decisÃµes de licenciamento](docs/LICENSE-DECISION.md).

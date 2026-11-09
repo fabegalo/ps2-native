@@ -96,6 +96,8 @@ struct Fixture {
 };
 }
 int main(int argc,char** argv)try {
+    require(pad_axis_byte(-32768,0)==0u && pad_axis_byte(0,0)==128u && pad_axis_byte(32767,0)==255u,"XInput axes preserve full range and neutral");
+    require(pad_axis_byte(-32768,0,true)==255u && pad_axis_byte(32767,0,true)==0u && pad_axis_byte(500,1000)==128u,"Y inversion and deadzone preserve host stick semantics");
     GamepadRetry retry;
     require(!retry.throttled(0,2000),"first controller probe");
     retry.observed(0,false,2000);
@@ -198,14 +200,28 @@ int main(int argc,char** argv)try {
     until([&]{return launcher.pendingTasks()==0;},"identify play NVM");
     const auto gameId=qstr(frontend::library_id_for(fixture.root/"disc.iso"));
     bool opened=false;QObject::connect(&launcher,&Launcher::gameStarted,&launcher,[&]{opened=true;});
-    require(launcher.startGame(gameId) && opened,"Play launches the real session window path");
+    struct RequestSession final:frontend::RuntimeSession {
+        frontend::SessionRequest request;
+        void start(const frontend::SessionRequest& value) override {request=value;}
+        void stop() override {}
+        frontend::SessionState state()const override{return frontend::SessionState::Stopped;}
+        std::string last_error()const override{return {};}
+    } requested;
+    launcher.setRuntimeSession(&requested);
+    require(launcher.prepareGame(gameId) && opened && requested.request.prepare_only &&
+        !requested.request.native_cache.empty() && requested.request.experimental_manifest.empty(),
+        "Prepare routes library content to the native cache without a checkpoint");
+    require(launcher.startGame(gameId) && !requested.request.prepare_only && !requested.request.native_cache.empty(),
+        "Play uses the same native preparation and execution request");
+    auto originalRequest=requested.request;originalRequest.native_cache.clear();
+    launcher.setRuntimeSession(&session);session.start(originalRequest);
     require(observed.isNull(),"a new boot clears the previous session's image");
     until([&]{return !session.active();},"original boot refusal");
     require(session.originalBoot() && session.state()==frontend::SessionState::Failed,"original boot visibly fails");
     require(session.last_error().find(refusal.reason)!=std::string::npos &&
         session.last_error().find(QString::number(refusal.pc,16).toStdString())!=std::string::npos,
-        "Play reports the same PC and hardware refusal as original reset execution");
-    require(launcher.startGame(gameId),"Play can retry after a refusal");
+        "Original reset still reports the same PC and hardware refusal as the core");
+    session.start(originalRequest);
     session.stop();until([&]{return !session.active();},"stop original boot");
     frontend::SessionRequest changedBios;changedBios.rom0=fixture.root/"rom0.bin";
     changedBios.expected_rom0_sha256=std::string(64,'0');changedBios.disc=fixture.root/"disc.iso";
@@ -213,7 +229,7 @@ int main(int argc,char** argv)try {
     require(session.state()==frontend::SessionState::Failed && session.last_error().find("SHA-256")!=std::string::npos,
         "original boot rejects a BIOS that differs from library identification");
     session.setManifest(qpath(fixture.root/"session.json"));
-    require(!session.originalBoot(),"checkpoint panel remains accessible after Play");
+    require(!session.originalBoot(),"diagnostic worker retains checkpoint support independently of the production UI");
     launcher.flush();
     std::cout<<"Experimental Qt runtime lifecycle, input, GS, PCM and complete-state equivalence passed\n";
     return 0;

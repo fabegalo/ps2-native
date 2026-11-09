@@ -6,6 +6,9 @@
 #include <thread>
 #include <vector>
 #include <algorithm>
+#include <functional>
+#include <exception>
+#include <string_view>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -21,11 +24,13 @@ extern char** environ;
 #endif
 
 namespace ps2native::dev {
-struct ProcessResult { int exit_code{}; bool timed_out{}; double milliseconds{}; };
+struct ProcessResult { int exit_code{}; bool timed_out{},cancelled{}; double milliseconds{}; };
 inline ProcessResult process(const std::filesystem::path& executable, const std::vector<std::filesystem::path>& args,
-                             const std::filesystem::path& log, unsigned timeout_seconds) {
+                             const std::filesystem::path& log, unsigned timeout_seconds,std::uint64_t max_log_bytes=0,
+                             const std::function<bool()>& cancelled={},
+                             const std::function<void(std::string_view)>& on_output={}) {
     const auto start = std::chrono::steady_clock::now();
-    ps2native::create_directories(log.parent_path());
+    if(!log.empty())ps2native::create_directories(log.parent_path());
     ProcessResult result;
 #ifdef _WIN32
     auto quote = [](const std::wstring& value) {
@@ -40,15 +45,16 @@ inline ProcessResult process(const std::filesystem::path& executable, const std:
     std::wstring command = quote(executable.native());
     for (const auto& arg : args) command += L" " + quote(arg.native());
     SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
-    const auto log_handle = CreateFileW(native_io_path(log).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
-                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const auto log_handle = CreateFileW(log.empty()?L"NUL":native_io_path(log).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                                   log.empty()?OPEN_EXISTING:CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (log_handle == INVALID_HANDLE_VALUE) throw std::runtime_error("cannot open process log");
     HANDLE pipe_read{}, output{};
     if (!CreatePipe(&pipe_read,&output,&security,0) || !SetHandleInformation(pipe_read,HANDLE_FLAG_INHERIT,0)) {
         if(pipe_read)CloseHandle(pipe_read);if(output)CloseHandle(output);
         CloseHandle(log_handle);throw std::runtime_error("cannot create process output pipe");
     }
-    STARTUPINFOEXW startup{}; startup.StartupInfo.cb = sizeof(startup); startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    STARTUPINFOEXW startup{}; startup.StartupInfo.cb = sizeof(startup); startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES|STARTF_USESHOWWINDOW;
+    startup.StartupInfo.wShowWindow=SW_HIDE;
     startup.StartupInfo.hStdOutput = output; startup.StartupInfo.hStdError = output;
     startup.StartupInfo.hStdInput = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING, 0, nullptr);
     SIZE_T attribute_bytes{}; InitializeProcThreadAttributeList(nullptr,1,0,&attribute_bytes);
@@ -71,7 +77,8 @@ inline ProcessResult process(const std::filesystem::path& executable, const std:
         throw std::runtime_error("cannot bound process tree");
     }
     PROCESS_INFORMATION child{};
-    const auto created=CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,
+    // Keep the compiler probe and Ninja on the same console code page, hidden from desktop users.
+    const auto created=CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_SUSPENDED | CREATE_NEW_CONSOLE | EXTENDED_STARTUPINFO_PRESENT,
                         nullptr, nullptr, &startup.StartupInfo, &child);
     const auto launch_error=GetLastError();
     DeleteProcThreadAttributeList(startup.lpAttributeList);
@@ -93,31 +100,38 @@ inline ProcessResult process(const std::filesystem::path& executable, const std:
         throw std::runtime_error("cannot resume child process");
     }
     CloseHandle(child.hThread);
-    bool log_failed=false;
+    bool log_failed=false;std::uint64_t log_bytes=0;std::exception_ptr output_error;
     const auto drain=[&] {
         char buffer[16384];DWORD available{};
         unsigned chunks=0;
         while(chunks++<64 && PeekNamedPipe(pipe_read,nullptr,0,nullptr,&available,nullptr) && available) {
             DWORD got{},written{};
             if(!ReadFile(pipe_read,buffer,std::min<DWORD>(sizeof(buffer),available),&got,nullptr))break;
+            if(max_log_bytes && (log_bytes>=max_log_bytes || got>max_log_bytes-log_bytes)){log_failed=true;continue;}
             if(!WriteFile(log_handle,buffer,got,&written,nullptr) || written!=got)log_failed=true;
+            if(on_output && !output_error)try{on_output(std::string_view(buffer,got));}
+                catch(...){output_error=std::current_exception();log_failed=true;}
+            log_bytes+=got;
         }
     };
     const auto deadline=start+std::chrono::seconds(timeout_seconds);
     for(;;) {
         drain();const auto waited=WaitForSingleObject(child.hProcess,10);
         if(waited==WAIT_OBJECT_0)break;
-        if(waited==WAIT_FAILED || std::chrono::steady_clock::now()>=deadline) {
-            result.timed_out=true;TerminateJobObject(job,124);WaitForSingleObject(child.hProcess,5000);break;
+        result.cancelled=cancelled && cancelled();
+        if(result.cancelled || log_failed || waited==WAIT_FAILED || std::chrono::steady_clock::now()>=deadline) {
+            result.timed_out=!result.cancelled;TerminateJobObject(job,124);WaitForSingleObject(child.hProcess,5000);break;
         }
     }
     drain();
     DWORD code = 1; GetExitCodeProcess(child.hProcess, &code);
-    result.exit_code = result.timed_out ? 124 : static_cast<int>(code);
+    result.exit_code = result.cancelled ? 130 : result.timed_out ? 124 : static_cast<int>(code);
     CloseHandle(child.hProcess); CloseHandle(job);
     drain();CloseHandle(pipe_read);CloseHandle(log_handle);
-    if(log_failed)throw std::runtime_error("process log write failed");
+    if(output_error)std::rethrow_exception(output_error);
+    if(log_failed)throw std::runtime_error("process log exceeded its limit or could not be written");
 #else
+    if(on_output || log.empty())throw std::runtime_error("streamed process output requires the Windows build adapter");
     const auto output = open(native_io_path(log).c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (output < 0) throw std::runtime_error("cannot open process log");
     std::vector<std::string> owned{executable.native()};
@@ -138,19 +152,32 @@ inline ProcessResult process(const std::filesystem::path& executable, const std:
     if (error) throw std::runtime_error("cannot spawn process (errno " + std::to_string(error) + ")");
     const auto deadline = start + std::chrono::seconds(timeout_seconds);
     int status{};
+    bool log_limit=false;
     for (;;) {
         const auto waited = waitpid(child, &status, WNOHANG);
         if (waited == child) break;
         if (waited < 0 && errno != EINTR) { kill(-child,SIGKILL); waitpid(child,&status,0); throw std::runtime_error("cannot wait for process"); }
-        if (std::chrono::steady_clock::now() >= deadline) {
-            result.timed_out = true; kill(-child, SIGKILL); while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+        std::error_code log_error;
+        log_limit=max_log_bytes && std::filesystem::file_size(log,log_error)>=max_log_bytes && !log_error;
+        result.cancelled=cancelled && cancelled();
+        if (result.cancelled || log_limit || std::chrono::steady_clock::now() >= deadline) {
+            result.timed_out = !result.cancelled; kill(-child, SIGKILL); while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     // Do not leave grandchildren running after their direct parent exits.
     kill(-child, SIGKILL);
-    result.exit_code = result.timed_out ? 124 : WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+    result.exit_code = result.cancelled ? 130 : result.timed_out ? 124 : WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+    if(max_log_bytes) {
+        std::error_code error;
+        const auto bytes=std::filesystem::file_size(log,error);
+        if(!error && bytes>max_log_bytes) {
+            log_limit=true;std::filesystem::resize_file(log,max_log_bytes,error);
+            if(error)throw std::runtime_error("process log exceeded its limit and could not be bounded");
+        }
+    }
+    if(log_limit)throw std::runtime_error("process log exceeded its limit");
 #endif
     result.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     return result;

@@ -19,6 +19,8 @@ int main(int argc,char** argv) {
             const auto code=direct_test::dynamic_code();
             const auto snapshot=snapshot_ee_code(memory,direct_test::dynamic_address,12,sha256_hex(code));
             require(snapshot.bytes==overlay.bytes,"offline snapshot stable ELF identity");
+            require(snapshot_ee_code(memory,direct_test::dynamic_address|0x80000000u,12,sha256_hex(code)).entry==
+                (direct_test::dynamic_address|0x80000000u),"kernel aliases retain their execution address in offline snapshots");
             rejects([&]{(void)snapshot_ee_code(memory,direct_test::dynamic_address,12,std::string(64,'0'));},"SHA-256");
             rejects([&]{(void)snapshot_ee_code(memory,direct_test::dynamic_address+1,12,sha256_hex(code));},"range");
             auto verified=VerifiedAotOverlay::verify(snapshot,overlay_aot_module(),memory);

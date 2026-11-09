@@ -1,10 +1,15 @@
 // Authored guest accesses to documented digital-output configuration.
 #include "bios_program.hpp"
 #include "boot_checks.hpp"
+#include "iop_native_fixture.hpp"
 #include <iostream>
 using namespace ps2native;
 using namespace boot_checks;
 namespace {
+void require_native(const Iop& iop) {
+    require(!iop.interpreted_instructions(),"SPDIF regressions execute only fixed native translations");
+    if(iop.stopped())require(iop.stop_reason()->find("missing IOP AOT")==std::string::npos,*iop.stop_reason());
+}
 Iop run(unsigned mode) {
     m20::Assembler a(kEeResetVector);a.la(8,0xBF9007C6u);a.la(10,0xA0000100u);
     if(mode!=1) {
@@ -23,7 +28,7 @@ Iop run(unsigned mode) {
     }
     a.label("idle");a.beq(0,0,"idle");a.nop();
     const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> rom(4u*1024u*1024u);
-    std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);iop.run_until(80);return iop;
+    std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);iop.run_until(80);require_native(iop);return iop;
 }
 }
 int main() try {
@@ -49,7 +54,7 @@ int main() try {
         }
         a.label("idle");a.beq(0,0,"idle");a.nop();
         const auto code=m20::le_words(a.finish());std::vector<std::uint8_t> rom(4u*1024u*1024u);
-        std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);iop.run_until(80);
+        std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);iop.run_until(80);require_native(iop);
         if(!mode)require(!iop.stopped() && iop.ee_read(0x100,4)==0xC032u && iop.ee_read(0x104,4)==0,
                          "SPDIF PCM output retains guest configuration and explicit disable without fabricating samples");
         else require(iop.stopped(),"SPDIF reset, bypass, streaming and unsupported access widths remain explicit");
@@ -63,7 +68,7 @@ int main() try {
         std::copy(code.begin(),code.end(),rom.begin());Iop iop;iop.reset(rom,nullptr);
         if(mode)iop.diagnostic_spu2_7ca_latch();
         if(mode==4)iop.reset(rom,nullptr);
-        iop.run_until(40);
+        iop.run_until(40);require_native(iop);
         if(mode==1)require(!iop.stopped(),"explicit unknown-output latch experiment permits only a known halfword write");
         else require(iop.stopped(),"unknown output effects, reads, word writes and reset remain fail-closed");
     }
@@ -75,7 +80,7 @@ int main() try {
         const auto code=m20::le_words(a.finish());Iop iop;iop.load_program(code,0x1000,0x1000);
         if(mode)iop.diagnostic_spu2_reserved_latches();
         if(mode==4)iop.load_program(code,0x1000,0x1000);
-        iop.run_until(40);
+        iop.run_until(40);require_native(iop);
         require(iop.stopped()==(mode!=1 && mode!=6 && mode!=7),"reserved apertures require opt-in, known halfwords, no reads or unrelated registers");
         require(iop.diagnostic_ram32(0x1000)==0x3C08BF90u && !iop.diagnostic_ram32(0),"diagnostic snapshot preserves knownness even after stop");
         if(iop.stopped())rejects([&]{(void)iop.ee_read(0x1000,4);},"after the IOP stopped");

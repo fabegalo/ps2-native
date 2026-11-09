@@ -250,7 +250,7 @@ void check_interrupt_source_masks() {
         a.la(t0,0x00400401u);a.mtc0(t0,Status);
         a.label("spin");a.beq(zero,zero,"spin");a.nop();
         const auto rom=rom_of(a);Iop iop;iop.reset(rom,&kProfile);iop.run_until(40);
-        if(known&(1u<<bit))require(!iop.stopped(),"known masked IRQ source "+std::to_string(bit));
+        if(known&(1u<<bit))require(!iop.stopped(),"known masked IRQ source "+std::to_string(bit)+": "+iop.stop_reason().value_or(""));
         else {
             require(iop.stopped(),"unknown enabled IRQ source "+std::to_string(bit));
             require(iop.stop_reason()->find("interrupts enabled while the interrupt line depends on")!=std::string::npos,
@@ -700,7 +700,9 @@ void check_ee_devices() {
     bare.set_clock(&ee);
     bare.reset();
     rejects([&] { (void)bare.read(kDev9Revision, 1u); }, "no console profile with the SSBUS revision");
-    rejects([&] { (void)bare.read(kSifMsflg, 4u); }, "after the IOP stopped");
+    require(bare.iop().stopped() && bare.read(kSifMsflg,4u)==0u && bare.iop().stopped(),
+        "the reset SIF latch is readable without starting or resuming the IOP");
+    rejects([&] { (void)bare.iop().ee_read(0u,4u); }, "undefined since power-on");
 }
 } // namespace
 

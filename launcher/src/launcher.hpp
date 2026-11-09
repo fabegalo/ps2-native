@@ -122,6 +122,7 @@ public:
     Q_INVOKABLE bool startDiagnostic(const QString& biosId);
     void setRuntimeSession(ps2native::frontend::RuntimeSession* session) { session_ = session; }
     Q_INVOKABLE bool startGame(const QString& id);
+    Q_INVOKABLE bool prepareGame(const QString& id);
     Q_INVOKABLE void setCoversFolder(const QUrl& folder);
     Q_INVOKABLE void clearCoversFolder();
     Q_INVOKABLE void setBootToolOverride(const QUrl& file);
@@ -165,6 +166,7 @@ private:
     [[nodiscard]] ps2native::frontend::ProbeContext probe_context() const;
 
     QString data_dir_;
+    bool launchGame(const QString& id,bool prepare_only);
     ps2native::frontend::RuntimeSession* session_{};
     ps2native::frontend::Library library_;
     ps2native::frontend::LauncherSettings settings_;

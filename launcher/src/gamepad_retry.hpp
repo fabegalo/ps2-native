@@ -1,9 +1,15 @@
 // Adapted from DirectXTK GamePad.cpp (MIT), Microsoft Corporation.
-// Pinned source and license: third_party/DirectXTK/LICENSE.
+// Pinned source and license: licenses/DirectXTK/LICENSE.
 #pragma once
 #include <array>
 #include <cstdint>
 namespace ps2launcher {
+inline std::uint8_t pad_axis_byte(std::int32_t value,std::int32_t deadzone,bool invert=false) {
+    if(value>=-deadzone && value<=deadzone)return 0x80u;
+    value=value<-32768?-32768:value>32767?32767:value;
+    if(invert)return static_cast<std::uint8_t>(128-(value>=0?value*128/32767:value*127/32768));
+    return static_cast<std::uint8_t>(128+(value>=0?value*127/32767:value*128/32768));
+}
 class GamepadRetry {
 public:
     bool throttled(unsigned player,std::uint64_t time) const {

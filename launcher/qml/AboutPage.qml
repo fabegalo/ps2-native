@@ -53,7 +53,7 @@ Flickable {
                     SectionTitle { Layout.fillWidth: true; text: qsTr("ps2-native"); iconName: "info" }
                     Text {
                         Layout.fillWidth: true
-                        text: qsTr("Runs the original PlayStation 2 system and games through static AOT recompilation of MIPS R5900 code to native C++, with an explicit, traced interpreter for code that is not proven statically. Fidelity first; performance without trading correctness.")
+                        text: qsTr("Prepares original PlayStation 2 code as offline native modules for the shared runtime with selective HLE. Compatibility is incomplete. Missing translations and services stop explicitly, without an interpreted fallback.")
                         color: Theme.textMuted
                         font.pixelSize: Theme.bodySize - 1
                         wrapMode: Text.WordWrap

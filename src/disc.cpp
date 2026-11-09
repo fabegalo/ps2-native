@@ -141,6 +141,11 @@ DiscEntry DiscImage::find(std::string_view path) {
     return current;
 }
 std::vector<DiscEntry> DiscImage::list(std::string_view path){return entries(find(path));}
+std::uint32_t DiscImage::file_size(std::string_view path) {
+    const auto entry=find(path);
+    if(entry.directory)throw std::runtime_error("ISO 9660 directory is not a file");
+    return entry.size;
+}
 std::vector<std::uint8_t> DiscImage::read(std::string_view path) {
     const auto entry=find(path);
     if(entry.directory)throw std::runtime_error("cannot read ISO 9660 directory as a file");

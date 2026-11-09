@@ -55,8 +55,12 @@ int main(int argc, char** argv) try {
     BootOptions options; options.max_instructions = 100; options.max_trace_events = 8;
     rejects([&] { (void)session.run(nullptr, options); }, "not prepared");
     session.prepare_original(request, nullptr);
+    require(session.ee().cycles()==0 && session.memory().iop().cycle()==0,
+            "Firmware preparation resets both CPU clocks before attaching input");
+    session.memory().diagnostic_sio2_digital_pad(0,0xFFFFu,8192);
     auto reference = std::make_unique<Memory>(); EEState ee;
     prepare_ee_boot(bios, nullptr, ee, *reference);
+    reference->diagnostic_sio2_digital_pad(0,0xFFFFu,8192);
     reference->mount_disc(std::make_shared<DiscImage>(fixture.disc), Iop::DiscMedium::Ps2Cd, true);
     require(checkpoint_state_sha256(session.ee(), session.memory()) == checkpoint_state_sha256(ee, *reference),
             "Original preparation preserves complete console state");
@@ -95,9 +99,62 @@ int main(int argc, char** argv) try {
     const auto assisted=parse_ee_elf(direct_test::elf(hle_test::program()));
     session.prepare_hle_elf(assisted,nullptr);
     require(session.memory().hle_kernel()!=nullptr,"Supervisor owns the explicit HLE session");
+    require(session.ee().cp0(Cop0::Wired)==31 && session.ee().cp0(Cop0::Random)==47,
+            "HLE installs the 32-MiB kernel TLB and protects its wired entries");
+    auto& mapped=session.memory();
+    require(mapped.read32(0x1000E010u)==mapped.read32(0xB000E010u),
+            "HLE register mapping reaches the existing device bus");
+    mapped.write32(0x20100000u,0x12345678u);
+    require(mapped.read32(0x00100000u)==0x12345678u && mapped.read32(0x30100000u)==0x12345678u,
+            "HLE RAM aliases share the canonical storage");
+    require(((mapped.tlb_entry(*mapped.tlb_probe(0x20100000u)).entry_lo0>>3u)&7u)==2 &&
+            ((mapped.tlb_entry(*mapped.tlb_probe(0x30100000u)).entry_lo0>>3u)&7u)==7,
+            "HLE aliases retain their cache policies");
+    mapped.set_translation_context(23,false,Memory::Privilege::Kernel);
+    require(mapped.read32(0x1000E010u)==mapped.read32(0xB000E010u),
+            "Kernel mappings are global across ASIDs");
+    rejects([&]{mapped.write32(0x1000C000u,0);},"TLB modified");
+    rejects([&]{(void)mapped.read32(0x12010000u);},"TLB invalid");
+    rejects([&]{(void)mapped.read32(0x02000000u);},"TLB refill");
+    mapped.tlb_write(2,{0,0x10000017u,0x00400016u,0x00400052u});
+    require(mapped.read32(0x10000000u)==mapped.read32(0xB0000000u),
+            "Guest TLB updates remain authoritative");
+    mapped.set_translation_context(24,false,Memory::Privilege::Kernel);
+    rejects([&]{(void)mapped.read32(0x10000000u);},"TLB refill");
+    const auto ram_entry=*mapped.tlb_probe(0x00100000u);
+    const auto original_ram=mapped.tlb_entry(ram_entry);
+    mapped.tlb_write(ram_entry,{original_ram.page_mask,original_ram.entry_hi,
+        original_ram.entry_lo0&~4u,original_ram.entry_lo1&~4u});
+    rejects([&]{mapped.write32(0x00100000u,0);},"TLB modified");
+    require(mapped.read32(0x20100000u)==0x12345678u,"TLB permission refusal preserves shared RAM");
+    require(mapped.code_matches(0x00100000u,0x12345678u),"Native guard resolves the mapped code page");
+    mapped.tlb_write(ram_entry,{original_ram.page_mask,original_ram.entry_hi,
+        original_ram.entry_lo0&~2u,original_ram.entry_lo1&~2u});
+    rejects([&]{(void)mapped.code_matches(0x00100000u,0x12345678u);},"TLB invalid");
+    rejects([&]{(void)mapped.read32(0x00010000u);},"TLB refill");
+    mapped.write32(0x70000000u,0xAABBCCDDu);
+    require(mapped.read32(0x70000000u)==0xAABBCCDDu,"HLE scratchpad uses the canonical TLB mapping");
+    {
+        Iop romless;romless.reset({},nullptr);
+        const auto stopped=romless.stop_reason();
+        romless.mount_disc(std::make_shared<DiscImage>(fixture.disc),Iop::DiscMedium::Ps2Cd);
+        require(romless.stopped() && romless.stop_reason()==stopped && !romless.cycle(),
+                "ROM-less media attachment preserves the stopped IOP and its reset clock");
+        rejects([&]{(void)romless.ee_cdvd_read(0x1F40200Fu,1);},"no ROM0 mapped");
+        rejects([&]{romless.mount_disc({},Iop::DiscMedium::Ps2Cd);},"disc image");
+        const std::array<std::uint8_t,4> incomplete_rom{};
+        Iop invalid;invalid.reset(incomplete_rom,nullptr);
+        rejects([&]{invalid.mount_disc(std::make_shared<DiscImage>(fixture.disc),Iop::DiscMedium::Ps2Cd);},"active reset state");
+    }
+    session.memory().mount_disc(std::make_shared<DiscImage>(fixture.disc),Iop::DiscMedium::Ps2Cd,true);
+    require(session.memory().iop().hle_services_active() && !session.memory().iop().cycle() &&
+            !session.memory().iop().native_instructions() && !session.memory().iop().interpreted_instructions(),
+            "HLE mounts media in the canonical service state without claiming IOP firmware execution");
     session.prepare_original(request,nullptr);
     require(session.memory().hle_kernel()==nullptr && session.ee().pc==kEeResetVector,
             "Original boot detaches HLE before resetting the same console");
+    require(!session.memory().tlb_probe(0x1000E000u),"Original reset does not inherit HLE mappings");
+    require(!session.memory().iop().hle_services_active(),"Original reset removes IOP HLE services");
     require(canonical_cpu==&session.ee() && canonical_memory==&session.memory(),"SDK owner keeps state addresses stable across lifecycle transitions");
     session.runtime().invalidate_preparation();
     rejects([&]{(void)session.run(nullptr,options);},"not prepared");

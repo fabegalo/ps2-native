@@ -29,10 +29,12 @@ public:
     void read_sector(std::uint32_t lba, std::span<std::uint8_t,2048> out);
     [[nodiscard]] std::vector<DiscEntry> list(std::string_view directory = {});
     [[nodiscard]] std::vector<std::uint8_t> read(std::string_view path);
+    [[nodiscard]] std::uint32_t file_size(std::string_view path);
     [[nodiscard]] std::string boot_path(); // BOOT2 only; PS-X BOOT is refused
     [[nodiscard]] ElfImage boot_elf();
     [[nodiscard]] const std::string& volume_id() const noexcept { return volume_id_; }
     [[nodiscard]] std::uint64_t image_size() const noexcept { return file_.size(); }
+    [[nodiscard]] std::uint32_t user_sector_count() const noexcept {return sectors_;}
     // RUNTIME_HELPERS_BEGIN
     [[nodiscard]] const auto& diagnostic_dvd_geometry() const noexcept { return diagnostic_geometry_; }
     // RUNTIME_HELPERS_END

@@ -19,6 +19,7 @@ public:
     SessionSupervisor& operator=(SessionSupervisor&&) = delete;
 
     void prepare_original(const SessionRequest& request, const AotModule* module);
+    void prepare_game(const SessionRequest& request, const AotModule* module);
     void prepare_hle_elf(const ElfImage& elf, const AotModule* module,
                          const DirectElfEnvironment& environment = {});
     void prepare_firmware(const BiosImage& bios, const AotModule* module,

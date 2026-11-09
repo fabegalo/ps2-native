@@ -7,7 +7,7 @@ target_sources(ps2n-dev PRIVATE tools/ps2recomp_prepare.cpp)
 target_link_libraries(ps2n-dev PRIVATE ps2_analyzer_lib nlohmann_json::nlohmann_json)
 file(READ "${PS2N_LOCK_FILE}" sdk_lock)
 string(REPLACE "\r\n" "\n" sdk_lock "${sdk_lock}")
-string(SHA256 sdk_lock_hash "${sdk_lock}")
+set(sdk_lock_hash "${PS2N_PS2RECOMP_CODEGEN_LOCK_SHA256}")
 string(JSON sdk_revision GET "${sdk_lock}" ps2recomp_sdk commit)
 target_compile_definitions(ps2n-dev PRIVATE
     PS2N_PS2RECOMP_REVISION="${sdk_revision}"
@@ -29,8 +29,8 @@ if(BUILD_TESTING)
             "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include"
             "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xIOP/include"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/ps2recomp_native.cpp"
-            "${CMAKE_CURRENT_SOURCE_DIR}/include" "$<TARGET_FILE:ps2n_sdk_runtime>"
-            "$<TARGET_FILE:ps2n_core_native>" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ps2recomp_integrated.cpp")
+            "${CMAKE_CURRENT_SOURCE_DIR}/include" "$<TARGET_LINKER_FILE:ps2n_core>"
+            "$<TARGET_LINKER_FILE:ps2n_core_native>" "${CMAKE_CURRENT_SOURCE_DIR}/tests/ps2recomp_integrated.cpp")
         add_dependencies(ps2n-sdk-prepare-tests ps2n_sdk_runtime)
     endif()
     add_test(NAME sdk-prepare-pipeline COMMAND ps2n-sdk-prepare-tests

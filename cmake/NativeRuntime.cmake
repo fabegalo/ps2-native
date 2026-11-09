@@ -38,7 +38,7 @@ if(BUILD_TESTING)
     set_tests_properties(sdk-runtime-owner PROPERTIES TIMEOUT 120)
     if(PS2N_DUMPBIN_EXECUTABLE)
         add_test(NAME sdk-runtime-no-interpreters COMMAND "${CMAKE_COMMAND}"
-            "-DDUMPBIN=${PS2N_DUMPBIN_EXECUTABLE}" "-DNATIVE=$<TARGET_FILE:ps2n_sdk_runtime>"
+            "-DDUMPBIN=${PS2N_DUMPBIN_EXECUTABLE}" "-DNATIVE=$<TARGET_FILE:ps2n_core>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_symbols.cmake")
     endif()
 endif()

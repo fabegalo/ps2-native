@@ -51,6 +51,7 @@ void GsRegisters::reset(std::uint64_t now, std::optional<std::uint64_t> diagnost
     mode_ = {};
     diagnostic_reset_syncv_ = diagnostic_reset_syncv;
     diagnostic_reset_field_ = diagnostic_reset_field;
+    kernel_reset_syncv_.reset();kernel_reset_field_.reset();
     diagnostic_reset_scanmask_.reset();
     diagnostic_reset_texture_cache_invalid_=false;
     diagnostic_texture_precision_=0;
@@ -95,6 +96,10 @@ void GsRegisters::diagnostic_texture_precision(unsigned modes) {
 }
 
 std::uint64_t GsRegisters::read(std::uint32_t physical, std::size_t bytes) const {
+    if(physical==kGsImr) {
+        if(bytes!=4u && bytes!=8u)throw DeviceRefusal("GS IMR requires a 32/64-bit read");
+        return imr_;
+    }
     if (physical == kGsCsr && bytes == 1u) {
         if (unknown_events_)
             throw DeviceRefusal("GS CSR event byte: HSINT/VSINT timing unknown since last acknowledge");
@@ -125,13 +130,28 @@ void GsRegisters::change_line_state(const LineState& next, const LineClockGuard&
 }
 
 void GsRegisters::reset_events(std::uint64_t now) {
-    field_=diagnostic_reset_field_;
+    field_=diagnostic_reset_field_?diagnostic_reset_field_:kernel_reset_field_;
     events_ = unknown_events_ = 0u;
     event_cycle_ = now;
     irq_pending_ = irq_unknown_ = finish_pending_ = false;
     // ID reset contents are not established for the selected chip. Masked
     // SIGNAL/LABEL writes define only the bits they actually replace.
     siglblid_ = siglblid_known_ = 0u;
+}
+
+void GsRegisters::initialize_kernel_video(std::uint64_t syncv,bool field) {
+    if(event_cycle_ || kernel_reset_syncv_ || diagnostic_reset_syncv_ || diagnostic_reset_field_)
+        throw DeviceRefusal("kernel video initialization requires an unused GS reset state");
+    write(kGsSyncv,8,syncv,0,{});
+    kernel_reset_syncv_=syncv;kernel_reset_field_=field;field_=field;
+    // PS2Memory::initialize clears VRAM once; GS::reset never clears it.
+    vram_.synchronize();
+    std::fill(vram_.words_.begin(),vram_.words_.end(),0u);
+    std::fill(vram_.known_.begin(),vram_.known_.end(),~0u);
+    vram_.locations_.fill(GsVram::Location::Cpu);
+    vram_.knowledge_cached_.fill(false);
+    ++vram_.revision_;
+    reset_drawing();
 }
 
 void GsRegisters::raise_event(std::uint32_t event) {
@@ -173,7 +193,15 @@ void GsRegisters::advance(std::uint64_t now) {
                     else if(field_ && (edges&1u))*field_=!*field_;
                 }
             }
-        } else if (clock.next_edge(from, false) <= now) raise_event(kCsrVsint);
+        } else if (clock.next_edge(from, false) <= now) {
+            raise_event(kCsrVsint);
+            if(kernel_reset_field_ && field_) {
+                const auto period=clock.half_line*clock.field;
+                const auto previous=std::max(event_cycle_,clock.epoch);
+                const auto edges=(now-clock.epoch)/period-(previous-clock.epoch)/period;
+                if(edges&1u)*field_=!*field_;
+            }
+        }
     } else if (clock.state == VerticalClock::State::Unknown && !(events_ & kCsrVsint)) {
         unknown_events_ |= kCsrVsint;
     }
@@ -267,7 +295,10 @@ void GsRegisters::write_impl(std::uint32_t physical, std::size_t bytes, std::uin
         if (bytes != 8u)
             throw DeviceRefusal(std::string("GS ") + reg.name + " write of " + std::to_string(bytes) +
                                 " byte(s) is not modeled (64-bit stores only)");
-        if ((value & ~reg.valid) != 0u && !(physical==kGsSmode2 && (diagnostic_texture_precision_&256u)))
+        // SDK memory retains the full SMODE2 word; its GS consumes only the
+        // defined mode fields. Keep this compatibility behavior HLE-scoped.
+        if ((value & ~reg.valid) != 0u && !(physical==kGsSmode2 &&
+            (kernel_reset_syncv_ || (diagnostic_texture_precision_&256u))))
             throw DeviceRefusal(std::string("GS ") + reg.name + " " + hex(value, 16) + ": reserved bits " +
                                 hex(value & ~reg.valid, 16) + " set; their effect is not documented");
         if (physical == kGsSmode1) {
@@ -305,7 +336,7 @@ void GsRegisters::write_impl(std::uint32_t physical, std::size_t bytes, std::uin
             // state (PCSX2 clears them too); the line clock restarts as NTSC.
             change_line_state({Sync::Running, 2u, {now, kEeCyclesPerBusCycle * kBusCyclesPerNtscLine}}, guard);
             mode_ = {};
-            mode_.back() = diagnostic_reset_syncv_;
+            mode_.back() = diagnostic_reset_syncv_?diagnostic_reset_syncv_:kernel_reset_syncv_;
             reset_drawing(); // VRAM survives a soft GS reset
             reset_events(now);
             ++generation_;

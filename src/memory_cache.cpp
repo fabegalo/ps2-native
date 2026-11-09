@@ -49,7 +49,7 @@ void Memory::flush_hle_cache(unsigned operation) {
     }
 }
 void Memory::diagnostic_data_cache(bool translate_uncached_hits) {
-    if(mapping_==Mapping::ElfProgram || data_cache_model_ ||
+    if(mapping_==Mapping::ElfProgram ||
        (cache_clock_ && *cache_clock_) || (cache_config_&0x10000u))
         throw DeviceRefusal("D-cache experiment must be enabled before CPU execution in boot/Direct ELF mode");
     data_cache_model_=true;

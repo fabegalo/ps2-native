@@ -32,17 +32,13 @@ namespace ps2native {
     X(Vrinit) X(Vrnext) X(Vrget) X(Vrxor) \
     X(CFalseS) X(CEqualS) X(CLessS) X(CLessEqualS) X(Bc1f) X(Bc1t) X(Bc1fl) X(Bc1tl) \
     X(Bc0f) X(Bc0t) X(Bc0fl) X(Bc0tl)
-// System encodings retain stable enum values. CACHE can be emitted by AOT
-// through the shared system helper; the remaining instructions execute in
-// the interpreter (boot path): COP0 moves, TLB maintenance, ERET, EI/DI,
-// PREF, the COP1 word loads and
-// stores LWC1/SWC1 (FPU arithmetic is not decoded) and the trap-style
-// exceptions and signed arithmetic with overflow, which enter the guest's
-// level-1 handler. Signed arithmetic remains an explicit AOT boundary.
+// Native system helpers handle COP0, FPU and exception behavior. Append new
+// opcodes here to preserve existing enum values and their cache/ABI contracts.
 #define PS2N_R5900_SYSTEM_OPCODES(X) \
     X(Mfc0) X(Mtc0) X(Tlbr) X(Tlbwi) X(Tlbwr) X(Tlbp) X(Eret) X(Ei) X(Di) \
     X(Cache) X(Pref) X(Syscall) X(Break) X(Lwc1) X(Swc1) X(Mfc1) X(Mtc1) X(Cfc1) X(Ctc1) X(MovS) X(DivS) X(MulS) X(CvtWS) X(CvtSW) X(MaddS) X(AddaS) X(Addi) \
-    X(Add) X(Sub) X(Dadd) X(Dsub) X(Daddi) X(AddS) X(SubS) X(AbsS) X(NegS) X(SqrtS) X(MulaS) X(MsubaS) X(MaddaS) X(MsubS)
+    X(Add) X(Sub) X(Dadd) X(Dsub) X(Daddi) X(AddS) X(SubS) X(AbsS) X(NegS) X(SqrtS) X(MulaS) X(MsubaS) X(MaddaS) X(MsubS) X(MaxS) X(MinS) \
+    X(Bc2f) X(Bc2t) X(Bc2fl) X(Bc2tl) X(Vitof)
 
 enum class MipsOpcode : std::uint8_t {
 #define PS2N_OPCODE_ENUMERATOR(name) name,

@@ -1,4 +1,5 @@
 #include "ps2native/aot_runtime.hpp"
+#include "ps2native/hle.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -35,6 +36,12 @@ bool is_verified_indirect_entry(const AotModule& module, std::uint32_t pc) noexc
                               module.indirect_entries + module.indirect_entry_count, pc);
 }
 
+bool poll_sdk_kernel(ExecutionContext& ctx) {
+    const auto dispatched=ctx.memory.hle_kernel()->poll_execution(ctx);
+    if(dispatched)++ctx.kernel_dispatches;
+    return dispatched;
+}
+
 bool aot_enter(ExecutionContext& ctx, std::uint32_t pc, std::uint32_t word, bool has_delay_slot) {
     return aot_enter_checked(ctx,pc,word,has_delay_slot);
 }
@@ -58,7 +65,9 @@ void flush_interrupt_cache(ExecutionContext& ctx) {
 }
 bool poll_ee_interrupts_cached_slow(ExecutionContext& ctx) {
     flush_interrupt_cache(ctx);
-    return poll_ee_interrupts(ctx.state,ctx.memory);
+    const auto dispatched=poll_ee_interrupts(ctx.state,ctx.memory);
+    if(dispatched && ctx.memory.hle_kernel())++ctx.kernel_dispatches;
+    return dispatched;
 }
 void prime_interrupt_cache(ExecutionContext& ctx) {
     auto& cache=ctx.interrupt_cache;const auto& state=ctx.state;
@@ -88,7 +97,8 @@ bool aot_polling_loop(ExecutionContext& ctx,std::uint32_t start,std::span<const 
     if(!(state.cp0(Cop0::Status)&kStatusIM3))return false;
     if(state.pc!=start || state.delay_pending || ctx.executed>=ctx.budget || words.size()<3u || words.size()>16u ||
        ctx.budget-ctx.executed<words.size()*2u || ctx.stop_pc-start<words.size()*4u)return false;
-    const auto deadline=ctx.observer ? ctx.observer->idle_deadline() : UINT64_MAX;
+    const auto hardwareDeadline=ctx.observer ? ctx.observer->idle_deadline() : UINT64_MAX;
+    const auto deadline=ctx.memory.hle_kernel()?std::min(hardwareDeadline,ctx.memory.hle_kernel()->next_deadline()):hardwareDeadline;
     if(!deadline)return false;
     const auto load=words.front(),branch=words[words.size()-2u];
     const bool polling=load!=0u;
@@ -145,6 +155,7 @@ std::uint64_t run_aot_module(const AotModule& module, EEState& state, Memory& me
     std::uint64_t executed = 0;
     ExecutionContext ctx{state, memory, executed, max_instructions, stop_pc};
     AotDispatchCache dispatch;
+    unsigned kernel_yields=0;
     while (true) {
         if (!state.delay_pending && state.pc == stop_pc) {
             state.indirect_entry_pending = false; // Host return address.
@@ -152,6 +163,7 @@ std::uint64_t run_aot_module(const AotModule& module, EEState& state, Memory& me
         }
         if (executed >= max_instructions)
             throw std::runtime_error("Guest instruction budget exhausted");
+        if(state.pc==0 && memory.hle_kernel() && memory.hle_kernel()->complete_syscall_return())continue;
         (void)poll_ee_interrupts(state,memory);
         ctx.interrupts_sampled=true;
         memory.set_cpu_context(state.cp0(Cop0::Status), state.cp0(Cop0::EntryHi)); memory.set_cache_config(state.cp0(Cop0::Config));
@@ -171,9 +183,12 @@ std::uint64_t run_aot_module(const AotModule& module, EEState& state, Memory& me
             state.indirect_entry_pending = false;
         }
         const auto before = executed;
+        const auto before_dispatch=ctx.kernel_dispatches;
         block->execute(ctx); // Host-compiled basic-block function, no interpreter.
-        if (before == executed)
-            throw std::runtime_error("AOT dispatcher did not make progress");
+        if (before == executed) {
+            if(before_dispatch==ctx.kernel_dispatches || ++kernel_yields>64u)
+                throw std::runtime_error("AOT dispatcher did not make progress");
+        } else kernel_yields=0;
     }
 }
 } // namespace ps2native

@@ -1,6 +1,7 @@
 #include "bios_program.hpp"
 #include "boot_checks.hpp"
 #include "iso_image.hpp"
+#include "iop_native_fixture.hpp"
 #include <iostream>
 using namespace ps2native;
 using namespace boot_checks;

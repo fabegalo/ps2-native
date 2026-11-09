@@ -51,10 +51,28 @@ std::uint64_t GsRegisters::required(std::uint8_t index) const {
 }
 void GsRegisters::reset_drawing() {
     general_ = {}; general_unknown_={}; display_ = {}; first_vertex_.reset(); triangle_vertices_count_=0; transfer_ = {};
-    general_[0x22]=diagnostic_reset_scanmask_;
+    if(kernel_reset_syncv_) {
+        // PS2Recomp GS::reset/PS2Memory::initialize defaults for the HLE
+        // profile only. Original hardware reset retains its unknown state.
+        display_[0]=0u;
+        mode_[(kGsSmode2-kGsSmode1)/16u]=0u;
+        for(unsigned index:{0x00u,0x02u,0x03u,0x06u,0x07u,0x08u,0x09u,
+            0x14u,0x15u,0x18u,0x19u,0x1Bu,0x1Cu,0x22u,0x34u,0x35u,0x36u,0x37u,
+            0x3Bu,0x3Du,0x42u,0x43u,0x44u,0x45u,0x46u,0x47u,0x48u,0x49u,
+            0x4Au,0x4Bu,0x4Eu,0x4Fu,0x50u,0x51u,0x52u})general_[index]=0u;
+        general_[0x01]=0x3F80000080808080ull;
+        general_[0x1A]=1u;
+        general_[0x40]=general_[0x41]=(639ull<<16u)|(447ull<<48u);
+        general_[0x4C]=general_[0x4D]=10ull<<16u;
+        general_[0x53]=3u;
+        display_[7]=display_[9]=10ull<<9u;
+        display_[8]=display_[10]=(639ull<<32u)|(447ull<<44u);
+        for(unsigned index:{11u,12u,13u,14u})display_[index]=0u;
+    }
+    if(diagnostic_reset_scanmask_)general_[0x22]=*diagnostic_reset_scanmask_;
     if(diagnostic_texture_precision_&128u)for(unsigned index:{8u,9u}) {general_[index]=0;general_unknown_[index]=~0xFull;}
     clut_={};clut_base_={};sampled_pages_={};dirty_texture_pages_={};transfer_generation_=0;texture_flush_generation_.reset();
-    if(diagnostic_reset_texture_cache_invalid_)texture_flush_generation_=0;
+    if(kernel_reset_syncv_ || diagnostic_reset_texture_cache_invalid_)texture_flush_generation_=0;
     imr_ = 0x7F00u;
 }
 void GsRegisters::start_transfer(std::uint64_t value) {

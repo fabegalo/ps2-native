@@ -92,7 +92,7 @@ QtObject {
         case "invalid-image": return qsTr("The file could not be read as a PlayStation disc image.")
         case "unsupported-format": return qsTr("Compressed images cannot be read yet. Register the uncompressed ISO instead.")
         case "not-ps2": return qsTr("This is a PlayStation disc. Only PlayStation 2 software is in scope.")
-        case "runtime-unavailable": return qsTr("Identified PlayStation 2 disc. Play attempts original BIOS boot and reports the first unsupported behavior. Gameplay compatibility is unverified.")
+        case "runtime-unavailable": return qsTr("Identified PlayStation 2 disc. Prepare creates a verified native module; Play stops at unsupported behavior. Gameplay compatibility is unverified.")
         }
         return ""
     }

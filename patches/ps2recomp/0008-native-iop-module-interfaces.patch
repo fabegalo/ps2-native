@@ -1,0 +1,4004 @@
+--- a/ps2xIOP/src/iop_service.h
++++ b/ps2xIOP/src/iop_service.h
+@@ -33,6 +33,8 @@
+ 
+         [[nodiscard]] virtual RpcResult handleRpc(const RpcRequest &request) = 0;
+ 
++        virtual void onVblank() {}
++
+         virtual void onSifTransfer(const SifTransfer &transfer)
+         {
+             (void)transfer;
+--- a/ps2xIOP/src/module_factories.h
++++ b/ps2xIOP/src/module_factories.h
+@@ -6,5 +6,8 @@
+ {
+     std::unique_ptr<IopService> createDbcmanService(IopHost &host);
+     std::unique_ptr<IopService> createLibSdService(IopHost &host);
+-    std::unique_ptr<IopService> createMcservService(IopHost &host);
++    std::unique_ptr<IopService> createMcservService(IopHost &host, uint32_t serverVersion = 0x0205u, uint32_t managerVersion = 0x0206u);
++#ifdef PS2N_SDK_NATIVE_BACKEND
++    std::unique_ptr<IopService> createPadmanService(IopHost &host,uint16_t version);
++#endif
+ }
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -24,6 +24,7 @@
+ #include <span>
+ #include <sstream>
+ #include <utility>
++#include <stdexcept>
+ 
+ namespace ps2x::iop::detail
+ {
+@@ -78,6 +79,13 @@
+             uint32_t entry = 0;
+             uint32_t gp = 0;
+             bool resident = false;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            uint32_t moduleInfo = 0;
++            bool ownsImage = false;
++            bool ownsModuleInfo = false;
++            std::array<uint32_t,9> fileInfo{};
++            bool registered = true;
++#endif
+         };
+ 
+         struct GuestCallback
+@@ -95,6 +103,9 @@
+ 
+         explicit Impl(IopHost &hostRef)
+             : host(hostRef),
++#ifdef PS2N_SDK_NATIVE_BACKEND
++              memory(hostRef.nativeMemory()),
++#endif
+               sysmem(host, memory),
+               kernel(memory),
+               cdvd(host, memory, kernel),
+@@ -106,7 +117,9 @@
+               intrman(memory),
+               timrman(),
+               ioman(memory),
++#ifndef PS2N_SDK_NATIVE_BACKEND
+               cpuCore(memory),
++#endif
+               imports(memory),
+               loadcore(memory, imports)
+         {
+@@ -115,7 +128,9 @@
+ 
+         void reset()
+         {
++#ifndef PS2N_SDK_NATIVE_BACKEND
+             memory.reset();
++#endif
+             kernel.reset();
+             modules.clear();
+             imports.reset();
+@@ -128,7 +143,14 @@
+             pendingGuestCallbacks.clear();
+             nextModuleId = 1;
+             moduleCursor = kModuleLoadBase;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            nativeLoadcoreData=0;nativeRpcFrames.clear();nativeRpcThreadId=0;
++#endif
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            totalCycles = host.nativeCycles();
++#else
+             totalCycles = 0;
++#endif
+             totalInstructions = 0;
+             eeCycleCarry = 0;
+             activeCpu = nullptr;
+@@ -176,8 +198,10 @@
+ 
+         void schedulePendingDma()
+         {
++#ifndef PS2N_SDK_NATIVE_BACKEND
+             if (const auto dma = memory.takeDmaStart())
+                 pendingDmaInterrupts[dma->irq] = totalCycles + dma->delayCycles;
++#endif
+         }
+ 
+         bool readRam(uint32_t address, void *destination, size_t size) const
+@@ -215,8 +239,30 @@
+             host.log(level, text);
+         }
+ 
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        void serviceNativeInterrupts(CpuState *cpu = nullptr) {
++            if(!servicingNativeInterrupts && !kernel.nativeAlarmActive() && (!cpu || !cpu->branchPending)) {
++                const auto pending=host.nativePendingInterrupts(intrman.nativeMask());
++                if(pending) {
++                    struct InterruptScope {bool& active;~InterruptScope(){active=false;}} scope{servicingNativeInterrupts};
++                    servicingNativeInterrupts=true;
++                    if(cpu)host.nativePrepareImport(*cpu);
++                    for(unsigned irq=0;irq<32;++irq)if(pending&(1u<<irq)) {
++                        if(irq==3u)host.nativeAcknowledgeInterrupts(1u<<irq);
++                        if(!intrman.dispatchInterrupt(static_cast<int>(irq),*this))throw std::runtime_error("SDK registered IOP interrupt lost its handler");
++                        if(irq!=3u)host.nativeAcknowledgeInterrupts(1u<<irq);
++                    }
++                    if(cpu)host.nativePublish(*cpu);
++                }
++            }
++        }
++#endif
+         bool checkInterrupt(CpuState &cpu)
+         {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            serviceNativeInterrupts(&cpu);
++            return host.nativeInterrupt(cpu);
++#else
+             const uint32_t status = cpu.cop0[12];
+             if ((status & 1u) == 0u)
+                 return false;
+@@ -228,6 +274,7 @@
+             cpu.cop0[13] |= 0x400u;
+             cpuCore.raiseException(cpu, 0u, cpu.pc, false);
+             return true;
++#endif
+         }
+ 
+         enum class ImportDisposition
+@@ -237,8 +284,140 @@
+             Missing,
+         };
+ 
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        void nativeWriteModuleInfo(Module& module) {
++            const auto& info=module.fileInfo;
++            if(!info[0] || module.moduleInfo)return;
++            module.moduleInfo=memory.allocate(48u,16u);
++            if(!module.moduleInfo)throw std::runtime_error("IOP loadcore module metadata allocation failed");
++            module.ownsModuleInfo=true;
++            const uint32_t name=info[8]==UINT32_MAX?0u:memory.read32(info[8]);
++            const uint32_t version=info[8]==UINT32_MAX?0u:memory.read16(info[8]+4u);
++            const std::array<uint32_t,12> data{0u,name,version,static_cast<uint32_t>(module.id),info[1],info[2],info[3],info[4],info[5],info[6],0u,0u};
++            if(!memory.writeRam(module.moduleInfo,data.data(),sizeof data))throw std::runtime_error("IOP loadcore module metadata outside RAM");
++        }
++        void nativeSyncCatalog() {
++            if(!nativeLoadcoreData)return;
++            uint32_t head=0u,count=0u;
++            for(auto& [id,module]:modules)if(module.registered) {
++                nativeWriteModuleInfo(module);
++                if(!module.moduleInfo)throw std::runtime_error("IOP loadcore catalog requires IOPMOD metadata");
++                memory.write32(module.moduleInfo,head);head=module.moduleInfo;++count;
++            }
++            memory.write32(nativeLoadcoreData+16u,head);memory.write32(nativeLoadcoreData+20u,count);
++            memory.write32(nativeLoadcoreData+24u,nextModuleId);
++            uint32_t library=0u;
++            for(const auto address:imports.tableAddresses()){memory.write32(address,library);library=address;}
++            memory.write32(nativeLoadcoreData,library);
++        }
++        bool nativeLoadcoreImport(uint16_t ordinal,CpuState& cpu) {
++            const uint32_t a0=cpu.gpr[4];
++            if(ordinal==3u) {
++                if(!nativeLoadcoreData) {
++                    nativeLoadcoreData=memory.allocate(104u,16u);
++                    if(!nativeLoadcoreData || !memory.zeroRam(nativeLoadcoreData,104u))throw std::runtime_error("IOP loadcore internal data allocation failed");
++                }
++                nativeSyncCatalog();cpu.gpr[2]=nativeLoadcoreData;return true;
++            }
++            if(ordinal==22u) {
++                std::array<uint8_t,144> header{};std::array<uint32_t,9> info{};
++                if(!memory.readRam(a0,header.data(),header.size()) || !IopModuleLoader::probe(header,info)) {cpu.gpr[2]=UINT32_MAX;return true;}
++                const uint32_t output=cpu.gpr[5];
++                if(!output || (output&3u) || !memory.writeRam(output,info.data(),sizeof info))throw std::runtime_error("IOP loadcore FileInfo outside aligned RAM");
++                cpu.gpr[2]=info[0];return true;
++            }
++            if(ordinal==23u) {
++                const uint32_t output=cpu.gpr[5];std::array<uint32_t,9> info{},expected{};std::vector<uint8_t> image;
++                if(!output || (output&3u) || !memory.readRam(output,info.data(),sizeof info) || !IopModuleLoader::readElfFromIop(memory,a0,image) ||
++                    !IopModuleLoader::probe(image,expected)) {cpu.gpr[2]=UINT32_MAX;return true;}
++                for(unsigned i=0;i<info.size();++i)if(i!=3u && info[i]!=expected[i])throw std::runtime_error("IOP loadcore FileInfo disagrees with its ELF");
++                if(info[3]<48u || info[3]>kRamSize || info[7]>kRamSize-info[3]){cpu.gpr[2]=UINT32_MAX;return true;}
++                const auto physicalOutput=IopMemory::physicalAddress(output);
++                if(physicalOutput<info[3]+info[7] && physicalOutput+sizeof info>info[3]-48u)
++                    throw std::runtime_error("IOP loadcore FileInfo overlaps its destination image");
++                for(const auto& [id,module]:modules)if(module.base<info[3]+info[7] && info[3]<module.base+module.size)
++                    throw std::runtime_error("IOP loadcore destination overlaps an SDK module");
++                const auto loaded=IopModuleLoader::load(image,memory,moduleCursor,info[3]);
++                if(!loaded){cpu.gpr[2]=UINT32_MAX;return true;}
++                if(!loaded.relocationsComplete || loaded.executableRanges.empty() ||
++                    std::none_of(loaded.executableRanges.begin(),loaded.executableRanges.end(),[&](const auto& range){return loaded.entry>=range.first && loaded.entry-range.first<range.second;}))
++                    throw std::runtime_error("IOP loadcore executable lacks complete native relocation/range metadata");
++                info[1]=loaded.entry;info[2]=loaded.gp;info[3]=loaded.base;
++                if(info[0]==4u && info[8]!=UINT32_MAX)info[8]+=loaded.base;
++                if(info[8]!=UINT32_MAX && !memory.ownsRamRange(info[8],8u))throw std::runtime_error("IOP loadcore module ID outside RAM");
++                const auto metadata=loaded.base-48u;
++                const uint32_t name=info[8]==UINT32_MAX?0u:memory.read32(info[8]);
++                const uint32_t version=info[8]==UINT32_MAX?0u:memory.read16(info[8]+4u);
++                const std::array<uint32_t,12> descriptor{0u,name,version,0u,info[1],info[2],info[3],info[4],info[5],info[6],0u,0u};
++                if(!memory.writeRam(metadata,descriptor.data(),sizeof descriptor) || !memory.writeRam(output,info.data(),sizeof info))
++                    throw std::runtime_error("IOP loadcore cannot publish its module metadata");
++                Module module;module.id=nextModuleId++;module.base=loaded.base;module.size=loaded.size;module.entry=loaded.entry;module.gp=loaded.gp;
++                module.moduleInfo=metadata;module.fileInfo=info;module.registered=false;
++                module.name=name?memory.readString(name,256u):std::string{};module.path=module.name;
++                modules.emplace(module.id,std::move(module));
++                imports.setLinkedRange(loaded.base,loaded.size,true);
++                for(const auto& [base,size]:loaded.executableRanges)host.nativeModuleLoaded(base,size,base);
++                cpu.gpr[2]=0u;return true;
++            }
++            if(ordinal==16u || ordinal==17u) {
++                if(ordinal==17u && !a0){cpu.gpr[2]=0u;return true;}
++                const auto found=std::find_if(modules.begin(),modules.end(),[&](const auto& entry){return entry.second.moduleInfo==a0;});
++                if(found==modules.end())throw std::runtime_error("IOP loadcore module registration has no matching SDK load");
++                if(ordinal==16u) {
++                    if(found->first>UINT16_MAX)throw std::runtime_error("IOP loadcore module ID capacity exceeded");
++                    found->second.registered=true;
++                    memory.write16(a0+12u,static_cast<uint16_t>(found->first));
++                    std::ostringstream event;
++                    event<<"[IOP] registered IRX "<<found->second.name<<" id="<<found->first<<" base=0x"<<std::hex<<found->second.base
++                        <<" size=0x"<<found->second.size;
++                    log(LogLevel::Info,event.str());
++                } else {
++                    const auto& module=found->second;imports.eraseRange(module.base,module.size);rpc.removeServersInRange(module.base,module.size);
++                    host.nativeModuleReleased(module.base,module.size);
++                    kernel.terminateThreadsInRange(module.base,module.size);
++                    if(module.ownsImage)(void)memory.freeAllocation(module.base);
++                    if(module.ownsModuleInfo)(void)memory.freeAllocation(module.moduleInfo);
++                    modules.erase(found);
++                }
++                nativeSyncCatalog();cpu.gpr[2]=0u;return true;
++            }
++            if(ordinal==24u) {
++                nativeSyncCatalog();
++                for(auto& [id,module]:modules)if(module.registered) {
++                    nativeWriteModuleInfo(module);
++                    if(!module.moduleInfo)throw std::runtime_error("IOP loadcore address query lacks module metadata");
++                    const auto base=memory.read32(module.moduleInfo+24u);
++                    const uint64_t size=uint64_t{memory.read32(module.moduleInfo+28u)}+memory.read32(module.moduleInfo+32u)+memory.read32(module.moduleInfo+36u);
++                    if(a0>=base && uint64_t{a0-base}<size){cpu.gpr[2]=module.moduleInfo;return true;}
++                }
++                cpu.gpr[2]=0u;return true;
++            }
++            if(ordinal==8u || ordinal==9u) {
++                const uint32_t size=cpu.gpr[5];
++                if((a0&3u) || (size&3u) || !memory.ownsRamRange(a0,size))throw std::runtime_error("IOP loadcore import range outside aligned RAM");
++                // AOT imports resolve on entry; unlinking still invalidates that binding.
++                imports.setLinkedRange(a0,size,ordinal==8u);
++                cpu.gpr[2]=0u;return true;
++            }
++            const bool handled=loadcore.dispatchImport(ordinal,cpu);
++            if(handled && (ordinal==6u || ordinal==7u || ordinal==10u))nativeSyncCatalog();
++            return handled;
++        }
++#endif
+         ImportDisposition dispatchImport(const IopImportCall &call, CpuState &cpu)
+         {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            // Approved status HLE queries the same drive; other exports remain original.
++            if (iequals(call.library,"cdvdman") && call.ordinal==28u && cdvd.dispatchImport(call.ordinal,cpu))
++                return ImportDisposition::Handled;
++            // A loaded original provider owns the remaining library, including state.
++            if (const uint32_t target = imports.resolve(call.library, call.ordinal, call.version ? std::optional<uint16_t>{call.version} : std::nullopt))
++            {
++                cpu.pc = target;
++                cpu.branchPending = false;
++                return ImportDisposition::JumpToGuest;
++            }
++#endif
+             const uint32_t a0 = cpu.gpr[4];
+             auto setV0 = [&](uint32_t value)
+             {
+@@ -263,7 +442,12 @@
+                 return ImportDisposition::Handled;
+             }
+ 
+-            if (iequals(call.library, "loadcore") && loadcore.dispatchImport(call.ordinal, cpu))
++            if (iequals(call.library, "loadcore") &&
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                nativeLoadcoreImport(call.ordinal,cpu))
++#else
++                loadcore.dispatchImport(call.ordinal, cpu))
++#endif
+                 return ImportDisposition::Handled;
+ 
+             if (iequals(call.library, "thbase") || iequals(call.library, "threadman"))
+@@ -328,8 +512,12 @@
+                 return ImportDisposition::Handled;
+             if (iequals(call.library, "dmacman"))
+             {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                return ImportDisposition::Missing;
++#else
+                 setV0(0);
+                 return ImportDisposition::Handled;
++#endif
+             }
+             if (iequals(call.library, "stdio") && stdio.dispatchImport(call.ordinal, cpu))
+                 return ImportDisposition::Handled;
+@@ -354,12 +542,29 @@
+             out << "[IOP] unhandled import " << call.library << ':' << call.ordinal
+                 << " version=0x" << std::hex << call.version << " pc=0x" << cpu.pc;
+             log(LogLevel::Warning, out.str());
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            throw std::runtime_error(out.str());
++#else
+             setV0(0);
+             return ImportDisposition::Missing;
+-        }
++#endif
++        }
++
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        std::optional<uint32_t> nativeStartModule(const Module& module,int32_t argc) {
++            if(module.fileInfo[8]==UINT32_MAX || !module.fileInfo[8])return std::nullopt;
++            const auto nameAddress=memory.read32(module.fileInfo[8]);
++            if(!nameAddress)return std::nullopt;
++            const auto name=memory.readString(nameAddress,256u);
++            return host.nativeStartModule(name,memory.read16(module.fileInfo[8]+4u),module.base,module.size,argc);
++        }
++#endif
+ 
+         bool step(CpuState &cpu)
+         {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            rpc.nativePumpSifDma();
++#endif
+             if (cpu.stopped)
+                 return false;
+             if (cpu.pc == kThreadReturnSentinel || cpu.pc == kCallReturnSentinel)
+@@ -380,26 +585,56 @@
+ 
+             if (const auto import = imports.decode(cpu.pc))
+             {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                if(!import->linked)throw std::runtime_error("IOP native import belongs to an unlinked image");
++                host.nativePrepareImport(cpu);
++#endif
+                 const ImportDisposition disposition = dispatchImport(*import, cpu);
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                if(disposition==ImportDisposition::Missing) {
++                    std::ostringstream out;
++                    out<<"[IOP] unhandled import "<<import->library<<':'<<import->ordinal<<" version=0x"<<std::hex<<import->version<<" pc=0x"<<cpu.pc;
++                    throw std::runtime_error(out.str());
++                }
++#endif
+                 ++totalInstructions;
+                 ++totalCycles;
+-                if (disposition == ImportDisposition::JumpToGuest)
+-                    return true;
+-                cpu.pc = cpu.gpr[31];
+-                cpu.branchPending = false;
++                if (disposition != ImportDisposition::JumpToGuest) {
++                    cpu.pc = cpu.gpr[31];
++                    cpu.branchPending = false;
++                }
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                host.nativePublish(cpu);
++                host.nativeTick(totalCycles);
++#endif
+                 return !cpu.stopped;
+             }
+ 
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            for(const auto& [id,module]:modules)if(cpu.pc==module.entry) {
++                if(const auto result=nativeStartModule(module,static_cast<int32_t>(cpu.gpr[4]))) {
++                    cpu.gpr[2]=*result;cpu.pc=cpu.gpr[31];cpu.branchPending=false;
++                    host.nativePublish(cpu);return true;
++                }
++                break;
++            }
++            const bool running = host.nativeStep(cpu);
++#else
+             const bool running = cpuCore.executeInstruction(cpu);
++#endif
+             schedulePendingDma();
+             ++totalInstructions;
+             ++totalCycles;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            host.nativeTick(totalCycles);
++#endif
+             return running;
+         }
+ 
+         uint32_t runCpu(CpuState &cpu, uint32_t instructionBudget)
+         {
+             CpuState *previous = activeCpu;
++            struct RestoreCpu { CpuState *&slot; CpuState *previous; ~RestoreCpu(){slot=previous;} } restore{activeCpu,previous};
+             activeCpu = &cpu;
+             const uint64_t start = totalInstructions;
+             while (!cpu.stopped && !cpu.yielded && totalInstructions - start < instructionBudget)
+@@ -410,8 +645,10 @@
+                     servicePendingDmaInterrupts();
+                 if (!servicingGuestCallbacks && !pendingGuestCallbacks.empty())
+                     servicePendingGuestCallbacks();
+-            }
+-            activeCpu = previous;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                if(!cpu.branchPending)kernel.serviceNativeAlarms(totalCycles,*this);
++#endif
++            }
+             return static_cast<uint32_t>(totalInstructions - start);
+         }
+ 
+@@ -456,6 +693,16 @@
+             }
+             cpu.gpr[31] = kCallReturnSentinel;
+             runCpu(cpu, budget);
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            if (cpu.pc != kCallReturnSentinel || cpu.yielded || cpu.exception)
++            {
++                std::ostringstream out;
++                out << "IOP native function did not return within its call contract: entry=0x" << std::hex << address
++                    << " pc=0x" << cpu.pc << " registered_irqs=0x" << intrman.nativeMask() << std::dec << " yielded=" << cpu.yielded << " exception=" << cpu.exception
++                    << " stopped=" << cpu.stopped << " budget=" << budget;
++                throw std::runtime_error(out.str());
++            }
++#endif
+             return cpu.gpr[2];
+         }
+ 
+@@ -468,6 +715,74 @@
+         {
+             return callFunction(address, a0, a1, a2, a3, gp);
+         }
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        uint64_t nativeExecutionCycles() const override {return totalCycles;}
++        bool nativeInterruptsEnabled() const override {return host.nativeInterruptsEnabled();}
++        bool inInterruptContext() const override {return servicingNativeInterrupts || kernel.nativeAlarmActive();}
++        uint32_t executeFileFunction(uint32_t address,uint32_t a0,uint32_t a1,uint32_t a2,uint32_t gp) override {
++            auto* thread=kernel.nativeCurrentThread();
++            if(!thread)return callFunction(address,a0,a1,a2,0u,gp);
++            if(inInterruptContext() || activeCpu!=&thread->cpu)
++                throw std::runtime_error("IOP file operation requires its original thread context");
++            const auto saved=thread->cpu;const auto id=thread->id;
++            const uint32_t stack=saved.gpr[29];
++            if(stack<thread->stackBase+32u || stack>thread->stackBase+thread->stackSize || saved.pendingLoad || saved.branchPending)
++                throw std::runtime_error("IOP file operation has no stable thread call frame");
++            struct FileCallScope {
++                Impl& owner;int id;CpuState saved;CpuState* previousCpu;int previousWorker;
++                ~FileCallScope(){
++                    auto* current=owner.kernel.nativeThread(id);
++                    if(current){current->cpu=saved;current->state=IopThreadState::Running;}
++                    owner.kernel.nativeCurrentThread(current);owner.activeCpu=current?previousCpu:nullptr;
++                    owner.nativeRpcThreadId=previousWorker;
++                }
++            } scope{*this,id,saved,activeCpu,nativeRpcThreadId};
++            kernel.nativeCurrentThread(nullptr);activeCpu=nullptr;nativeRpcThreadId=id;
++            thread->cpu.pc=address;thread->cpu.gpr[4]=a0;thread->cpu.gpr[5]=a1;thread->cpu.gpr[6]=a2;thread->cpu.gpr[7]=0u;
++            thread->cpu.gpr[28]=gp;thread->cpu.gpr[29]=(stack-32u)&~15u;thread->cpu.gpr[31]=kCallReturnSentinel;
++            thread->cpu.stopped=false;thread->cpu.yielded=false;thread->cpu.exception=false;thread->state=IopThreadState::Ready;
++            const auto instructions=totalInstructions,cycles=totalCycles;
++            while(totalInstructions-instructions<kMaxCallInstructions && totalCycles-cycles<kIopClockHz) {
++                runCycles(kDefaultSlice);thread=kernel.nativeThread(id);
++                if(!thread)throw std::runtime_error("IOP file operation terminated its calling thread");
++                if(thread->cpu.pc==kCallReturnSentinel && !thread->cpu.exception)return thread->cpu.gpr[2];
++            }
++            throw std::runtime_error("IOP file driver did not complete within its native instruction/time contract: "+kernel.nativeWaitState(id));
++        }
++        uint32_t executeNativeRpcFunction(uint32_t address,uint32_t a0,uint32_t a1,uint32_t a2,uint32_t gp,int threadId) override {
++            if(threadId)throw std::runtime_error("Queued native RPC requires its SDK continuation");
++            return callFunction(address,a0,a1,a2,0u,gp);
++        }
++        std::optional<uint32_t> beginNativeRpcFunction(uint32_t address,uint32_t a0,uint32_t a1,uint32_t a2,uint32_t gp,int threadId) override {
++            if(!threadId)return executeNativeRpcFunction(address,a0,a1,a2,gp,0);
++            if(activeCpu || kernel.nativeThreadActive() || nativeRpcThreadId || nativeRpcFrames.contains(threadId))
++                throw std::runtime_error("IOP RPC worker requires an unused scheduler boundary");
++            auto* thread=kernel.nativeThread(threadId);
++            if(!thread || thread->state!=IopThreadState::Sleep)throw std::runtime_error("IOP RPC worker is not waiting in RpcLoop");
++            const auto saved=thread->cpu;const uint32_t stack=saved.gpr[29];
++            if(stack<thread->stackBase+32u || stack>thread->stackBase+thread->stackSize || saved.pendingLoad || saved.branchPending)
++                throw std::runtime_error("IOP RPC worker has no stable call frame");
++            nativeRpcFrames.emplace(threadId,saved);
++            thread->cpu.pc=address;thread->cpu.gpr[4]=a0;thread->cpu.gpr[5]=a1;thread->cpu.gpr[6]=a2;thread->cpu.gpr[7]=0u;
++            thread->cpu.gpr[28]=gp;thread->cpu.gpr[29]=(stack-32u)&~15u;thread->cpu.gpr[31]=kCallReturnSentinel;
++            thread->cpu.stopped=false;thread->cpu.yielded=false;thread->cpu.exception=false;thread->state=IopThreadState::Ready;
++            return std::nullopt;
++        }
++        std::optional<uint32_t> pollNativeRpcFunction(int threadId) override {
++            const auto frame=nativeRpcFrames.find(threadId);
++            if(frame==nativeRpcFrames.end())throw std::runtime_error("IOP RPC continuation has no worker frame");
++            if(activeCpu || kernel.nativeThreadActive())throw std::runtime_error("IOP RPC completion requires a scheduler boundary");
++            auto* thread=kernel.nativeThread(threadId);
++            if(!thread || thread->cpu.exception)throw std::runtime_error("IOP RPC worker terminated or faulted during its handler");
++            if(thread->cpu.pc==kCallReturnSentinel) {
++                const uint32_t result=thread->cpu.gpr[2];thread->cpu=frame->second;
++                thread->state=IopThreadState::Sleep;nativeRpcFrames.erase(frame);return result;
++            }
++            if(thread->state==IopThreadState::Dormant || thread->state==IopThreadState::Dead)
++                throw std::runtime_error("IOP RPC worker exited without returning its handler");
++            return std::nullopt;
++        }
++#endif
+ 
+         uint32_t executeGuestFunctionWithBudget(uint32_t address,
+                                                 uint32_t a0,
+@@ -553,37 +868,70 @@
+             servicingGuestCallbacks = false;
+         }
+ 
+-        void runCycles(uint64_t cycles) noexcept
++        void runCycles(uint64_t cycles)
+         {
+             try
+             {
+                 const uint64_t target = totalCycles + cycles;
+                 while (totalCycles < target)
+                 {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                    rpc.nativePumpSifDma();
++#endif
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                    if(nativeRpcThreadId) {
++                        const auto* worker=kernel.nativeThread(nativeRpcThreadId);
++                        if(!worker || worker->cpu.pc==kCallReturnSentinel)break;
++                    }
++                    serviceNativeInterrupts(activeCpu);
++                    if(totalCycles>=target)break;
++                    kernel.serviceNativeAlarms(totalCycles,*this);
++                    if(totalCycles>=target)break;
++#endif
+                     servicePendingDmaInterrupts();
+                     servicePendingGuestCallbacks();
+                     timrman.serviceDue(totalCycles, *this);
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                    if(totalCycles>=target)break;
++#endif
+                     IopThread *next = kernel.beginNextReady(totalCycles);
+                     if (!next)
+                     {
+                         uint64_t nextWake = kernel.nextWakeCycle(target);
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                        if(rpc.nativeHasSifDma())nextWake=std::min(nextWake,totalCycles+1u);
++#endif
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                        if(host.nativeInterruptsEnabled())nextWake=kernel.nativeNextAlarmCycle(nextWake);
++#endif
+                         for (const auto &[irq, completionCycle] : pendingDmaInterrupts)
+                             nextWake = std::min(nextWake, completionCycle);
+                         if (!pendingGuestCallbacks.empty())
+                             nextWake = std::min(nextWake, pendingGuestCallbacks.begin()->first);
+                         nextWake = timrman.nextEventCycle(nextWake);
+                         totalCycles = std::max(totalCycles + 1u, std::min(target, nextWake));
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                        host.nativeTick(totalCycles);
++                        serviceNativeInterrupts(activeCpu);
++                        kernel.serviceNativeAlarms(totalCycles,*this);
++#endif
+                         continue;
+                     }
+                     const uint64_t before = totalCycles;
+                     runCpu(next->cpu, static_cast<uint32_t>(std::min<uint64_t>(kDefaultSlice, target - totalCycles)));
+                     kernel.endTimeslice(*next, kThreadReturnSentinel);
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                    host.nativeTick(totalCycles);
++#endif
+                     if (totalCycles == before)
+                         ++totalCycles;
+                 }
+             }
+             catch (...)
+             {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                throw;
++#endif
+                 // Runtime scheduling must never throw through EeScheduler::accountCycles().
+             }
+         }
+@@ -601,8 +949,13 @@
+                     log(LogLevel::Error, "[IOP] module arena exhausted");
+                 return result;
+             }
+-            if (!loaded.relocationsComplete)
++            if (!loaded.relocationsComplete) {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                throw std::runtime_error("IOP native module has unsupported relocations");
++#else
+                 log(LogLevel::Warning, "[IOP] one or more IRX relocations were unsupported");
++#endif
++            }
+ 
+             Module module;
+             module.id = nextModuleId++;
+@@ -613,6 +966,14 @@
+             module.size = loaded.size;
+             module.entry = loaded.entry;
+             module.gp = loaded.gp;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            module.ownsImage=true;
++            if(IopModuleLoader::probe(image,module.fileInfo)) {
++                module.fileInfo[1]=loaded.entry;module.fileInfo[2]=loaded.gp;module.fileInfo[3]=loaded.base;
++                if(module.fileInfo[0]==4u && module.fileInfo[8]!=UINT32_MAX)module.fileInfo[8]+=loaded.base;
++            }
++            imports.setLinkedRange(loaded.base,loaded.size,true);
++#endif
+ 
+             uint32_t args = 0u;
+             if (arguments && argumentSize)
+@@ -624,13 +985,28 @@
+                     write8(args + argumentSize, 0u);
+                 }
+             }
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            if (loaded.executableRanges.empty() || std::none_of(loaded.executableRanges.begin(),loaded.executableRanges.end(),
++                [&](const auto &range){return module.entry>=range.first && module.entry-range.first<range.second;}))
++                throw std::runtime_error("IOP native module entry lacks executable ELF range metadata");
++            for (const auto &[base,size] : loaded.executableRanges)
++                host.nativeModuleLoaded(base,size,base);
++#endif
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            const auto hleStart=nativeStartModule(module,static_cast<int32_t>(argumentSize));
++            const uint32_t startResult=hleStart?*hleStart:callFunction(module.entry,argumentSize,args,0u,0u,module.gp);
++#else
+             const uint32_t startResult = callFunction(module.entry, argumentSize, args, 0u, 0u, module.gp);
++#endif
+             if (args)
+                 freeAllocation(args);
+             module.resident = startResult == 0u || startResult == 2u;
+             result.moduleId = module.id;
+             result.startResult = static_cast<int32_t>(startResult);
+             modules[module.id] = std::move(module);
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            nativeSyncCatalog();
++#endif
+ 
+             std::ostringstream out;
+             out << "[IOP] loaded IRX id=" << result.moduleId
+@@ -671,7 +1047,15 @@
+             kernel.terminateThreadsInRange(it->second.base, it->second.size);
+             rpc.removeServersInRange(it->second.base, it->second.size);
+             imports.eraseRange(it->second.base, it->second.size);
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            host.nativeModuleReleased(it->second.base,it->second.size);
++            if(it->second.ownsImage)(void)memory.freeAllocation(it->second.base);
++            if(it->second.ownsModuleInfo)(void)memory.freeAllocation(it->second.moduleInfo);
++#endif
+             modules.erase(it);
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            nativeSyncCatalog();
++#endif
+             kernel.cleanupDeadThreads();
+             if (result)
+                 *result = 0;
+@@ -679,7 +1063,11 @@
+         }
+ 
+         IopHost &host;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        IopMemory& memory;
++#else
+         IopMemory memory;
++#endif
+         IopSysmem sysmem;
+         IopKernel kernel;
+         IopCdvd cdvd;
+@@ -691,7 +1079,9 @@
+         IopIntrman intrman;
+         IopTimrman timrman;
+         IopIoman ioman;
++#ifndef PS2N_SDK_NATIVE_BACKEND
+         IopCpuCore cpuCore;
++#endif
+         IopImportRegistry imports;
+         IopLoadcore loadcore;
+         std::map<int, Module> modules;
+@@ -703,6 +1093,12 @@
+         uint64_t totalInstructions = 0;
+         uint64_t eeCycleCarry = 0;
+         CpuState *activeCpu = nullptr;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        bool servicingNativeInterrupts=false;
++        int nativeRpcThreadId=0;
++        std::map<int,CpuState> nativeRpcFrames;
++        uint32_t nativeLoadcoreData=0;
++#endif
+         std::string lastError;
+         bool servicingDmaInterrupts = false;
+         bool servicingGuestCallbacks = false;
+@@ -724,6 +1120,28 @@
+         m_impl->reset();
+     }
+ 
++#ifdef PS2N_SDK_NATIVE_BACKEND
++    bool IopEmulator::nativeCpuActive() const noexcept {return m_impl->activeCpu!=nullptr;}
++    bool IopEmulator::nativeHasRpc() const noexcept {return m_impl->rpc.nativeHasRpc();}
++    RpcResult IopEmulator::pollNativeRpc(RpcRequest& request,uint64_t mask,uint64_t value) {return m_impl->rpc.pollNativeRpc(request,*m_impl,mask,value);}
++    bool IopEmulator::nativeHasSifDma() const noexcept {return m_impl->rpc.nativeHasSifDma();}
++    bool IopEmulator::nativeHasAlarms() const noexcept {return m_impl->kernel.nativeAlarmCount()!=0;}
++    bool IopEmulator::nativeRpcServer(RpcRequest& request,bool byAddress) const noexcept {return m_impl->rpc.nativeServer(request,byAddress);}
++    void IopEmulator::runUntilNative(uint64_t cycle) {
++        m_impl->totalCycles=std::max(m_impl->totalCycles,m_impl->host.nativeCycles());
++        if(cycle>m_impl->totalCycles)m_impl->runCycles(cycle-m_impl->totalCycles);
++    }
++    ModuleLoadResult IopEmulator::loadModuleImage(std::string_view path,std::span<const uint8_t> image) {
++        return m_impl->loadImage(std::string(path),image,nullptr,0);
++    }
++    bool IopEmulator::dispatchNativeImport(std::string_view library,uint16_t ordinal,IopCpuState& cpu) {
++        const auto result=m_impl->dispatchImport({std::string(library),ordinal,0},cpu);
++        if(result==Impl::ImportDisposition::JumpToGuest)
++            cpu.gpr[2]=m_impl->callFunction(cpu.pc,cpu.gpr[4],cpu.gpr[5],cpu.gpr[6],cpu.gpr[7],cpu.gpr[28]);
++        return result!=Impl::ImportDisposition::Missing;
++    }
++#endif
++
+     ModuleLoadResult IopEmulator::loadModule(std::string_view path, const void *arguments, uint32_t argumentSize)
+     {
+         return m_impl->loadModule(path, arguments, argumentSize);
+@@ -739,7 +1157,7 @@
+         return m_impl->stopModule(moduleId, result);
+     }
+ 
+-    void IopEmulator::runEeCycles(uint64_t eeCycles) noexcept
++    void IopEmulator::runEeCycles(uint64_t eeCycles)
+     {
+         const uint64_t total = m_impl->eeCycleCarry + eeCycles;
+         const uint64_t iopCycles = total / 8u;
+--- a/ps2xIOP/src/emulator/iop_emulator.h
++++ b/ps2xIOP/src/emulator/iop_emulator.h
+@@ -8,6 +8,7 @@
+ #include <string>
+ #include <string_view>
+ #include <vector>
++#include <span>
+ 
+ namespace ps2x::iop::detail
+ {
+@@ -21,10 +22,21 @@
+         IopEmulator &operator=(const IopEmulator &) = delete;
+ 
+         void reset();
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        void runUntilNative(uint64_t cycle);
++        [[nodiscard]] bool nativeCpuActive() const noexcept;
++        [[nodiscard]] bool nativeHasAlarms() const noexcept;
++        [[nodiscard]] bool nativeHasSifDma() const noexcept;
++        [[nodiscard]] bool nativeHasRpc() const noexcept;
++        [[nodiscard]] RpcResult pollNativeRpc(RpcRequest&,uint64_t tokenMask=0,uint64_t tokenValue=0);
++        [[nodiscard]] bool nativeRpcServer(RpcRequest& request,bool byAddress) const noexcept;
++        [[nodiscard]] ModuleLoadResult loadModuleImage(std::string_view path,std::span<const uint8_t> image);
++        [[nodiscard]] bool dispatchNativeImport(std::string_view library,uint16_t ordinal,detail::IopCpuState& cpu);
++#endif
+         [[nodiscard]] ModuleLoadResult loadModule(std::string_view path, const void *arguments, uint32_t argumentSize);
+         [[nodiscard]] ModuleLoadResult loadModuleBuffer(uint32_t guestAddress, const void *arguments, uint32_t argumentSize);
+         [[nodiscard]] bool stopModule(int32_t moduleId, int32_t *result);
+-        void runEeCycles(uint64_t eeCycles) noexcept;
++        void runEeCycles(uint64_t eeCycles);
+         [[nodiscard]] RpcResult handleRpc(const RpcRequest &request);
+         [[nodiscard]] bool hasRpcServer(uint32_t sid) const noexcept;
+         void onSifTransfer(const SifTransfer &transfer);
+--- a/ps2xIOP/src/modules/mcserv.cpp
++++ b/ps2xIOP/src/modules/mcserv.cpp
+@@ -9,6 +9,7 @@
+ #include <memory>
+ #include <mutex>
+ #include <sstream>
++#include <stdexcept>
+ #include <string_view>
+ 
+ namespace ps2x::iop::detail
+@@ -19,8 +20,6 @@
+         constexpr uint32_t kMcservDev9Sid = 0x80000480u;
+         constexpr int32_t kSucceeded = 0;
+         constexpr int32_t kDenied = -5;
+-        constexpr uint32_t kMcservVersion = 0x0205u;
+-        constexpr uint32_t kMcmanVersion = 0x0206u;
+         constexpr uint32_t kCreateDirectory = 0x0040u;
+ 
+         enum class Operation
+@@ -165,7 +164,8 @@
+         class McservService final : public IopService
+         {
+         public:
+-            explicit McservService(IopHost &host) : m_host(host) {}
++            McservService(IopHost &host, uint32_t serverVersion, uint32_t managerVersion)
++                : m_host(host), m_serverVersion(serverVersion), m_managerVersion(managerVersion) {}
+ 
+             [[nodiscard]] std::string_view name() const override { return "MCSERV"; }
+             [[nodiscard]] std::span<const uint32_t> sids() const override { return m_sids; }
+@@ -208,7 +208,7 @@
+                     NameParameter parameter{};
+                     if (request.send.address != 0u &&
+                         request.send.size >= sizeof(parameter) &&
+-                        m_host.readGuest(request.send.address, &parameter, sizeof(parameter)))
++                        m_host.readRpcInput(request.send.address, &parameter, sizeof(parameter)))
+                     {
+                         result = handleNameOperation(operation, request.send.address, parameter);
+                     }
+@@ -218,13 +218,19 @@
+                     DescriptorParameter parameter{};
+                     if (request.send.address != 0u &&
+                         request.send.size >= sizeof(parameter) &&
+-                        m_host.readGuest(request.send.address, &parameter, sizeof(parameter)))
++                        m_host.readRpcInput(request.send.address, &parameter, sizeof(parameter)))
+                     {
+                         if (operation == Operation::Write && parameter.origin > 0 &&
+                             parameter.origin <= static_cast<int32_t>(sizeof(parameter.data)))
+                         {
+                             const uint32_t inlineAddress = request.send.address + static_cast<uint32_t>(offsetof(DescriptorParameter, data));
+-                            const int32_t prefix = call(MemoryCardOperation::Write, static_cast<uint32_t>(parameter.fd), inlineAddress, static_cast<uint32_t>(parameter.origin));
++                            if(parameter.origin<0 || parameter.origin>static_cast<int32_t>(sizeof parameter.data)) {
++                                writeResult(request.receive,kDenied);return response;
++                            }
++                            MemoryCardRequest prefixRequest{MemoryCardOperation::Write,
++                                {static_cast<uint32_t>(parameter.fd),inlineAddress,static_cast<uint32_t>(parameter.origin)}};
++                            prefixRequest.inlineData={parameter.data,static_cast<size_t>(parameter.origin)};
++                            const int32_t prefix=m_host.memoryCard(prefixRequest);
+                             if (prefix < 0)
+                             {
+                                 result = prefix;
+@@ -266,19 +272,27 @@
+             void writeResult(GuestBuffer receive, int32_t result)
+             {
+                 const std::array<uint32_t, 1> values{static_cast<uint32_t>(result)};
+-                (void)writeRpcWords(m_host, receive, values);
++                if(receive.size<sizeof(values) || !m_host.writeRpcOutput(receive.address,values.data(),sizeof(values)))
++                    throw std::runtime_error("MCSERV response outside its receive buffer");
+             }
+ 
+             void writeInitResult(GuestBuffer receive, Flavor flavor, int32_t result)
+             {
+-                const std::array<uint32_t, 3> values = {static_cast<uint32_t>(result), kMcservVersion, kMcmanVersion};
++                const std::array<uint32_t, 3> values = {static_cast<uint32_t>(result), m_serverVersion, m_managerVersion};
+                 const size_t count = flavor == Flavor::NewXmcserv ? values.size() : 1u;
+-                (void)writeRpcWords(m_host, receive, std::span<const uint32_t>(values.data(), count));
++                if(receive.size<count*4u || !m_host.writeRpcOutput(receive.address,values.data(),count*4u))
++                    throw std::runtime_error("MCSERV init response outside its receive buffer");
+             }
+ 
+             int32_t handleNameOperation(Operation operation, uint32_t sendAddress, const NameParameter &parameter)
+             {
+-                const uint32_t nameAddress = sendAddress + static_cast<uint32_t>(offsetof(NameParameter, name));
++                const uint32_t nameAddress=sendAddress+static_cast<uint32_t>(offsetof(NameParameter,name));
++                const auto end=std::find(std::begin(parameter.name),std::end(parameter.name),'\0');
++                if(end==std::end(parameter.name))return kDenied;
++                const std::string name(parameter.name,end);
++                const auto named=[&](MemoryCardOperation op,std::array<uint32_t,6> args) {
++                    MemoryCardRequest request{op,args};request.name=name;return m_host.memoryCard(request);
++                };
+                 const uint32_t port = static_cast<uint32_t>(parameter.port);
+                 const uint32_t slot = static_cast<uint32_t>(parameter.slot);
+                 switch (operation)
+@@ -286,21 +300,20 @@
+                 case Operation::Open:
+                     if ((static_cast<uint32_t>(parameter.flags) & kCreateDirectory) != 0u)
+                     {
+-                        return call(MemoryCardOperation::Mkdir, port, slot, nameAddress);
+-                    }
+-                    return call(MemoryCardOperation::Open, port, slot, nameAddress, static_cast<uint32_t>(parameter.flags));
++                        return named(MemoryCardOperation::Mkdir,{port,slot,nameAddress});
++                    }
++                    return named(MemoryCardOperation::Open,{port,slot,nameAddress,static_cast<uint32_t>(parameter.flags)});
+                 case Operation::Chdir:
+-                    return call(MemoryCardOperation::Chdir, port, slot, nameAddress, parameter.pointer);
++                    return named(MemoryCardOperation::Chdir,{port,slot,nameAddress,parameter.pointer});
+                 case Operation::SetInfo:
+-                    return call(MemoryCardOperation::SetFileInfo, port, slot, nameAddress);
++                    return named(MemoryCardOperation::SetFileInfo,{port,slot,nameAddress,parameter.pointer,static_cast<uint32_t>(parameter.flags)});
+                 case Operation::Delete:
+-                    return call(MemoryCardOperation::Delete, port, slot, nameAddress);
++                    return named(MemoryCardOperation::Delete,{port,slot,nameAddress});
+                 case Operation::GetDir:
+-                    // MCSERV normally DMA-writes entries. The existing HLE returns
+-                    // zero entries instead of fabricating directory contents.
+-                    return kSucceeded;
++                    return named(MemoryCardOperation::GetDir,{port,slot,nameAddress,
++                        static_cast<uint32_t>(parameter.flags),static_cast<uint32_t>(parameter.maxEntries),parameter.pointer});
+                 case Operation::GetEnt:
+-                    return 1024;
++                    throw std::runtime_error("MCSERV free directory-entry accounting is not implemented");
+                 default:
+                     return kDenied;
+                 }
+@@ -390,6 +403,7 @@
+             }
+ 
+             IopHost &m_host;
++            const uint32_t m_serverVersion, m_managerVersion;
+             mutable std::mutex m_mutex;
+             uint32_t m_unknownRpcLogCount = 0u;
+             const std::array<uint32_t, 2> m_sids = {kMcservSid, kMcservDev9Sid};
+@@ -397,8 +411,8 @@
+         };
+     }
+ 
+-    std::unique_ptr<IopService> createMcservService(IopHost &host)
++    std::unique_ptr<IopService> createMcservService(IopHost &host, uint32_t serverVersion, uint32_t managerVersion)
+     {
+-        return std::make_unique<McservService>(host);
++        return std::make_unique<McservService>(host, serverVersion, managerVersion);
+     }
+ }
+--- a/ps2xIOP/src/emulator/core/iop_cpu.h
++++ b/ps2xIOP/src/emulator/core/iop_cpu.h
+@@ -3,14 +3,35 @@
+ #include <array>
+ #include <cstdint>
+ #include <optional>
++#ifdef PS2N_SDK_NATIVE_BACKEND
++#include <stdexcept>
++#endif
+ 
+ namespace ps2x::iop::detail
+ {
+     class IopMemory;
+ 
++#ifdef PS2N_SDK_NATIVE_BACKEND
++    // A copied native context keeps knowledge; SDK imports consume checked values.
++    struct IopNativeRegister {
++        uint32_t value = 0, unknown = 0;
++        uint64_t epoch = 0;
++        IopNativeRegister() = default;
++        explicit IopNativeRegister(uint32_t word):value(word) {}
++        IopNativeRegister& operator=(uint32_t word) {value=word;unknown=0;epoch=0;return *this;}
++        operator uint32_t() const {
++            if(unknown)throw std::runtime_error("SDK IOP import consumes unknown register bits");
++            return value;
++        }
++    };
++#endif
+     struct IopCpuState
+     {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        std::array<IopNativeRegister,32> gpr{};
++#else
+         std::array<uint32_t, 32> gpr{};
++#endif
+         uint32_t hi = 0;
+         uint32_t lo = 0;
+         uint32_t pc = 0;
+@@ -23,6 +44,11 @@
+         bool stopped = false;
+         bool yielded = false;
+         bool exception = false;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        uint32_t hiUnknown = 0, loUnknown = 0, pendingLoadUnknown = 0;
++        uint32_t cop0Defined = 0xFFFFu;
++        uint64_t pendingLoadEpoch = 0;
++#endif
+     };
+ 
+     class IopCpuCore
+--- a/ps2xIOP/src/emulator/core/iop_kernel.cpp
++++ b/ps2xIOP/src/emulator/core/iop_kernel.cpp
+@@ -1,4 +1,8 @@
+ #include "iop_kernel.h"
++#include <sstream>
++#include <limits>
++#include <stdexcept>
++#include "../services/iop_rpc.h"
+ 
+ #include "iop_memory.h"
+ #include "../iop_emulator_const.h"
+@@ -7,6 +11,22 @@
+ 
+ namespace ps2x::iop::detail
+ {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++    IopThread* IopKernel::nativeThread(int id) noexcept {
++        const auto thread=m_threads.find(id);return thread==m_threads.end()?nullptr:&thread->second;
++    }
++    std::string IopKernel::nativeWaitState(int id) const {
++        std::ostringstream out;
++        const auto found=m_threads.find(id);
++        if(found==m_threads.end())return "worker absent";
++        const auto& thread=found->second;
++        out<<"worker="<<id<<" state="<<static_cast<int>(thread.state)<<" wait="<<thread.waitId<<" bits=0x"<<std::hex<<thread.waitBits;
++        if(const auto event=m_eventFlags.find(thread.waitId);event!=m_eventFlags.end())out<<" event_bits=0x"<<event->second.bits;
++        out<<" threads=[";unsigned count=0;
++        for(const auto& [tid,t]:m_threads){if(count++==16u){out<<"...";break;}out<<std::dec<<tid<<':'<<static_cast<int>(t.state)<<"@0x"<<std::hex<<t.cpu.pc<<"/wait="<<std::dec<<t.waitId<<"/bits=0x"<<std::hex<<t.waitBits<<',';}
++        out<<']';return out.str();
++    }
++#endif
+     namespace
+     {
+         uint32_t alignUp(uint32_t value, uint32_t alignment)
+@@ -25,6 +45,9 @@
+ 
+     void IopKernel::reset()
+     {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        m_alarms.clear();m_activeAlarm=nullptr;m_nextAlarm=1;
++#endif
+         m_threads.clear();
+         m_semaphores.clear();
+         m_eventFlags.clear();
+@@ -36,6 +59,11 @@
+ 
+     bool IopKernel::dispatchThreadImport(uint16_t ordinal, IopCpuState &cpu, uint64_t currentCycle)
+     {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        if(m_activeAlarm && (ordinal==4u || ordinal==5u || ordinal==8u || ordinal==9u || ordinal==10u || ordinal==22u || ordinal==33u)) {
++            cpu.gpr[2]=static_cast<uint32_t>(-100);return true;
++        }
++#endif
+         const auto setV0 = [&](int32_t value)
+         {
+             cpu.gpr[2] = static_cast<uint32_t>(value);
+@@ -267,12 +295,36 @@
+             m_memory.write32(cpu.gpr[4] + 4u, static_cast<uint32_t>(currentCycle >> 32u));
+             setV0(0);
+             return true;
+-        case 35:
+-        case 36:
++        case 35: // SetAlarm
++        case 36: // iSetAlarm
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        {
++            const uint32_t function=cpu.gpr[5],argument=cpu.gpr[6];
++            if((function&3u) || IopMemory::physicalAddress(function)>=IopMemory::RamSize || !function){setV0(-402);return true;}
++            if(nativeAlarmCount()>=1024u || m_nextAlarm==UINT64_MAX){setV0(-400);return true;}
++            const uint32_t clock=cpu.gpr[4];
++            const uint64_t delay=uint64_t{m_memory.read32(clock)}|(uint64_t{m_memory.read32(clock+4u)}<<32u);
++            if(delay>UINT64_MAX-currentCycle)throw std::overflow_error("IOP alarm deadline exceeds the shared clock");
++            m_alarms.emplace(std::pair{currentCycle+delay,m_nextAlarm++},Alarm{function,argument,cpu.gpr[28]});
++            setV0(0);return true;
++        }
++#endif
+         case 37:
+         case 38:
+-            setV0(0);
+-            return true;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        {
++            const uint32_t function=cpu.gpr[4],argument=cpu.gpr[5];
++            if(m_activeAlarm && m_activeAlarm->function==function && m_activeAlarm->argument==argument && !m_activeAlarm->cancelled) {
++                m_activeAlarm->cancelled=true;setV0(0);return true;
++            }
++            const auto alarm=std::find_if(m_alarms.begin(),m_alarms.end(),[&](const auto& entry){return entry.second.function==function && entry.second.argument==argument;});
++            if(alarm==m_alarms.end()){setV0(-105);return true;}
++            m_alarms.erase(alarm);setV0(0);return true;
++        }
++#else
++            setV0(0);
++            return true;
++#endif
+         case 39: // USec2SysClock
+         {
+             const uint64_t cycles = (static_cast<uint64_t>(cpu.gpr[4]) * kIopClockHz) / 1'000'000ull;
+@@ -299,6 +351,24 @@
+             return false;
+         }
+     }
++
++#ifdef PS2N_SDK_NATIVE_BACKEND
++    uint64_t IopKernel::nativeNextAlarmCycle(uint64_t fallback) const noexcept {
++        return m_alarms.empty()?fallback:std::min(fallback,m_alarms.begin()->first.first);
++    }
++    void IopKernel::serviceNativeAlarms(uint64_t cycle,IopGuestExecutor& executor) {
++        if(m_activeAlarm || m_alarms.empty() || m_alarms.begin()->first.first>cycle || executor.inInterruptContext() || !executor.nativeInterruptsEnabled())return;
++        const auto key=m_alarms.begin()->first;auto alarm=m_alarms.begin()->second;m_alarms.erase(m_alarms.begin());
++        struct AlarmScope {Alarm*& active;IopThread*& current;IopThread* previous;~AlarmScope(){active=nullptr;current=previous;}} scope{m_activeAlarm,m_currentThread,m_currentThread};
++        m_activeAlarm=&alarm;m_currentThread=nullptr;
++        const uint32_t repeat=executor.executeGuestFunctionWithBudget(alarm.function,alarm.argument,0u,0u,0u,alarm.gp,100000u);
++        if(repeat && !alarm.cancelled) {
++            const auto now=executor.nativeExecutionCycles();
++            if(repeat>UINT64_MAX-now)throw std::overflow_error("IOP repeated alarm exceeds the shared clock");
++            m_alarms.emplace(std::pair{now+repeat,key.second},alarm);
++        }
++    }
++#endif
+ 
+     bool IopKernel::referThreadStatus(int id, uint32_t outputAddress)
+     {
+--- a/ps2xIOP/src/emulator/core/iop_kernel.h
++++ b/ps2xIOP/src/emulator/core/iop_kernel.h
+@@ -5,10 +5,12 @@
+ #include <cstddef>
+ #include <cstdint>
+ #include <map>
++#include <string>
+ 
+ namespace ps2x::iop::detail
+ {
+     class IopMemory;
++    class IopGuestExecutor;
+ 
+     enum class IopThreadState : uint8_t
+     {
+@@ -67,6 +69,17 @@
+         void terminateThreadsInRange(uint32_t base, uint32_t size);
+ 
+         [[nodiscard]] size_t threadCount() const noexcept { return m_threads.size(); }
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        [[nodiscard]] IopThread* nativeThread(int id) noexcept;
++        [[nodiscard]] bool nativeThreadActive() const noexcept {return m_currentThread!=nullptr;}
++        [[nodiscard]] IopThread* nativeCurrentThread() const noexcept {return m_currentThread;}
++        void nativeCurrentThread(IopThread* thread) noexcept {m_currentThread=thread;}
++        [[nodiscard]] std::string nativeWaitState(int id) const;
++        void serviceNativeAlarms(uint64_t cycle,IopGuestExecutor& executor);
++        [[nodiscard]] uint64_t nativeNextAlarmCycle(uint64_t fallback) const noexcept;
++        [[nodiscard]] bool nativeAlarmActive() const noexcept {return m_activeAlarm!=nullptr;}
++        [[nodiscard]] size_t nativeAlarmCount() const noexcept {return m_alarms.size()+(m_activeAlarm?1u:0u);}
++#endif
+ 
+     private:
+         struct Semaphore
+@@ -99,5 +112,11 @@
+         uint32_t m_nextSemaphoreId = 1;
+         uint32_t m_nextEventFlagId = 1;
+         IopThread *m_currentThread = nullptr;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        struct Alarm {uint32_t function,argument,gp;bool cancelled=false;};
++        std::map<std::pair<uint64_t,uint64_t>,Alarm> m_alarms;
++        Alarm* m_activeAlarm=nullptr;
++        uint64_t m_nextAlarm=1;
++#endif
+     };
+ }
+--- a/ps2xIOP/src/emulator/core/iop_memory.cpp
++++ b/ps2xIOP/src/emulator/core/iop_memory.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include <algorithm>
+ #include <cstring>
++#include <stdexcept>
+ 
+ namespace ps2x::iop::detail
+ {
+@@ -19,6 +20,7 @@
+         }
+     }
+ 
++#ifndef PS2N_SDK_NATIVE_BACKEND
+     IopMemory::IopMemory()
+         : m_ram(RamSize), m_owned(RamSize), m_scratch(ScratchSize)
+     {
+@@ -282,8 +284,15 @@
+         return result;
+     }
+ 
++#endif
++
+     uint32_t IopMemory::allocate(uint32_t size, uint32_t alignment, std::optional<uint32_t> fixed)
+     {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        if (!alignment || (alignment & (alignment - 1u)) || alignment > HeapLimit ||
++            size > HeapLimit - HeapBase || (fixed && (*fixed < HeapBase || *fixed > HeapLimit)))
++            return 0u;
++#endif
+         size = alignUp(std::max(size, 1u), 16u);
+         alignment = std::max<uint32_t>(alignment, 4u);
+         if (fixed)
+@@ -299,7 +308,7 @@
+             return address;
+         }
+ 
+-        uint32_t candidate = alignUp(m_heapCursor, alignment);
++        uint32_t candidate = alignUp(HeapBase, alignment);
+         for (;;)
+         {
+             bool overlap = false;
+@@ -330,17 +339,33 @@
+                                         { return candidate.address == address; });
+         if (block == m_allocations.end())
+             return false;
++#ifndef PS2N_SDK_NATIVE_BACKEND
+         std::fill(m_owned.begin() + block->address,
+                   m_owned.begin() + block->address + block->size,
+                   uint8_t{0});
++#endif
+         m_allocations.erase(block);
+         return true;
+     }
+ 
+-    uint32_t IopMemory::maxFreeMemory() const
+-    {
+-        return m_heapCursor < HeapLimit ? HeapLimit - m_heapCursor : 0u;
+-    }
++    std::pair<uint32_t,uint32_t> IopMemory::freeMemory(uint32_t alignment) const {
++        if(!alignment || (alignment&(alignment-1u)) || alignment>HeapLimit)throw std::runtime_error("Invalid IOP free-memory alignment");
++        auto blocks=m_allocations;
++        std::sort(blocks.begin(),blocks.end(),[](const auto& a,const auto& b){return a.address<b.address;});
++        uint32_t cursor=HeapBase,largest=0u,total=0u;
++        const auto gap=[&](uint32_t end) {
++            const auto start=alignUp(cursor,alignment),stop=end&~(alignment-1u);
++            const auto size=stop>start?stop-start:0u;largest=std::max(largest,size);total+=size;
++        };
++        for(const auto& block:blocks) {
++            if(block.address<HeapBase || block.address>HeapLimit || block.size>HeapLimit-block.address)
++                throw std::runtime_error("Invalid IOP allocation catalog");
++            gap(block.address);cursor=std::max(cursor,block.address+block.size);
++        }
++        gap(HeapLimit);return {largest,total};
++    }
++    uint32_t IopMemory::maxFreeMemory(uint32_t alignment) const {return freeMemory(alignment).first;}
++    uint32_t IopMemory::totalFreeMemory(uint32_t alignment) const {return freeMemory(alignment).second;}
+ 
+     std::optional<IopMemory::Allocation> IopMemory::allocationContaining(uint32_t address) const
+     {
+@@ -355,6 +380,7 @@
+         return *block;
+     }
+ 
++#ifndef PS2N_SDK_NATIVE_BACKEND
+     std::string IopMemory::readString(uint32_t address, size_t limit) const
+     {
+         std::string result;
+@@ -368,4 +394,5 @@
+         }
+         return result;
+     }
++#endif
+ }
+--- a/ps2xIOP/src/emulator/core/iop_memory.h
++++ b/ps2xIOP/src/emulator/core/iop_memory.h
+@@ -11,6 +11,7 @@
+ #include <string>
+ #include <unordered_map>
+ #include <vector>
++#include <utility>
+ 
+ namespace ps2x::iop::detail
+ {
+@@ -61,7 +62,8 @@
+ 
+         [[nodiscard]] uint32_t allocate(uint32_t size, uint32_t alignment = 16u, std::optional<uint32_t> fixed = std::nullopt);
+         [[nodiscard]] bool freeAllocation(uint32_t address);
+-        [[nodiscard]] uint32_t maxFreeMemory() const;
++        [[nodiscard]] uint32_t maxFreeMemory(uint32_t alignment=16u) const;
++        [[nodiscard]] uint32_t totalFreeMemory(uint32_t alignment=16u) const;
+         [[nodiscard]] std::optional<Allocation> allocationContaining(uint32_t address) const;
+ 
+         [[nodiscard]] uint32_t interruptStatus() const noexcept { return m_interruptStatus; }
+@@ -77,6 +79,7 @@
+         [[nodiscard]] static uint32_t physicalAddress(uint32_t address) noexcept;
+ 
+     private:
++        [[nodiscard]] std::pair<uint32_t,uint32_t> freeMemory(uint32_t alignment) const;
+         [[nodiscard]] uint32_t readHardware32(uint32_t address) const;
+         void writeHardware32(uint32_t address, uint32_t value);
+         void markOwned(uint32_t address, size_t size);
+--- a/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
+@@ -281,7 +281,11 @@
+                 return true;
+ 
+             case 28: // sceCdStatus
++#ifdef PS2N_SDK_NATIVE_BACKEND
++                cpu.gpr[2] = host.nativeCdvdStatus();
++#else
+                 cpu.gpr[2] = kCdvdStatusPause;
++#endif
+                 return true;
+ 
+             case 37: // sceCdCallback
+--- a/ps2xIOP/src/emulator/imports/iop_imports.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_imports.cpp
+@@ -5,6 +5,7 @@
+ #include <algorithm>
+ #include <cctype>
+ #include <utility>
++#include <stdexcept>
+ 
+ namespace ps2x::iop::detail
+ {
+@@ -43,6 +44,8 @@
+     void IopImportRegistry::reset()
+     {
+         m_libraries.clear();
++        m_nextRegistrationSequence=0;
++        m_unlinkedRanges.clear();
+     }
+ 
+     std::optional<IopImportCall> IopImportRegistry::decode(uint32_t pc) const
+@@ -93,6 +96,7 @@
+                     trimLibraryName(name),
+                     static_cast<uint16_t>(delay & 0xFFFFu),
+                     m_memory.read16(table + 8u),
++                    std::none_of(m_unlinkedRanges.begin(),m_unlinkedRanges.end(),[&](const auto& range){return physicalPc<range.first+range.second && range.first<physicalPc+8u;}),
+                 };
+             }
+         }
+@@ -123,13 +127,46 @@
+             if (library.functions.size() > 1024u)
+                 return false;
+         }
++        library.registrationSequence=++m_nextRegistrationSequence;
+         m_libraries[physical] = std::move(library);
+         return true;
+     }
+ 
+     bool IopImportRegistry::releaseExportTable(uint32_t address)
+     {
+-        return m_libraries.erase(IopMemory::physicalAddress(address)) != 0u;
++        const auto physical=IopMemory::physicalAddress(address);
++        if(!m_libraries.erase(physical))return false;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        m_memory.write32(physical,kExportMagic);
++#endif
++        return true;
++    }
++    std::vector<uint32_t> IopImportRegistry::tableAddresses() const {
++        std::vector<uint32_t> tables;tables.reserve(m_libraries.size());
++        for(const auto& [address,library]:m_libraries)tables.push_back(address);
++        std::sort(tables.begin(),tables.end(),[&](uint32_t a,uint32_t b){return m_libraries.at(a).registrationSequence<m_libraries.at(b).registrationSequence;});
++        return tables;
++    }
++
++    void IopImportRegistry::setLinkedRange(uint32_t base,uint32_t size,bool linked) {
++        base=IopMemory::physicalAddress(base);
++        if(base>IopMemory::RamSize || size>IopMemory::RamSize-base)throw std::runtime_error("IOP import binding outside RAM");
++        const auto end=base+size;std::vector<std::pair<uint32_t,uint32_t>> ranges;
++        for(const auto& [start,length]:m_unlinkedRanges) {
++            const auto stop=start+length;
++            if(stop<=base || start>=end)ranges.emplace_back(start,length);
++            else {
++                if(start<base)ranges.emplace_back(start,base-start);
++                if(stop>end)ranges.emplace_back(end,stop-end);
++            }
++        }
++        if(!linked && size)ranges.emplace_back(base,size);
++        std::sort(ranges.begin(),ranges.end());m_unlinkedRanges.clear();
++        for(const auto& range:ranges) {
++            if(!m_unlinkedRanges.empty() && range.first<=m_unlinkedRanges.back().first+m_unlinkedRanges.back().second) {
++                auto& previous=m_unlinkedRanges.back();previous.second=std::max(previous.first+previous.second,range.first+range.second)-previous.first;
++            } else m_unlinkedRanges.push_back(range);
++        }
+     }
+ 
+     const IopImportRegistry::ExportLibrary *IopImportRegistry::findLibrary(std::string_view name, std::optional<uint16_t> version) const
+--- a/ps2xIOP/src/emulator/imports/iop_imports.h
++++ b/ps2xIOP/src/emulator/imports/iop_imports.h
+@@ -7,6 +7,7 @@
+ #include <string>
+ #include <string_view>
+ #include <vector>
++#include <utility>
+ 
+ namespace ps2x::iop::detail
+ {
+@@ -17,6 +18,7 @@
+         std::string library;
+         uint16_t ordinal = 0;
+         uint16_t version = 0;
++        bool linked = true;
+     };
+ 
+     class IopImportRegistry
+@@ -32,6 +34,8 @@
+         [[nodiscard]] uint32_t resolve(std::string_view library, uint16_t ordinal, std::optional<uint16_t> version = std::nullopt) const;
+         [[nodiscard]] int32_t setRebootTimeLibraryHandlingMode(uint32_t address, uint32_t mode);
+         void eraseRange(uint32_t base, uint32_t size);
++        [[nodiscard]] std::vector<uint32_t> tableAddresses() const;
++        void setLinkedRange(uint32_t base,uint32_t size,bool linked);
+ 
+     private:
+         struct ExportLibrary
+@@ -40,11 +44,14 @@
+             uint16_t version = 0;
+             std::string name;
+             std::vector<uint32_t> functions;
++            uint64_t registrationSequence = 0;
+         };
+ 
+         [[nodiscard]] const ExportLibrary *findLibrary(std::string_view name, std::optional<uint16_t> version) const;
+ 
+         IopMemory &m_memory;
+         std::map<uint32_t, ExportLibrary> m_libraries;
++        uint64_t m_nextRegistrationSequence = 0;
++        std::vector<std::pair<uint32_t,uint32_t>> m_unlinkedRanges;
+     };
+ }
+--- a/ps2xIOP/src/emulator/imports/iop_intrman.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_intrman.cpp
+@@ -3,6 +3,7 @@
+ #include "../core/iop_cpu.h"
+ #include "../core/iop_memory.h"
+ #include "../services/iop_rpc.h"
++#include <stdexcept>
+ 
+ namespace ps2x::iop::detail
+ {
+@@ -31,7 +32,7 @@
+         switch (ordinal)
+         {
+         case 3:
+-            setV0(0u);
++            setV0(executor.inInterruptContext()?1u:0u);
+             return true;
+         case 4: // RegisterIntrHandler
+             m_handlers[static_cast<int>(a0)] = {a2, a3, cpu.gpr[28]};
+@@ -42,6 +43,19 @@
+             setV0(0u);
+             return true;
+         case 6: // EnableIntr
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            if((a0>=32u && a0<=38u) || (a0>=40u && a0<=45u)) {
++                const auto channel=a0<40u?a0-32u:a0-40u;
++                const auto address=a0<40u?0x1F8010F4u:0x1F801574u;
++                const auto mode=a0<40u?(1u<<channel):0u;
++                m_memory.write32(address,((m_memory.read32(address)&0x00FFFFFFu)&~mode)|(1u<<(16u+channel)));
++                const auto route=1u<<(a0<40u?channel:channel+7u);
++                m_memory.write32(0x1F801574u,(m_memory.read32(0x1F801574u)&0x00FFFFFFu)&~route);
++                m_memory.write32(0x1F8010F4u,(m_memory.read32(0x1F8010F4u)&0x00FFFFFFu)|(1u<<23u));
++                m_memory.setInterruptMask(m_memory.interruptMask()|8u);
++            } else if((a0&0xFFu)>=32u && (a0&0xFFu)<=45u)
++                throw std::runtime_error("IOP native DMA interrupt code/mode is unsupported");
++#endif
+             m_enabled[static_cast<int>(a0)] = true;
+             if (a0 < 32u)
+                 m_memory.setInterruptMask(m_memory.interruptMask() | (1u << a0));
+@@ -52,6 +66,13 @@
+                 m_memory.write32(a1, a0);
+             if (a0 < 32u)
+                 m_memory.setInterruptMask(m_memory.interruptMask() & ~(1u << a0));
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            if((a0>=32u && a0<=38u) || (a0>=40u && a0<=45u)) {
++                const auto channel=a0<40u?a0-32u:a0-40u;
++                const auto address=a0<40u?0x1F8010F4u:0x1F801574u;
++                m_memory.write32(address,(m_memory.read32(address)&0x00FFFFFFu)&~(1u<<(16u+channel)));
++            }
++#endif
+             m_enabled[static_cast<int>(a0)] = false;
+             setV0(0u);
+             return true;
+@@ -94,6 +115,25 @@
+ 
+     bool IopIntrman::dispatchInterrupt(int irq, IopGuestExecutor &executor) const
+     {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        if(irq==3 && !m_handlers.contains(3)) {
++            for(unsigned bank=0;bank<2u;++bank) {
++                const auto address=bank?0x1F801574u:0x1F8010F4u;
++                const auto status=m_memory.read32(address);
++                const auto pending=(status>>24u)&(status>>16u)&(bank?0x3Fu:0x7Fu);
++                for(unsigned channel=0;channel<(bank?6u:7u);++channel)if(pending&(1u<<channel)) {
++                    const int child=static_cast<int>((bank?40u:32u)+channel);
++                    const auto enabled=m_enabled.find(child);
++                    const auto handler=m_handlers.find(child);
++                    if(enabled==m_enabled.end() || !enabled->second || handler==m_handlers.end() || !handler->second.function)continue;
++                    // Clear only this completion before the callback can submit another DMA.
++                    m_memory.write32(address,(m_memory.read32(address)&0x00FFFFFFu)|(1u<<(24u+channel)));
++                    if(!dispatchInterrupt(child,executor))throw std::runtime_error("IOP DMA completion lost its registered handler");
++                }
++            }
++            return true; // SIF may already have consumed the source of this latched parent edge.
++        }
++#endif
+         const auto enabled = m_enabled.find(irq);
+         if (enabled == m_enabled.end() || !enabled->second)
+             return false;
+@@ -110,4 +150,17 @@
+                                                       100000u);
+         return true;
+     }
++#ifdef PS2N_SDK_NATIVE_BACKEND
++    uint32_t IopIntrman::nativeMask() const noexcept {
++        uint32_t mask=0;
++        for(const auto &[irq,handler]:m_handlers) {
++            const auto enabled=m_enabled.find(irq);
++            if(handler.function && enabled!=m_enabled.end() && enabled->second) {
++                if(irq>=0 && irq<32)mask|=1u<<irq;
++                else if((irq>=32 && irq<=38) || (irq>=40 && irq<=45))mask|=8u;
++            }
++        }
++        return mask;
++    }
++#endif
+ }
+--- a/ps2xIOP/src/emulator/imports/iop_intrman.h
++++ b/ps2xIOP/src/emulator/imports/iop_intrman.h
+@@ -17,6 +17,9 @@
+         void reset();
+         [[nodiscard]] bool dispatchImport(uint16_t ordinal, IopCpuState &cpu, IopGuestExecutor &executor);
+         [[nodiscard]] bool dispatchInterrupt(int irq, IopGuestExecutor &executor) const;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        [[nodiscard]] uint32_t nativeMask() const noexcept;
++#endif
+ 
+     private:
+         struct Handler
+--- a/ps2xIOP/src/emulator/imports/iop_ioman.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_ioman.cpp
+@@ -5,6 +5,7 @@
+ #include "../services/iop_rpc.h"
+ 
+ #include <algorithm>
++#include <stdexcept>
+ 
+ namespace ps2x::iop::detail
+ {
+@@ -16,6 +17,9 @@
+     void IopIoman::reset()
+     {
+         m_devices.clear();
++        if(m_fileTable)(void)m_memory.freeAllocation(m_fileTable);
++        m_fileTable=0u;
++        m_files.fill({});
+     }
+ 
+     bool IopIoman::dispatchImport(uint16_t ordinal, IopCpuState &cpu, IopGuestExecutor &executor)
+@@ -29,6 +33,60 @@
+ 
+         switch (ordinal)
+         {
++        case 4: // Open: iop_file_t and driver operations use the guest ABI.
++        {
++            const auto available=std::find_if(m_files.begin(),m_files.end(),[](const File& f){return !f.device;});
++            if(available==m_files.end()){setV0(-24);return true;}
++            const auto path=m_memory.readString(a0);
++            const auto first=path.find_first_not_of(' '),colon=path.find(':',first);
++            if(first==path.npos || colon==path.npos || colon==first){setV0(-19);return true;}
++            auto unitStart=colon;
++            while(unitStart>first && path[unitStart-1]>='0' && path[unitStart-1]<='9')--unitStart;
++            uint32_t unit=0u;
++            for(auto i=unitStart;i<colon;++i) {
++                const auto digit=static_cast<uint32_t>(path[i]-'0');
++                if(unit>(static_cast<uint32_t>(INT32_MAX)-digit)/10u){setV0(-19);return true;}
++                unit=unit*10u+digit;
++            }
++            const auto name=path.substr(first,unitStart-first);
++            const auto driver=std::find_if(m_devices.begin(),m_devices.end(),[&](const Device& d){return d.name==name;});
++            if(driver==m_devices.end()){setV0(-19);return true;}
++            const auto device=driver->address,gp=driver->gp;
++            const auto operations=m_memory.read32(device+16u),target=operations?m_memory.read32(operations+12u):0u;
++            if(!target)throw std::runtime_error("IOP IOMAN Open has no registered driver operation");
++            if(!m_fileTable) {
++                m_fileTable=m_memory.allocate(static_cast<uint32_t>(m_files.size())*16u,16u);
++                if(!m_fileTable){setV0(-12);return true;}
++                if(!m_memory.zeroRam(m_fileTable,m_files.size()*16u))throw std::runtime_error("IOP IOMAN file table outside RAM");
++            }
++            const auto fd=static_cast<uint32_t>(available-m_files.begin()),file=m_fileTable+fd*16u;
++            *available={device,gp}; // Reserve before a driver can yield and another thread opens a file.
++            m_memory.write32(file,cpu.gpr[5]);m_memory.write32(file+4u,unit);
++            m_memory.write32(file+8u,device);m_memory.write32(file+12u,0u);
++            try {
++                const auto result=static_cast<int32_t>(executor.executeFileFunction(target,file,a0+static_cast<uint32_t>(colon)+1u,cpu.gpr[5],gp));
++                if(result<0){*available={};m_memory.write32(file,0u);m_memory.write32(file+8u,0u);setV0(result);}
++                else setV0(fd);
++            } catch(...) {*available={};throw;}
++            return true;
++        }
++        case 5: // Close
++        case 6: // Read
++        case 8: // Lseek
++        {
++            if(a0>=m_files.size() || !m_files[a0].device){setV0(-9);return true;}
++            const auto descriptor=m_files[a0];const auto file=m_fileTable+a0*16u;
++            if(ordinal==6u && !(m_memory.read32(file)&1u)){setV0(-9);return true;}
++            if(ordinal==6u && !m_memory.ownsRamRange(cpu.gpr[5],cpu.gpr[6])){setV0(-14);return true;}
++            if(ordinal==8u && cpu.gpr[6]>2u){setV0(-22);return true;}
++            const auto operations=m_memory.read32(descriptor.device+16u);
++            const auto offset=ordinal==5u?16u:ordinal==6u?20u:28u;
++            const auto target=operations?m_memory.read32(operations+offset):0u;
++            if(!target)throw std::runtime_error("IOP IOMAN descriptor has no registered driver operation");
++            const auto result=executor.executeFileFunction(target,file,cpu.gpr[5],cpu.gpr[6],descriptor.gp);
++            if(ordinal==5u){m_files[a0]={};m_memory.write32(file,0u);m_memory.write32(file+8u,0u);}
++            setV0(result);return true;
++        }
+         case 20: // AddDrv
+         {
+             if (a0 == 0u || m_devices.size() >= kMaxDevices)
+--- a/ps2xIOP/src/emulator/imports/iop_ioman.h
++++ b/ps2xIOP/src/emulator/imports/iop_ioman.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <cstdint>
++#include <array>
+ #include <string>
+ #include <vector>
+ 
+@@ -28,5 +29,8 @@
+ 
+         IopMemory &m_memory;
+         std::vector<Device> m_devices;
++        struct File { uint32_t device = 0u; uint32_t gp = 0u; };
++        std::array<File,16> m_files{};
++        uint32_t m_fileTable = 0u;
+     };
+ }
+--- a/ps2xIOP/src/emulator/imports/iop_loadcore.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_loadcore.cpp
+@@ -51,7 +51,9 @@
+                 setV0(0u);
+                 return true;
+             }
+-            const uint32_t table = m_imports.findTable(m_memory.readString(address + 12u, 8u), m_memory.read16(address + 8u));
++            std::string name;
++            for(unsigned i=0;i<8u;++i){const auto byte=m_memory.read8(address+12u+i);if(!byte)break;name.push_back(static_cast<char>(byte));}
++            const uint32_t table = m_imports.findTable(name, m_memory.read16(address + 8u));
+             setV0(table != 0u ? table + 20u : 0u);
+             return true;
+         }
+--- a/ps2xIOP/src/emulator/imports/iop_sysmem.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_sysmem.cpp
+@@ -27,9 +27,17 @@
+         {
+         case 4: // AllocSysMemory
+         {
+-            const uint32_t address = a0 == 2u
+-                                         ? m_memory.allocate(a1, 16u, a2)
+-                                         : m_memory.allocate(a1, 16u);
++            if(a0>2u || !a1 || a1>IopMemory::HeapLimit-IopMemory::HeapBase || (a0==2u && (a2&255u))) {
++                setV0(0u);return true;
++            }
++            const auto size=(a1+255u)&~255u;
++            uint32_t address=0u;
++            if(a0==0u)address=m_memory.allocate(size,256u);
++            else if(a0==2u)address=m_memory.allocate(size,256u,a2);
++            else for(auto candidate=IopMemory::HeapLimit-size;;candidate-=256u) {
++                address=m_memory.allocate(size,256u,candidate);
++                if(address || candidate<IopMemory::HeapBase+256u)break;
++            }
+             setV0(address);
+             return true;
+         }
+@@ -40,8 +48,9 @@
+             setV0(IopMemory::RamSize);
+             return true;
+         case 7: // QueryMaxFreeMemSize
++            setV0(m_memory.maxFreeMemory(256u));return true;
+         case 8: // QueryTotalFreeMemSize
+-            setV0(m_memory.maxFreeMemory());
++            setV0(m_memory.totalFreeMemory(256u));
+             return true;
+         case 9: // QueryBlockTopAddress
+             if (const auto block = m_memory.allocationContaining(a0))
+--- a/ps2xIOP/src/emulator/services/iop_module_loader.cpp
++++ b/ps2xIOP/src/emulator/services/iop_module_loader.cpp
+@@ -320,21 +320,21 @@
+         return ok;
+     }
+ 
+-    bool IopModuleLoader::readElfFromGuest(IopHost &host, uint32_t guestAddress, std::vector<uint8_t> &bytes)
++    template<class Read> static bool readElfImage(Read read,std::vector<uint8_t> &bytes,uint64_t capacity=kMaxImageSize)
+     {
+         Elf32Ehdr header{};
+-        if (!host.readGuest(guestAddress, &header, sizeof(header)) || !validElfHeader(header))
++        if (!read(&header, sizeof(header)) || !validElfHeader(header))
+             return false;
+ 
+         uint64_t required = sizeof(header);
+         required = std::max<uint64_t>(required, static_cast<uint64_t>(header.phoff) + static_cast<uint64_t>(header.phentsize) * header.phnum);
+         required = std::max<uint64_t>(required, static_cast<uint64_t>(header.shoff) + static_cast<uint64_t>(header.shentsize) * header.shnum);
+ 
+-        if (required > kMaxImageSize)
++        if (required > capacity)
+             return false; // Should we log an error here? TODO check later
+ 
+         bytes.resize(static_cast<size_t>(required));
+-        if (!host.readGuest(guestAddress, bytes.data(), bytes.size()))
++        if (!read(bytes.data(), bytes.size()))
+             return false;
+ 
+         if (header.shnum != 0u && header.shentsize >= sizeof(Elf32Shdr))
+@@ -360,14 +360,45 @@
+                 required = std::max<uint64_t>(required, static_cast<uint64_t>(program.offset) + program.filesz);
+             }
+         }
+-        if (required > kMaxImageSize)
++        if (required > capacity)
+             return false;
+ 
+         bytes.resize(static_cast<size_t>(required));
+-        return host.readGuest(guestAddress, bytes.data(), bytes.size());
++        return read(bytes.data(), bytes.size());
+     }
+ 
+-    IopImageLoadResult IopModuleLoader::load(std::span<const uint8_t> image, IopMemory &memory, uint32_t moduleCursor)
++    bool IopModuleLoader::readElfFromGuest(IopHost& host,uint32_t address,std::vector<uint8_t>& bytes) {
++        return readElfImage([&](void* output,size_t size){return host.readGuest(address,output,size);},bytes);
++    }
++    bool IopModuleLoader::readElfFromIop(IopMemory& memory,uint32_t address,std::vector<uint8_t>& bytes) {
++        const auto physical=IopMemory::physicalAddress(address);
++        const auto block=memory.allocationContaining(physical);
++        if(!block || physical<block->address || physical-block->address>block->size)return false;
++        const auto available=block->size-(physical-block->address);
++        return readElfImage([&](void* output,size_t size){return size<=available && memory.readRam(address,output,size);},bytes,available);
++    }
++
++    bool IopModuleLoader::probe(std::span<const uint8_t> image,std::array<uint32_t,9>& fileInfo)
++    {
++        if(image.size()<sizeof(Elf32Ehdr))return false;
++        Elf32Ehdr header{};std::memcpy(&header,image.data(),sizeof header);
++        if(!validElfHeader(header) || (header.type!=ET_EXEC && header.type!=ET_SCE_IOPRELEXEC && header.type!=ET_SCE_IOPRELEXEC2) ||
++            header.phnum!=2u || header.phentsize!=sizeof(Elf32Phdr) || !checkedRange(image.size(),header.phoff,2u*sizeof(Elf32Phdr)))return false;
++        std::array<Elf32Phdr,2> programs{};std::memcpy(programs.data(),image.data()+header.phoff,sizeof programs);
++        const auto& metadata=programs[0];const auto& segment=programs[1];
++        if(metadata.type!=PT_SCE_IOPMOD || metadata.filesz<24u || !checkedRange(image.size(),metadata.offset,24u) ||
++            segment.type!=PT_LOAD || !segment.memsz || segment.filesz>segment.memsz ||
++            segment.vaddr>UINT32_MAX-segment.memsz)return false;
++        std::array<uint32_t,6> info{};std::memcpy(info.data(),image.data()+metadata.offset,sizeof info);
++        if(uint64_t{info[3]}+info[4]+info[5]>segment.memsz || uint64_t{info[3]}+info[4]>segment.filesz || (info[1]&3u))return false;
++        if(header.type!=ET_EXEC && segment.vaddr!=0u)return false;
++        if(info[0]!=UINT32_MAX && (info[0]<segment.vaddr || uint64_t{info[0]-segment.vaddr}+8u>segment.memsz))return false;
++        const std::array<uint32_t,9> result{header.type==ET_EXEC?3u:4u,info[1],info[2],segment.vaddr,
++            info[3],info[4],info[5],segment.memsz,info[0]};
++        fileInfo=result;return true;
++    }
++
++    IopImageLoadResult IopModuleLoader::load(std::span<const uint8_t> image, IopMemory &memory, uint32_t moduleCursor,std::optional<uint32_t> destinationBase)
+     {
+         IopImageLoadResult result;
+         result.nextModuleCursor = moduleCursor;
+@@ -381,6 +412,8 @@
+             result.error = IopImageLoadError::InvalidElf;
+             return result;
+         }
++        if((header.phnum && (header.phentsize<sizeof(Elf32Phdr) || !checkedRange(image.size(),header.phoff,uint32_t{header.phentsize}*header.phnum))) ||
++            (header.shnum && (header.shentsize<sizeof(Elf32Shdr) || !checkedRange(image.size(),header.shoff,uint32_t{header.shentsize}*header.shnum))))return result;
+ 
+         uint32_t minVaddr = std::numeric_limits<uint32_t>::max();
+         uint32_t maxVaddr = 0u;
+@@ -396,6 +429,7 @@
+                 programHeaders.push_back(program);
+                 if (program.type == PT_LOAD && program.memsz != 0u)
+                 {
++                    if(program.vaddr>UINT32_MAX-program.memsz)return result;
+                     hasLoad = true;
+                     minVaddr = std::min(minVaddr, program.vaddr);
+                     maxVaddr = std::max(maxVaddr, program.vaddr + program.memsz);
+@@ -414,6 +448,7 @@
+                 sectionHeaders.push_back(section);
+                 if (!hasLoad && (section.flags & SHF_ALLOC) != 0u && section.size != 0u)
+                 {
++                    if(section.addr>UINT32_MAX-section.size)return result;
+                     minVaddr = std::min(minVaddr, section.addr);
+                     maxVaddr = std::max(maxVaddr, section.addr + section.size);
+                 }
+@@ -423,16 +458,38 @@
+         if (minVaddr == std::numeric_limits<uint32_t>::max())
+             minVaddr = 0u;
+         uint32_t span = maxVaddr > minVaddr ? maxVaddr - minVaddr : 0x1000u;
+-        span = alignUp(span, 0x100u);
++        if(!destinationBase)span = alignUp(span, 0x100u);
+         const bool relocate = header.type != ET_EXEC ||
+                               maxVaddr > IopMemory::RamSize ||
+                               (minVaddr < kModuleLoadBase && minVaddr != 0u);
+         uint32_t base = 0u;
+         int64_t delta = 0;
+-        if (relocate)
+-        {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        struct ImageReservation {
++            IopMemory& memory;
++            uint32_t address = 0;
++            ~ImageReservation() {if(address)(void)memory.freeAllocation(address);}
++        } reservation{memory};
++#endif
++        if(destinationBase) {
++            base=*destinationBase;
++            if(base<0x30u || (base&3u) || base>IopMemory::RamSize || span>IopMemory::RamSize-base ||
++                (!relocate && base!=minVaddr))return result;
++            const auto allocation=memory.allocationContaining(base-0x30u);
++            if(!allocation || base<allocation->address || base-allocation->address>allocation->size ||
++                span>allocation->size-(base-allocation->address))return result;
++            delta=static_cast<int64_t>(base)-minVaddr;
++        }
++        else if (relocate)
++        {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            base = memory.allocate(span,0x100u);
++            reservation.address = base;
++            if (!base)
++#else
+             base = alignUp(moduleCursor, 0x100u);
+             if (base + span >= IopMemory::HeapBase)
++#endif
+             {
+                 result.error = IopImageLoadError::ArenaExhausted;
+                 return result;
+@@ -443,6 +500,13 @@
+         else
+         {
+             base = minVaddr;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            if(!memory.allocate(span,0x100u,base)) {
++                result.error=IopImageLoadError::ArenaExhausted;
++                return result;
++            }
++            reservation.address=base;
++#endif
+         }
+ 
+         if (hasLoad)
+@@ -519,9 +583,7 @@
+                 std::memcpy(&entry, image.data() + program.offset + 4u, sizeof(entry));
+                 std::memcpy(&gp, image.data() + program.offset + 8u, sizeof(gp));
+                 result.entry = static_cast<uint32_t>(static_cast<int64_t>(entry) + delta);
+-                result.gp = gp != 0u
+-                                ? static_cast<uint32_t>(static_cast<int64_t>(gp) + delta)
+-                                : 0u;
++                result.gp = static_cast<uint32_t>(static_cast<int64_t>(gp) + delta);
+                 break;
+             }
+         }
+@@ -555,6 +617,29 @@
+             }
+         }
+ 
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        const auto executableRange = [&](uint32_t address,uint32_t size) {
++            const int64_t loaded = static_cast<int64_t>(address) + delta;
++            if (loaded < base || static_cast<uint64_t>(loaded) > static_cast<uint64_t>(base) + span ||
++                size > static_cast<uint64_t>(base) + span - loaded)
++                return false;
++            result.executableRanges.emplace_back(static_cast<uint32_t>(loaded),size);
++            return true;
++        };
++        // Prefer SHF_EXECINSTR sections; PF_X load bytes also support stripped IRX.
++        for (const auto &section : sectionHeaders)
++            if ((section.flags & 6u) == 6u && section.type != SHT_NOBITS && section.size) {
++                if (!checkedRange(image.size(),section.offset,section.size) || !executableRange(section.addr,section.size))
++                    return result;
++            }
++        if (result.executableRanges.empty())
++            for (const auto &program : programHeaders)
++                if (program.type == PT_LOAD && (program.flags & 1u) && program.filesz)
++                    if (!executableRange(program.vaddr,program.filesz))return result;
++#endif
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        reservation.address=0;
++#endif
+         result.error = IopImageLoadError::None;
+         return result;
+     }
+--- a/ps2xIOP/src/emulator/services/iop_module_loader.h
++++ b/ps2xIOP/src/emulator/services/iop_module_loader.h
+@@ -4,6 +4,9 @@
+ #include <span>
+ #include <string_view>
+ #include <vector>
++#include <utility>
++#include <array>
++#include <optional>
+ 
+ namespace ps2x::iop
+ {
+@@ -31,6 +34,9 @@
+         uint32_t gp = 0;
+         uint32_t nextModuleCursor = 0;
+         bool relocationsComplete = true;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        std::vector<std::pair<uint32_t,uint32_t>> executableRanges;
++#endif
+ 
+         [[nodiscard]] explicit operator bool() const noexcept
+         {
+@@ -43,6 +49,9 @@
+     public:
+         [[nodiscard]] static bool readWholeHostFile(IopHost &host, std::string_view guestPath, std::vector<uint8_t> &bytes);
+         [[nodiscard]] static bool readElfFromGuest(IopHost &host, uint32_t guestAddress, std::vector<uint8_t> &bytes);
+-        [[nodiscard]] static IopImageLoadResult load(std::span<const uint8_t> image, IopMemory &memory, uint32_t moduleCursor);
++        [[nodiscard]] static bool readElfFromIop(IopMemory &memory, uint32_t address, std::vector<uint8_t>& bytes);
++        [[nodiscard]] static bool probe(std::span<const uint8_t> header, std::array<uint32_t,9>& fileInfo);
++        [[nodiscard]] static IopImageLoadResult load(std::span<const uint8_t> image, IopMemory &memory, uint32_t moduleCursor,
++            std::optional<uint32_t> destination = std::nullopt);
+     };
+ }
+--- a/ps2xIOP/src/emulator/services/iop_rpc.cpp
++++ b/ps2xIOP/src/emulator/services/iop_rpc.cpp
+@@ -1,4 +1,6 @@
+ #include "iop_rpc.h"
++#include "../../iop_service.h"
++#include <stdexcept>
+ 
+ #include "../core/iop_cpu.h"
+ #include "../core/iop_kernel.h"
+@@ -21,6 +23,13 @@
+     void IopRpcBridge::reset()
+     {
+         m_servers.clear();
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        m_queueThreads.clear();m_nativePending.clear();
++        for(const auto address:m_nativeTagBuffers)if(address)m_memory.freeAllocation(address);
++        m_nativeTagBuffers={};m_nativeTagCount=m_nativeStagingIndex=0u;
++        m_nativeQueuedIds.clear();m_nativeActiveIds.clear();
++
++#endif
+         m_nextDmaId = 1u;
+         m_sifInitialized = false;
+     }
+@@ -40,6 +49,9 @@
+             return true;
+         case 7: // sceSifSetDma
+         {
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            setV0(nativeSetDma(cpu.gpr[4],cpu.gpr[5]));return true;
++#else
+             constexpr uint32_t kDescriptorSize = 16u;
+             constexpr uint32_t kMaxDescriptors = 32u;
+             const uint32_t descriptorAddress = cpu.gpr[4];
+@@ -118,9 +130,14 @@
+             }
+             setV0(dmaId);
+             return true;
++#endif
+         }
+         case 8: // sceSifDmaStat
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            setV0(static_cast<uint32_t>(nativeDmaStat(cpu.gpr[4])));
++#else
+             setV0(0xFFFFFFFFu);
++#endif
+             return true;
+         case 29: // sceSifCheckInit
+             setV0(m_sifInitialized ? 1u : 0u);
+@@ -130,6 +147,59 @@
+             return true;
+         }
+     }
++
++#ifdef PS2N_SDK_NATIVE_BACKEND
++    void IopRpcBridge::nativePumpSifDma() {
++        if(!m_nativeActiveIds.empty()) {
++            if(!m_host.nativeSif0Complete())return;
++            m_nativeActiveIds.clear();
++        }
++        if(!m_nativeTagCount || !m_host.nativeSif0Available())return;
++        const auto address=m_nativeTagBuffers[m_nativeStagingIndex];
++        if(!address || !m_memory.writeRam(address,m_nativeTags.data(),m_nativeTagCount*16u))
++            throw std::runtime_error("SDK SIF0 tag storage is unavailable");
++        m_host.nativeStartSif0(address);
++        m_nativeActiveIds=std::move(m_nativeQueuedIds);m_nativeQueuedIds.clear();
++        m_nativeTagCount=0u;m_nativeStagingIndex^=1u;
++    }
++    uint32_t IopRpcBridge::nativeSetDma(uint32_t descriptors,uint32_t count) {
++        nativePumpSifDma();
++        if(!descriptors || (descriptors&3u) || !count || count>32u || !m_memory.ownsRamRange(descriptors,count*16u))return 0u;
++        std::array<std::array<uint32_t,4>,32> tags{};uint32_t used=0u;
++        for(uint32_t i=0;i<count;++i) {
++            std::array<uint32_t,4> descriptor{};
++            if(!m_memory.readRam(descriptors+i*16u,descriptor.data(),16u))return 0u;
++            const auto size=static_cast<int32_t>(descriptor[2]);if(size<=0)continue;
++            const auto source=descriptor[0]&0xFFFFFFu,destination=descriptor[1]&0x1FFFFFFFu,attributes=descriptor[3];
++            const auto words=(static_cast<uint64_t>(size)+3u)/4u,qwords=(words+3u)/4u;
++            if((source&3u) || (destination&15u) || qwords>0xFFFFu || !m_memory.ownsRamRange(source,words*4u) ||
++               destination>32u*1024u*1024u || qwords*16u>32u*1024u*1024u-destination)return 0u;
++            if(attributes&~0x46u)throw std::runtime_error("SDK SIF0 DMA attributes unsupported: "+std::to_string(attributes));
++            if((attributes&4u) && i+1u<count)throw std::runtime_error("SIF0 intermediate IOP tag IRQ is not modeled");
++            tags[used++]={source|((attributes&4u)?0x40000000u:0u),static_cast<uint32_t>(words),
++                0x10000000u|static_cast<uint32_t>(qwords)|((attributes&2u)?0x80000000u:0u),destination};
++        }
++        if(!used || m_nativeTagCount+used>32u)return 0u;
++        if(m_nativeTagCount && (m_nativeTags[m_nativeTagCount-1u][0]&0x40000000u))
++            throw std::runtime_error("SIF0 queued IOP tag IRQ continuation is not modeled");
++        for(auto& address:m_nativeTagBuffers)if(!address) {
++            address=m_memory.allocate(32u*16u,16u);
++            if(!address)throw std::runtime_error("SDK SIF0 tag allocation failed");
++        }
++        if(m_nativeTagCount)m_nativeTags[m_nativeTagCount-1u][0]&=~0x80000000u;
++        for(uint32_t i=0;i<used;++i)m_nativeTags[m_nativeTagCount++]=tags[i];
++        m_nativeTags[m_nativeTagCount-1u][0]|=0x80000000u;
++        if(!m_nextDmaId || m_nextDmaId>0x7FFFFFFFu)m_nextDmaId=1u;
++        const auto id=m_nextDmaId++;m_nativeQueuedIds.push_back(id);
++        nativePumpSifDma();return id;
++    }
++    int32_t IopRpcBridge::nativeDmaStat(uint32_t id) {
++        nativePumpSifDma();
++        if(std::find(m_nativeActiveIds.begin(),m_nativeActiveIds.end(),id)!=m_nativeActiveIds.end())return 0;
++        if(std::find(m_nativeQueuedIds.begin(),m_nativeQueuedIds.end(),id)!=m_nativeQueuedIds.end())return 1;
++        return -1;
++    }
++#endif
+ 
+     bool IopRpcBridge::dispatchSifCmdImport(uint16_t ordinal, IopCpuState &cpu)
+     {
+@@ -183,9 +253,11 @@
+             if (signedExtraSize > 0)
+             {
+                 extraSize = static_cast<uint32_t>(signedExtraSize);
++                std::vector<uint8_t> extra(extraSize);
+                 if (extraSource == 0u || extraDestination == 0u ||
+                     !m_memory.ownsRamRange(extraSource, extraSize) ||
+-                    !m_host.writeGuest(extraDestination, m_memory.ram().data() + IopMemory::physicalAddress(extraSource), extraSize))
++                    !m_memory.readRam(extraSource, extra.data(), extraSize) ||
++                    !m_host.writeGuest(extraDestination, extra.data(), extraSize))
+                 {
+                     setV0(0u);
+                     return true;
+@@ -234,6 +306,9 @@
+             setV0(0);
+             return true;
+         case 19: // SetRpcQueue
++#ifdef PS2N_SDK_NATIVE_BACKEND
++            m_queueThreads[cpu.gpr[4]]=static_cast<int>(cpu.gpr[5]);
++#endif
+             setV0(cpu.gpr[4]);
+             return true;
+         case 20:
+@@ -281,6 +356,12 @@
+             return result;
+ 
+         RpcServer &server = serverIt->second;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        // SIF1 has already delivered the request into the registered IOP buffer.
++        if (request.serverAddress != server.serverData || request.send.address != server.buffer ||
++            !m_memory.ownsRamRange(server.buffer,request.send.size))
++            throw std::runtime_error("IOP RPC native request does not match the delivered buffer");
++#else
+         if (request.send.size != 0u && server.buffer != 0u)
+         {
+             const uint32_t copySize = std::min<uint32_t>(request.send.size, IopMemory::RamSize - std::min(server.buffer, IopMemory::RamSize));
+@@ -291,34 +372,74 @@
+                     (void)m_memory.writeRam(server.buffer, payload.data(), payload.size());
+             }
+         }
+-
++#endif
++
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        const auto queue=m_queueThreads.find(server.queue);
++        if(server.queue && (queue==m_queueThreads.end() || queue->second<=0))throw std::runtime_error("IOP RPC queue has no registered thread");
++        const int threadId=queue==m_queueThreads.end()?0:queue->second;
++        if(std::any_of(m_nativePending.begin(),m_nativePending.end(),[&](const auto& pending){return pending.threadId==threadId;}))
++            throw std::runtime_error("Native RPC queue already has an unfinished call");
++        const auto returned=executor.beginNativeRpcFunction(server.function,request.function,server.buffer,request.send.size,server.gp,threadId);
++        if(!returned) {
++            m_nativePending.push_back({request,threadId});result.handled=true;return result;
++        }
++        uint32_t returnPointer=*returned;
++#else
+         uint32_t returnPointer = executor.executeGuestFunction(server.function,
+                                                                request.function,
+                                                                server.buffer,
+                                                                request.send.size,
+                                                                0u,
+                                                                server.gp);
++#endif
+         if (returnPointer == 0u)
+             returnPointer = server.buffer;
++#ifndef PS2N_SDK_NATIVE_BACKEND
+         if (request.receive.address != 0u && request.receive.size != 0u && returnPointer != 0u)
+         {
+             const uint32_t physical = IopMemory::physicalAddress(returnPointer);
+             if (physical < IopMemory::RamSize)
+             {
+                 const uint32_t copySize = std::min<uint32_t>(request.receive.size, IopMemory::RamSize - physical);
+-                (void)m_host.writeGuest(request.receive.address, m_memory.ram().data() + physical, copySize);
++                std::vector<uint8_t> response(copySize);
++                if (!m_memory.readRam(physical, response.data(), copySize) ||
++                    !m_host.writeGuest(request.receive.address, response.data(), copySize))
++                    throw std::runtime_error("IOP RPC response transfer failed");
+                 if (copySize < request.receive.size)
+                     (void)m_host.zeroGuest(request.receive.address + copySize, request.receive.size - copySize);
+             }
+         }
++#endif
+ 
+         result.handled = true;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        result.resultAddress = returnPointer;
++#else
+         result.resultAddress = request.receive.address;
++#endif
+         result.serverDispatchPolicy = ServerDispatchPolicy::Suppress;
+         result.signalNowaitCompletion = true;
+         result.signalCompletion = true;
+         return result;
+     }
++
++#ifdef PS2N_SDK_NATIVE_BACKEND
++    RpcResult IopRpcBridge::pollNativeRpc(RpcRequest& request,IopGuestExecutor& executor,uint64_t tokenMask,uint64_t tokenValue) {
++        RpcResult result{};if(m_nativePending.empty())return result;
++        // Actual SIF submissions precede completion packets on the same bus.
++        nativePumpSifDma();if(nativeHasSifDma())return result;
++        for(auto pending=m_nativePending.begin();pending!=m_nativePending.end();++pending) {
++            if((pending->request.callToken&tokenMask)!=tokenValue)continue;
++            const auto returned=executor.pollNativeRpcFunction(pending->threadId);if(!returned)continue;
++            request=pending->request;m_nativePending.erase(pending);
++            result.handled=true;result.resultAddress=*returned?*returned:request.serverBuffer;
++            result.serverDispatchPolicy=ServerDispatchPolicy::Suppress;
++            result.signalNowaitCompletion=true;result.signalCompletion=true;break;
++        }
++        return result;
++    }
++#endif
+ 
+     void IopRpcBridge::onSifTransfer(const SifTransfer &transfer)
+     {
+@@ -346,4 +467,165 @@
+         const auto server = m_servers.find(sid);
+         return server != m_servers.end() && server->second.function != 0u;
+     }
++#ifdef PS2N_SDK_NATIVE_BACKEND
++    bool IopRpcBridge::nativeServer(RpcRequest &request, bool byAddress) const noexcept
++    {
++        for(const auto &[sid,server]:m_servers) {
++            if(!server.function || (byAddress?server.serverData!=request.serverAddress:sid!=request.sid))continue;
++            request.sid=sid;request.serverAddress=server.serverData;
++            request.serverFunction=server.function;request.serverBuffer=server.buffer;return true;
++        }
++        return false;
++    }
++#endif
+ }
++
++#ifdef PS2N_SDK_NATIVE_BACKEND
++namespace ps2x::iop::detail {
++namespace {
++// EE libpad's public DMA ABI: ps2sdk/ee/rpc/pad/src/libpad.c.
++struct NativePadAreaOld {
++    uint32_t frame{};
++    uint8_t state{},reqState{},ok{},reserved{};
++    std::array<uint8_t,32> data{};
++    uint32_t length{};
++    std::array<uint8_t,20> tail{};
++};
++struct NativePadAreaNew {
++    std::array<uint8_t,32> data{};
++    std::array<uint8_t,8> actDirect{},actAlign{};
++    std::array<std::array<uint8_t,4>,8> actData{};
++    std::array<uint16_t,4> modeTable{};
++    uint32_t frame{},findPadRetries{},length{};
++    uint8_t modeConfig{},modeCurId{},model{},buttonDataReady{},nrOfModes{},modeCurOffs{},nrOfActuators{},numActComb{};
++    uint8_t reserved{},mode{},lock{},actDirSize{},state{},reqState{},currentTask{},runTask{},stat70bit{};
++    std::array<uint8_t,11> padding{};
++};
++static_assert(sizeof(NativePadAreaOld)==64u && offsetof(NativePadAreaOld,length)==40u);
++static_assert(sizeof(NativePadAreaNew)==128u && offsetof(NativePadAreaNew,frame)==88u && offsetof(NativePadAreaNew,state)==112u);
++class NativePadmanService final:public IopService {
++    IopHost& host;
++    uint16_t version;
++    std::array<uint32_t,2> stride{128u,128u};
++    uint32_t statusArea{},statusFrame{};
++    static constexpr std::array<uint32_t,4> ids{0x80000100u,0x80000101u,0x8000010Fu,0x8000011Fu};
++    static constexpr std::array<std::string_view,3> aliases{"padman","xpadman","ds2u_d"};
++    int32_t call(PadOperation operation,std::array<uint32_t,6> args={},std::span<const uint8_t> data={}) {
++        return host.pad({operation,args,data});
++    }
++    PadSnapshot snapshot(unsigned port) {
++        PadSnapshot state;PadRequest request{PadOperation::Snapshot,{port,0u}};request.snapshot=&state;
++        if(host.pad(request)!=1)throw std::runtime_error("PADMAN cannot inspect its SDK port state");return state;
++    }
++    void publish(unsigned port,bool initialize=false) {
++        const auto state=snapshot(port);
++        if(!state.open || !state.dmaAddress)return;
++        const auto write=[&](const void* data,size_t bytes) {
++            const auto offset=initialize?0u:((state.frame+1u)&1u)*stride[port];
++            if(!host.writeGuest(state.dmaAddress+offset,data,bytes))throw std::runtime_error("PADMAN output outside its EE pad area");
++            if(initialize && !host.writeGuest(state.dmaAddress+stride[port],data,bytes))throw std::runtime_error("PADMAN second EE buffer is invalid");
++        };
++        if(stride[port]==64u) {
++            NativePadAreaOld area;area.frame=state.frame;area.state=static_cast<uint8_t>(state.state);area.reqState=static_cast<uint8_t>(state.reqState);
++            area.data=state.data;area.length=state.connected?32u:0u;
++            area.tail[2]=state.connected?3u:0u;
++            write(&area,sizeof area);
++        } else {
++            NativePadAreaNew area;area.frame=state.frame;area.state=static_cast<uint8_t>(state.state);area.reqState=static_cast<uint8_t>(state.reqState);
++            area.data=state.data;area.length=state.connected?32u:0u;
++            if(state.connected) {
++                area.modeConfig=2u;area.currentTask=1u;area.model=3u;
++                area.modeCurId=state.data[1];area.buttonDataReady=1u;
++                area.nrOfModes=2u;area.modeTable[0]=4u;area.modeTable[1]=7u;area.modeCurOffs=state.analog?1u:0u;
++                area.nrOfActuators=2u;area.mode=state.analog?1u:0u;area.lock=state.modeLock;area.actDirSize=state.actDirectSize;
++                std::copy(state.actAlign.begin(),state.actAlign.end(),area.actAlign.begin());
++                std::copy(state.actDirect.begin(),state.actDirect.end(),area.actDirect.begin());
++                for(unsigned act=0;act<2u;++act)for(unsigned field=0;field<4u;++field)
++                    area.actData[act][field]=static_cast<uint8_t>(call(PadOperation::InfoAct,{port,0u,act,field}));
++            }
++            write(&area,sizeof area);
++        }
++    }
++public:
++    NativePadmanService(IopHost& owner,uint16_t moduleVersion):host(owner),version(moduleVersion){}
++    std::string_view name() const override{return "PADMAN";}
++    std::span<const uint32_t> sids() const override{return ids;}
++    std::span<const std::string_view> moduleAliases() const override{return aliases;}
++    void reset() override {
++        if(call(PadOperation::Init,{version})!=1)throw std::runtime_error("SDK PADMAN backend initialization failed");
++        statusArea=statusFrame=0;stride={128u,128u};
++    }
++    void onVblank() override {
++        if(call(PadOperation::Tick)!=1)throw std::runtime_error("SDK PADMAN frame update failed");
++        for(unsigned port=0;port<2u;++port)publish(port);
++        ++statusFrame;
++        if(statusArea) {
++            std::array<uint32_t,32> state{};state[0]=statusFrame;
++            for(unsigned port=0;port<2u;++port)state[port+1u]=snapshot(port).connected?1u:0u;
++            const auto offset=(statusFrame&1u)?0u:128u;
++            if(!host.writeGuest(statusArea+offset,state.data(),sizeof state))throw std::runtime_error("PADMAN connection buffer outside EE RAM");
++        }
++    }
++    RpcResult handleRpc(const RpcRequest& request) override {
++        if(request.function!=1u || request.send.size<4u || request.send.size>128u || request.receive.size!=128u)
++            throw std::runtime_error("PADMAN RPC packet shape unsupported");
++        if(request.sid==0x80000101u || request.sid==0x8000011Fu)throw std::runtime_error("PADMAN extension RPC is not implemented");
++        std::array<uint32_t,32> reply{};
++        const auto word=[&](unsigned index) {
++            if(index>=32u || (index+1u)*4u>request.send.size || !host.readRpcInput(request.send.address+index*4u,&reply[index],4u))
++                throw std::runtime_error("PADMAN RPC argument outside its IOP packet");
++            return reply[index];
++        };
++        const auto original=word(0u);
++        auto command=original;
++        if(command>=0x80000100u && command<=0x8000010Eu)command=(command&0xFFu)+1u;
++        const auto portArgs=[&](){return std::array<uint32_t,6>{word(1u),word(2u)};};
++        int32_t result=0;unsigned output=3u;
++        switch(command) {
++        case 1u: {
++            auto args=portArgs();const auto area=word(4u);
++            const bool old=request.sid==0x8000010Fu;
++            const auto bytes=old?128u:256u;
++            if(args[0]>=2u || args[1] || !area || (area&(old?15u:63u)) || !host.validateGuestOutput(area,bytes))break;
++            args[2]=area;result=call(PadOperation::Open,args);
++            if(result==1){stride[args[0]]=old?64u:128u;publish(args[0],true);}
++            // PS2SDK's RPC implementation leaves the deprecated IOP padBuf unused.
++            reply[5]=0u;break;
++        }
++        case 3u:case 4u:case 5u:case 6u: {
++            auto args=portArgs();args[2]=word(3u);args[3]=word(4u);output=5u;
++            result=call(command==3u?PadOperation::InfoAct:command==4u?PadOperation::InfoComb:command==5u?PadOperation::InfoMode:PadOperation::SetMainMode,args);break;
++        }
++        case 7u:case 8u:case 11u: {
++            const auto args=portArgs();const auto bytes=command==11u?12u:6u;std::array<uint8_t,12> data{};
++            if(request.send.size<12u+bytes || !host.readRpcInput(request.send.address+12u,data.data(),bytes))throw std::runtime_error("PADMAN inline command outside its packet");
++            result=call(command==7u?PadOperation::SetActDirect:command==8u?PadOperation::SetActAlign:PadOperation::SetVref,args,{data.data(),bytes});
++            output=command==11u?7u:5u;break;
++        }
++        case 9u:result=call(PadOperation::GetButtonMask,portArgs());break;
++        case 10u:{auto args=portArgs();args[2]=word(3u);result=call(PadOperation::SetButtonInfo,args);output=4u;break;}
++        case 12u:result=call(PadOperation::GetPortMax);break;
++        case 13u:{const auto port=word(1u);result=port<2u?call(PadOperation::GetSlotMax,{port}):0;break;}
++        case 14u:{auto args=portArgs();args[2]=word(4u);result=call(PadOperation::Close,args);break;}
++        case 15u:result=call(PadOperation::End);statusArea=0u;break;
++        case 16u:{
++            const auto area=word(4u);
++            if(area && ((area&63u) || !host.validateGuestOutput(area,256u)))break;
++            result=call(PadOperation::Init,{version});
++            if(result==1){statusArea=area;statusFrame=0u;if(area && !host.zeroGuest(area,256u))throw std::runtime_error("PADMAN cannot initialize its connection buffers");}
++            break;
++        }
++        case 18u:result=call(PadOperation::GetModVersion);break;
++        default:throw std::runtime_error("PADMAN RPC command is not implemented: "+std::to_string(original));
++        }
++        reply[output]=static_cast<uint32_t>(result);
++        if(!host.writeRpcOutput(request.receive.address,reply.data(),sizeof reply))throw std::runtime_error("PADMAN response outside its IOP buffer");
++        RpcResult response;response.handled=true;response.resultAddress=request.receive.address;return response;
++    }
++};
++}
++std::unique_ptr<IopService> createPadmanService(IopHost& host,uint16_t version) {
++    return std::make_unique<NativePadmanService>(host,version);
++}
++}
++#endif
+--- a/ps2xIOP/src/emulator/services/iop_rpc.h
++++ b/ps2xIOP/src/emulator/services/iop_rpc.h
+@@ -5,6 +5,10 @@
+ #include <cstddef>
+ #include <cstdint>
+ #include <unordered_map>
++#include <array>
++#include <vector>
++#include <optional>
++#include <stdexcept>
+ 
+ namespace ps2x::iop
+ {
+@@ -38,6 +42,17 @@
+         {
+             return executeGuestFunction(address, a0, a1, a2, a3, gp);
+         }
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        [[nodiscard]] virtual uint32_t executeNativeRpcFunction(uint32_t address,uint32_t a0,uint32_t a1,uint32_t a2,uint32_t gp,int threadId) = 0;
++        [[nodiscard]] virtual std::optional<uint32_t> beginNativeRpcFunction(uint32_t address,uint32_t a0,uint32_t a1,uint32_t a2,uint32_t gp,int threadId)
++        {return executeNativeRpcFunction(address,a0,a1,a2,gp,threadId);}
++        [[nodiscard]] virtual std::optional<uint32_t> pollNativeRpcFunction(int threadId) {throw std::runtime_error("Native RPC continuation unavailable");}
++        [[nodiscard]] virtual uint64_t nativeExecutionCycles() const = 0;
++        [[nodiscard]] virtual bool nativeInterruptsEnabled() const = 0;
++#endif
++        [[nodiscard]] virtual bool inInterruptContext() const {return false;}
++        [[nodiscard]] virtual uint32_t executeFileFunction(uint32_t address,uint32_t a0,uint32_t a1,uint32_t a2,uint32_t gp)
++        { return executeGuestFunction(address,a0,a1,a2,0u,gp); }
+     };
+ 
+     class IopRpcBridge
+@@ -53,6 +68,14 @@
+         void removeServersInRange(uint32_t base, uint32_t size);
+ 
+         [[nodiscard]] bool hasServer(uint32_t sid) const noexcept;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        [[nodiscard]] bool nativeServer(RpcRequest &request, bool byAddress) const noexcept;
++        [[nodiscard]] RpcResult pollNativeRpc(RpcRequest&,IopGuestExecutor&,uint64_t tokenMask=0,uint64_t tokenValue=0);
++        [[nodiscard]] bool nativeHasRpc() const noexcept {return !m_nativePending.empty();}
++        void nativePumpSifDma();
++        [[nodiscard]] bool nativeHasSifDma() const noexcept {return !m_nativeActiveIds.empty() || m_nativeTagCount!=0u;}
++
++#endif
+         [[nodiscard]] size_t serverCount() const noexcept { return m_servers.size(); }
+ 
+     private:
+@@ -72,6 +95,18 @@
+         IopMemory &m_memory;
+         IopKernel &m_kernel;
+         std::unordered_map<uint32_t, RpcServer> m_servers;
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        std::unordered_map<uint32_t,int> m_queueThreads;
++        struct PendingRpc {RpcRequest request;int threadId;};
++        std::vector<PendingRpc> m_nativePending;
++        uint32_t nativeSetDma(uint32_t descriptors,uint32_t count);
++        int32_t nativeDmaStat(uint32_t id);
++        std::array<uint32_t,2> m_nativeTagBuffers{};
++        std::array<std::array<uint32_t,4>,32> m_nativeTags{};
++        std::vector<uint32_t> m_nativeQueuedIds,m_nativeActiveIds;
++        uint32_t m_nativeTagCount=0u,m_nativeStagingIndex=0u;
++
++#endif
+         uint32_t m_nextDmaId = 1u;
+         bool m_sifInitialized = false;
+     };
+--- a/ps2xIOP/include/ps2x/iop/iop_host.h
++++ b/ps2xIOP/include/ps2x/iop/iop_host.h
+@@ -7,6 +7,11 @@
+ #include <cstdint>
+ #include <string>
+ #include <string_view>
++#include <optional>
++#include <span>
++#include <stdexcept>
++
++namespace ps2x::iop::detail { class IopMemory; struct IopCpuState; }
+ 
+ namespace ps2x::iop
+ {
+@@ -50,7 +55,30 @@
+     {
+         MemoryCardOperation operation = MemoryCardOperation::Init;
+         // The fifth argument is carried in $t0 by the EE n32 ABI
+-        std::array<uint32_t, 5> arguments{};
++        std::array<uint32_t, 6> arguments{};
++        // RPC names/prefixes live in the received packet, not in the EE address space.
++        std::optional<std::string> name;
++        std::span<const uint8_t> inlineData;
++    };
++
++    enum class PadOperation : uint32_t {
++        Init,End,Open,Close,Tick,Snapshot,GetState,GetReqState,GetModVersion,
++        GetPortMax,GetSlotMax,InfoMode,InfoAct,InfoComb,GetButtonMask,
++        SetMainMode,SetButtonInfo,SetActAlign,SetActDirect,SetVref,
++    };
++    struct PadSnapshot {
++        bool open=false,connected=false,analog=false,pressure=false;
++        uint32_t dmaAddress=0,frame=0,state=0,reqState=0;
++        uint16_t pressureMask=0;
++        uint8_t modeLock=0,actDirectSize=0;
++        std::array<uint8_t,32> data{};
++        std::array<uint8_t,6> actAlign{},actDirect{};
++    };
++    struct PadRequest {
++        PadOperation operation=PadOperation::Init;
++        std::array<uint32_t,6> arguments{};
++        std::span<const uint8_t> data;
++        PadSnapshot* snapshot=nullptr;
+     };
+ 
+     class IopHost
+@@ -61,7 +89,14 @@
+         virtual bool readGuest(uint32_t address, void *destination, size_t size) const = 0;
+         virtual bool writeGuest(uint32_t address, const void *source, size_t size) = 0;
+         virtual bool zeroGuest(uint32_t address, size_t size) = 0;
++        virtual bool readRpcInput(uint32_t address, void *destination, size_t size) const
++        { return readGuest(address,destination,size); }
++        virtual bool writeRpcOutput(uint32_t address, const void *source, size_t size)
++        { return writeGuest(address,source,size); }
++
+         virtual bool normalizeGuestAddress(uint32_t address, uint32_t &normalized) const = 0;
++        virtual bool validateGuestOutput(uint32_t,size_t) const {return false;}
++
+ 
+         // IOP RAM is a distinct address space from the EE guest. TODO remove this later
+         virtual bool readIopMemory(uint32_t address, void *destination, size_t size) const
+@@ -90,6 +125,26 @@
+             normalized = 0u;
+             return false;
+         }
++#ifdef PS2N_SDK_NATIVE_BACKEND
++        virtual detail::IopMemory& nativeMemory() = 0;
++        virtual bool nativeStep(detail::IopCpuState&) = 0;
++        virtual bool nativeInterrupt(detail::IopCpuState&) = 0;
++        virtual uint32_t nativePendingInterrupts(uint32_t interested) const = 0;
++        virtual void nativeAcknowledgeInterrupts(uint32_t handled) = 0;
++        virtual bool nativeInterruptsEnabled() const = 0;
++        virtual void nativePublish(const detail::IopCpuState&) = 0;
++        virtual void nativePrepareImport(detail::IopCpuState&) = 0;
++        virtual bool nativeSif0Available() const {throw std::runtime_error("Native SIF0 interface unavailable");}
++        virtual bool nativeSif0Complete() const {throw std::runtime_error("Native SIF0 interface unavailable");}
++        virtual void nativeStartSif0(uint32_t) {throw std::runtime_error("Native SIF0 interface unavailable");}
++        virtual uint32_t nativeCdvdStatus() const {throw std::runtime_error("Native CDVD drive status unavailable");}
++        virtual uint64_t nativeCycles() const = 0;
++        virtual void nativeTick(uint64_t cycle) = 0;
++        virtual void nativeModuleLoaded(uint32_t base,uint32_t size,uint32_t entry) = 0;
++        virtual void nativeModuleReleased(uint32_t base,uint32_t size) = 0;
++        virtual std::optional<uint32_t> nativeStartModule(std::string_view,uint16_t,uint32_t,uint32_t,int32_t) {return std::nullopt;}
++
++#endif
+         virtual uint32_t allocateIopHandle(IopHandleKind kind) = 0;
+         virtual uint32_t allocateGuest(uint32_t size, uint32_t alignment) = 0;
+         virtual void freeGuest(uint32_t address) = 0;
+@@ -108,6 +163,11 @@
+         virtual void closeHostFile(uint64_t handle) = 0;
+ 
+         virtual int32_t memoryCard(const MemoryCardRequest &request) = 0;
++        virtual int32_t pad(const PadRequest&) {return -1;}
++        virtual bool readPadInput(unsigned,unsigned,uint8_t*,size_t) const {return false;}
++        virtual bool setPadRumble(unsigned,unsigned,uint8_t,uint8_t) {return false;}
++
++
+ 
+         virtual bool hasGuestFunction(uint32_t address) const = 0;
+         virtual bool invokeGuestFunction(uint64_t callToken,
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp
+@@ -1,4 +1,12 @@
++#ifdef PS2N_SDK_HLE
++#include "sdk_kernel_common.hpp"
++#include "ps2x/iop/iop_host.h"
++#include <deque>
++#include <cstdio>
++#include <sstream>
++#else
+ #include "Common.h"
++#endif
+ #include "MemoryCard.h"
+ 
+ namespace ps2_stubs
+@@ -80,16 +88,59 @@
+         {
+             std::string currentDir = "/";
+             bool formatted = true;
++            size_t directoryCursor=0;
++            std::string directoryQuery;
+         };
+ 
+-        std::mutex g_mcStateMutex;
+-        int32_t g_mcNextFd = 1;
+-        int32_t g_mcLastCmd = 0;
+-        bool g_mcCommandPending = false;
+-        int32_t g_mcLastResult = 0;
+-        std::unordered_map<int32_t, McOpenFile> g_mcFiles;
+-        std::array<McPortState, 2> g_mcPorts{};
+-        int32_t g_cvMcFileCursor = 0;
++        struct McState {
++            std::mutex mutex;
++            int32_t nextFd=1,lastCmd=0,lastResult=0,cvFileCursor=0;
++            bool commandPending=false;
++            std::unordered_map<int32_t,McOpenFile> files;
++            std::array<McPortState,2> ports{};
++#ifdef PS2N_SDK_HLE
++            std::filesystem::path root;
++#endif
++            ~McState(){for(auto& [id,file]:files)if(file.file)std::fclose(file.file);}
++        };
++#ifdef PS2N_SDK_HLE
++        struct McView {uint32_t address;size_t written;std::vector<uint8_t> data;};
++        struct McIo {
++            ps2x::iop::IopHost& host;
++            const ps2x::iop::MemoryCardRequest& request;
++            McState& state;
++            std::deque<McView> outputs,inputs;
++        };
++        thread_local McIo* activeMc{};
++        McState& mcState(){if(!activeMc)throw std::runtime_error("MemoryCard service is not bound to a console");return activeMc->state;}
++        constexpr uint32_t PS2_FIO_SEEK_CUR=1,PS2_FIO_SEEK_END=2;
++        void setReturnS32(R5900Context* context,int32_t value){context->set_reg32_sign_extended(2,static_cast<uint32_t>(value));}
++        constexpr uint32_t PS2_FIO_O_RDONLY=1,PS2_FIO_O_WRONLY=2,PS2_FIO_O_RDWR=3,
++            PS2_FIO_O_APPEND=0x100,PS2_FIO_O_CREAT=0x200,PS2_FIO_O_TRUNC=0x400;
++        std::string toLowerAscii(std::string value){for(auto& c:value)if(c>='A' && c<='Z')c+=32;return value;}
++        std::string readPs2CStringBounded(uint8_t*,uint32_t address,size_t maximum) {
++            if(activeMc->request.name)return *activeMc->request.name;
++            std::string value;
++            for(size_t i=0;i<maximum;++i){uint8_t byte;if(!activeMc->host.readGuest(address+static_cast<uint32_t>(i),&byte,1u))throw std::runtime_error("MemoryCard name outside EE RAM");if(!byte)return value;value.push_back(static_cast<char>(byte));}
++            throw std::runtime_error("MemoryCard name lacks a terminator");
++        }
++        uint8_t* mcOutput(uint8_t*,uint32_t address,size_t size) {
++            if(!address || size>1024u*1024u || !activeMc->host.validateGuestOutput(address,size))return nullptr;
++            activeMc->outputs.push_back({address,size,std::vector<uint8_t>(size)});
++            return activeMc->outputs.back().data.data();
++        }
++        const uint8_t* mcInput(const uint8_t*,uint32_t address,size_t size) {
++            if(!activeMc->request.inlineData.empty())return size<=activeMc->request.inlineData.size()?activeMc->request.inlineData.data():nullptr;
++            if(!address || size>1024u*1024u)return nullptr;
++            McView view{address,0,std::vector<uint8_t>(size)};
++            if(!activeMc->host.readGuest(address,view.data.data(),size))return nullptr;
++            activeMc->inputs.push_back(std::move(view));return activeMc->inputs.back().data.data();
++        }
++#else
++        McState& mcState(){static McState state;return state;}
++        uint8_t* mcOutput(uint8_t* rdram,uint32_t address,size_t){return getMemPtr(rdram,address);}
++        const uint8_t* mcInput(const uint8_t* rdram,uint32_t address,size_t){return getConstMemPtr(rdram,address);}
++#endif
+ 
+         constexpr int32_t kCvMcSaveFileBytes = 0x838;
+         constexpr int32_t kCvMcConfigFileBytes = 0x34;
+@@ -109,11 +160,15 @@
+ 
+         bool isValidMcPortSlot(int32_t port, int32_t slot)
+         {
+-            return port >= 0 && port < static_cast<int32_t>(g_mcPorts.size()) && slot == 0;
++            return port >= 0 && port < static_cast<int32_t>(mcState().ports.size()) && slot == 0;
+         }
+ 
+         std::filesystem::path getMcRootPath(int32_t port)
+         {
++#ifdef PS2N_SDK_HLE
++            std::filesystem::path root=mcState().root;
++            if(root.empty() || !root.is_absolute())throw std::runtime_error("MemoryCard requires an explicit absolute save root");
++#else
+             const PS2Runtime::IoPaths &paths = PS2Runtime::getIoPaths();
+             std::filesystem::path root = paths.mcRoot;
+             if (root.empty())
+@@ -130,6 +185,7 @@
+                 }
+             }
+ 
++#endif
+             root = root.lexically_normal();
+             if (port <= 0)
+             {
+@@ -155,6 +211,10 @@
+         {
+             std::error_code ec;
+             std::filesystem::create_directories(getMcRootPath(port), ec);
++#ifdef PS2N_SDK_HLE
++            if(ec || !std::filesystem::is_directory(getMcRootPath(port),ec) || ec)
++                throw std::runtime_error("MemoryCard save directory is unavailable");
++#endif
+         }
+ 
+         std::vector<std::string> splitMcPathComponents(const std::string &value)
+@@ -215,9 +275,9 @@
+ 
+             const bool absolute = !path.empty() && path.front() == '/';
+             std::vector<std::string> parts;
+-            if (!absolute && port >= 0 && port < static_cast<int32_t>(g_mcPorts.size()))
+-            {
+-                parts = splitMcPathComponents(g_mcPorts[static_cast<size_t>(port)].currentDir);
++            if (!absolute && port >= 0 && port < static_cast<int32_t>(mcState().ports.size()))
++            {
++                parts = splitMcPathComponents(mcState().ports[static_cast<size_t>(port)].currentDir);
+             }
+ 
+             for (const std::string &part : splitMcPathComponents(path))
+@@ -247,7 +307,20 @@
+             std::filesystem::path resolved = getMcRootPath(port);
+             if (guestPath.size() > 1u)
+             {
++                #ifdef PS2N_SDK_HLE
++                const auto relative=std::filesystem::u8path(guestPath.substr(1));
++                for(const auto& component:relative) {
++                    const auto text=component.u8string();
++                    if(text.find(u8':')!=text.npos || component.is_absolute())throw std::runtime_error("MemoryCard path is not a guest-relative name");
++                }
++                resolved /= relative;
++                const auto root=std::filesystem::weakly_canonical(getMcRootPath(port));
++                const auto actual=std::filesystem::weakly_canonical(resolved);
++                const auto within=actual.lexically_relative(root);
++                if(within.empty() || *within.begin()==".." || within.is_absolute())throw std::runtime_error("MemoryCard path escapes its save root");
++#else
+                 resolved /= std::filesystem::path(guestPath.substr(1));
++#endif
+             }
+             return resolved.lexically_normal();
+         }
+@@ -275,7 +348,7 @@
+                 return;
+             }
+ 
+-            uint8_t *dst = getMemPtr(rdram, addr);
++            uint8_t *dst = mcOutput(rdram, addr, value.size()+1u);
+             if (!dst)
+             {
+                 return;
+@@ -362,14 +435,14 @@
+ 
+         void setMcCommandResultLocked(int32_t cmd, int32_t result)
+         {
+-            g_mcLastCmd = cmd;
+-            g_mcLastResult = result;
+-            g_mcCommandPending = true;
++            mcState().lastCmd = cmd;
++            mcState().lastResult = result;
++            mcState().commandPending = true;
+         }
+ 
+         void closeMcFilesLocked()
+         {
+-            for (auto &[fd, openFile] : g_mcFiles)
++            for (auto &[fd, openFile] : mcState().files)
+             {
+                 if (openFile.file)
+                 {
+@@ -377,12 +450,12 @@
+                     openFile.file = nullptr;
+                 }
+             }
+-            g_mcFiles.clear();
++            mcState().files.clear();
+         }
+ 
+         void closeMcFilesForPortLocked(int32_t port)
+         {
+-            for (auto it = g_mcFiles.begin(); it != g_mcFiles.end();)
++            for (auto it = mcState().files.begin(); it != mcState().files.end();)
+             {
+                 if (it->second.port == port)
+                 {
+@@ -390,7 +463,7 @@
+                     {
+                         std::fclose(it->second.file);
+                     }
+-                    it = g_mcFiles.erase(it);
++                    it = mcState().files.erase(it);
+                 }
+                 else
+                 {
+@@ -405,25 +478,25 @@
+             {
+                 return kMcResultDeniedPermit;
+             }
+-            if (g_mcFiles.size() >= kMcMaxOpenFiles)
++            if (mcState().files.size() >= kMcMaxOpenFiles)
+             {
+                 return kMcResultUpLimitHandle;
+             }
+ 
+             for (int attempt = 0; attempt < 0x10000; ++attempt)
+             {
+-                if (g_mcNextFd <= 0)
+-                {
+-                    g_mcNextFd = 1;
+-                }
+-
+-                const int32_t fd = g_mcNextFd++;
+-                if (g_mcFiles.find(fd) != g_mcFiles.end())
++                if (mcState().nextFd <= 0)
++                {
++                    mcState().nextFd = 1;
++                }
++
++                const int32_t fd = mcState().nextFd++;
++                if (mcState().files.find(fd) != mcState().files.end())
+                 {
+                     continue;
+                 }
+ 
+-                g_mcFiles.emplace(fd, McOpenFile{file, port, hostPath});
++                mcState().files.emplace(fd, McOpenFile{file, port, hostPath});
+                 return fd;
+             }
+ 
+@@ -474,29 +547,34 @@
+                 }
+             }
+ 
++#ifdef _WIN32
++            const std::string modeText(mode);
++            return _wfopen(hostPath.c_str(),std::wstring(modeText.begin(),modeText.end()).c_str());
++#else
+             return std::fopen(hostPath.string().c_str(), mode);
++#endif
+         }
+     }
+ 
+     MemoryCardDebugSnapshot getMemoryCardDebugSnapshot()
+     {
+         MemoryCardDebugSnapshot snapshot{};
+-        std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-        snapshot.nextFd = g_mcNextFd;
+-        snapshot.lastCmd = g_mcLastCmd;
+-        snapshot.lastResult = g_mcLastResult;
+-        snapshot.cvFileCursor = g_cvMcFileCursor;
+-
+-        for (size_t i = 0; i < g_mcPorts.size(); ++i)
++        std::lock_guard<std::mutex> lock(mcState().mutex);
++        snapshot.nextFd = mcState().nextFd;
++        snapshot.lastCmd = mcState().lastCmd;
++        snapshot.lastResult = mcState().lastResult;
++        snapshot.cvFileCursor = mcState().cvFileCursor;
++
++        for (size_t i = 0; i < mcState().ports.size(); ++i)
+         {
+             snapshot.ports[i].port = static_cast<int32_t>(i);
+-            snapshot.ports[i].currentDir = g_mcPorts[i].currentDir;
+-            snapshot.ports[i].formatted = g_mcPorts[i].formatted;
++            snapshot.ports[i].currentDir = mcState().ports[i].currentDir;
++            snapshot.ports[i].formatted = mcState().ports[i].formatted;
+             snapshot.ports[i].rootPath = getMcRootPath(static_cast<int32_t>(i));
+         }
+ 
+-        snapshot.openFiles.reserve(g_mcFiles.size());
+-        for (const auto &[fd, file] : g_mcFiles)
++        snapshot.openFiles.reserve(mcState().files.size());
++        for (const auto &[fd, file] : mcState().files)
+         {
+             MemoryCardDebugOpenFile row{};
+             row.fd = fd;
+@@ -526,10 +604,10 @@
+         std::string currentDir = "/";
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             if (isValidMcPortSlot(port, slot))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                McPortState &state = mcState().ports[static_cast<size_t>(port)];
+                 currentDir = state.currentDir;
+                 if (!state.formatted)
+                 {
+@@ -566,15 +644,15 @@
+         const int32_t fd = static_cast<int32_t>(getRegU32(ctx, 4));
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            auto it = g_mcFiles.find(fd);
+-            if (it != g_mcFiles.end())
++            std::lock_guard<std::mutex> lock(mcState().mutex);
++            auto it = mcState().files.find(fd);
++            if (it != mcState().files.end())
+             {
+                 if (!it->second.file || std::fclose(it->second.file) == 0)
+                 {
+                     result = kMcResultSucceed;
+                 }
+-                g_mcFiles.erase(it);
++                mcState().files.erase(it);
+             }
+             setMcCommandResultLocked(kMcCmdClose, result);
+         }
+@@ -589,10 +667,10 @@
+ 
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             if (isValidMcPortSlot(port, slot))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                McPortState &state = mcState().ports[static_cast<size_t>(port)];
+                 if (!state.formatted)
+                 {
+                     result = kMcResultNoFormat;
+@@ -632,13 +710,13 @@
+     void sceMcEnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             closeMcFilesLocked();
+-            g_mcNextFd = 1;
+-            g_mcLastCmd = 0;
+-            g_mcLastResult = 0;
+-            g_mcCommandPending = false;
+-            for (McPortState &state : g_mcPorts)
++            mcState().nextFd = 1;
++            mcState().lastCmd = 0;
++            mcState().lastResult = 0;
++            mcState().commandPending = false;
++            for (McPortState &state : mcState().ports)
+             {
+                 state.currentDir = "/";
+             }
+@@ -653,9 +731,9 @@
+         const int32_t fd = static_cast<int32_t>(getRegU32(ctx, 4));
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            auto it = g_mcFiles.find(fd);
+-            if (it != g_mcFiles.end() && it->second.file)
++            std::lock_guard<std::mutex> lock(mcState().mutex);
++            auto it = mcState().files.find(fd);
++            if (it != mcState().files.end() && it->second.file)
+             {
+                 result = (std::fflush(it->second.file) == 0) ? kMcResultSucceed : kMcResultDeniedPermit;
+             }
+@@ -671,7 +749,7 @@
+ 
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             if (isValidMcPortSlot(port, slot))
+             {
+                 closeMcFilesForPortLocked(port);
+@@ -682,7 +760,7 @@
+                 std::filesystem::create_directories(root, ec);
+                 if (!ec)
+                 {
+-                    McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                    McPortState &state = mcState().ports[static_cast<size_t>(port)];
+                     state.currentDir = "/";
+                     state.formatted = true;
+                     result = kMcResultSucceed;
+@@ -699,16 +777,17 @@
+         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
+         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
+         const std::string rawPath = readPs2CStringBounded(rdram, getRegU32(ctx, 6), kMcMaxPathLen);
++        const int32_t flags=static_cast<int32_t>(getRegU32(ctx,7));
+         const int32_t maxEntries = static_cast<int32_t>(getRegU32(ctx, 8));
+         const uint32_t tableAddr = getRegU32(ctx, 9);
+ 
+         std::vector<SceMcTblGetDir> entries;
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             if (isValidMcPortSlot(port, slot))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                McPortState &state = mcState().ports[static_cast<size_t>(port)];
+                 if (!state.formatted)
+                 {
+                     result = kMcResultNoFormat;
+@@ -718,6 +797,8 @@
+                     ensureMcRootExists(port);
+                     const std::string guestQuery =
+                         normalizeGuestMcPathLocked(port, rawPath.empty() ? "." : rawPath);
++                    if(flags==0){state.directoryCursor=0;state.directoryQuery=guestQuery;}
++                    else if(flags!=1 || state.directoryQuery!=guestQuery)throw std::runtime_error("MemoryCard directory continuation has no matching query");
+                     const bool hasWildcard =
+                         guestQuery.find('*') != std::string::npos || guestQuery.find('?') != std::string::npos;
+ 
+@@ -821,15 +902,17 @@
+                             entries.push_back(tableEntry);
+                         }
+ 
++                        const size_t entryOffset=std::min(state.directoryCursor,entries.size());
+                         const size_t entryCount =
+-                            std::min(entries.size(), maxEntries > 0 ? static_cast<size_t>(maxEntries) : 0u);
++                            std::min(entries.size()-entryOffset, maxEntries > 0 ? static_cast<size_t>(maxEntries) : 0u);
+                         if (entryCount == 0u || tableAddr == 0u)
+                         {
+                             result = static_cast<int32_t>(entryCount);
+                         }
+-                        else if (uint8_t *dst = getMemPtr(rdram, tableAddr))
++                        else if (uint8_t *dst = mcOutput(rdram, tableAddr, entryCount*sizeof(SceMcTblGetDir)))
+                         {
+-                            std::memcpy(dst, entries.data(), entryCount * sizeof(SceMcTblGetDir));
++                            std::memcpy(dst, entries.data()+entryOffset, entryCount * sizeof(SceMcTblGetDir));
++                            state.directoryCursor=entryOffset+entryCount;
+                             result = static_cast<int32_t>(entryCount);
+                         }
+                         else
+@@ -850,7 +933,7 @@
+     void sceMcGetEntSpace(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             setMcCommandResultLocked(kMcCmdGetEntSpace, 1024);
+         }
+         setReturnS32(ctx, 0);
+@@ -870,10 +953,10 @@
+         int32_t result = kMcResultNoEntry;
+ 
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             if (isValidMcPortSlot(port, slot))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                McPortState &state = mcState().ports[static_cast<size_t>(port)];
+                 cardType = kMcTypePs2;
+                 freeBlocks = state.formatted ? kMcFreeClusters : 0;
+                 format = state.formatted ? kMcFormatted : kMcUnformatted;
+@@ -885,21 +968,21 @@
+ 
+         if (typePtr != 0u)
+         {
+-            if (uint8_t *out = getMemPtr(rdram, typePtr))
++            if (uint8_t *out = mcOutput(rdram, typePtr,4u))
+             {
+                 std::memcpy(out, &cardType, sizeof(cardType));
+             }
+         }
+         if (freePtr != 0u)
+         {
+-            if (uint8_t *out = getMemPtr(rdram, freePtr))
++            if (uint8_t *out = mcOutput(rdram, freePtr,4u))
+             {
+                 std::memcpy(out, &freeBlocks, sizeof(freeBlocks));
+             }
+         }
+         if (formatPtr != 0u)
+         {
+-            if (uint8_t *out = getMemPtr(rdram, formatPtr))
++            if (uint8_t *out = mcOutput(rdram, formatPtr,4u))
+             {
+                 std::memcpy(out, &format, sizeof(format));
+             }
+@@ -919,13 +1002,13 @@
+     void sceMcInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             closeMcFilesLocked();
+-            g_mcNextFd = 1;
+-            g_mcLastCmd = 0;
+-            g_mcLastResult = 0;
+-            g_mcCommandPending = false;
+-            for (McPortState &state : g_mcPorts)
++            mcState().nextFd = 1;
++            mcState().lastCmd = 0;
++            mcState().lastResult = 0;
++            mcState().commandPending = false;
++            for (McPortState &state : mcState().ports)
+             {
+                 state.currentDir = "/";
+                 state.formatted = true;
+@@ -944,10 +1027,10 @@
+ 
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             if (isValidMcPortSlot(port, slot))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                McPortState &state = mcState().ports[static_cast<size_t>(port)];
+                 if (!state.formatted)
+                 {
+                     result = kMcResultNoFormat;
+@@ -989,10 +1072,10 @@
+ 
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             if (isValidMcPortSlot(port, slot))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                McPortState &state = mcState().ports[static_cast<size_t>(port)];
+                 if (!state.formatted)
+                 {
+                     result = kMcResultNoFormat;
+@@ -1048,17 +1131,20 @@
+         const int32_t fd = static_cast<int32_t>(getRegU32(ctx, 4));
+         const uint32_t dstAddr = getRegU32(ctx, 5);
+         const int32_t size = static_cast<int32_t>(getRegU32(ctx, 6));
+-        uint8_t *dst = (size > 0) ? getMemPtr(rdram, dstAddr) : nullptr;
++        uint8_t *dst = (size > 0) ? mcOutput(rdram, dstAddr,static_cast<size_t>(size)) : nullptr;
++#ifdef PS2N_SDK_HLE
++        if(dst)activeMc->outputs.back().written=0u;
++#endif
+ 
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            auto it = g_mcFiles.find(fd);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
++            auto it = mcState().files.find(fd);
+             if (size <= 0)
+             {
+                 result = 0;
+             }
+-            else if (it == g_mcFiles.end() || !it->second.file)
++            else if (it == mcState().files.end() || !it->second.file)
+             {
+                 result = kMcResultNoEntry;
+             }
+@@ -1069,6 +1155,9 @@
+             else
+             {
+                 const size_t bytesRead = std::fread(dst, 1u, static_cast<size_t>(size), it->second.file);
++#ifdef PS2N_SDK_HLE
++                activeMc->outputs.back().written=bytesRead;
++#endif
+                 result = std::ferror(it->second.file) ? kMcResultDeniedPermit : static_cast<int32_t>(bytesRead);
+                 if (std::ferror(it->second.file))
+                 {
+@@ -1090,10 +1179,10 @@
+ 
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             if (isValidMcPortSlot(port, slot))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                McPortState &state = mcState().ports[static_cast<size_t>(port)];
+                 if (!state.formatted)
+                 {
+                     result = kMcResultNoFormat;
+@@ -1127,9 +1216,9 @@
+ 
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            auto it = g_mcFiles.find(fd);
+-            if (it != g_mcFiles.end() && it->second.file)
++            std::lock_guard<std::mutex> lock(mcState().mutex);
++            auto it = mcState().files.find(fd);
++            if (it != mcState().files.end() && it->second.file)
+             {
+                 int whence = SEEK_SET;
+                 if (origin == PS2_FIO_SEEK_CUR)
+@@ -1165,10 +1254,10 @@
+ 
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             if (isValidMcPortSlot(port, slot))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                McPortState &state = mcState().ports[static_cast<size_t>(port)];
+                 if (!state.formatted)
+                 {
+                     result = kMcResultNoFormat;
+@@ -1198,11 +1287,11 @@
+         int32_t result = 0;
+         bool hadPending = false;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            hadPending = g_mcCommandPending;
+-            g_mcCommandPending = false;
+-            cmd = g_mcLastCmd;
+-            result = g_mcLastResult;
++            std::lock_guard<std::mutex> lock(mcState().mutex);
++            hadPending = mcState().commandPending;
++            mcState().commandPending = false;
++            cmd = mcState().lastCmd;
++            result = mcState().lastResult;
+         }
+ 
+         // libmc semantics: -1 means no async operation was executing; games rely
+@@ -1217,14 +1306,14 @@
+ 
+         if (cmdPtr != 0u)
+         {
+-            if (uint8_t *out = getMemPtr(rdram, cmdPtr))
++            if (uint8_t *out = mcOutput(rdram, cmdPtr,4u))
+             {
+                 std::memcpy(out, &cmd, sizeof(cmd));
+             }
+         }
+         if (resultPtr != 0u)
+         {
+-            if (uint8_t *out = getMemPtr(rdram, resultPtr))
++            if (uint8_t *out = mcOutput(rdram, resultPtr,4u))
+             {
+                 std::memcpy(out, &result, sizeof(result));
+             }
+@@ -1241,7 +1330,7 @@
+ 
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
+             if (isValidMcPortSlot(port, slot))
+             {
+                 closeMcFilesForPortLocked(port);
+@@ -1252,7 +1341,7 @@
+                 std::filesystem::create_directories(root, ec);
+                 if (!ec)
+                 {
+-                    McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                    McPortState &state = mcState().ports[static_cast<size_t>(port)];
+                     state.currentDir = "/";
+                     state.formatted = false;
+                     result = kMcResultSucceed;
+@@ -1269,17 +1358,17 @@
+         const int32_t fd = static_cast<int32_t>(getRegU32(ctx, 4));
+         const uint32_t srcAddr = getRegU32(ctx, 5);
+         const int32_t size = static_cast<int32_t>(getRegU32(ctx, 6));
+-        const uint8_t *src = (size > 0) ? getConstMemPtr(rdram, srcAddr) : nullptr;
++        const uint8_t *src = (size > 0) ? mcInput(rdram, srcAddr,static_cast<size_t>(size)) : nullptr;
+ 
+         int32_t result = kMcResultNoEntry;
+         {
+-            std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            auto it = g_mcFiles.find(fd);
++            std::lock_guard<std::mutex> lock(mcState().mutex);
++            auto it = mcState().files.find(fd);
+             if (size <= 0)
+             {
+                 result = 0;
+             }
+-            else if (it == g_mcFiles.end() || !it->second.file)
++            else if (it == mcState().files.end() || !it->second.file)
+             {
+                 result = kMcResultNoEntry;
+             }
+@@ -1306,6 +1395,7 @@
+         setReturnS32(ctx, 0);
+     }
+ 
++#ifndef PS2N_SDK_HLE
+     void mcCallMessageTypeSe(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         setReturnS32(ctx, 0);
+@@ -1408,7 +1498,7 @@
+ 
+     void mcGetFileSelectWindowCursol(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        setReturnS32(ctx, g_cvMcFileCursor);
++        setReturnS32(ctx, mcState().cvFileCursor);
+     }
+ 
+     void mcGetFreeCapacitySize(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+@@ -1446,8 +1536,8 @@
+     void mcMoveFileSelectWindowCursor(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         const int32_t delta = static_cast<int32_t>(getRegU32(ctx, 5));
+-        g_cvMcFileCursor += delta;
+-        g_cvMcFileCursor = std::clamp(g_cvMcFileCursor, -1, 15);
++        mcState().cvFileCursor += delta;
++        mcState().cvFileCursor = std::clamp(mcState().cvFileCursor, -1, 15);
+         setReturnS32(ctx, 0);
+     }
+ 
+@@ -1483,7 +1573,7 @@
+ 
+     void mcSelectFileInfoInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        g_cvMcFileCursor = 0;
++        mcState().cvFileCursor = 0;
+         setReturnS32(ctx, 1);
+     }
+ 
+@@ -1494,14 +1584,14 @@
+ 
+     void mcSetFileSelectWindowCursol(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        g_cvMcFileCursor = static_cast<int32_t>(getRegU32(ctx, 5));
+-        g_cvMcFileCursor = std::clamp(g_cvMcFileCursor, -1, 15);
++        mcState().cvFileCursor = static_cast<int32_t>(getRegU32(ctx, 5));
++        mcState().cvFileCursor = std::clamp(mcState().cvFileCursor, -1, 15);
+         setReturnS32(ctx, 0);
+     }
+ 
+     void mcSetFileSelectWindowCursolInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        g_cvMcFileCursor = 0;
++        mcState().cvFileCursor = 0;
+         setReturnS32(ctx, 0);
+     }
+ 
+@@ -1529,4 +1619,48 @@
+     {
+         setReturnS32(ctx, 1);
+     }
++#endif
++
++#ifdef PS2N_SDK_HLE
++    int32_t nativeMemoryCard(ps2x::iop::IopHost& host,const ps2x::iop::MemoryCardRequest& request,
++        std::shared_ptr<void>& storage) {
++        if(!storage) {
++            auto state=std::make_shared<McState>();
++            state->root=std::filesystem::u8path(host.hostPath(ps2x::iop::HostPathKind::MemoryCardRoot));
++            if(!state->root.is_absolute())throw std::runtime_error("MemoryCard save root must be absolute");
++            storage=std::move(state);
++        }
++        auto& state=*std::static_pointer_cast<McState>(storage);
++        McIo io{host,request,state};
++        struct Scope{McIo* previous;~Scope(){activeMc=previous;}} scope{activeMc};activeMc=&io;
++        using Handler=void(*)(uint8_t*,R5900Context*,PS2Runtime*);
++        Handler handler=nullptr;
++        using O=ps2x::iop::MemoryCardOperation;
++        switch(request.operation) {
++        case O::Init:handler=sceMcInit;break;
++        case O::GetInfo:handler=sceMcGetInfo;break;
++        case O::Open:handler=sceMcOpen;break;
++        case O::Close:handler=sceMcClose;break;
++        case O::Seek:handler=sceMcSeek;break;
++        case O::Read:handler=sceMcRead;break;
++        case O::Write:handler=sceMcWrite;break;
++        case O::Flush:handler=sceMcFlush;break;
++        case O::Chdir:handler=sceMcChdir;break;
++        case O::GetDir:handler=sceMcGetDir;break;
++        case O::SetFileInfo:throw std::runtime_error("MemoryCard persistent file metadata is not implemented");
++        case O::Delete:handler=sceMcDelete;break;
++        case O::Format:throw std::runtime_error("MemoryCard persistent format state is not implemented");
++        case O::Unformat:throw std::runtime_error("MemoryCard persistent format state is not implemented");
++        case O::Mkdir:handler=sceMcMkdir;break;
++        }
++        if(!handler)return kMcResultDeniedPermit;
++        R5900Context context{};
++        for(unsigned i=0;i<request.arguments.size();++i)setRegU32(&context,4+i,request.arguments[i]);
++        handler(nullptr,&context,nullptr);
++        for(const auto& output:io.outputs)if(output.written && !host.writeGuest(output.address,output.data.data(),output.written))
++            throw std::runtime_error("MemoryCard output outside EE RAM");
++        return state.lastResult;
++    }
++#endif
++
+ }
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.h
+@@ -8,6 +8,10 @@
+ #include <string>
+ #include <vector>
+ 
++#ifdef PS2N_SDK_HLE
++#include "ps2x/iop/iop_host.h"
++#include <memory>
++#endif
+ namespace ps2_stubs
+ {
+ 
+@@ -37,6 +41,9 @@
+     };
+ 
+     MemoryCardDebugSnapshot getMemoryCardDebugSnapshot();
++#ifdef PS2N_SDK_HLE
++    int32_t nativeMemoryCard(ps2x::iop::IopHost&,const ps2x::iop::MemoryCardRequest&,std::shared_ptr<void>&);
++#endif
+     void sceMcChangeThreadPriority(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceMcChdir(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceMcClose(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+--- a/ps2xRuntime/src/lib/ps2_iop_host.cpp
++++ b/ps2xRuntime/src/lib/ps2_iop_host.cpp
+@@ -470,6 +470,7 @@
+ 
+     // EE n32 ABI: the fifth argument travels in $t0, matching the sceMc* stubs.
+     setRegU32(&context, 8, request.arguments[4]);
++    setRegU32(&context, 9, request.arguments[5]);
+ 
+     handler(m_activeRdram ? m_activeRdram : m_runtime.memory().getRDRAM(),
+             &context,
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+@@ -1,4 +1,12 @@
++#ifdef PS2N_SDK_HLE
++#include "sdk_kernel_common.hpp"
++#include "ps2x/iop/iop_host.h"
++#include <deque>
++#include <atomic>
++#include <sstream>
++#else
+ #include "Common.h"
++#endif
+ #include "Pad.h"
+ 
+ namespace ps2_stubs
+@@ -40,11 +48,17 @@
+             uint8_t ry = kPadAnalogCenter;
+             uint8_t lx = kPadAnalogCenter;
+             uint8_t ly = kPadAnalogCenter;
++            std::array<uint8_t,12> pressure{};
+         };
+ 
+         struct PadPortState
+         {
+             bool open = false;
++            bool connected=false,sampled=false;
++            uint32_t frame=0;
++            uint16_t pressureMask=0;
++            uint8_t modeLock=0,actDirectSize=0;
++            std::array<uint8_t,6> actAlign{0xFF,0xFF,0xFF,0xFF,0xFF,0xFF},actDirect{};
+             bool analogMode = false;  // real pads power up DIGITAL (CURID=4, mode 0x41)
+             bool pressureEnabled = false;
+             bool lastUsedOverride = false;
+@@ -60,13 +74,40 @@
+             uint32_t lastReadDataAddr = 0u;
+         };
+ 
+-        std::mutex g_padOverrideMutex;
+-        std::mutex g_padStateMutex;
+-        bool g_padOverrideEnabled = false;
+-        PadInputState g_padOverrideState{};
+-        PadPortState g_padPorts[kPadPortCount]{};
+-        int g_padReadLogCount = 0;
+-
++        struct PadState {
++            std::mutex overrideMutex,stateMutex;
++            bool overrideEnabled=false;
++            PadInputState overrideState{};
++            PadPortState ports[kPadPortCount]{};
++            int readLogCount=0;
++            uint32_t frame=0,version=0;
++#ifdef PS2N_SDK_HLE
++            ps2x::iop::IopHost* host=nullptr;
++            ~PadState(){if(host)for(unsigned port=0;port<kPadPortCount;++port)host->setPadRumble(port,0u,0u,0u);}
++#endif
++        };
++#ifdef PS2N_SDK_HLE
++        struct PadView {uint32_t address;std::vector<uint8_t> data;};
++        struct PadIo {
++            ps2x::iop::IopHost& host;
++            const ps2x::iop::PadRequest& request;
++            PadState& state;
++            std::deque<PadView> outputs;
++        };
++        thread_local PadIo* activePad{};
++        PadState& padState(){if(!activePad)throw std::runtime_error("SDK pad state is not bound to a console");return activePad->state;}
++        void setReturnS32(R5900Context* context,int32_t value){context->set_reg32_sign_extended(2,static_cast<uint32_t>(value));}
++        void setReturnU32(R5900Context* context,uint32_t value){context->set_reg32_sign_extended(2,value);}
++        uint8_t* padOutput(uint8_t*,uint32_t address) {
++            if(!address || !activePad->host.validateGuestOutput(address,32u))return nullptr;
++            activePad->outputs.push_back({address,std::vector<uint8_t>(32u)});return activePad->outputs.back().data.data();
++        }
++#else
++        PadState& padState(){static PadState state;return state;}
++        uint8_t* padOutput(uint8_t* rdram,uint32_t address){return getMemPtr(rdram,address);}
++#endif
++
++#ifndef PS2N_SDK_HLE
+         uint8_t axisToByte(float axis)
+         {
+             axis = std::clamp(axis, -1.0f, 1.0f);
+@@ -192,9 +233,11 @@
+             }
+         }
+ 
++#endif
++
+         void resetPadStateLocked()
+         {
+-            for (PadPortState &portState : g_padPorts)
++            for (PadPortState &portState : padState().ports)
+             {
+                 portState = PadPortState{};
+             }
+@@ -210,7 +253,7 @@
+             {
+                 return nullptr;
+             }
+-            return &g_padPorts[port];
++            return &padState().ports[port];
+         }
+ 
+         void initializePadPortLocked(PadPortState &portState, uint32_t dmaAddr)
+@@ -235,17 +278,29 @@
+             {
+                 return 0u;
+             }
++#ifdef PS2N_SDK_HLE
++            constexpr std::array<uint16_t,12> masks{kPadBtnRight,kPadBtnLeft,kPadBtnUp,kPadBtnDown,
++                kPadBtnTriangle,kPadBtnCircle,kPadBtnCross,kPadBtnSquare,kPadBtnL1,kPadBtnR1,kPadBtnL2,kPadBtnR2};
++            const auto found=std::find(masks.begin(),masks.end(),mask);
++            if(found==masks.end() || (state.buttons&mask))return 0u;
++            return std::max<uint8_t>(1u,state.pressure[static_cast<size_t>(found-masks.begin())]);
++#else
+             if ((portState.buttonMask & mask) == 0u)
+             {
+                 return 0u;
+             }
+             return ((state.buttons & mask) == 0u) ? 0xFFu : 0u;
++#endif
+         }
+ 
+         void fillPadStatus(uint8_t *data, const PadInputState &state, const PadPortState &portState)
+         {
+             std::memset(data, 0, 32);
+             data[1] = portState.analogMode ? kPadModeDualShock : kPadModeDigital;
++#ifdef PS2N_SDK_HLE
++            if(portState.pressureEnabled)data[1]=0x79u;
++            data[31]=0x5Au;
++#endif
+             data[2] = static_cast<uint8_t>(state.buttons & 0xFFu);
+             data[3] = static_cast<uint8_t>((state.buttons >> 8) & 0xFFu);
+             data[4] = state.rx;
+@@ -261,8 +316,8 @@
+             data[14] = pressureValue(state, portState, kPadBtnCross);
+             data[15] = pressureValue(state, portState, kPadBtnSquare);
+             data[16] = pressureValue(state, portState, kPadBtnL1);
+-            data[17] = pressureValue(state, portState, kPadBtnL2);
+-            data[18] = pressureValue(state, portState, kPadBtnR1);
++            data[17] = pressureValue(state, portState, kPadBtnR1);
++            data[18] = pressureValue(state, portState, kPadBtnL2);
+             data[19] = pressureValue(state, portState, kPadBtnR2);
+         }
+ 
+@@ -275,7 +330,7 @@
+ 
+             PadPortState portState;
+             {
+-                std::lock_guard<std::mutex> lock(g_padStateMutex);
++                std::lock_guard<std::mutex> lock(padState().stateMutex);
+                 const PadPortState *sharedPortState = lookupPadPortStateLocked(port, slot);
+                 if (!sharedPortState || !sharedPortState->open)
+                 {
+@@ -285,17 +340,31 @@
+             }
+ 
+             PadInputState state;
+-            bool useOverride = false;
+-            {
+-                std::lock_guard<std::mutex> lock(g_padOverrideMutex);
+-                if (g_padOverrideEnabled)
++            bool useOverride=false,usedBackend=true;
++#ifdef PS2N_SDK_HLE
++            std::array<uint8_t,32> input{};
++            const bool connected=activePad->host.readPadInput(port,slot,input.data(),input.size());
++            {
++                std::lock_guard lock(padState().stateMutex);
++                auto* shared=lookupPadPortStateLocked(port,slot);
++                if(!shared || !shared->open)return false;
++                shared->sampled=true;shared->connected=connected;
++                if(!connected){shared->lastReadOk=false;return false;}
++            }
++            state.buttons=static_cast<uint16_t>(input[2]|uint16_t{input[3]}<<8u);
++            state.rx=input[4];state.ry=input[5];state.lx=input[6];state.ly=input[7];
++            std::copy_n(input.begin()+8u,12u,state.pressure.begin());
++#else
++            {
++                std::lock_guard<std::mutex> lock(padState().overrideMutex);
++                if (padState().overrideEnabled)
+                 {
+-                    state = g_padOverrideState;
++                    state = padState().overrideState;
+                     useOverride = true;
+                 }
+             }
+ 
+-            bool usedBackend = false;
++            usedBackend = false;
+             if (!useOverride)
+             {
+                 uint8_t backendData[32]{};
+@@ -315,10 +384,11 @@
+                 }
+             }
+ 
++#endif
+             fillPadStatus(outData, state, portState);
+ 
+             {
+-                std::lock_guard<std::mutex> lock(g_padStateMutex);
++                std::lock_guard<std::mutex> lock(padState().stateMutex);
+                 if (PadPortState *sharedPortState = lookupPadPortStateLocked(port, slot))
+                 {
+                     sharedPortState->lastInput = state;
+@@ -345,7 +415,7 @@
+         (void)rdram;
+         (void)runtime;
+         {
+-            std::lock_guard<std::mutex> lock(g_padStateMutex);
++            std::lock_guard<std::mutex> lock(padState().stateMutex);
+             resetPadStateLocked();
+         }
+         setReturnS32(ctx, 1);
+@@ -354,7 +424,7 @@
+     void scePadEnterPressMode(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         (void)runtime;
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                            static_cast<int>(getRegU32(ctx, 5)));
+         if (!portState || !portState->open)
+@@ -372,7 +442,7 @@
+     void scePadExitPressMode(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         (void)runtime;
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                            static_cast<int>(getRegU32(ctx, 5)));
+         if (!portState || !portState->open)
+@@ -389,20 +459,25 @@
+ 
+     void scePadGetButtonMask(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        (void)rdram;
+-        (void)runtime;
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++#ifdef PS2N_SDK_HLE
++        const auto* p=lookupPadPortStateLocked(getRegU32(ctx,4),getRegU32(ctx,5));
++        setReturnU32(ctx,p && p->open && p->connected?0x3FFFFu:0u);
++#else
++        (void)rdram;
++        (void)runtime;
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         const PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                                  static_cast<int>(getRegU32(ctx, 5)));
+         const uint16_t mask = portState ? portState->buttonMask : 0xFFFFu;
+         setReturnS32(ctx, static_cast<int32_t>(mask));
++    #endif
+     }
+ 
+     void scePadGetDmaStr(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         (void)rdram;
+         (void)runtime;
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         const PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                                  static_cast<int>(getRegU32(ctx, 5)));
+         const uint32_t dmaAddr = portState ? portState->dmaAddr : getRegU32(ctx, 6);
+@@ -411,18 +486,26 @@
+ 
+     void scePadGetFrameCount(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifdef PS2N_SDK_HLE
++        setReturnU32(ctx,padState().frame);
++#else
+         (void)rdram;
+         (void)runtime;
+         static std::atomic<uint32_t> frameCount{0};
+         setReturnU32(ctx, frameCount++);
++    #endif
+     }
+ 
+     void scePadGetModVersion(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifdef PS2N_SDK_HLE
++        setReturnU32(ctx,padState().version);
++#else
+         (void)rdram;
+         (void)runtime;
+         // Arbitrary non-zero module version.
+         setReturnS32(ctx, 0x0200);
++    #endif
+     }
+ 
+     void scePadGetPortMax(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+@@ -436,7 +519,7 @@
+     {
+         (void)rdram;
+         (void)runtime;
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         const PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                                  static_cast<int>(getRegU32(ctx, 5)));
+         setReturnS32(ctx, static_cast<int32_t>(portState ? portState->reqState : 0u));
+@@ -452,9 +535,13 @@
+ 
+     void scePadGetState(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        (void)rdram;
+-        (void)runtime;
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++#ifdef PS2N_SDK_HLE
++        const auto* p=lookupPadPortStateLocked(getRegU32(ctx,4),getRegU32(ctx,5));
++        setReturnS32(ctx,!p || !p->open?0:!p->sampled?1:!p->connected?0:p->transientState?5:6);
++#else
++        (void)rdram;
++        (void)runtime;
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                            static_cast<int>(getRegU32(ctx, 5)));
+         int32_t state = kPadStateDisconnected;
+@@ -471,12 +558,21 @@
+             }
+         }
+         setReturnS32(ctx, state);
++    #endif
+     }
+ 
+     void scePadInfoAct(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifdef PS2N_SDK_HLE
++        const auto* p=lookupPadPortStateLocked(getRegU32(ctx,4),getRegU32(ctx,5));
++        if(!p || !p->open || !p->connected || p->reqState==2u){setReturnS32(ctx,0);return;}
++        const auto act=static_cast<int32_t>(getRegU32(ctx,6));const auto cmd=getRegU32(ctx,7);
++        // DS2 query-actuator fields, consumed by PS2SDK QueryAct.
++        constexpr uint8_t attributes[2][4]={{1,2,0,10},{1,1,1,20}};
++        setReturnS32(ctx,act==-1?2:act>=0 && act<2 && cmd<4u?attributes[act][cmd]:0);
++#else
+         const int32_t act = static_cast<int32_t>(getRegU32(ctx, 6));
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         const PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                                  static_cast<int>(getRegU32(ctx, 5)));
+         if (!portState || !portState->open)
+@@ -491,6 +587,7 @@
+             return;
+         }
+         setReturnS32(ctx, (act < 2) ? 1 : 0);
++    #endif
+     }
+ 
+     void scePadInfoComb(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+@@ -503,12 +600,20 @@
+ 
+     void scePadInfoMode(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifdef PS2N_SDK_HLE
++        const auto* p=lookupPadPortStateLocked(getRegU32(ctx,4),getRegU32(ctx,5));
++        if(!p || !p->open || !p->connected || p->reqState==2u){setReturnS32(ctx,0);return;}
++        const auto kind=getRegU32(ctx,6);const auto index=static_cast<int32_t>(getRegU32(ctx,7));
++        const int current=p->analogMode?7:4;
++        setReturnS32(ctx,kind==1u || kind==2u?current:kind==3u?int(p->analogMode):
++            kind==4u?(index==-1?2:index==0?4:index==1?7:0):0);
++#else
+         (void)rdram;
+         (void)runtime;
+ 
+         const int32_t infoMode = static_cast<int32_t>(getRegU32(ctx, 6)); // a2
+         const int32_t index = static_cast<int32_t>(getRegU32(ctx, 7));    // a3
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         const PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                                  static_cast<int>(getRegU32(ctx, 5)));
+         if (!portState || !portState->open)
+@@ -547,13 +652,14 @@
+             setReturnS32(ctx, 0);
+             return;
+         }
++    #endif
+     }
+ 
+     void scePadInfoPressMode(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         (void)rdram;
+         (void)runtime;
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         const PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                                  static_cast<int>(getRegU32(ctx, 5)));
+         setReturnS32(ctx, (portState && portState->open) ? 1 : 0);
+@@ -564,7 +670,7 @@
+         (void)rdram;
+         (void)runtime;
+         {
+-            std::lock_guard<std::mutex> lock(g_padStateMutex);
++            std::lock_guard<std::mutex> lock(padState().stateMutex);
+             resetPadStateLocked();
+         }
+         setReturnS32(ctx, 1);
+@@ -577,9 +683,15 @@
+ 
+     void scePadPortClose(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        (void)rdram;
+-        (void)runtime;
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++#ifdef PS2N_SDK_HLE
++        const auto port=getRegU32(ctx,4),slot=getRegU32(ctx,5);
++        auto* p=lookupPadPortStateLocked(port,slot);
++        if(!p || !p->open){setReturnS32(ctx,0);return;}
++        activePad->host.setPadRumble(port,slot,0u,0u);*p=PadPortState{};setReturnS32(ctx,1);
++#else
++        (void)rdram;
++        (void)runtime;
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                            static_cast<int>(getRegU32(ctx, 5)));
+         if (!portState)
+@@ -593,14 +705,15 @@
+         portState->reqState = 0u;
+         portState->transientState = 0u;
+         setReturnS32(ctx, 1);
++    #endif
+     }
+ 
+     void scePadPortOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         (void)runtime;
+         const uint32_t dmaAddr = getRegU32(ctx, 6);
+-        uint8_t *dmaStr = getMemPtr(rdram, dmaAddr);
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++        uint8_t *dmaStr = padOutput(rdram, dmaAddr);
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                            static_cast<int>(getRegU32(ctx, 5)));
+         if (!portState || (dmaAddr != 0u && !dmaStr))
+@@ -609,6 +722,10 @@
+             return;
+         }
+ 
++#ifdef PS2N_SDK_HLE
++        if(portState->open)activePad->host.setPadRumble(getRegU32(ctx,4),getRegU32(ctx,5),0u,0u);
++        *portState=PadPortState{};
++#endif
+         portState->open = true;
+         portState->analogMode = false;     // real pads open DIGITAL
+         portState->pressureEnabled = false;
+@@ -618,7 +735,9 @@
+         portState->transientState = 0u;
+         if (dmaStr)
+         {
++#ifndef PS2N_SDK_HLE
+             ps2TraceGuestRangeWrite(rdram, dmaAddr, 32u, "scePadPortOpen", ctx);
++#endif
+             std::memset(dmaStr, 0, 32);
+         }
+         setReturnS32(ctx, 1);
+@@ -626,25 +745,35 @@
+ 
+     void scePadRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifdef PS2N_SDK_HLE
++        const auto* p=lookupPadPortStateLocked(getRegU32(ctx,4),getRegU32(ctx,5));
++        if(!p || !p->open || !p->connected){setReturnS32(ctx,0);return;}
++        auto* out=padOutput(rdram,getRegU32(ctx,6));
++        if(!out){setReturnS32(ctx,0);return;}
++        std::copy_n(p->lastData,32u,out);setReturnS32(ctx,1);
++#else
+         const int port = static_cast<int>(getRegU32(ctx, 4));
+         const int slot = static_cast<int>(getRegU32(ctx, 5));
+         const uint32_t dataAddr = getRegU32(ctx, 6);
+-        uint8_t *data = getMemPtr(rdram, dataAddr);
++        uint8_t *data = padOutput(rdram, dataAddr);
+         if (!data)
+         {
+             setReturnS32(ctx, 0);
+             return;
+         }
+ 
++#ifndef PS2N_SDK_HLE
+         ps2TraceGuestRangeWrite(rdram, dataAddr, 32u, "scePadRead", ctx);
++#endif
+         if (!readPadPortData(port, slot, runtime, data, dataAddr))
+         {
+             setReturnS32(ctx, 0);
+             return;
+         }
+ 
++#ifndef PS2N_SDK_HLE
+         PS2_IF_AGRESSIVE_LOGS({
+-            if (g_padReadLogCount < 48)
++            if (padState().readLogCount < 48)
+             {
+                 const int gamepad = findFirstGamepad();
+                 const bool gamepadStartPressed =
+@@ -659,12 +788,14 @@
+                     std::printf("[padread] port=%d slot=%d data2=0x%02x data3=0x%02x guestButtons=0x%04x enter=%d gamepadStart=%d\n",
+                                 port, slot, data[2], data[3], guestButtons,
+                                 IsKeyDown(KEY_ENTER) ? 1 : 0, gamepadStartPressed ? 1 : 0);
+-                    ++g_padReadLogCount;
++                    ++padState().readLogCount;
+                 }
+             }
+         });
+ 
+-        setReturnS32(ctx, 1);
++#endif
++        setReturnS32(ctx, 1);
++    #endif
+     }
+ 
+     void scePadReqIntToStr(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+@@ -672,7 +803,7 @@
+         (void)runtime;
+         const uint32_t state = getRegU32(ctx, 4);
+         const uint32_t strAddr = getRegU32(ctx, 5);
+-        char *buf = reinterpret_cast<char *>(getMemPtr(rdram, strAddr));
++        char *buf = reinterpret_cast<char *>(padOutput(rdram, strAddr));
+         if (!buf)
+         {
+             setReturnS32(ctx, -1);
+@@ -687,23 +818,51 @@
+ 
+     void scePadSetActAlign(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        (void)rdram;
+-        (void)runtime;
+-        setReturnS32(ctx, 1);
++#ifdef PS2N_SDK_HLE
++        const auto port=getRegU32(ctx,4),slot=getRegU32(ctx,5);
++        auto* p=lookupPadPortStateLocked(port,slot);
++        if(!p || !p->open || !p->connected || p->reqState==2u || activePad->request.data.size()!=6u){setReturnS32(ctx,0);return;}
++        for(const auto value:activePad->request.data)if(value!=0u && value!=1u && value!=0xFFu){setReturnS32(ctx,0);return;}
++        std::copy_n(activePad->request.data.begin(),6u,p->actAlign.begin());p->reqState=2u;p->transientState=5u;
++        setReturnS32(ctx,1);
++#else
++        (void)rdram;
++        (void)runtime;
++        setReturnS32(ctx, 1);
++    #endif
+     }
+ 
+     void scePadSetActDirect(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        (void)rdram;
+-        (void)runtime;
+-        setReturnS32(ctx, 1);
++#ifdef PS2N_SDK_HLE
++        const auto port=getRegU32(ctx,4),slot=getRegU32(ctx,5);
++        auto* p=lookupPadPortStateLocked(port,slot);
++        if(!p || !p->open || !p->connected || p->reqState==2u || activePad->request.data.size()!=6u){setReturnS32(ctx,0);return;}
++        std::copy_n(activePad->request.data.begin(),6u,p->actDirect.begin());p->actDirectSize=6u;
++        uint8_t smallMotor=0,largeMotor=0;
++        for(unsigned i=0;i<6u;++i){if(p->actAlign[i]==0u)smallMotor=p->actDirect[i]?1u:0u;else if(p->actAlign[i]==1u)largeMotor=p->actDirect[i];}
++        (void)activePad->host.setPadRumble(port,slot,smallMotor,largeMotor);
++        setReturnS32(ctx,1);
++#else
++        (void)rdram;
++        (void)runtime;
++        setReturnS32(ctx, 1);
++    #endif
+     }
+ 
+     void scePadSetButtonInfo(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        (void)rdram;
+-        (void)runtime;
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++#ifdef PS2N_SDK_HLE
++        auto* p=lookupPadPortStateLocked(getRegU32(ctx,4),getRegU32(ctx,5));
++        const auto mask=getRegU32(ctx,6);
++        if(!p || !p->open || !p->connected || p->reqState==2u){setReturnS32(ctx,0);return;}
++        if(mask && mask!=0xFFFu)throw std::runtime_error("SDK pad sparse pressure response is not implemented");
++        p->analogMode=true;p->pressureEnabled=mask!=0u;p->pressureMask=static_cast<uint16_t>(mask);
++        p->reqState=2u;p->transientState=5u;setReturnS32(ctx,1);
++#else
++        (void)rdram;
++        (void)runtime;
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                            static_cast<int>(getRegU32(ctx, 5)));
+         if (portState && portState->open)
+@@ -713,13 +872,21 @@
+             queueExecCmdStateLocked(*portState);
+         }
+         setReturnS32(ctx, 1);
++    #endif
+     }
+ 
+     void scePadSetMainMode(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        (void)rdram;
+-        (void)runtime;
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++#ifdef PS2N_SDK_HLE
++        auto* p=lookupPadPortStateLocked(getRegU32(ctx,4),getRegU32(ctx,5));
++        const auto mode=getRegU32(ctx,6),lock=getRegU32(ctx,7);
++        if(!p || !p->open || !p->connected || p->reqState==2u || mode>1u || lock>3u){setReturnS32(ctx,0);return;}
++        p->analogMode=mode!=0u;p->pressureEnabled=false;p->pressureMask=0;p->modeLock=lock==3u?3u:0u;
++        p->reqState=2u;p->transientState=5u;setReturnS32(ctx,1);
++#else
++        (void)rdram;
++        (void)runtime;
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                            static_cast<int>(getRegU32(ctx, 5)));
+         if (!portState || !portState->open)
+@@ -732,13 +899,14 @@
+         portState->reqState = 0u;
+         queueExecCmdStateLocked(*portState);
+         setReturnS32(ctx, 1);
++    #endif
+     }
+ 
+     void scePadSetReqState(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         (void)rdram;
+         (void)runtime;
+-        std::lock_guard<std::mutex> lock(g_padStateMutex);
++        std::lock_guard<std::mutex> lock(padState().stateMutex);
+         PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                            static_cast<int>(getRegU32(ctx, 5)));
+         if (portState && portState->open)
+@@ -751,9 +919,16 @@
+ 
+     void scePadSetVrefParam(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        (void)rdram;
+-        (void)runtime;
+-        setReturnS32(ctx, 1);
++#ifdef PS2N_SDK_HLE
++        const auto* p=lookupPadPortStateLocked(getRegU32(ctx,4),getRegU32(ctx,5));
++        if(!p || !p->open || !p->connected || p->reqState==2u || activePad->request.data.size()!=12u){setReturnS32(ctx,0);return;}
++        for(const auto value:activePad->request.data)if(value!=2u)throw std::runtime_error("SDK pad custom pressure calibration is not implemented");
++        setReturnS32(ctx,1);
++#else
++        (void)rdram;
++        (void)runtime;
++        setReturnS32(ctx, 1);
++    #endif
+     }
+ 
+     void scePadSetWarningLevel(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+@@ -768,7 +943,7 @@
+         (void)runtime;
+         const uint32_t state = getRegU32(ctx, 4);
+         const uint32_t strAddr = getRegU32(ctx, 5);
+-        char *buf = reinterpret_cast<char *>(getMemPtr(rdram, strAddr));
++        char *buf = reinterpret_cast<char *>(padOutput(rdram, strAddr));
+         if (!buf)
+         {
+             setReturnS32(ctx, -1);
+@@ -802,23 +977,23 @@
+     {
+         PadDebugSnapshot snapshot{};
+         {
+-            std::lock_guard<std::mutex> lock(g_padOverrideMutex);
+-            snapshot.overrideEnabled = g_padOverrideEnabled;
+-            snapshot.overrideButtons = g_padOverrideState.buttons;
+-            snapshot.overrideRx = g_padOverrideState.rx;
+-            snapshot.overrideRy = g_padOverrideState.ry;
+-            snapshot.overrideLx = g_padOverrideState.lx;
+-            snapshot.overrideLy = g_padOverrideState.ly;
+-        }
+-
+-        {
+-            std::lock_guard<std::mutex> lock(g_padStateMutex);
+-            snapshot.readLogCount = g_padReadLogCount;
++            std::lock_guard<std::mutex> lock(padState().overrideMutex);
++            snapshot.overrideEnabled = padState().overrideEnabled;
++            snapshot.overrideButtons = padState().overrideState.buttons;
++            snapshot.overrideRx = padState().overrideState.rx;
++            snapshot.overrideRy = padState().overrideState.ry;
++            snapshot.overrideLx = padState().overrideState.lx;
++            snapshot.overrideLy = padState().overrideState.ly;
++        }
++
++        {
++            std::lock_guard<std::mutex> lock(padState().stateMutex);
++            snapshot.readLogCount = padState().readLogCount;
+             for (size_t port = 0; port < kPadDebugPortCount; ++port)
+             {
+                 for (size_t slot = 0; slot < kPadDebugSlotCount; ++slot)
+                 {
+-                    const PadPortState &src = g_padPorts[port];
++                    const PadPortState &src = padState().ports[port];
+                     PadDebugPortSnapshot &dst = snapshot.ports[port][slot];
+                     dst.open = src.open;
+                     dst.analogMode = src.analogMode;
+@@ -845,19 +1020,86 @@
+ 
+     void setPadOverrideState(uint16_t buttons, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry)
+     {
+-        std::lock_guard<std::mutex> lock(g_padOverrideMutex);
+-        g_padOverrideEnabled = true;
+-        g_padOverrideState.buttons = buttons;
+-        g_padOverrideState.lx = lx;
+-        g_padOverrideState.ly = ly;
+-        g_padOverrideState.rx = rx;
+-        g_padOverrideState.ry = ry;
++        std::lock_guard<std::mutex> lock(padState().overrideMutex);
++        padState().overrideEnabled = true;
++        padState().overrideState.buttons = buttons;
++        padState().overrideState.lx = lx;
++        padState().overrideState.ly = ly;
++        padState().overrideState.rx = rx;
++        padState().overrideState.ry = ry;
+     }
+ 
+     void clearPadOverrideState()
+     {
+-        std::lock_guard<std::mutex> lock(g_padOverrideMutex);
+-        g_padOverrideEnabled = false;
+-        g_padOverrideState = PadInputState{};
+-    }
++        std::lock_guard<std::mutex> lock(padState().overrideMutex);
++        padState().overrideEnabled = false;
++        padState().overrideState = PadInputState{};
++    }
++#ifdef PS2N_SDK_HLE
++    int32_t nativePad(ps2x::iop::IopHost& host,const ps2x::iop::PadRequest& request,std::shared_ptr<void>& storage) {
++        if(!storage){auto state=std::make_shared<PadState>();state->host=&host;storage=std::move(state);}
++        auto& state=*std::static_pointer_cast<PadState>(storage);
++        PadIo io{host,request,state};struct Scope{PadIo* previous;~Scope(){activePad=previous;}} scope{activePad};activePad=&io;
++        using O=ps2x::iop::PadOperation;
++        if(request.operation==O::Tick) {
++            ++state.frame;
++            for(unsigned port=0;port<kPadPortCount;++port)if(state.ports[port].open) {
++                auto& p=state.ports[port];++p.frame;p.reqState=0u;p.transientState=0u;
++                std::array<uint8_t,32> data{};(void)readPadPortData(port,0,nullptr,data.data(),0u);
++                uint8_t smallMotor=0,largeMotor=0;
++                if(p.connected)for(unsigned i=0;i<6u;++i){if(p.actAlign[i]==0u)smallMotor=p.actDirect[i]?1u:0u;else if(p.actAlign[i]==1u)largeMotor=p.actDirect[i];}
++                (void)host.setPadRumble(port,0u,smallMotor,largeMotor);
++            }
++            return 1;
++        }
++        if(request.operation==O::Snapshot) {
++            if(!request.snapshot)return 0;
++            const auto* p=lookupPadPortStateLocked(request.arguments[0],request.arguments[1]);
++            *request.snapshot={};if(!p)return 0;
++            auto& out=*request.snapshot;
++            out.open=p->open;out.connected=p->connected;out.analog=p->analogMode;out.pressure=p->pressureEnabled;
++            out.dmaAddress=p->dmaAddr;out.frame=p->frame;
++            out.state=!p->open?0u:!p->sampled?1u:!p->connected?0u:p->transientState?5u:6u;
++            out.reqState=p->reqState;out.pressureMask=p->pressureMask;out.modeLock=p->modeLock;out.actDirectSize=p->actDirectSize;
++            std::copy_n(p->lastData,32u,out.data.begin());out.actAlign=p->actAlign;out.actDirect=p->actDirect;
++            return 1;
++        }
++        using Handler=void(*)(uint8_t*,R5900Context*,PS2Runtime*);Handler handler=nullptr;
++        switch(request.operation) {
++        case O::Init:handler=scePadInit;break;
++        case O::End:handler=scePadEnd;break;
++        case O::Open:handler=scePadPortOpen;break;
++        case O::Close:handler=scePadPortClose;break;
++        case O::GetState:handler=scePadGetState;break;
++        case O::GetReqState:handler=scePadGetReqState;break;
++        case O::GetModVersion:handler=scePadGetModVersion;break;
++        case O::GetPortMax:handler=scePadGetPortMax;break;
++        case O::GetSlotMax:handler=scePadGetSlotMax;break;
++        case O::InfoMode:handler=scePadInfoMode;break;
++        case O::InfoAct:handler=scePadInfoAct;break;
++        case O::InfoComb:handler=scePadInfoComb;break;
++        case O::GetButtonMask:handler=scePadGetButtonMask;break;
++        case O::SetMainMode:handler=scePadSetMainMode;break;
++        case O::SetButtonInfo:handler=scePadSetButtonInfo;break;
++        case O::SetActAlign:handler=scePadSetActAlign;break;
++        case O::SetActDirect:handler=scePadSetActDirect;break;
++        case O::SetVref:handler=scePadSetVrefParam;break;
++        default:return 0;
++        }
++        if(request.operation==O::Init) {
++            if(!request.arguments[0] || request.arguments[0]>0xFFFFu)throw std::runtime_error("SDK pad module version is required");
++            state.version=request.arguments[0];state.frame=0;
++        }
++        if(request.operation==O::Init || request.operation==O::End)
++            for(unsigned port=0;port<kPadPortCount;++port)host.setPadRumble(port,0u,0u,0u);
++        R5900Context context{};
++        for(unsigned i=0;i<request.arguments.size();++i)setRegU32(&context,4+i,request.arguments[i]);
++        handler(nullptr,&context,nullptr);
++        const auto result=static_cast<int32_t>(context.reg32(2));
++        if(result>0)for(const auto& out:io.outputs)if(!host.writeGuest(out.address,out.data.data(),out.data.size()))
++            throw std::runtime_error("SDK pad output outside EE RAM");
++        return result;
++    }
++#endif
++
+ }

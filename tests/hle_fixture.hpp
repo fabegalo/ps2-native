@@ -24,6 +24,14 @@ inline direct_test::Program program() {
     call(0x44);a.la(8,data);a.sw(2,0x100,8);
     a.addiu(4,0,1);a.addiu(5,0,4);a.addiu(6,0,0x11);a.la(7,data+0x104);call(0x56);
     a.la(8,data);a.sw(2,0x108,8);call(0x23);a.nop();
+    while(a.here()<text+0x600)a.nop();roots.push_back(a.here());
+    a.addiu(16,0,0x1234);call(0x7F);a.addiu(2,0,0x1234);a.jr(31);a.nop();
+    while(a.here()<text+0x700)a.nop();roots.push_back(a.here());
+    a.addu(4,5,0);call(0x42);a.jr(31);a.nop();
+    while(a.here()<text+0x800)a.nop();roots.push_back(a.here());
+    a.label("alarm_idle");a.nop();a.beq(0,0,"alarm_idle");a.nop();
+    while(a.here()<text+0x900)a.nop();roots.push_back(a.here());
+    a.addu(4,6,0);call(0x42);a.jr(31);a.nop();
     std::vector<std::uint8_t> values(0x3000);
     direct_test::put(values,4,1); // semaphore maximum, initial count zero
     direct_test::put(values,0x20,2); // multi-wait event flag

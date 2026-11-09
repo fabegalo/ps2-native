@@ -1,4 +1,4 @@
-PS2Recomp HLE kernel adaptation
+PS2Recomp directly compiled kernel and SDK interfaces
 Upstream: https://github.com/ran-j/PS2Recomp
 Revision: e5636981a1c9de368f6b71e819c3dc188dfedbf4
 License: GPL-3.0 (see LICENSE in this directory)
@@ -10,14 +10,16 @@ ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp
 ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
 ps2xRuntime/src/lib/Kernel/Syscalls/Sync.cpp
 ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+ps2xRuntime/src/lib/Kernel/Syscalls/Deci2.cpp
 ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h
 
-The adaptation reuses kernel object allocation, EE descriptors/error codes,
-semaphore/event algorithms and thread lifecycle. Context/memory access,
-dispatch and scheduling use ps2-native EEState, Memory and clocks.
-No standalone upstream runtime, second memory/device state, host-clock VBLANK scheduler,
-game overrides or success stubs are linked. Device IRQ wakeups, alarms, file/RPC
-services and HLE checkpoint serialization are not implemented in this subset.
+The HLE syscall sources and EeScheduler are compiled directly from the pinned
+SDK checkout, with reproducible native-interface patches in patches/ps2recomp.
+The previous locally derived kernel was removed in the maintainer-approved
+migration of 2026-11-08. Context, checked guest memory, canonical clocks and
+device transport adapters live in src/sdk_hle.cpp, src/sdk/ and the native
+PS2Runtime backend. These adapters do not introduce another console runtime.
+Unavailable interfaces refuse explicitly; this notice does not certify games.
 
 Combined binaries linking this GPL component must be distributed under the
 GPL-3.0 terms, with corresponding source and the applicable license notices.
@@ -41,3 +43,13 @@ SDK tools and combined binaries require
 GPL-3.0 distribution terms and corresponding source, including these patches;
 the original platform code retains its BSD-3-Clause notices. Dependencies
 retain their own licenses and notices in their pinned source trees.
+
+Native IOP reuse: ps2xIOP/src/emulator/services/iop_module_loader.cpp and
+ps2xIOP/src/ps2_path.cpp are compiled from that same pinned SDK checkout.
+The upstream emulator/core/iop_kernel.cpp and emulator/imports/iop_cdvd.cpp
+are compiled against that adapter too; no IopCpuCore implementation is linked.
+IopMemory allocation bookkeeping is adapted from emulator/core/iop_memory.cpp.
+Patch 0006 selects iop_memory_native.hpp for the shared memory interface;
+its ELF/IRX parsing and relocation implementation stays upstream. This
+adapter borrows the existing Iop RAM and preserves its undefined-byte and
+stopped-device refusals. No upstream IOP CPU, RAM or interpreter is linked.

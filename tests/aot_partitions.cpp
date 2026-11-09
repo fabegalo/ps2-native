@@ -37,7 +37,7 @@ Stamps objects(const fs::path& path) {
 }
 }
 template<class Char> int run_test(int argc,Char** argv) try {
-    require(argc==9,"fixture root repo cmake core compiler ninja config");
+    require(argc==10,"fixture root repo cmake core compiler ninja config core_link");
     if(!file_exists(argv[7]))return 77;
     const fs::path elf_path(argv[1]),root(argv[2]),repo(argv[3]),cmake(argv[4]);
     require(root.is_absolute() && !file_exists(root),"unused absolute partition test directory");
@@ -63,7 +63,7 @@ template<class Char> int run_test(int argc,Char** argv) try {
         "include("+bracket(repo/"cmake/AotSource.cmake")+")\n"
         "add_library(aot_object OBJECT)\nps2n_target_aot_source(aot_object "+bracket(source)+")\n"
         "target_include_directories(aot_object PRIVATE "+bracket(repo/"include")+")\n"
-        "add_library(core STATIC IMPORTED)\nset_target_properties(core PROPERTIES IMPORTED_LOCATION "+bracket(fs::path(argv[5]))+")\n"
+        "add_library(core SHARED IMPORTED)\nset_target_properties(core PROPERTIES IMPORTED_LOCATION "+bracket(fs::path(argv[5]))+" IMPORTED_IMPLIB "+bracket(fs::path(argv[9]))+")\n"
         "add_executable(partition-probe "+bracket(repo/"tests/aot_smoke.cpp")+" $<TARGET_OBJECTS:aot_object>)\n"
         "target_include_directories(partition-probe PRIVATE "+bracket(repo/"include")+")\ntarget_link_libraries(partition-probe PRIVATE core)\n"
         "file(GENERATE OUTPUT \"${CMAKE_BINARY_DIR}/objects.txt\" CONTENT \"$<JOIN:$<TARGET_OBJECTS:aot_object>,\\n>\")\n";

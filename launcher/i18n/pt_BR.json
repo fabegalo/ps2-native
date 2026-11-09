@@ -12,7 +12,7 @@
   "Original BIOS boot with game disc — reference interpreter, software GS. Compatibility is incomplete; execution stops at the first unsupported behavior.": "Boot original da BIOS com o disco do jogo — interpretador de referência, GS por software. A compatibilidade está incompleta; a execução para no primeiro comportamento não suportado.",
   "ps2-native — Game session": "ps2-native — Sessão do jogo",
   "Original BIOS boot — static AOT; compatibility incomplete": "Boot original da BIOS — AOT estática; compatibilidade incompleta",
-  "Identified PlayStation 2 disc. Play attempts original BIOS boot and reports the first unsupported behavior. Gameplay compatibility is unverified.": "Disco de PlayStation 2 identificado. Jogar tenta o boot original da BIOS e informa o primeiro comportamento não suportado. Compatibilidade de gameplay não verificada.",
+  "Identified PlayStation 2 disc. Prepare creates a verified native module; Play stops at unsupported behavior. Gameplay compatibility is unverified.": "Disco de PlayStation 2 identificado. Preparar cria um módulo nativo verificado; Jogar para diante de comportamento não suportado. Compatibilidade de gameplay não verificada.",
   "Home": "Início",
   "Library": "Biblioteca",
   "Settings": "Configurações",
@@ -368,5 +368,16 @@
   "%n disc image(s) added": "%n imagem(ns) de disco adicionada(s)",
   "%n with issues": "%n com problemas",
   "%n already registered": "%n já registrado(s)",
-  "%n other 4 MiB file(s) skipped": "%n outro(s) arquivo(s) de 4 MiB ignorado(s)"
+  "%n other 4 MiB file(s) skipped": "%n outro(s) arquivo(s) de 4 MiB ignorado(s)",
+  "Prepare": "Preparar",
+  "Preparation cancelled.": "Preparação cancelada.",
+  "Partial preparation: %1 instructions have no native translation. Play stops if reached.": "Preparação parcial: %1 instruções sem tradução nativa. A execução será interrompida se alcançá-las.",
+  "Stop the current session before preparing content.": "Pare a sessão atual antes de preparar o conteúdo.",
+  "Preparing verified native code…": "Preparando código nativo verificado…",
+  "Native code prepared. Select Play to start; game compatibility remains unverified.": "Código nativo preparado. Selecione Jogar para iniciar; a compatibilidade do jogo ainda não foi verificada.",
+  "Native artifacts prepared. Startup stopped: %1": "Artefatos nativos preparados. A inicialização parou: %1",
+  "Native AOT with selective HLE. Missing translations and services stop explicitly; compatibility incomplete.": "AOT nativo com HLE seletiva. Traduções e serviços ausentes interrompem a execução explicitamente; compatibilidade incompleta.",
+  "Native AOT session with selective HLE — compatibility incomplete": "Sessão AOT nativa com HLE seletiva — compatibilidade incompleta",
+  "Import your discs, prepare verified native code, and select Play. Compatibility is incomplete; unsupported translations and services are reported explicitly.": "Importe seus discos, prepare o código nativo verificado e selecione Jogar. A compatibilidade é incompleta; traduções e serviços sem suporte são informados explicitamente.",
+  "Prepares original PlayStation 2 code as offline native modules for the shared runtime with selective HLE. Compatibility is incomplete. Missing translations and services stop explicitly, without an interpreted fallback.": "Prepara o código original do PlayStation 2 como módulos nativos offline para o runtime compartilhado com HLE seletiva. A compatibilidade é incompleta. Traduções e serviços ausentes interrompem a execução explicitamente, sem interpretação alternativa."
 }

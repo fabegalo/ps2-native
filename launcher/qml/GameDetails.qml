@@ -140,6 +140,13 @@ Rectangle {
                 spacing: 8
                 AppButton {
                     Layout.fillWidth: true
+                    text: qsTr("Prepare")
+                    available: !Experimental.active
+                    reason: qsTr("Stop the current session before preparing content.")
+                    onClicked: Launcher.prepareGame(panel.entryId)
+                }
+                AppButton {
+                    Layout.fillWidth: true
                     text: qsTr("Play")
                     iconName: "play"
                     variant: "primary"

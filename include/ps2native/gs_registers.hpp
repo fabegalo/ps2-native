@@ -51,6 +51,7 @@ inline constexpr std::uint64_t kCsrReset = 1ull << 9;
 
 class GsRegisters {
     friend struct CheckpointAccess;
+    friend class SdkMemory;
 public:
     // HBLANK source for the EE timers: lines start at `epoch` and repeat
     // every `period` EE cycles; the first edge is one period after `epoch`.
@@ -173,12 +174,15 @@ private:
     void texture_transfer_write(unsigned address);
     void reset_drawing();
     void reset_events(std::uint64_t now);
+    void initialize_kernel_video(std::uint64_t syncv,bool field);
     void raise_event(std::uint32_t event);
     void update_interrupt_request();
     void finish_transfer();
 
     std::array<std::optional<std::uint64_t>, kModeRegisters> mode_{};
     std::optional<std::uint64_t> diagnostic_reset_syncv_;
+    std::optional<std::uint64_t> kernel_reset_syncv_;
+    std::optional<bool> kernel_reset_field_;
     std::optional<bool> diagnostic_reset_field_,field_;
     std::optional<unsigned> diagnostic_reset_scanmask_;
     bool diagnostic_reset_texture_cache_invalid_{};

@@ -30,6 +30,14 @@ int main(int argc,char** argv) try {
         refused=std::string(error.what()).find("HLE kernel objects")!=std::string::npos;
     }
     require(refused,"Incomplete HLE checkpoints remain explicitly unsupported");
+    auto low=hle_test::program();low.segments[0].address=0x10000u;
+    auto low_bytes=direct_test::elf(low);direct_test::put(low_bytes,24,0x10000u);
+    const auto previous_pc=cpu->pc;bool overlap=false;
+    try{runtime.prepare_hle_elf(parse_ee_elf(low_bytes),nullptr);}catch(const std::exception& error){
+        overlap=std::string(error.what()).find("reserved kernel RAM")!=std::string::npos;
+    }
+    require(overlap && cpu->pc==previous_pc && memory->hle_kernel()==kernel,
+        "Rejected kernel overlap preserves the previous console state");
     runtime.prepare_direct_elf(elf,&aot_module());
     require(memory==&runtime.memory() && cpu==&runtime.cpu() && !memory->hle_kernel(),"Fresh preparation detaches HLE in the same SDK-owned console");
     (void)checkpoint_state_sha256(*cpu,*memory);

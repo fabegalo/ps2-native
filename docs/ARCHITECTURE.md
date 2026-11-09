@@ -46,6 +46,30 @@ abaixo continuam explícitas e não representam o fluxo completo funcionando.
 
 ### Estado da integração
 
+Direção determinada pelo mantenedor em 09/11/2026: seguir a integração do
+x360-native, consumindo o PS2Recomp como implementação de recompilação,
+runtime e serviços, com correções genéricas em patches reproduzíveis do SDK
+fixado em `deps.lock.json`. O projeto mantém as camadas de produto e os
+adaptadores de integração/host; implementações locais concorrentes não devem
+substituir o SDK. Apenas transferir código local para um patch não realiza
+essa migração. Permanecem obrigatórios AOT offline, estado único do console,
+interface original e os contratos comuns Original/Native.
+
+O estado atual ainda não atende a essa direção: `0004-native-aot-emission`
+seleciona o emissor local e `src/ps2recomp_runtime.cpp` executa por
+`run_ee_boot`; FPU e SPU2 locais originam os bloqueios comerciais registrados.
+O primeiro recorte proposto é consumir a emissão e o contexto do SDK,
+adaptando despacho, orçamento e dispositivos sem outro runtime ou fallback.
+Esse recorte e a substituição dos provedores de dispositivos ainda exigem
+validação das fronteiras pelo mantenedor antes da implementação; as decisões
+abaixo descrevem a integração anterior, preservada até a migração aprovada.
+
+Decisão do mantenedor em 08/11/2026: substituir o kernel HLE derivado local
+pelo HLE e escalonador compilados diretamente do PS2Recomp fixado. Adaptar
+somente interfaces ao estado único e ao despacho AOT; remover `third_party`
+após migrar seus consumidores e preservar licenças/créditos. A migração
+ainda está em implementação e não certifica execução comercial.
+
 Decisão do mantenedor em 07/11/2026: PS2Recomp é o SDK central, com revisão
 fixada em `deps.lock.json`. `PS2Runtime` será o núcleo principal e proprietário
 do estado único do console. Os componentes próprios de AOT EE/IOP/VU,
@@ -66,14 +90,16 @@ patches, funções omitidas ou stubs sugeridos pelo analisador. A identidade
 inclui entrada, lock do SDK e hashes das saídas para reutilização verificada.
 Em 08/11/2026, o mantenedor validou um backend integrado exclusivo na classe
 `PS2Runtime` do SDK (`PS2N_SDK_NATIVE_BACKEND`). Ele possui EE, memória,
-NVM e o kernel HLE adaptado; supervisor, launcher e CLIs usam referências a
+NVM e a ligação ao kernel HLE do SDK; supervisor, launcher e CLIs usam referências a
 esse estado. IOP/VU AOT, hardware/DMA, GS, áudio e controles permanecem nos
 componentes existentes dentro da memória compartilhada. O backend standalone
 do SDK não é ligado a esse executável. Os checkpoints mantêm os campos atuais;
 o contrato do SDK e seu lock participam da identidade de runtime.
 
-No perfil integrado, `R5900Context` é um alias do `ExecutionContext`
-existente, que referencia EE e memória canônicos. Orçamento e observação
+No perfil AOT, `R5900Context` é um alias do `ExecutionContext`
+existente, que referencia EE e memória canônicos. Nas fontes do kernel SDK,
+o contexto usa snapshots `EEState` do escalonador; COP0, relógios e dispositivos
+continuam globais ao console, preservados pelas interfaces de troca de contexto. Orçamento e observação
 usam o despachante AOT comum; os relógios continuam únicos.
 O emissor do SDK usa as instruções que ele decodificou e o emissor nativo
 compartilhado do projeto, preservando guards por instrução, delay slots,
@@ -82,41 +108,320 @@ Os campos `PS2N_ELF_AOT_SOURCE` e `PS2N_SESSION_AOT_SOURCE` também aceitam
 `<preparação>/sdk-prepare.json`; o CMake verifica SDK, backend e todas as saídas
 antes de compilar, sem copiar traduções. O recibo inclui a identidade do backend
 local e `runtime_ready=false`: geração de fontes não certifica binário, cobertura
-ou execução de Browser/jogos. Instruções reconhecidas pelo SDK mas ausentes
-no ISA nativo, como BC2*, ainda recusam a preparação. Serviços upstream
+ou execução de Browser/jogos. Instruções sem tradução seguem a preparação
+parcial estrita validada abaixo. Serviços upstream
 restantes ainda exigem adaptação.
 O interpretador e a memória privados de `ps2xIOP` não estão ligados;
 carregamento/relocação IRX e serviços RPC precisam usar AOT IOP antes de
 habilitar esse caminho. GPU e checkpoints atuais permanecem preservados.
 
+Em 08/11/2026, o mantenedor validou módulos AOT carregáveis no PS2Runtime
+existente para o fluxo Importar → Preparar → Jogar. A preparação deve compilar
+offline e manter cache por hash, validando ABI, revisão e invalidação antes
+do carregamento. O módulo não possui outro runtime nem estado de console;
+usa HLE, EE/memória e dispositivos da sessão existente. Recompilar o launcher
+por conteúdo ou criar outro processo de execução não são as opções escolhidas.
+Esta decisão não certifica compatibilidade comercial nem módulos já implementados.
+
+Também em 08/11/2026, o mantenedor validou preparação AOT parcial com recusa
+estrita. O SDK lista PCs/palavras sem tradução no recibo e não os registra
+como código nativo: o bloco retorna antes da lacuna e o despachante para nesse
+PC, sem executar, pular ou interpretar a instrução ausente. Instruções válidas
+posteriores podem estar traduzidas, mas não autorizam atravessar a lacuna.
+Hashes e ABI continuam obrigatórios; preparação parcial não certifica execução.
+Fontes traduzidas usam identidade de conteúdo/SDK/emissor; binários acrescentam
+ABI, headers e configuração do compilador. Serviços importados da biblioteca
+compartilhada podem evoluir sem recompilar o código do jogo quando esses
+contratos permanecem iguais. Checkpoints conservam sua identidade de runtime.
+As fontes nativas do SDK reutilizam as partições por endereço e o manifesto
+verificado `.sources` do emissor AOT comum.
+
 Após nova validação do mantenedor em 07/11/2026, o kernel HLE do PS2Recomp
-foi adaptado em `third_party/ps2recomp`, com GPL e créditos preservados
+foi inicialmente adaptado localmente; a migração direta aprovada acima
+substitui essa versão, com GPL e créditos em `licenses/PS2Recomp` preservados
 (ver `LICENSE-DECISION.md`). `HleKernel` conecta os serviços ao despacho comum
 AOT/nativo e à mesma instância de EE/memória. `ps2n-run --hle` / `ps2n-run-native --hle`
 e `SessionSupervisor::prepare_hle_elf` iniciam uma sessão assistida explícita,
 com acesso COP1/COP2 habilitado pelo ambiente HLE. O reset original e o
 diagnóstico bare-metal mantêm seus próprios estados e não ativam HLE.
 
+Em 08/11/2026, o mantenedor validou ampliar o HLE seletivo no runtime
+compartilhado para alcançar os menus de Shadow of the Colossus e God of War,
+com serviços reais e testes, preservando código original e execução AOT.
+
 A cobertura inicial inclui criação/início/saída/prioridade/espera de threads,
 semáforos e eventos, SetupThread, SetupHeap/EndOfHeap, GetMemorySize e FlushCache
-(com writeback/invalidação no modelo compartilhado). O escalonamento ocorre nas
-fronteiras de syscall; IRQs, alarmes, arquivos/RPC, callbacks de retorno de
-thread e inicialização completa de jogos/Browser continuam pendentes. Um
+(com writeback/invalidação no modelo compartilhado), além do registro e execução
+AOT de handlers via SetSyscall, com retorno ao chamador e chamada recursiva ao
+serviço original. O registro de handlers usa a própria tabela da sessão HLE
+em RAM reservada, sem um segundo mapa de endereços no host. Esse layout HLE
+não é apresentado como o kernel de uma revisão de BIOS.
+SIF SetReg/GetReg usa registradores físicos existentes e três registradores
+de software na mesma RAM; SetDChain arma o canal real. SetDma valida o lote
+antes de publicar tags e usa os motores SIF/DMA existentes, sem completar
+transferências por antecipação. DMA Stat consulta o estado efetivo do canal.
+Callbacks DMA nativos preservam contexto/GP/SP, ordem e máscaras; o ponteiro
+opcional de contexto salvo continua desconhecido e seu consumo é recusado.
+O escalonador do SDK também observa prazos em ciclos durante o AOT, incluindo
+alarmes em laços sem syscalls; o retorno nativo de uma thread torna-a dormente.
+As interfaces de inicialização publicam os argumentos `BOOT2` no ABI `sargs`,
+habilitam o DMAC real, estabelecem VIF MODE e conectam o perfil NTSC/FIELD inicial
+do SDK ao GS e às bordas compartilhadas de EE/IOP. VBlank alimenta os eventos,
+flags e contadores do escalonador original; alarmes podem acordar a única thread
+em espera, com avanço até o próximo evento físico e limite explícito de um segundo
+de tempo guest por espera nativa. Máscaras de IRQ pertencem aos controladores
+físicos, inclusive após escrita MMIO. O reset de hardware não herda
+esse perfil de compatibilidade; o soft reset GS restaura o perfil da sessão HLE.
+O perfil também aplica os contextos e latches iniciais de `GS::reset()` do SDK,
+seu armazenamento integral de SMODE2 e a VRAM zerada de `PS2Memory::initialize()`
+somente no início; soft reset preserva a VRAM e a contagem de pixels enviados.
+O teste headless de God of War USA (`ec9397d2…`) em 08/11/2026 alcançou o texto
+de apresentação da Sony em 19.728.260 instruções AOT, sem intérprete. Parou no bind
+RPC `0x80000593`. A integração seguinte carrega CDVDMAN e CDVDFSV originais da
+BIOS/IOPRP pelo loader do SDK e prepara seus intervalos executáveis em AOT.
+Exports originais têm precedência sobre HLE; o transporte SIF consulta o registro
+RPC do próprio SDK, executa seu handler nativo e devolve os bytes por SIF0 físico.
+O teste comercial passou desse bind e executou o reboot IOPRP com as novas
+traduções. RTC é fornecido pelo host (runner também aceita epoch explícito);
+perfil/NVM validados chegam ao IOP, sem deduzir MECHACON da BIOS. Com
+SCPH-70004:GH-032-32 e a NVM validada do conjunto, a descoberta alcançou GetToc
+DVD-9. Os dois PVDs confirmam layer0=2.080.544 e 4.161.520 setores totais;
+OTP/PTP não é comprovado pela ISO. O mantenedor autorizou o teste diagnóstico
+OTP dessa geometria, que permanece explícita, sem padrão por título.
+O RPC usa sua thread/fila original do SDK para suspender/retomar waits; IRQs
+físicas alcançam o intrman original. O próximo bloqueio comprovado era thbase:35:
+upstream retorna zero em SetAlarm/iSetAlarm/CancelAlarm/iCancelAlarm sem serviço.
+O mantenedor validou em 08/11/2026 completar esses quatro serviços no próprio
+kernel do SDK, em patch versionado, com callbacks AOT e o relógio/escalonador
+únicos, sem kernel paralelo. Os quatro serviços foram implementados e os testes
+nativos cobrem repetição, cancelamento e IRQ mascarada. DMACMAN original substitui
+o dispatcher sem DMA do SDK; MODLOAD/LOADFILE originais também entram pelo loader
+do SDK em AOT. A descoberta comercial em 09/11/2026 passou dos RPCs CDVD e LOADFILE
+e parou em `ioman:4` (Open): o IopIoman upstream só oferece AddDrv/DelDrv. Em
+09/11/2026 o mantenedor validou completar Open/Close/Read/Lseek no próprio SDK,
+chamando os drivers originais em AOT e mantendo memória/kernel únicos.
+Essas operações passaram nos testes de ABI/erros e Read bloqueante na thread
+original; o adaptador de strings valida até NUL sem exigir todo o limite de strlen.
+EnableIntr/DisableIntr de DMA agora usam DICR/I_MASK físicos e entregam IRQ35 em
+AOT; a recepção SIF é reconhecida antes de um RPC bloquear, sem antecipar sua resposta.
+O jogo passou da espera de CDVD, leu setores do IRX e parou em `loadcore:22`
+(ProbeExecutableObject), ainda ausente no SDK.
+O mantenedor validou completar no SDK a análise/carregamento de IRX, o vínculo
+de imports e o registro de módulos, reutilizando o loader e o catálogo existentes,
+sem outro loader ou estado de console. Essa cobertura passou nos testes nativos;
+o carregamento comercial avançou até a inicialização MemoryCard via SIO2/DMA,
+cuja temporização ainda não está validada. Em 09/11/2026, o mantenedor aprovou
+usar o MCSERV HLE existente do PS2Recomp para MCMAN/MCSERV, adaptando transporte
+e armazenamento à sessão única, preservando saves e erros. A integração está
+validada sinteticamente com leitura/gravação/persistência, diretórios paginados
+e RPC IOP/EE distintos. No GOW, MCMAN ativou o backend; a execução avançou de
+6.913.046 para 7.096.617 ciclos IOP e parou no poll digital `01 42` do PADMAN
+(`ds2u_d`), ainda sem transporte serial validado. MCSERV RPC passou no teste
+sintético, mas o jogo ainda não chegou à ativação desse módulo.
+Em 09/11/2026, o mantenedor aprovou completar o PADMAN RPC no próprio SDK,
+reaproveitando seu HLE libpad, adaptado à entrada real e ao SIF da sessão única.
+PADMAN passou nos testes sintéticos de RPC/ABI antigo e novo, entrada real,
+modos, pressão, desconexão e saída de atuadores; isso não certifica controle físico.
+No GOW, a execução alcançou o streamer original e exigiu SifSetDma/SifDmaStat:
+o SDK agora usa o SIF0 físico, com fila limitada, conclusão pelo DMA e payload
+opaco, em vez de copiar diretamente para o EE. O reconhecimento da conclusão
+continua progredindo durante RPC nativo bloqueante. A regressão transferiu 4 KiB
+e outro pedido enfileirado; o diagnóstico comercial avançou ao IRX `ck01`,
+preparado offline, e parou em CACHE 0x10 no EE (leitura de tag D-cache).
+Em 09/11/2026, o mantenedor aprovou ativar na sessão HLE genérica o modelo
+funcional de D-cache existente, mantendo memória, AOT e DMA compartilhados.
+A ativação preserva Config convidado, tags desconhecidas e recusas existentes;
+não inventa conteúdo de cache nem torna o DMA coerente por cópia adicional.
+Passaram a cobertura funcional existente de cache e o teste HLE de DXLTG,
+visibilidade de linha suja e writeback via FlushCache do SDK. No teste comercial,
+o primeiro bloqueio mudou para DHWBIN no alias uncached 0x20327AC0, antes da
+etapa anteriormente alcançada. Em 09/11/2026, o mantenedor aprovou usar no teste
+o modo diagnóstico existente de procurar a linha pelo endereço físico. A opção
+explícita `--diagnostic-cache-uncached-hits` no runner e na descoberta AOT seleciona
+essa hipótese e entra na identidade da descoberta; o padrão mantém a recusa.
+Essa hipótese não tem comprovação de hardware.
+A sessão HLE fria inicializa tags inválidas por DXSTG no cache compartilhado,
+como estado de software do kernel, preservando os dados e bits reservados
+desconhecidos. Reset físico mantém PFNs indefinidos; cache pré-configurado não
+é reinicializado, preservando linhas sujas existentes.
+Com a tradução física diagnóstica e essa inicialização, GOW executou
+19.912.349 instruções EE AOT e 377.906 IOP nativas, zero interpretadas, e chegou
+à escrita SPU2 0x7CA=8 pelo driver original. Seus efeitos permanecem desconhecidos;
+em 09/11/2026 o mantenedor aprovou usar o modo diagnóstico existente de retenção
+por escrita de 16 bits, sem afirmar efeitos de áudio desconhecidos. A opção
+`--assume-spu2-7ca-latch` do runner e da descoberta AOT seleciona essa hipótese;
+leituras, larguras inválidas e o modo padrão continuam recusados. A seleção
+é registrada na identidade e no recibo da descoberta. A regressão SPDIF passou
+em execução exclusivamente AOT, incluindo reset, leituras e larguras inválidas;
+o corpus sintético foi completado e o teste recusa tradução nativa ausente.
+No teste com essa opção, o driver passou por 0x7CA e avançou de 10.820.420
+para 10.828.264 ciclos IOP (385.750 instruções nativas), parando ao habilitar
+o SPU2 sem estado inicial de vozes/entradas estabelecido. A hipótese existente
+de reset silencioso foi aprovada pelo mantenedor em 09/11/2026 para o próximo
+diagnóstico. A opção explícita `--assume-spu2-quiescent-reset` ativa o estado
+existente somente na sessão HLE ainda não executada, antes da configuração de áudio,
+e entra na identidade/recibo da descoberta. Não altera transferências, DSP ou
+recusas de efeitos não implementados, nem comprova o reset no hardware.
+O teste HLE de seleção antes da execução e recusa após configuração passou.
+No GOW, o driver avançou até 10.828.503 ciclos IOP (385.980 instruções nativas),
+parando no FIFO PIO por ausência de um intervalo explícito por palavra.
+Em 09/11/2026, o mantenedor aprovou usar no diagnóstico comercial 1 ciclo
+IOP por palavra PIO de 16 bits, o mesmo parâmetro dos testes existentes.
+A opção `--assume-spu2-pio-word-cycles=1` seleciona a transferência FIFO/RAM
+existente e entra na identidade/recibo da descoberta; não é medição de hardware.
+Passaram a regressão FIFO→RAM em um ciclo, a recusa de seleção tardia e os
+controles de intervalos inválidos. No GOW, PIO avançou até o contrato síncrono
+do RPC 104 do streamer: 19.916.845 instruções EE AOT, 2.317.600 IOP nativas,
+zero interpretadas. A medição temporária contou 1.953.465 instruções do worker
+em 2.000.056 totais; as demais threads não explicam a maior parte do limite.
+A tabela consultada tinha 234 entradas legíveis. A instrumentação foi removida
+após preservar a medição compacta. A proposta de continuação RPC no próprio
+escalonador SDK, com resposta SIF apenas na conclusão, foi aprovada em 09/11/2026.
+Em 09/11/2026, o mantenedor aprovou expor no runner HLE e na preparação
+o diagnóstico SPU2 existente de latches não atribuídos para investigar Super
+Bust-A-Move. A seleção é explícita, entra no recibo e não valida áudio;
+leituras e acessos inválidos continuam recusados. O ensaio chegou à leitura EEA
+em 0x1F90033C. O mantenedor aprovou testar o diagnóstico inicial existente
+com EEA 0xE/0xF; a opção explícita usa decimais 14:15 e integra o recibo.
+Esses valores são hipótese de inicialização, não medição de hardware. O ensaio
+chegou a 138.361.795 instruções EE AOT e 253.053 IOP nativas, zero
+interpretadas; parou ao habilitar efeitos sem ESA inicial conhecido. Somente
+a limpeza da VRAM foi observada, sem menu, gameplay ou FPS medido.
+A continuação mantém o callback na thread original, preserva o quadro RpcLoop
+e usa as mesmas fatias/relógio; não aumenta o antigo limite de chamadas síncronas.
+Cada chamada pendente conserva seu pacote na RAM IOP canônica; filas RPC
+distintas progridem no escalonador existente sem reusar esse pacote. A mesma
+fila recusa uma segunda chamada inacabada. Transferências SIF0 submetidas
+pelo callback precedem sua resposta, preservando a ocupação real do transporte. A sessão e a espera limitada do escalonador EE continuam supervisionadas. O modelo numérico existente de vozes
+não dispensa validação desse estado nem implementa automaticamente todo o DSP.
+Em 09/11/2026, o mantenedor aprovou unificar as reservas de imagens, pilhas,
+metadados e sysmem no alocador existente do SDK, na RAM IOP única.
+A faixa gerenciada passa a 0x10000–0x1F0000; buffers baixos do kernel e pilhas
+altas de chamadas permanecem reservados fora dela. Imagens relocáveis exigem
+nova preparação AOT. O limite anterior de 832 KiB recusava o pedido real de
+0x11ADF8 bytes do streamer; o ponteiro zero precedia a corrupção do receptor SIF.
+A regressão HLE passou com imagem reservada, alocação grande sem sobreposição,
+liberação de falha de carga e proteção das reservas baixas. Onze regiões IOP
+foram preparadas novamente, mantendo ABI/cache EE. No teste comercial limitado,
+o pool recebeu 0xD5200 e o RPC concluiu; o receptor SIF permaneceu em 0x3277C0.
+O jogo passou de 49.111.082 para 108.694.210 instruções EE AOT, com 7.245.364
+IOP nativas e zero interpretadas. O novo bloqueio em 0x283ED4 consome incerteza
+originada em MUL.S 0x1187F4 (1.0 × 0x39C90FD8); o diagnóstico escalar existente
+foi aprovado pelo mantenedor em 09/11/2026 para o próximo teste. A opção explícita
+`--assume-ee-early-digit-carry` reutiliza o modelo escalar existente, entra na
+identidade/recibo da descoberta e permanece hipótese de referência externa,
+sem medição no console. Os demais produtos incertos continuam recusados.
+A regressão FPU e quatro controles negativos dos CLIs passaram. O teste
+comercial passou do bloqueio escalar para 113.419.490 instruções EE AOT e
+7.247.722 IOP nativas, zero interpretadas. O bloqueio seguinte é cdvdman:28
+(sceCdStatus): o driver original entrega o byte de status 0x0A com bits 6–7
+MMIO desconhecidos; SLTIU em 0x82954 exige o valor inteiro. A seleção proposta
+do serviço HLE existente do SDK com estado real do drive foi aprovada em
+09/11/2026. Apenas cdvdman:28 usa essa fronteira: consulta o estado canônico
+do drive, sem retornar pausa constante nem definir bits MMIO desconhecidos.
+As demais exportações seguem o provedor original AOT, com DMA/IRQ e erros
+na sessão única; ausência de mídia e IOP parado continuam recusados.
+A regressão HLE passou com exportação original sentinela, busca→pausa e IRQ,
+sem relaxar o MMIO. No GOW, cdvdman:28 avançou para 118.145.244 instruções EE
+AOT e 7.250.244 IOP nativas, zero interpretadas, ainda no logo. A nova fronteira
+é a incerteza de MUL.S no índice 2099 da tabela inicial. Comparação isolada dos
+4096 produtos com o oráculo inteiro PS2Float de parallel-ps2 deixou cinco
+incertos no diagnóstico atual, zero divergências entre os 4091 aceitos. Os
+cinco resultados do oráculo coincidiram com a multiplicação normal do SDK;
+nenhum vetor físico consultado cobriu esses casos incertos. A proposta de um
+diagnóstico separado, com escolha SDK limitada ao intervalo certificado,
+aguarda validação. O oráculo não foi incorporado ao runtime.
+O framebuffer permanece no mesmo logo,
+SHA-256 c6d81d717994f47e6a2ff12c7b4b55e9d05685cb2094269c5ae6cecccd235fc9.
+A imagem permaneceu no logo (671.760 pixels escritos); não há áudio/gameplay
+comprovado.
+Os demais IRX continuam pelo loader/kernel do SDK em AOT. Metadados persistentes
+e formatação do cartão ainda param explicitamente; não retornam sucesso fictício.
+Não há menu/gameplay comprovado.
+O mantenedor autorizou em 08/11/2026 usar diretamente o loader e o kernel IOP
+do PS2Recomp com módulos IRX preparados offline em AOT, adaptando as interfaces
+à memória e ao relógio únicos, sem outro kernel local ou fallback interpretado.
+Isso não certifica apresentação, áudio, menu ou gameplay.
+Arquivos/RPC, callbacks específicos de vídeo,
+cobertura integral de dispositivos e inicialização completa de jogos/Browser
+continuam pendentes. Um
 serviço desconhecido ou ausência de thread executável produz recusa explícita.
 O formato v1 de checkpoints recusa sessões HLE, inclusive exportação de hash
 de estado completo, até incluir os objetos do kernel. Desligar HLE não torna
 esse estado serializável: é necessário um novo reset/preparo. Saves antigos não mudam.
 
-Nos diagnósticos ELF assistidos, God of War (USA) alcançou 267.298 instruções
-AOT sem interpretação até SetSyscall (0x74), com estado observado igual à
-referência. Super Bust-A-Move (USA), pela referência interpretada, passou
-FlushCache e parou em acesso MMIO sem TLB. Não demonstram gameplay ou boot original.
+Em 08/11/2026, o mantenedor autorizou inicializar a TLB do kernel de 32 MiB
+na sessão HLE, mantendo a mesma memória, ASID, permissões, cache e recusas
+de regiões não mapeadas. A RAM e o scratchpad HLE passam pela TLB existente;
+alterações convidadas invalidam também os guards de código nativo. O reset
+do Browser original continua separado e não herda essas entradas.
+
+Com essa inicialização, Super Bust-A-Move (USA) retirou 4.484.175 instruções
+AOT e parou em `SifSetDChain` (`0x78`), ainda sem implementação HLE. Shadow
+of the Colossus (USA) retirou 1.397.118 e God of War (USA), 1.578.074,
+antes de recusar leitura em `0x00000004` após a busca de handler na RAM.
+O espelho da tabela de syscalls continua uma lacuna. Todos mantiveram
+interpretação em zero e não escreveram no GS; não demonstram gameplay ou
+boot original. Em 08/11/2026, o mantenedor validou a tabela de syscalls na
+RAM canônica e serviços SIF ligados aos dispositivos EE/IOP existentes,
+com layout verificado e recusas estritas de serviços/execução AOT ausentes.
+A alternativa de inicializar kernel/IOP pelo firmware AOT não foi escolhida
+para este incremento; memória, dispositivos e relógios continuam únicos.
+O mantenedor também validou descoberta AOT limitada em Preparar: execução
+nativa para no código ausente, captura/verifica a região, compila/cacheia
+offline e reinicia dentro de limites explícitos. Jogar apenas carrega esses
+overlays quando os bytes correspondem à RAM; não compila nem interpreta.
+O incremento cobre regiões EE com escrita convidada observada, até oito
+regiões de no máximo uma página de 4 KiB, sem promover padding não escrito
+a código. Cada início tem orçamento de 50 milhões de instruções; a descoberta
+verifica o limite de 240 segundos entre etapas/fatias de execução, e cada
+compilação de região possui limite próprio de 180 segundos.
+ELF físico e alias KSEG permanecem distintos; conteúdo, ABI e alias identificam
+o módulo. A ativação confere a região inteira pela visão de fetch antes do
+primeiro bloco; os guards existentes recusam alterações posteriores.
+Em 08/11/2026, o mantenedor validou serviços de sistema IOP HLE com relógio,
+RAM e dispositivos canônicos: bootstrap real de buffers/handlers, SIF CMD/RPC
+e arquivos/CDVD. Código convidado de módulos originais continua exigindo AOT,
+com recusa de serviços/traduções ausentes. A inicialização integral do kernel
+IOP pelo firmware AOT não foi escolhida para este incremento. Essa autorização
+não certifica a cobertura desses serviços nem o boot de jogos/Browser.
+O primeiro incremento inicializa buffers/registradores na RAM IOP e o DMA
+SIF1 canônico, despacha CMD de endereço/inicialização/registradores e devolve
+RPCINIT por SIF0 real. O relógio avança sem contabilizar instruções IOP
+inexistentes; reset original e carga bare-metal removem esse modo. Arquivos,
+servidores RPC restantes e execução de módulos ainda são lacunas explícitas. Os callbacks
+EE INTC/DMAC compartilham preservação de contexto e executam código AOT.
+As regressões sintéticas de HLE, posse SDK e sessão passaram; isso não
+estabelece execução de jogos nem boot original.
+O mantenedor reafirmou reutilização máxima do PS2Recomp, incluindo serviços,
+escalonadores e ferramentas, com adaptação às fronteiras já aprovadas.
+O carregador ELF/IRX e as rotinas de relocação de `ps2xIOP` são compilados
+diretamente do SDK fixado: o patch 0006 troca somente sua interface de memória
+por um adaptador que referencia a RAM IOP canônica. Parser de caminhos também
+vem do SDK. Regressões cobrem carga, recusa de ELF inválido, início de IRX e
+threads pelo kernel original, prioridade dos exports e RPC sobre RAM IOP única,
+sem intérprete. `prepare-native` prepara também os intervalos IRX ausentes e
+o recibo carrega suas DLLs com verificação de conteúdo/ABI e vida útil registrada.
+Na espera EE por SIF, a adaptação de `EeScheduler::waitForEvent` avança somente
+o relógio compartilhado até IRQ real, limitada a 65.536 ciclos IOP por espera;
+sem evento ou thread executável, a recusa continua explícita.
+Kernel IOP e CDVD também são compilados do `ps2xIOP`, com adaptador para a
+imagem montada e RAM existentes. O servidor `0x80000592` faz bind e inicializa
+CDVD pela implementação upstream; resultado e recibo retornam pelo SIF0 real.
+O heap RPC usa o alocador upstream sobre a mesma RAM; reset HLE valida o IOPRP
+solicitado antes de reinicializar os serviços, preservando estado EE e relógio.
+Respostas de versão usam ROMDIR/EXTINFO do IOPRP ativo ou da BIOS validada,
+compartilhada por referência em Preparar/Jogar. O hash dessa dependência invalida a descoberta,
+sem recompilar código de jogo apenas por mudar a BIOS. As regressões cobrem
+resposta de 4/16 bytes e recusa de metadados ausentes, sem certificar gameplay.
+O Super Bust ainda para no bind CDVD `0x80000596`, após corrigir a validação
+comum de descritores de semáforo; não há imagem ou gameplay comprovados.
 
 | Componente | Base existente e fronteira restante |
 | --- | --- |
 | Launcher | Qt/QML em `launcher/`: catálogo, configuração e início; não substitui o Browser. O worker mantém a adaptação Qt e os comandos de pausa/parada. |
 | Conteúdo/catálogo | `frontend/content` e `library`: identificação, caminhos, perfis e persistência sem copiar originais. A seleção de todas as dependências AOT antes de Play ainda não é automática. |
-| Preparação/AOT | `ps2n-dev`, `ps2n-aot`, análise e partições CMake: traduções EE/IOP/VU. O launcher recebe módulos ligados na compilação; módulo existente não prova cobertura do conteúdo. |
+| Preparação/AOT | `ps2n-dev`, `ps2n-aot`, análise e partições CMake: traduções EE/IOP/VU. O launcher prepara/cacheia módulos carregáveis por hash e ABI; módulo existente não prova cobertura do conteúdo. |
 | Runtime + HLE | `boot`, `Memory`, EE/IOP e dispositivos conservam estado e semântica compartilhados. O kernel HLE inicial está conectado às syscalls; cobertura de sistema/IOP e equivalência comercial ainda são parciais. |
 | GPU Original/Native | `gs_*`, shaders e backends software/Vulkan/DirectX. API gráfica de host não equivale ao modo Native aprimorado, ainda indisponível. |
 | Sistema e jogos | ROM/NVM, disco, reset, ELF diagnóstico e checkpoints têm identidades distintas. Browser completo e gameplay não são estabelecidos por builds ou fixtures. |

@@ -53,10 +53,13 @@ struct ExecutionContext {
     // Consumed once by the selected engine; later instructions still sample.
     bool interrupts_sampled{};
     InterruptSampleCache interrupt_cache{};
+    // Host control transfers are progress, but never guest instruction retirement.
+    std::uint64_t kernel_dispatches{};
 };
 void flush_interrupt_cache(ExecutionContext& ctx);
 void prime_interrupt_cache(ExecutionContext& ctx);
 bool poll_ee_interrupts_cached_slow(ExecutionContext& ctx);
+bool poll_sdk_kernel(ExecutionContext& ctx);
 PS2N_EE_INLINE bool poll_ee_interrupts_cached(ExecutionContext& ctx) {
     auto& cache=ctx.interrupt_cache;const auto& state=ctx.state;
     if(cache.deadline && state.cycles()<cache.deadline && cache.status==state.cp0(Cop0::Status) &&
@@ -126,6 +129,7 @@ inline bool aot_enter_checked(ExecutionContext& ctx, std::uint32_t pc, std::uint
     state.instruction_in_delay_slot=state.delay_pending;
     const auto sampled=ctx.interrupts_sampled;ctx.interrupts_sampled=false;
     if (!sampled && poll_ee_interrupts_cached(ctx)) return false;
+    if(ctx.memory.hle_kernel() && poll_sdk_kernel(ctx))return false;
     if(ctx.interrupt_cache.deadline || state.cycles()>=ctx.interrupt_cache.retry_after) {
         if(!interrupt_inert_instruction(ctx,word))flush_interrupt_cache(ctx);
         else if(!ctx.interrupt_cache.deadline)prime_interrupt_cache(ctx);
@@ -437,7 +441,7 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
     (void)m;
     (void)pc;
     // Host execution is sequential: guest memory accesses are already ordered (SYNC).
-    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::VaddBc || Op == O::VsubBc || Op == O::VaddaBc || Op == O::Vopmula || Op == O::Vopmsub || Op == O::Vsqrt || Op == O::Vrsqrt || Op == O::Vdiv || Op == O::Vwaitq || Op == O::VaddQ || Op == O::VsubQ || Op == O::VmulQ || Op == O::Vmove || Op == O::Vnop || Op == O::Vftoi || Op == O::Vrinit || Op == O::Vrnext || Op == O::Vrget || Op == O::Vrxor || Op == O::Vcallms || Op == O::Vmsub || Op == O::VmsubBc || Op == O::Vmsuba || Op == O::VmsubaBc) {
+    if constexpr (Op == O::Cfc2 || Op == O::Ctc2 || Op == O::Qmfc2 || Op == O::Qmtc2 || Op == O::Viswr || Op == O::Vsub || Op == O::Vsqi || Op == O::Viadd || Op == O::Vadd || Op == O::Vmr32 || Op == O::Lqc2 || Op == O::Sqc2 || Op == O::Vmul || Op == O::VmulBc || Op == O::Vmadd || Op == O::VmaddBc || Op == O::Vmula || Op == O::VmulaBc || Op == O::Vmadda || Op == O::VmaddaBc || Op == O::VaddBc || Op == O::VsubBc || Op == O::VaddaBc || Op == O::Vopmula || Op == O::Vopmsub || Op == O::Vsqrt || Op == O::Vrsqrt || Op == O::Vdiv || Op == O::Vwaitq || Op == O::VaddQ || Op == O::VsubQ || Op == O::VmulQ || Op == O::Vmove || Op == O::Vnop || Op == O::Vftoi || Op == O::Vitof || Op == O::Vrinit || Op == O::Vrnext || Op == O::Vrget || Op == O::Vrxor || Op == O::Vcallms || Op == O::Vmsub || Op == O::VmsubBc || Op == O::Vmsuba || Op == O::VmsubaBc) {
         if (!(s.cp0(Cop0::Status) & (1u<<30)))
             throw std::runtime_error("COP2 transfer with Status.CU2 = 0; coprocessor unusable vectoring is not modeled");
         constexpr bool transfer=Op==O::Cfc2 || Op==O::Ctc2 || Op==O::Qmfc2 || Op==O::Qmtc2;
@@ -468,14 +472,15 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
             m.vu_advance_q(s.cycles());
             if constexpr(Op!=O::Vwaitq)
                 m.vu_issue_q(s.cycles(),d_,t_,(w>>21u)&3u,(w>>23u)&3u,Op==O::Vsqrt ? 1u : (Op==O::Vrsqrt ? 2u : 0u));
-        } else if constexpr (Op==O::Vftoi) {
+        } else if constexpr (Op==O::Vftoi || Op==O::Vitof) {
             constexpr unsigned fractions[]{0,4,12,15};
             const auto source=m.observe_vu_vector(d_);auto result=m.observe_vu_vector(t_);
             for(unsigned lane=0;lane<4u;++lane)if((w>>21u)&(8u>>lane)) {
                 const auto& input=lane<2u ? source.low : source.high;
                 auto& output=lane<2u ? result.low : result.high;
                 const auto shift=(lane&1u)*32u;const auto mask=0xFFFFFFFFull<<shift;
-                const auto value=vu_float_to_fixed({static_cast<std::uint32_t>(input.value>>shift),
+                const auto convert=Op==O::Vitof ? vu_fixed_to_float : +[](ObservedWord value,unsigned fraction){return vu_float_to_fixed(value,fraction);};
+                const auto value=convert({static_cast<std::uint32_t>(input.value>>shift),
                     static_cast<std::uint32_t>(input.unknown>>shift)},fractions[w&3u]);
                 output.value=(output.value&~mask)|(std::uint64_t{value.value}<<shift);
                 output.unknown=(output.unknown&~mask)|(std::uint64_t{value.unknown}<<shift);
@@ -1072,6 +1077,14 @@ PS2N_EE_INLINE void exec(EEState& s, Memory& m, std::uint32_t pc, std::uint32_t 
         const auto condition=m.dma_cop0_condition();
         constexpr bool positive=Op==O::Bc0t || Op==O::Bc0tl;
         branch(s,condition==positive,pc,w,Op==O::Bc0fl || Op==O::Bc0tl);
+    } else if constexpr (Op==O::Bc2f || Op==O::Bc2t || Op==O::Bc2fl || Op==O::Bc2tl) {
+        if(!(s.cp0(Cop0::Status)&(1u<<30u)))
+            throw std::runtime_error("COP2 branch with Status.CU2 = 0; coprocessor unusable vectoring is not modeled");
+        // CPCOND2 is VPU_STAT.VBS1 (bit 8), independent of VU0's busy bit.
+        const auto status=m.observe_vu_control(29);
+        if(status.unknown&0x100u)throw std::runtime_error("COP2 branch consumes unknown VPU_STAT.VBS1");
+        constexpr bool positive=Op==O::Bc2t || Op==O::Bc2tl;
+        branch(s,((status.value&0x100u)!=0)==positive,pc,w,Op==O::Bc2fl || Op==O::Bc2tl);
     } else if constexpr (Op==O::Bc1f || Op==O::Bc1t || Op==O::Bc1fl || Op==O::Bc1tl) {
         if(!(s.cp0(Cop0::Status)&kStatusCU1))
             throw std::runtime_error("COP1 branch with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");

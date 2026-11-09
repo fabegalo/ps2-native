@@ -47,7 +47,7 @@ void check_alias(const fs::path& root) {
 void check_build(const fs::path& root, const fs::path& repo, const fs::path& cmake,
                  const fs::path& fixture, const fs::path& aot, const fs::path& helper,
                  const fs::path& core, const fs::path& compiler, const fs::path& ninja,
-                 const fs::path& config, unsigned target) {
+                 const fs::path& config, const fs::path& core_link, unsigned target) {
     auto directory = root / "originals" / std::to_string(target) / fs::path(u8"a\u00e7\u00e3o \u65e5\u672c \U0001f680");
     fs::path name(u8"AOT_\u65e5\U0001f680.cpp");
     while ((directory / name).native().size() + 50 < target) directory /= "depth_012345678901234567890123456789";
@@ -69,7 +69,7 @@ void check_build(const fs::path& root, const fs::path& repo, const fs::path& cma
         "include(" + bracket(repo / "cmake/AotSource.cmake") + ")\n"
         "add_library(aot_object OBJECT)\nps2n_target_aot_source(aot_object \"${AOT_SOURCE}\")\n"
         "target_include_directories(aot_object PRIVATE " + bracket(repo / "include") + ")\n"
-        "add_library(core STATIC IMPORTED)\nset_target_properties(core PROPERTIES IMPORTED_LOCATION " + bracket(core) + ")\n"
+        "add_library(core SHARED IMPORTED)\nset_target_properties(core PROPERTIES IMPORTED_LOCATION " + bracket(core) + " IMPORTED_IMPLIB " + bracket(core_link) + ")\n"
         "add_executable(path-probe " + bracket(repo / "tests/aot_smoke.cpp") + " $<TARGET_OBJECTS:aot_object>)\n"
         "target_include_directories(path-probe PRIVATE " + bracket(repo / "include") + ")\ntarget_link_libraries(path-probe PRIVATE core)\n"
         "file(GENERATE OUTPUT \"${CMAKE_BINARY_DIR}/objects.txt\" CONTENT \"$<JOIN:$<TARGET_OBJECTS:aot_object>,\\n>\")\n"
@@ -122,14 +122,14 @@ void check_build(const fs::path& root, const fs::path& repo, const fs::path& cma
 template<class Char> int run_test(int argc, Char** argv) {
     fs::path cleanup;
     try {
-        require(argc == 11, "root repo cmake fixture aot helper core compiler ninja config");
+        require(argc == 12, "root repo cmake fixture aot helper core compiler ninja config core_link");
         if (!file_exists(argv[9])) { std::cout << "Ninja not available: AOT build path test NOT VALIDATED\n"; return 77; }
         const fs::path root(argv[1]);
         require(root.is_absolute() && !file_exists(root), "unused absolute test root");
         cleanup = root;
         check_alias(root);
         for (const auto target : {260u, 500u, 1000u})
-            check_build(root, argv[2], argv[3], argv[4], argv[5], argv[6], argv[7], argv[8], argv[9], argv[10], target);
+            check_build(root, argv[2], argv[3], argv[4], argv[5], argv[6], argv[7], argv[8], argv[9], argv[10], argv[11], target);
         remove_directory_tree(root);
         return 0;
     } catch (const std::exception& error) {

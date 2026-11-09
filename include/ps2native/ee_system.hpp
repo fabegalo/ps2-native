@@ -725,6 +725,11 @@ void execute_ee_system(ExecutionContext& ctx,std::uint32_t dynamic_word=0,System
     if constexpr(Observe)if (ctx.observer != nullptr) ctx.observer->on_instruction(pc, word, ExecutionEngine::Aot);
     const auto frame = ee::begin(state, pc);
     switch (Op) {
+        case MipsOpcode::Bc2f: ee::exec<MipsOpcode::Bc2f>(state,memory,pc,word); break;
+        case MipsOpcode::Bc2t: ee::exec<MipsOpcode::Bc2t>(state,memory,pc,word); break;
+        case MipsOpcode::Bc2fl: ee::exec<MipsOpcode::Bc2fl>(state,memory,pc,word); break;
+        case MipsOpcode::Bc2tl: ee::exec<MipsOpcode::Bc2tl>(state,memory,pc,word); break;
+        case MipsOpcode::Vitof: ee::exec<MipsOpcode::Vitof>(state,memory,pc,word); break;
         case MipsOpcode::Mfc0: cpu.mfc0(instruction.rt, instruction.rd); break;
         case MipsOpcode::Mtc0: cpu.mtc0(instruction.rt, instruction.rd); break;
         case MipsOpcode::Tlbwi: cpu.tlb_write_indexed(); break;
@@ -815,6 +820,22 @@ void execute_ee_system(ExecutionContext& ctx,std::uint32_t dynamic_word=0,System
             relation.value=state.fpr[ee::sa(word)];relation.unknown=state.unknown_fpr_bits[ee::sa(word)];state.fpr_affine[ee::sa(word)]=relation;
             }
             state.fcr31&=~0xC000u;break;
+        case MipsOpcode::MaxS: case MipsOpcode::MinS: {
+            if(!(state.cp0(Cop0::Status)&kStatusCU1))
+                cpu.stop(StopKind::GuestException,"MIN/MAX.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+            const auto fs=ee::rd(word),ft=ee::rt(word),fd=ee::sa(word);
+            if(fs!=ft && (state.unknown_fpr_bits[fs] || state.unknown_fpr_bits[ft]))
+                cpu.stop(StopKind::NotModeled,"MIN/MAX.S selection depends on unknown operand bits");
+            // Compare raw EE encodings: signed zeros, denormals and exponent 255
+            // retain their bits instead of taking host IEEE NaN/flush semantics.
+            const auto order=[](std::uint32_t value){return value&0x80000000u ? ~value : value^0x80000000u;};
+            const bool less=order(state.fpr[fs])<order(state.fpr[ft]);
+            const auto source=(less==(instruction.opcode==MipsOpcode::MinS)) ? fs : ft;
+            const auto relation=cpu.fpu_relation(source);
+            state.fpr[fd]=state.fpr[source];state.unknown_fpr_bits[fd]=state.unknown_fpr_bits[source];state.fpr_affine[fd]=relation;
+            state.fcr31&=~0xC000u;
+            break;
+        }
         case MipsOpcode::MovS:
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"MOV.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -651,7 +652,7 @@ inline void emit_m21_scratchpad(Assembler& a) {
 // Stage::M22 also the M2.2 block before ERET; Stage::M23 adds the M2.3 block
 // after it, Stage::M24 the M2.4 block after that and Stage::M25 the M2.5 block
 // after that. The default (M2.0) firmware is unchanged.
-inline Firmware build_firmware(Stage stage = Stage::M20) {
+inline Firmware build_firmware(Stage stage = Stage::M20,std::span<const File> additional = {}) {
     const bool m21 = stage != Stage::M20;
     const bool m22 = stage == Stage::M22 || stage == Stage::M23 || stage == Stage::M24 || stage == Stage::M25;
     const bool m23 = stage == Stage::M23 || stage == Stage::M24 || stage == Stage::M25;
@@ -665,6 +666,7 @@ inline Firmware build_firmware(Stage stage = Stage::M20) {
     files.push_back({"SYNPAYLD", le_words(payload_code()), {}});
     std::vector<std::uint32_t> table(kTable.begin(), kTable.end());
     files.push_back({"SYNDATA", le_words(table), {}});
+    files.insert(files.end(),additional.begin(),additional.end());
     field(files[0].extinfo, 0x01, 0, {0x03, 0x11, 0x26, 0x20});
     field(files[0].extinfo, 0x03, 0, text("ps2-native synthetic firmware (not Sony)"));
     field(files[3].extinfo, 0x02, 0x0100, {});

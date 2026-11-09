@@ -88,7 +88,7 @@ struct CheckpointAccess {
         v.locations_={};v.pending_pages_={};v.knowledge_cached_={};v.fallback_reasons_={};
     }
     static void prepare_read(VuControl& v){v.invalidate_vu1_aot();v.vu1_aot_stats_={};v.vu0_aot_stats_={};v.vu1_capture_={};}
-    static void prepare_read(Iop& i){i.pad_poll_source_={};i.ee_ram_metadata_=nullptr;i.instruction_observer_={};i.native_instructions_=i.interpreted_instructions_=0;}
+    static void prepare_read(Iop& i){i.pad_poll_source_={};i.pad_output_sink_={};i.ee_ram_metadata_=nullptr;i.instruction_observer_={};i.native_instructions_=i.interpreted_instructions_=0;}
     template<class T> static void prepare_read(DiagnosticHistory<T>& history){history.sink_=nullptr;}
     template<class T> static void validate(const T&){}
     static void validate(const RdramChain& chain){

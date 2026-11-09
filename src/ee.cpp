@@ -1,5 +1,6 @@
 #include "ps2native/ee_semantics.hpp"
 #include "ps2native/memory.hpp"
+#include "ps2native/hle.hpp"
 
 #include <cstddef>
 #include <algorithm>
@@ -43,6 +44,7 @@ bool poll_interrupts(EEState& state, Memory* memory) {
     state.set_cp0(Cop0::Cause, cause);
     if ((status & (kStatusEXL | kStatusERL)) || !(status & kStatusIE) || !(status & kStatusEIE) ||
         !(status & cause & (kStatusIM7|kStatusIM2|kStatusIM3))) return false;
+    if(memory && memory->hle_kernel() && memory->hle_kernel()->dispatch_interrupt(status&cause))return true;
     state.set_cp0(Cop0::Epc, state.delay_pending ? state.pc - 4u : state.pc);
     state.set_cp0(Cop0::Cause, (cause & ~0x8000007Cu) | (state.delay_pending ? 0x80000000u : 0u));
     state.set_cp0(Cop0::Status, status | kStatusEXL);

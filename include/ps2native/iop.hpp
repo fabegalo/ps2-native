@@ -60,8 +60,10 @@ inline constexpr std::uint32_t kDev9Revision = 0x1F80146Eu;
     // RUNTIME_HELPERS_BEGIN
 struct IopExecutionStop { std::string reason; };
     // RUNTIME_HELPERS_END
+class Ps2RecompIopServices;
 class Iop {
     friend struct CheckpointAccess;
+    friend class Ps2RecompIopServices;
 public:
     // External machine event, not a ROM/NVM value (ps2sdk wakeup reasons).
     enum class PowerEvent : std::uint8_t { FrontPanelPowerOn=0, MainReset=1, Alarm=2, ExternalDevice=3 };
@@ -79,6 +81,7 @@ public:
     using InstructionObserver=std::function<void(std::uint32_t,std::uint32_t)>;
     void set_instruction_observer(InstructionObserver observer) {instruction_observer_=std::move(observer);}
     [[nodiscard]] std::string code_identity(std::uint32_t pc) const;
+    [[nodiscard]] std::optional<std::pair<std::uint32_t,std::uint32_t>> native_module_range(std::uint32_t pc) const;
     // RUNTIME_HELPERS_END
     // User/front-panel power-on with `rom0` (empty: no ROM, the IOP stays stopped) on console
     // `hardware` (nullptr: none, so its PRId read stops the IOP), whose
@@ -93,6 +96,11 @@ public:
     // start/end (I_STAT bits 0 and 11); its timing must not change while the
     // IOP runs (the EE syncs the IOP before every GS write).
     void run_until(std::uint64_t cycle, const GsRegisters* video = nullptr);
+    // Explicit HLE launch only. Firmware reset and bare-metal AOT retain their CPU path.
+    void start_hle_services(Ps2RecompIopServices* services=nullptr);
+    void stop_hle_services() noexcept;
+    [[nodiscard]] bool hle_services_active() const noexcept {return hle_services_;}
+    [[nodiscard]] bool hle_events_pending() const noexcept;
     // RUNTIME_HELPERS_BEGIN
     [[nodiscard]] std::optional<std::uint64_t> idle_loop_horizon() const;
     [[nodiscard]] bool ee_memory_quiescent() const noexcept {
@@ -269,8 +277,32 @@ public:
     // HOST_INPUT_BEGIN (not serialized)
     // Sampled only by a real 01/42 digital-pad poll. The returned active-low
     // value is latched into that packet; this never creates a guest poll.
+    struct PadInput {
+        std::uint16_t buttons{0xFFFFu}; // active-low
+        std::uint8_t rx{0x80u},ry{0x80u},lx{0x80u},ly{0x80u};
+        std::array<std::uint8_t,12> pressure{};
+        std::uint16_t pressureValid{}; // Other buttons map to full digital pressure.
+        bool operator==(const PadInput&) const = default;
+    };
+    using PadInputSource=std::function<std::optional<PadInput>(unsigned,std::uint64_t)>;
+    using PadOutputSink=std::function<bool(unsigned,std::uint8_t,std::uint8_t)>;
+    void set_pad_output_sink(PadOutputSink sink){pad_output_sink_=std::move(sink);}
+    bool emit_pad_output(unsigned port,std::uint8_t smallMotor,std::uint8_t largeMotor) const {
+        return pad_output_sink_ && pad_output_sink_(port,smallMotor,largeMotor);
+    }
     using PadPollSource=std::function<std::uint16_t(unsigned,std::uint64_t)>;
-    void set_pad_poll_source(PadPollSource source) { pad_poll_source_=std::move(source); }
+    void set_pad_input_source(PadInputSource source) {pad_poll_source_=std::move(source);}
+    void set_pad_poll_source(PadPollSource source) {
+        pad_poll_source_=source?PadInputSource{[source=std::move(source)](unsigned port,std::uint64_t cycle) {
+            return std::optional<PadInput>{PadInput{source(port,cycle)}};
+        }}:PadInputSource{};
+    }
+    [[nodiscard]] std::optional<PadInput> poll_pad_input(unsigned port) const {
+        if(port>=sio2_digital_pads_.size())return std::nullopt;
+        if(pad_poll_source_)return pad_poll_source_(port,cycle_);
+        if(sio2_digital_pads_[port])return PadInput{*sio2_digital_pads_[port]};
+        return std::nullopt;
+    }
     // HOST_INPUT_END
     void diagnostic_sio2_unplugged_ports(unsigned mask,std::uint32_t timeout_cycles);
     void diagnostic_sio2_dma_word_cycles(std::uint32_t cycles);
@@ -545,7 +577,8 @@ private:
     std::optional<unsigned> diagnostic_sio2_port_timing_;
     std::array<std::optional<std::uint16_t>,2> sio2_digital_pads_;
     // HOST_INPUT_BEGIN (not serialized)
-    PadPollSource pad_poll_source_;
+    PadInputSource pad_poll_source_;
+    PadOutputSink pad_output_sink_;
     // HOST_INPUT_END
     std::uint32_t sio2_response_status_{};
     std::vector<std::uint8_t> sio2_input_;
@@ -719,6 +752,11 @@ private:
     bool ilink_bus_reset_{};
     const NvmImage* nvm_{};
     std::uint64_t cycle_{};
+    bool hle_services_{};
+    Ps2RecompIopServices* hle_system_{};
+    bool hle_command_active_{};
+    void tick_hle_services();
+    void initialize_hle_sif();
     std::optional<std::string> stop_;
     std::uint64_t stop_cycle_{};
     DiagnosticHistory<Event> events_;

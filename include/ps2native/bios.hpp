@@ -53,6 +53,16 @@ struct BiosLoadOptions {
 [[nodiscard]] BiosImage load_bios_rom0(std::span<const std::uint8_t> bytes,
                                        const BiosLoadOptions& options = {});
 
+// Read-only IOP reboot container; metadata does not imply execution of its IRX files.
+struct IopRebootImage {
+    std::vector<std::uint8_t> bytes;
+    std::string sha256;
+    std::vector<BiosModule> modules;
+    [[nodiscard]] const BiosModule* find(std::string_view name) const noexcept;
+};
+[[nodiscard]] IopRebootImage load_iop_reboot_image(std::vector<std::uint8_t> bytes,
+                                                  const BiosLoadOptions& options = {});
+
 // Explicitly reviewed pairing, never inferred from filenames or region alone.
 // The caller supplies provenance for the compatibility decision; the loader
 // verifies both hashes, the console/ROMVER binding and ROM1's internal metadata.

@@ -316,6 +316,7 @@ public:
 private:
     // RUNTIME_HELPERS_BEGIN
     friend class HleKernel;
+    friend class SdkMemory;
     HleKernel* hle_kernel_{}; // host attachment; active HLE checkpoints are refused
     bool hle_used_{}; // reset, not detach, establishes a serializable v1 console
     // RUNTIME_HELPERS_END

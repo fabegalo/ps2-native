@@ -3,6 +3,7 @@
 #include "ps2native/device_timing.hpp"
 #include <span>
 #include <string_view>
+#include <memory>
 
 namespace ps2native {
 class Iop;
@@ -15,7 +16,13 @@ struct IopAotModule {
     std::string_view source_sha256,identity;
     std::span<const IopAotEntry> entries;
 };
-struct IopAotRegistration { explicit IopAotRegistration(const IopAotModule&); };
+struct IopAotRegistration {
+    explicit IopAotRegistration(const IopAotModule&);
+    IopAotRegistration(const IopAotModule&,std::shared_ptr<const void> code_owner);
+    ~IopAotRegistration();
+    IopAotRegistration(const IopAotRegistration&)=delete;
+    IopAotRegistration& operator=(const IopAotRegistration&)=delete;
+};
 [[nodiscard]] std::string iop_aot_identity(std::string_view source,std::span<const IopAotEntry> entries);
 bool execute_iop_aot(Iop&,std::uint32_t word);
 [[nodiscard]] std::string missing_iop_aot(std::uint32_t pc,std::uint32_t word);

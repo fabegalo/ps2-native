@@ -22,6 +22,7 @@ bool MipsInstruction::is_conditional_branch() const noexcept {
         case MipsOpcode::Bltzal: case MipsOpcode::Bgezal:
         case MipsOpcode::Bc1f: case MipsOpcode::Bc1t:
         case MipsOpcode::Bc0f: case MipsOpcode::Bc0t:
+        case MipsOpcode::Bc2f: case MipsOpcode::Bc2t:
             return true;
         default:
             return is_likely_branch();
@@ -36,6 +37,7 @@ bool MipsInstruction::is_likely_branch() const noexcept {
         case MipsOpcode::Bltzall: case MipsOpcode::Bgezall:
         case MipsOpcode::Bc1fl: case MipsOpcode::Bc1tl:
         case MipsOpcode::Bc0fl: case MipsOpcode::Bc0tl:
+        case MipsOpcode::Bc2fl: case MipsOpcode::Bc2tl:
             return true;
         default:
             return false;
@@ -287,9 +289,14 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
             }
         }
     } else if (op == 0x12) {
+        if (rs==8u && rt<4u) {
+            constexpr MipsOpcode branches[]{MipsOpcode::Bc2f,MipsOpcode::Bc2t,MipsOpcode::Bc2fl,MipsOpcode::Bc2tl};
+            return make(branches[rt]);
+        }
         if (rs==16u && funct==0x38u)return make(MipsOpcode::Vcallms);
         if (word==0x4A0002FFu) return make(MipsOpcode::Vnop);
         if (rs>=16u && (word&0x7FCu)==0x17Cu) return make(MipsOpcode::Vftoi);
+        if (rs>=16u && (word&0x7FCu)==0x13Cu) return make(MipsOpcode::Vitof);
         if (word==0x4A0003BFu) return make(MipsOpcode::Vwaitq);
         if (rs>=16u && (word&0x7FFu)==0x33Cu) return make(MipsOpcode::Vmove);
         if (rs>=16u && (word&0x7FFu)==0x3BCu) return make(MipsOpcode::Vdiv);
@@ -361,6 +368,8 @@ std::optional<MipsInstruction> try_decode_r5900(std::uint32_t pc, std::uint32_t 
         if(rs==16 && funct==0x1Fu && sa==0)return make(MipsOpcode::MsubaS);
         if(rs==16 && funct==0x1Eu && sa==0)return make(MipsOpcode::MaddaS);
         if(rs==16 && funct==0x1Du)return make(MipsOpcode::MsubS);
+        if(rs==16 && funct==0x28u)return make(MipsOpcode::MaxS);
+        if(rs==16 && funct==0x29u)return make(MipsOpcode::MinS);
         if(word&0x7FFu)return std::nullopt;
         switch(rs) {
             case 0: return make(MipsOpcode::Mfc1);

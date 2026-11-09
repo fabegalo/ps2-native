@@ -67,4 +67,6 @@ public:
     [[nodiscard]] const LoadSegment& code_segment_at(std::uint32_t address) const;
 };
 [[nodiscard]] ElfImage parse_ee_elf(std::span<const std::uint8_t> data);
+// Stripped physical-RAM ELF, unchanged bytes/provenance and explicit KSEG execution.
+[[nodiscard]] ElfImage ee_execution_alias(ElfImage image,std::uint32_t alias);
 } // namespace ps2native

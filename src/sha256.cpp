@@ -5,6 +5,13 @@
 #include "ps2native/io.hpp"
 #include <algorithm>
 #include <stdexcept>
+#if defined(_WIN32) && defined(_MSC_VER)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
+#endif
 
 namespace ps2native {
 namespace {
@@ -73,13 +80,42 @@ std::string Sha256::hex_digest() const {
     return out;
 }
 std::string sha256_file(const std::filesystem::path& path) {
-    InputFile file(path); Sha256 hash;
+    InputFile file(path);
+    if(file.size()>UINT64_MAX/8u)throw std::runtime_error("SHA-256 input too large");
+#if defined(_WIN32) && defined(_MSC_VER)
+    // Use the OS provider for full-disc hashing without host ISA requirements.
+    struct Handles {
+        BCRYPT_ALG_HANDLE algorithm{};BCRYPT_HASH_HANDLE hash{};
+        ~Handles(){if(hash)BCryptDestroyHash(hash);if(algorithm)BCryptCloseAlgorithmProvider(algorithm,0);}
+    } native;
+    const auto checked=[](NTSTATUS status){
+        if(status<0)throw std::runtime_error("Windows SHA-256 failure, NTSTATUS "+std::to_string(status));
+    };
+    checked(BCryptOpenAlgorithmProvider(&native.algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0));
+    checked(BCryptCreateHash(native.algorithm,&native.hash,nullptr,0,nullptr,0,0));
+#else
+    Sha256 hash;
+#endif
     std::vector<std::uint8_t> buffer(1024u * 1024u);
     for (std::uint64_t offset = 0; offset < file.size();) {
         const auto n = file.read_at(offset, buffer);
         if (!n) throw std::runtime_error("short read while hashing input");
-        hash.update(std::span(buffer).first(n)); offset += n;
+#if defined(_WIN32) && defined(_MSC_VER)
+        checked(BCryptHashData(native.hash,buffer.data(),static_cast<ULONG>(n),0));
+#else
+        hash.update(std::span(buffer).first(n));
+#endif
+        offset += n;
     }
+#if defined(_WIN32) && defined(_MSC_VER)
+    std::array<std::uint8_t,32> digest{};
+    checked(BCryptFinishHash(native.hash,digest.data(),static_cast<ULONG>(digest.size()),0));
+    static constexpr char digits[]="0123456789abcdef";
+    std::string text(64,'0');
+    for(std::size_t i=0;i<digest.size();++i){text[i*2]=digits[digest[i]>>4u];text[i*2+1]=digits[digest[i]&15u];}
+    return text;
+#else
     return hash.hex_digest();
+#endif
 }
 } // namespace ps2native

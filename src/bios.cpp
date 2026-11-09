@@ -152,7 +152,7 @@ const BiosModule* BiosImage::find(std::string_view name) const noexcept {
     return it == modules.end() ? nullptr : &*it;
 }
 
-static BiosImage load_rom_directory(std::span<const std::uint8_t> rom, const BiosLoadOptions& options, bool primary) {
+static BiosImage load_rom_directory(std::span<const std::uint8_t> rom, const BiosLoadOptions& options, bool primary,bool reboot=false) {
     if (primary && rom.size() != Memory::kBiosRomBytes)
         reject("size is " + std::to_string(rom.size()) + " bytes; ROM0 is exactly 4194304 bytes "
                "(partial dumps and concatenated ROM0+ROM1/ROM2/EROM files are not accepted)");
@@ -204,7 +204,7 @@ static BiosImage load_rom_directory(std::span<const std::uint8_t> rom, const Bio
     }
     if (bios.modules[2].name != "EXTINFO") reject("EXTINFO must be the third ROMDIR entry");
     const auto& reset = bios.modules[0];
-    if (reset.size == 0u) reject("RESET is empty: the image has no code at the reset vector");
+    if (!reboot && reset.size == 0u) reject("RESET is empty: the image has no code at the reset vector");
     const auto& table = bios.modules[1];
     if (table.offset != bios.romdir_offset)
         reject("ROMDIR file offset " + hex32(table.offset) + " disagrees with the table at " +
@@ -227,12 +227,21 @@ static BiosImage load_rom_directory(std::span<const std::uint8_t> rom, const Bio
         parse_extinfo(rom, extinfo_base + module.extinfo_offset, module);
 
     if(primary)bios.version = parse_romver(rom, *bios.find("ROMVER"));
-    bios.rom0.assign(rom.begin(), rom.end());
     return bios;
 }
 
 BiosImage load_bios_rom0(std::span<const std::uint8_t> rom, const BiosLoadOptions& options) {
-    return load_rom_directory(rom,options,true);
+    auto bios=load_rom_directory(rom,options,true);bios.rom0.assign(rom.begin(),rom.end());return bios;
+}
+const BiosModule* IopRebootImage::find(std::string_view name) const noexcept {
+    const auto it=std::find_if(modules.begin(),modules.end(),[&](const auto& module){return module.name==name;});
+    return it==modules.end()?nullptr:&*it;
+}
+IopRebootImage load_iop_reboot_image(std::vector<std::uint8_t> bytes,const BiosLoadOptions& options) {
+    if(bytes.empty() || bytes.size()>2u*1024u*1024u)
+        throw std::runtime_error("IOP reboot image size "+std::to_string(bytes.size())+" exceeds its 2 MiB preparation limit");
+    auto directory=load_rom_directory(bytes,options,false,true);
+    return {std::move(bytes),std::move(directory.sha256),std::move(directory.modules)};
 }
 
 Rom1Image load_bios_rom1(std::span<const std::uint8_t> bytes, const BiosImage& bios,

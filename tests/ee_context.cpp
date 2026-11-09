@@ -797,6 +797,31 @@ void vector_nop() {
 }
 void vector_fixed() {
     constexpr unsigned fractions[]{0,4,12,15};
+    for(unsigned kind=0;kind<4;++kind) {
+        const auto fraction=fractions[kind];
+        for(const auto [input,expected]:{std::pair{0u,0u},std::pair{1u,0x3F800000u},
+            std::pair{0xFFFFFFFFu,0xBF800000u},std::pair{0x01000001u,0x4B800000u},
+            std::pair{0xFEFFFFFFu,0xCB800000u},std::pair{0x7FFFFFFFu,0x4EFFFFFFu},std::pair{0x80000000u,0xCF000000u}})
+            require(vu_fixed_to_float({input,0},fraction).value==(input ? expected-(fraction<<23u) : 0u),
+                "ITOF signed limits and chopped inexact results in every fixed-point format");
+        Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);EEState state;
+        state.pc=0x80001000u;state.set_cp0(Cop0::Status,1u<<30u);state.fcr31=0x0183FFFFu;
+        memory.write_vu_vector(1,{{16u,0xFFFFFFFF00000000ull},{0xFFFFFFE000000000ull,0xFFFFFFFFu}});
+        memory.write_vu_vector(2,{{0x1234567800000000ull,0},{0xABCDEF01u,0}});
+        const auto status=memory.read_vu_control(16),mac=memory.read_vu_control(17);
+        const auto word=0x4B22093Cu|kind;
+        require(decode_r5900(state.pc,word).opcode==MipsOpcode::Vitof,"all VITOF forms decode");
+        memory.write32(state.pc,word);std::uint64_t executed=0;ExecutionContext ctx{state,memory,executed,1,UINT32_MAX};
+        compiled_fixture_step(ctx);
+        const auto result=memory.observe_vu_vector(2);
+        require(result.low.value==(0x1234567800000000ull|(0x41800000u-(fraction<<23u))) && !result.low.unknown &&
+            result.high.value==((std::uint64_t{0xC2000000u-(fraction<<23u)}<<32u)|0xABCDEF01u) && !result.high.unknown &&
+            executed==1 && memory.read_vu_control(16)==status && memory.read_vu_control(17)==mac && state.fcr31==0x0183FFFFu,
+            "native VITOF preserves unselected lanes, flags and EE retirement");
+        state.set_cp0(Cop0::Status,0);
+        rejects([&]{ee::exec<MipsOpcode::Vitof>(state,memory,0,word);},"Status.CU2 = 0");
+    }
+    rejects([&]{(void)vu_fixed_to_float({1,1},4);},"unknown fixed-point bits");
     constexpr std::uint32_t positive[]{1,24,6144,49152},below_one[]{0,15,4095,32767};
     for(unsigned kind=0;kind<4u;++kind) {
         require(vu_float_to_fixed({0x3FC00000u,0},fractions[kind]).value==positive[kind] &&
@@ -1165,6 +1190,33 @@ void dma_cop0_branches() {
     s.delay_pending=false;s.set_cp0(Cop0::Status,0x10u);
     rejects([&]{ee::exec<MipsOpcode::Bc0f>(s,memory,0,0x41000000u);},"COP0 branch unusable");
 }
+void vu_cop2_branches() {
+    for(unsigned running=0;running<3;++running)for(unsigned form=0;form<4;++form) {
+        Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
+        EEState state;state.pc=0x80001000u;state.set_cp0(Cop0::Status,1u<<30u);
+        // Start the actual shared VU engine; VU0 busy must not set CPCOND2.
+        if(running)memory.write128(running==1 ? 0xB0004000u : 0xB0005000u,0x14000000u,0);
+        const auto word=0x49000003u|(form<<16u);
+        const auto decoded=decode_r5900(state.pc,word);
+        require(decoded.is_conditional_branch() && decoded.has_delay_slot() &&
+            decoded.is_likely_branch()==(form>=2u) && mips_aot_supported(decoded.opcode),"BC2 branch metadata");
+        require(!try_decode_r5900(state.pc,0x49040003u),"reserved BC2 encoding is refused");
+        memory.write32(state.pc,word);memory.write32(state.pc+4,0);
+        std::uint64_t executed=0;ExecutionContext ctx{state,memory,executed,10,UINT32_MAX};
+        compiled_fixture_step(ctx);
+        const bool taken=(running==2)==((form&1u)!=0);
+        const bool delay=!(form>=2u && !taken);
+        require(state.delay_pending==delay && state.stall_cycles==0 && executed==1,
+            "BC2 samples VU1 without interlocking VU0 or skipping retirement");
+        if(delay) {
+            require(state.pc==0x80001004u,"ordinary branch keeps its delay slot");
+            compiled_fixture_step(ctx);
+        }
+        require(state.pc==(taken ? 0x80001010u : 0x80001008u),"BC2 target and likely-slot annulment");
+        state.set_cp0(Cop0::Status,0);
+        rejects([&]{ee::exec<MipsOpcode::Bc2t>(state,memory,0,word);},"Status.CU2 = 0");
+    }
+}
 void conversions_and_partial_loads() {
     Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     EEState s;s.pc=0x80001000;s.set_cp0(Cop0::Status,kStatusCU1);s.fcr31=0x0183C079;
@@ -1256,6 +1308,6 @@ void conversions_and_partial_loads() {
 }
 }
 int main() {
-    try {native_fixture_identity();privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();vector_accumulator_add();immediate_add_knowledge();multiply_zero_knowledge();dma_idle_knowledge();dma_cop0_branches();conversions_and_partial_loads();return 0;}
+    try {native_fixture_identity();privilege_and_cache();floating_comparisons();nested_exception();addi_exception();signed_arithmetic();packed_copy();micro_subroutine();funnel_shift();leading_sign_count();disabled_cop0_context();integer_multiply_add();symbolic_shifts();register_context();adder();divider();vector_q();vector_nop();vector_fixed();vector_cpu_bounds();vector_setup();vector_accumulator_add();immediate_add_knowledge();multiply_zero_knowledge();dma_idle_knowledge();dma_cop0_branches();vu_cop2_branches();conversions_and_partial_loads();return 0;}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

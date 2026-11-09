@@ -1,6 +1,7 @@
 #include "ps2native/disc.hpp"
 #include "ps2native/io.hpp"
 #include "ps2native/sha256.hpp"
+#include "ps2recomp_codegen.hpp"
 #include "ps2recomp/config_manager.h"
 #include "ps2recomp/elf_analyzer.h"
 #include "ps2recomp/ps2_recompiler.h"
@@ -12,13 +13,15 @@
 #include <stdexcept>
 
 namespace ps2native::dev {
-int prepare_ps2recomp(const std::filesystem::path& source, const std::filesystem::path& destination, bool disc) {
+int prepare_ps2recomp(const std::filesystem::path& source, const std::filesystem::path& destination, bool disc,std::uint32_t alias) {
     namespace fs = std::filesystem;
     using nlohmann::json;
     const auto input = fs::weakly_canonical(fs::absolute(source));
     const auto output = fs::weakly_canonical(fs::absolute(destination));
     const auto input_hash = sha256_file(input);
     const auto image = disc ? DiscImage(input).boot_elf() : parse_ee_elf(read_file(input));
+    if(alias && disc)throw std::runtime_error("execution alias requires a stripped ELF");
+    if(alias)(void)ee_execution_alias(image,alias);
     constexpr const char* required[] = {"ps2_recompiled_functions.cpp", "ps2_recompiled_functions.h", "ps2_recompiled_stubs.h", "register_functions.cpp"};
     const auto receipt_path = output / "sdk-prepare.json";
     if (fs::exists(native_io_path(output))) {
@@ -26,7 +29,7 @@ int prepare_ps2recomp(const std::filesystem::path& source, const std::filesystem
         const auto receipt = json::parse(bytes.begin(), bytes.end());
         if (receipt.at("schema") != "ps2n-ps2recomp-prepare-v1" || receipt.at("input_sha256") != input_hash ||
             receipt.at("sdk_lock_sha256") != PS2N_PS2RECOMP_LOCK_SHA256 || receipt.at("disc") != disc ||
-            receipt.at("input") != path_utf8(input) || receipt.at("native_backend") != "ps2runtime-native-v1" ||
+            receipt.at("native_backend") != "ps2runtime-native-v1" || receipt.value("execution_alias",0u)!=alias ||
             receipt.at("native_backend_sha256") != PS2N_PS2RECOMP_BACKEND_SHA256 || receipt.at("files").empty())
             throw std::runtime_error("PS2Recomp output identity differs; preserve it and select a different output directory");
         for (const auto* name : required)
@@ -74,18 +77,25 @@ int prepare_ps2recomp(const std::filesystem::path& source, const std::filesystem
             throw std::runtime_error("PS2Recomp translation failed");
         }
         const auto& counters = recompiler.reportCounters();
-        const auto require_complete = [&] {
-            if (recompiler.hasErrors() || counters.decodeFailures || counters.functionsStubbed || counters.functionsSkipped ||
-                counters.unhandledInstructions || counters.correctnessCriticalFailures || !counters.functionsRecompiled)
+        const auto require_complete = [&](bool native_emitted=false) {
+            const bool errors=native_emitted ? counters.nonInstructionErrors!=0 : recompiler.hasErrors();
+            if (errors || counters.decodeFailures || counters.functionsStubbed || counters.functionsSkipped ||
+                (!native_emitted && counters.unhandledInstructions) || counters.correctnessCriticalGuestFallbacks ||
+                counters.correctnessCriticalFailures || !counters.functionsRecompiled)
             {
                 recompiler.printReport();
                 throw std::runtime_error("PS2Recomp translation incomplete: decode failure, unsupported instruction, skipped function or stub");
             }
         };
         require_complete();
+        reset_sdk_native_codegen(alias);
         recompiler.generateOutput();
-        require_complete();
-        if (!counters.generatedFunctions) throw std::runtime_error("PS2Recomp produced no functions");
+        // Standalone emission errors do not authorize native skips: every word
+        // is independently emitted or omitted with an exact strict-stop PC.
+        require_complete(true);
+        write_sdk_native_sources(output/"generated/ps2_recompiled_functions.cpp");
+        // Configured entry points can add synthesized native function roots.
+        if (counters.generatedFunctions<counters.functionsRecompiled)throw std::runtime_error("PS2Recomp omitted generated functions");
         // Required SDK outputs must be present; generateOutput() has a void API.
         for (const auto* name : required)
             if (!regular_file_size(output / "generated" / name)) throw std::runtime_error("PS2Recomp output is empty");
@@ -94,7 +104,12 @@ int prepare_ps2recomp(const std::filesystem::path& source, const std::filesystem
             {"sdk_lock_sha256", PS2N_PS2RECOMP_LOCK_SHA256}, {"input_sha256", input_hash}, {"input", path_utf8(input)}, {"disc", disc},
             {"functions", counters.functionsRecompiled}, {"native_backend", "ps2runtime-native-v1"},
             {"native_backend_sha256", PS2N_PS2RECOMP_BACKEND_SHA256}, {"elf_sha256", sha256_hex(image.bytes)},
-            {"runtime_ready", false}, {"files", json::object()}};
+            {"runtime_ready", false}, {"execution_alias",alias}, {"files", json::object()}};
+        receipt["native_translated_instructions"]=sdk_native_instruction_count();
+        receipt["sdk_unhandled_instructions"]=counters.unhandledInstructions;
+        receipt["native_unsupported"]=json::array();
+        for(const auto& [pc,word]:sdk_native_missing_translations())
+            receipt["native_unsupported"].push_back({{"pc",pc},{"word",word}});
         for (const auto& item : fs::recursive_directory_iterator(native_io_path(output))) {
             if (!item.is_regular_file()) continue;
             const auto relative=item.path().lexically_relative(native_io_path(output)).generic_u8string();
@@ -102,7 +117,9 @@ int prepare_ps2recomp(const std::filesystem::path& source, const std::filesystem
         }
         (void)write_text_if_changed(receipt_path, receipt.dump(2) + '\n');
         std::cout << "PS2Recomp AOT generated: " << counters.functionsRecompiled
-                  << " functions for the integrated PS2Runtime; host compilation and execution must be validated\n";
+                  << " analyzed functions for the integrated PS2Runtime; host compilation and execution must be validated\n"
+                  << "Native instructions="<<sdk_native_instruction_count()<<" unsupported="<<sdk_native_missing_translations().size()
+                  <<"; execution stops before every missing translation\n";
         return 0;
     } catch (...) {
         // This invocation exclusively created this directory; originals are outside it.

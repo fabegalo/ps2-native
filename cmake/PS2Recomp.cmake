@@ -16,6 +16,22 @@ set(BUILD_NON_SHARED ON)
 # First declaration wins over the upstream tags; verify each tag's resolved
 # commit before its CMake code is executed. Shallow clones bound disk usage.
 file(READ "${PS2N_LOCK_FILE}" _lock)
+
+# Runtime-only SDK patches change discovery/runtime identity, not emitted game code.
+string(JSON _codegen_lock REMOVE "${_lock}" ps2recomp_sdk patches)
+string(JSON _patch_count LENGTH "${_lock}" ps2recomp_sdk patches)
+if(_patch_count GREATER 0)
+    math(EXPR _patch_last "${_patch_count}-1")
+    foreach(_patch_index RANGE ${_patch_last})
+        string(JSON _patch GET "${_lock}" ps2recomp_sdk patches ${_patch_index})
+        string(JSON _patch_files GET "${_patch}" files)
+        if(_patch_files MATCHES "ps2xRecomp/|ps2xAnalyzer/")
+            string(APPEND _codegen_lock "\n${_patch}")
+        endif()
+    endforeach()
+endif()
+string(SHA256 PS2N_PS2RECOMP_CODEGEN_LOCK_SHA256 "${_codegen_lock}")
+
 foreach(name IN ITEMS elfio toml11 fmt libdwarf rabbitizer nlohmann_json)
     string(JSON repo GET "${_lock}" dependencies ${name} repository)
     string(JSON tag GET "${_lock}" dependencies ${name} tag)

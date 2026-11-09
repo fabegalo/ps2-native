@@ -276,7 +276,7 @@ Flickable {
                     }
                     Text {
                         Layout.fillWidth: true
-                        text: qsTr("Games are identified from their disc (serial, region, video mode). Starting them from the launcher is not available yet: game execution is still an experimental diagnostic.")
+                        text: qsTr("Import your discs, prepare verified native code, and select Play. Compatibility is incomplete; unsupported translations and services are reported explicitly.")
                         color: Theme.textFaint
                         font.pixelSize: Theme.captionSize + 1
                         wrapMode: Text.WordWrap

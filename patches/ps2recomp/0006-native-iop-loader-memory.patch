@@ -1,0 +1,17 @@
+diff --git a/ps2xIOP/src/emulator/core/iop_memory.h b/ps2xIOP/src/emulator/core/iop_memory.h
+--- a/ps2xIOP/src/emulator/core/iop_memory.h
++++ b/ps2xIOP/src/emulator/core/iop_memory.h
+@@ -1,4 +1,8 @@
+ #pragma once
++
++#if defined(PS2N_SDK_NATIVE_BACKEND)
++#include "iop_memory_native.hpp"
++#else
+ 
+ #include <cstddef>
+ #include <cstdint>
+@@ -89,3 +93,4 @@
+         std::optional<DmaStart> m_dmaStart;
+     };
+ }
++#endif

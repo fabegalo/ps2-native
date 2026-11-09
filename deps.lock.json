@@ -54,6 +54,130 @@
         "files": {
           "ps2xRecomp/src/lib/function_emitter.cpp": "6b22f156a329bd6fbdc737559d112c5200b5618451ff9176d62d55dd2d59906d"
         }
+      },
+      {
+        "file": "patches/ps2recomp/0005-native-partial-diagnostics.patch",
+        "sha256": "4f0cede3bb99d0b45ac62b8e77df375437474afd4140e4ca3b9d752a0d4b21fb",
+        "base_files": {
+          "ps2xRecomp/include/ps2recomp/recompiler_reporter.h": "3d09a96a02ac643fd8b79a8300dd75f2705b725b50523b7f8837e88014e7d040",
+          "ps2xRecomp/src/lib/recompiler_reporter.cpp": "fd822255b38aba5a71b6fd272bc1b6b9d6c5917dab417384f016f2b4564b4dc6"
+        },
+        "files": {
+          "ps2xRecomp/include/ps2recomp/recompiler_reporter.h": "14a2936c95f279079e09fdcd90b5491b629d31a603566abd0f8c7d44109aefaa",
+          "ps2xRecomp/src/lib/recompiler_reporter.cpp": "1c429c09fad64baccbef9f6a6059f5eaf90c7e9906faad1d10bcac1d5360e50f"
+        }
+      },
+      {
+        "file": "patches/ps2recomp/0006-native-iop-loader-memory.patch",
+        "sha256": "d1bbf3581dc4c295b2a5d623d1d65006d90142db96ec7b4cc30ae90086b64d3e",
+        "base_files": {
+          "ps2xIOP/src/emulator/core/iop_memory.h": "5a5b73ab69c4b58531111cad2743847ef00f3a8dd73004eea01ec8de4053135c"
+        },
+        "files": {
+          "ps2xIOP/src/emulator/core/iop_memory.h": "7572b7364348b9ad9a81a3dedc53329c966d8c580dc59a29440c542fa29a8593"
+        }
+      },
+      {
+        "file": "patches/ps2recomp/0007-direct-sdk-kernel-interfaces.patch",
+        "sha256": "ec9c4498b96198e03924f978a32848cb97a702fd2be4d943facac6efd36eb341",
+        "base_files": {
+          "ps2xRuntime/include/ps2_runtime.h": "84526f71f45e0054724d7e136cf69171bfbf217522e1ebe2c69020723ef38b3c",
+          "ps2xRuntime/include/ps2_runtime_macros.h": "728d13c159be541a6a2f9250310244c6ff7ed6247988db835f05dfd956a8b197",
+          "ps2xRuntime/include/runtime/ee_scheduler.h": "f88f8e94256162eab95f31d67a0353d10247e712b700e5130ce890ef9d2289d6",
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "89383df078a13e9d13335f158ce88f0fb85935c57f2edab0ef8f4a0c9edb4b83",
+          "ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp": "35244dec8738ab81bcd6eadd8212f39c940881750a140260c8004b017005f505",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Deci2.cpp": "5a10acc1937d03a5a1fbed1f76599df84939aa8de22e7a913cc6d06d7127cdac",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp": "0c610a9dbc17751bd8d813dbd4c8eb101bd0de14560a362286e0c59a96c98fd8",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp": "8a6ab5f46b707a9544ecd13e448ef5af7428200c941b0b69709b6919e8a4cece",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Sync.cpp": "afd87fb611ed9e5fac1fa6c70e0912fbed63925c7eb5f2dbedcd01352e154eaf",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp": "9d30538bd6d34577bd55946b537ec0d57524c20e660e8f1e7edb1f2eca1f3034",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp": "e73d7f0a46d07fc0f70d5b49b6453ed64271b3ad19ffd62a6a872095491bcdf4",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Common.h": "c56a42b760688e4dfb1fc5b596a905c7642fa8816d1290ce73fbf45dee87d4f3",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h": "88a8a4b4991b87fe052a4d3555facbb355207dd8572eaa1ff978c1fc712bf6c4",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/Runtime.h": "f40f6b8748ccf8817aab3cf23cc8710a4c25bca69945e789b122e642e3218824",
+          "ps2xRuntime/include/ps2_stubs.h": "bf3b313d5d59ea96372ea2a804c7879dbe7dd6ac1d4c1e7021cd3645d6539b65"
+        },
+        "files": {
+          "ps2xRuntime/include/ps2_runtime.h": "3e553898b70c9ea96e5e7c631e792028a3a6947f9821bc75dc2328379708e1ce",
+          "ps2xRuntime/include/ps2_runtime_macros.h": "db6de21b386ca4fb8a0b61af9d7f57200a22b772f7e1f9b745c837978108ad97",
+          "ps2xRuntime/include/runtime/ee_scheduler.h": "39ac171b47789cb0aad63f64357a80c4c827076cfc0fca8c30191bf43be8f00e",
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "b0503b797da800c4abc77544f891314514aa38ff32f4c8e91bc5ecd81338ea08",
+          "ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp": "43d5d7bdfd4bec78185a40cc4f36849c52fbeb6e70bf02ff65ef3ddcfeb82197",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Deci2.cpp": "a764e2907d26e1b7adcea2a640c29689b1235b6f2d5dfc483762215937125c9e",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp": "ea6623f2c94dc50dea13218b759e7583c9132053a1bd5217e4f8873cd5a925ee",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp": "27ddb0dbd4232b903ee269ceaa28d374c18dec2f670189040e6f3b86f464c9e8",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Sync.cpp": "03b38c5d2c82f6ec9a6a98be4a4fea6e8a1229d95601637bb5204dd498cd288f",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp": "008e687b4d56eb2bede6ac6508faff0809ed1b31069cdfae71d56a7845ccbe55",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp": "f0af2e78dafcc4c89304d15f50be929d839706216015a7c8b597c21a9a5ebfaf",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Common.h": "cbf0e3c956ffdb79e40db122968dc263f9555f29fbdf15e6cc82e3e2885496e9",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h": "9a796af86223681b3f16091ee7ffeddd5caaeafff79da1e44ca01e59372e884c",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/Runtime.h": "d704ba84fa326d0c324328514caccccc4ddee7a98d383b290d30ac0de4bac23a",
+          "ps2xRuntime/include/ps2_stubs.h": "82d8921eabe28c052f8a08ff2efeb6da603c33008643c117a5283aaac52c6e38"
+        }
+      },
+      {
+        "file": "patches/ps2recomp/0008-native-iop-module-interfaces.patch",
+        "sha256": "4d6f0f404ba71dcaea697c92c59bfacdae8b3c715626ee100bd24de8cfff562b",
+        "base_files": {
+          "ps2xIOP/src/iop_service.h": "118641032e0d1d31e019576eda1df0f39a34225a878ef98d710dbc7cae2b0df2",
+          "ps2xIOP/src/module_factories.h": "c70c2d77faec63098ad2cf3a05b3eaaf0e362d3a36f3c65f2ba221e0cb3a4aaf",
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "01deb410d04f441be12adc68638846061f19759e007c36cdfcbe987796199d36",
+          "ps2xIOP/src/emulator/iop_emulator.h": "a14bd2fb923632ad434f95e942b930fcc5e3a45e3bc2250d7fea7edcbe1b0f73",
+          "ps2xIOP/src/modules/mcserv.cpp": "2f9ea2deb074336f8757f5c479fc438405b6a86ad016a738be383dcbdcf801dc",
+          "ps2xIOP/src/emulator/core/iop_cpu.h": "eaf4ea244cb1650eaf0bb82f6c5c3f2895ee88e6d09a38d91f74f9dceb93291c",
+          "ps2xIOP/src/emulator/core/iop_kernel.cpp": "203c9949793be35f30583612db855544356d1ec1124b96fdf9377e4d321c1002",
+          "ps2xIOP/src/emulator/core/iop_kernel.h": "260863c946a687faf5e88c309615de4da319a3028124a97b714468dbf6df0ab5",
+          "ps2xIOP/src/emulator/core/iop_memory.cpp": "3952624ce32b501511a7460a7ce6d387f314d7173e8a6f4a2ed7fc1507e5f4ee",
+          "ps2xIOP/src/emulator/core/iop_memory.h": "7572b7364348b9ad9a81a3dedc53329c966d8c580dc59a29440c542fa29a8593",
+          "ps2xIOP/src/emulator/imports/iop_cdvd.cpp": "ca8f524a3b708bca4183c940ecdc244468782c0162e832f13e5ae8f088d26f07",
+          "ps2xIOP/src/emulator/imports/iop_imports.cpp": "e724e0bbfa64fa639aa6d72519edcf3c2ac94d0d1430d13160378869ad73924b",
+          "ps2xIOP/src/emulator/imports/iop_imports.h": "056894c369e6e8e8f8efcaae910c95414e7c7935658723fc7ff6af9b3fb6fd16",
+          "ps2xIOP/src/emulator/imports/iop_intrman.cpp": "9caf22bb353c49f39583cf8daae842c77e3a5fca0b10b4404464a097f30613ba",
+          "ps2xIOP/src/emulator/imports/iop_intrman.h": "d371f31ccbdc0d7868394da54edba1092658f546f76d524cfb393c8562650984",
+          "ps2xIOP/src/emulator/imports/iop_ioman.cpp": "3f82fdc5c4103e3c6be602d4d29feef9f593ed0eb885786622fbb1386df4690a",
+          "ps2xIOP/src/emulator/imports/iop_ioman.h": "d0ab9492561992e67b8fdcee7242e1fcc2871ba474b507889f64c05e5fa178a7",
+          "ps2xIOP/src/emulator/imports/iop_loadcore.cpp": "cb123a70c368e9a057b431691d77c4edeeb6543bae8588e4c9fc8087de21af80",
+          "ps2xIOP/src/emulator/imports/iop_sysmem.cpp": "7d8a0e9439dc9dc733896d74fadb5800d5f9c246609316db521b9ef1edd5b44e",
+          "ps2xIOP/src/emulator/services/iop_module_loader.cpp": "1506c9ed61743aee46c74483d23ed1717f3a1c4952d87b8fe9dc57695e17883e",
+          "ps2xIOP/src/emulator/services/iop_module_loader.h": "42f3d8f292bd7fd08b97151478c4bfb8472022735ff6885d24bc000c6997ad9d",
+          "ps2xIOP/src/emulator/services/iop_rpc.cpp": "62680a58200046de70babc31273535c51fa43a1979e0ffde5c307481dc83c969",
+          "ps2xIOP/src/emulator/services/iop_rpc.h": "bddd5dbe9cebfcb4214b0b5f09fff210e8399a5710105b3f2d4600c5bc38fae1",
+          "ps2xIOP/include/ps2x/iop/iop_host.h": "9bfbcd65c5c61847d3427dcdaebaf383617c2bf3a5595155be8d9107c0bc6acc",
+          "ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp": "9be593bb2d8f1cee9db5861406575650538e18d53a01e43f8a69a9c319887aa9",
+          "ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.h": "dde639e8679ea9fed3d3dda117b83b6f4de692246e1d24bddfc9b15993034f32",
+          "ps2xRuntime/src/lib/ps2_iop_host.cpp": "17a35b99e8535f38b47097361fb7bfedb30966c9d85b04e83f4e97a86d8ae0f6",
+          "ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp": "5b940a4fa9001b0345a82cc21847ea0372f69f89f25bfa514cf6282092a37c44"
+        },
+        "files": {
+          "ps2xIOP/src/iop_service.h": "1a662db88d14c715db0bf188f9f2b1ee0eb7e0b4fc9966d2171002c96d7aa222",
+          "ps2xIOP/src/module_factories.h": "3936a66b8fd0ff82e12e211a3f96f7b6df597d8d7ce36ee2645c0c30abd643a7",
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "9f8d87e7cf442909c024ab83e60d1f5691fe65df094fee87431985f29393766a",
+          "ps2xIOP/src/emulator/iop_emulator.h": "ea03a7b2607fceb1730222f902a6a6aceee32d1920d5628978a823d1f4c02acf",
+          "ps2xIOP/src/modules/mcserv.cpp": "8f8395e8998560b791421f9be2ab96581ae117fb1d1153d70d2d7c3c529ea0fa",
+          "ps2xIOP/src/emulator/core/iop_cpu.h": "c5b346ba45dd38442d66236b9ea00462b97a8aa387ad1189606229fdb568aeaa",
+          "ps2xIOP/src/emulator/core/iop_kernel.cpp": "cb1b4c72a19b3fe3fbabe830aaa85faaa40ba96b24988a04bdcedbed192ad462",
+          "ps2xIOP/src/emulator/core/iop_kernel.h": "68ca2b3a016aa6d47e4375121871429f20e17466865f87acf7827c4294d0bf5c",
+          "ps2xIOP/src/emulator/core/iop_memory.cpp": "1cb13669b04e749e872cc103d0c153ae61ae1287e6c57c17031d745285f435d5",
+          "ps2xIOP/src/emulator/core/iop_memory.h": "db4ede3d460e3aa4f443ff0994c09dd7ba16f05b49edf550d76690c29d5484dc",
+          "ps2xIOP/src/emulator/imports/iop_cdvd.cpp": "57eec80c2f266992812cdc05d68f242a00ab1dd3579b1087de6958327d67a952",
+          "ps2xIOP/src/emulator/imports/iop_imports.cpp": "2781d09b46b821adb52fbc907aab198204db7bc1633019d57ebf38bdaeddb960",
+          "ps2xIOP/src/emulator/imports/iop_imports.h": "fd1e455764c4d0d8973a28509076080f61dba7c0a8f960371e8ec8b1e3d9a4ab",
+          "ps2xIOP/src/emulator/imports/iop_intrman.cpp": "531900234a1843983e0c23ec38e481c3f731ea49aa2ab3fdc5f37ddde45d2fcc",
+          "ps2xIOP/src/emulator/imports/iop_intrman.h": "b6269dae913402410b541dd375a359cbe34201388aba419b38193b947d1be9ca",
+          "ps2xIOP/src/emulator/imports/iop_ioman.cpp": "3301cb7cad79124eab33e40c8e4f8c6d53631738e783fea95c0eba50e55ce4dd",
+          "ps2xIOP/src/emulator/imports/iop_ioman.h": "10884641b7ed4313a42f10253f4686c4f02d1373fa4f4746e99a8da6101db9de",
+          "ps2xIOP/src/emulator/imports/iop_loadcore.cpp": "d8a1207d702f890536e3a02a86f5466317fa6dcd79871a790b7f0a99a349e074",
+          "ps2xIOP/src/emulator/imports/iop_sysmem.cpp": "d2cb6504f02a07c7925a579443fc8a9be8cd43fc913eba174649b9bd2e64f143",
+          "ps2xIOP/src/emulator/services/iop_module_loader.cpp": "6b2ec08f024d28a392255615a3a7d5375e467b0ada79c508d61236db75bd2206",
+          "ps2xIOP/src/emulator/services/iop_module_loader.h": "8d28fae8bc3dd834c8074c504b08dacee4c2cbb74827432d6ea60c4e7d400187",
+          "ps2xIOP/src/emulator/services/iop_rpc.cpp": "d4dd005fe021e90f8f28cd3368ed0cdc1821aa3be89ab859849a131fc7e95107",
+          "ps2xIOP/src/emulator/services/iop_rpc.h": "0d46ad4abd6adc7d997c64f0b83cacec75347e3cdb7b5977d37040859e308a08",
+          "ps2xIOP/include/ps2x/iop/iop_host.h": "2e9184c04c6baa7729540152294cafd8c5fafba834be9978d824f71ab141ef4b",
+          "ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp": "9cae87780d1880f4c989beb3f1ef94a06e16d054bf5bc8753c185363fb23a614",
+          "ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.h": "d37178865412d4489e872c3e8873dcfa6eb32a7a36801c346b8dc0cc2478e2e7",
+          "ps2xRuntime/src/lib/ps2_iop_host.cpp": "f8c25a41a5d28e630f75a0eca82c966c0ab80e4508649fb661f72ffa30e2710f",
+          "ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp": "8d805db27ab0b7822b759102d9cd0436feac1e0f0440eb91d8712e02518e161b"
+        }
       }
     ],
     "path": "out/ps2recomp-reference"

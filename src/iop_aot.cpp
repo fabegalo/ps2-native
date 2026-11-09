@@ -5,6 +5,7 @@
 #include <deque>
 #include <iomanip>
 #include <map>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -20,7 +21,20 @@ void append(std::vector<std::uint8_t>& bytes,std::uint32_t value) {
 std::uint32_t read_word(std::span<const std::uint8_t> bytes,std::size_t at) {
     std::uint32_t result=0;for(unsigned b=0;b<4;++b)result|=std::uint32_t{bytes[at+b]}<<(b*8u);return result;
 }
-auto& registry() {static std::map<Key,void(*)(Iop&)> entries;return entries;}
+struct RegisteredCode {
+    const IopAotRegistration* registration;
+    void(*execute)(Iop&);
+    std::shared_ptr<const void> code_owner;
+};
+struct Registry {std::mutex mutex;std::map<Key,std::vector<RegisteredCode>> entries;};
+auto& registry() {static Registry value;return value;}
+void remove_registration(const IopAotRegistration* owner) {
+    auto& entries=registry().entries;
+    for(auto it=entries.begin();it!=entries.end();) {
+        std::erase_if(it->second,[&](const auto& code){return code.registration==owner;});
+        if(it->second.empty())it=entries.erase(it);else ++it;
+    }
+}
 std::uint32_t physical(std::uint32_t pc) {return pc<0xC0000000u ? pc&0x1FFFFFFFu : pc;}
 std::string hex(std::uint32_t value) {
     std::ostringstream out;out<<"0x"<<std::hex<<std::setw(8)<<std::setfill('0')<<value;return out.str();
@@ -48,18 +62,31 @@ std::string iop_aot_identity(std::string_view source,std::span<const IopAotEntry
     for(const auto& e:entries)text+=":"+hex(e.address)+":"+hex(e.word);
     return digest(text);
 }
-IopAotRegistration::IopAotRegistration(const IopAotModule& module) {
-    if(module.source_sha256.size()!=64 || module.identity!=iop_aot_identity(module.source_sha256,module.entries))
+IopAotRegistration::IopAotRegistration(const IopAotModule& module):IopAotRegistration(module,{}) {}
+IopAotRegistration::IopAotRegistration(const IopAotModule& module,std::shared_ptr<const void> code_owner) {
+    if(module.entries.size()>262144u || module.source_sha256.size()!=64 || module.identity!=iop_aot_identity(module.source_sha256,module.entries))
         throw std::runtime_error("IOP AOT registration identity mismatch");
-    for(const auto& entry:module.entries) {
+    for(const auto& entry:module.entries)
         if(!entry.execute || (entry.address&3u))throw std::runtime_error("Invalid IOP AOT entry");
-        registry().try_emplace(Key{physical(entry.address),entry.word},entry.execute);
-    }
+    auto& state=registry();std::lock_guard lock(state.mutex);
+    try {
+        for(const auto& entry:module.entries)
+            state.entries[{physical(entry.address),entry.word}].push_back({this,entry.execute,code_owner});
+    }catch(...){remove_registration(this);throw;}
+}
+IopAotRegistration::~IopAotRegistration() {
+    std::lock_guard lock(registry().mutex);remove_registration(this);
 }
 bool execute_iop_aot(Iop& iop,std::uint32_t word) {
-    const auto found=registry().find({physical(iop.pc()),word});
-    if(found==registry().end())return false;
-    found->second(iop);return true;
+    RegisteredCode code{};
+    {
+        auto& state=registry();std::lock_guard lock(state.mutex);
+        const auto found=state.entries.find({physical(iop.pc()),word});
+        if(found==state.entries.end())return false;
+        code=found->second.back();
+    }
+    // Pin the code image through execution, including exception unwinding.
+    code.execute(iop);return true;
 }
 std::string missing_iop_aot(std::uint32_t pc,std::uint32_t word) {
     return "missing IOP AOT: loaded image at physical="+hex(physical(pc))+" pc="+hex(pc)+
@@ -148,7 +175,8 @@ AotSources generate_iop_aot_sources(std::span<const std::uint8_t> bytes,std::uin
     for(const auto& e:entries)out<<"{"<<hex(e.address)<<"u,"<<hex(e.word)<<"u,&ps2native::"<<entry_scopes.at(e.address)<<"::at_"<<e.address<<"},\n";
     if(entries.empty())throw std::runtime_error("IOP AOT found no supported instructions");
     out<<"};\nstatic const IopAotModule module{\""<<source<<"\",\""<<identity<<"\",entries};\n"
-       <<"static const IopAotRegistration registration{module};\n}\n";
+       <<"#ifdef PS2N_IOP_LOADABLE_MODULE\nextern \"C\" const IopAotModule* ps2n_iop_aot_v1(){return &module;}\n"
+         "#else\nstatic const IopAotRegistration registration{module};\n#endif\n}\n";
     result.dispatcher=out.str();return result;
 }
 } // namespace ps2native

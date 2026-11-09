@@ -1,19 +1,23 @@
 cmake_minimum_required(VERSION 3.21)
 project(ps2-native VERSION 0.0.1 LANGUAGES CXX)
 
+include(cmake/AotSource.cmake)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 include(cmake/PS2Recomp.cmake)
 
-add_library(ps2n_core STATIC
+add_library(ps2n_core SHARED
     src/io.cpp src/elf.cpp src/relocations.cpp src/memory.cpp src/memory_cache.cpp src/ee.cpp src/mips.cpp
     src/control_flow.cpp src/aot.cpp src/aot_runtime.cpp src/sha256.cpp src/bios.cpp
     src/ee_system.cpp src/boot.cpp src/diagnostics.cpp src/analysis.cpp src/ee_registers.cpp
     src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp src/nvm.cpp
     src/video_encoder.cpp src/gif.cpp src/gs_vram.cpp src/gs_renderer.cpp src/framebuffer.cpp src/vu_micro.cpp src/vu_aot.cpp
-    src/iop_spu2.cpp src/audio.cpp src/iop_aot.cpp third_party/ps2recomp/hle_kernel.cpp)
+    src/iop_spu2.cpp src/audio.cpp src/iop_aot.cpp src/sdk_hle.cpp)
+set_target_properties(ps2n_core PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 target_compile_definitions(ps2n_core PUBLIC PS2N_NATIVE_ONLY=1)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 include(cmake/GsVulkan.cmake)
@@ -55,7 +59,6 @@ target_link_libraries(ps2n-boot PRIVATE ps2n_sdk_runtime)
 # and configure with -DPS2N_BIOS_AOT_SOURCE=<out.cpp>. The generated file is
 # derived from Sony firmware: keep it local, never commit or distribute it.
 set(PS2N_BIOS_AOT_SOURCE "" CACHE FILEPATH "ps2n-aot --bios translation of a user-supplied ROM0")
-include(cmake/AotSource.cmake)
 if(PS2N_BIOS_AOT_SOURCE)
     add_library(ps2n_bios_aot OBJECT)
     ps2n_target_aot_source(ps2n_bios_aot "${PS2N_BIOS_AOT_SOURCE}")
@@ -86,7 +89,7 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_BINARY_DIR}/aot-build-paths" "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_COMMAND}" $<TARGET_FILE:ps2n-make-fixture> $<TARGET_FILE:ps2n-aot>
         $<TARGET_FILE:ps2n-path> $<TARGET_FILE:ps2n_core> "${CMAKE_CXX_COMPILER}"
-        "${PS2N_NINJA_EXECUTABLE}" "$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,Release>")
+        "${PS2N_NINJA_EXECUTABLE}" "$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,Release>" $<TARGET_LINKER_FILE:ps2n_core>)
     set_tests_properties(aot-long-path-build PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}" TIMEOUT 240 SKIP_RETURN_CODE 77)
     add_executable(ps2n-make-fixture tests/make_fixture.cpp)
@@ -146,7 +149,7 @@ if(BUILD_TESTING)
     add_test(NAME native-aot-partitions COMMAND ps2n-aot-partitions "${FIXTURE_ELF}"
         "${CMAKE_CURRENT_BINARY_DIR}/aot-partitions" "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_COMMAND}"
         $<TARGET_FILE:ps2n_core> "${CMAKE_CXX_COMPILER}" "${PS2N_NINJA_EXECUTABLE}"
-        "$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,Release>")
+        "$<IF:$<BOOL:$<CONFIG>>,$<CONFIG>,Release>" $<TARGET_LINKER_FILE:ps2n_core>)
     set_tests_properties(native-aot-partitions PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
 
     add_executable(ps2n-aot-ops-smoke tests/aot_ops_smoke.cpp "${OPS_AOT}")
@@ -518,6 +521,7 @@ endif()
 
 include(cmake/NativeRuntime.cmake)
 include(cmake/Hle.cmake)
+include(cmake/NativeModule.cmake)
 
 # Desktop launcher (Qt 6 Quick). Optional: AUTO builds it only when Qt is found,
 # so headless and core-only builds never depend on a GUI toolkit.
@@ -547,7 +551,7 @@ if(BUILD_TESTING)
         target_link_libraries(ps2n-boot-m${stage} PRIVATE ps2n-test-boot-payload)
     endforeach()
     foreach(target IN ITEMS ps2n-iop-m25 ps2n-iop-m26 ps2n-iop-m27 ps2n-iop-memory-copy
-            ps2n-iop-bit-memory ps2n-iop-knowledge ps2n-iop-hblank ps2n-vu-micro ps2n-vu-path1)
+            ps2n-iop-bit-memory ps2n-iop-knowledge ps2n-iop-hblank ps2n-vu-micro ps2n-vu-path1 ps2n-gs-events)
         target_link_libraries(${target} PRIVATE ps2n-test-iop-fixtures ps2n-test-vu-fixtures)
     endforeach()
 endif()

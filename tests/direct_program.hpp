@@ -243,7 +243,7 @@ inline Program unaligned() {
     put(bytes,32,0xFFEEDDCCBBAA9988ull,8);put(bytes,40,0x0123456789ABCDEFull,8);
     return {{{text,5,le_words(a.finish())},{data,6,std::move(bytes)}},stop,{}, {}};
 }
-inline Program build(const std::string& mode) {
+inline Program build(const std::string& mode,std::uint32_t execution_alias=0) {
     if(mode=="fpu")return fpu();
     if(mode=="cpu") return cpu();
     if(mode=="dma") return dma();
@@ -254,11 +254,11 @@ inline Program build(const std::string& mode) {
     if(mode=="unaligned") return unaligned();
     if(mode=="dynamic") {
         Assembler a(text);
-        a.la(t0,data);a.la(t1,dynamic_address);a.addiu(t2,zero,3);
+        a.la(t0,data);a.la(t1,dynamic_address|execution_alias);a.addiu(t2,zero,3);
         a.label("copy");a.lw(t3,0,t0);a.sw(t3,0,t1);a.addiu(t0,t0,4);a.addiu(t1,t1,4);
         a.addiu(t2,t2,0xFFFF);a.bne(t2,zero,"copy");a.nop();
         a.sync_p();a.beq(zero,zero,"ready");a.nop();a.label("ready");const auto checkpoint=a.here();
-        a.la(t9,dynamic_address);a.jalr(t9);a.nop();a.brk();
+        a.la(t9,dynamic_address|execution_alias);a.jalr(t9);a.nop();a.brk();
         return {{{text,5,le_words(a.finish())},{data,6,dynamic_code()}},checkpoint,{},{}};
     }
     throw std::runtime_error("unknown Direct ELF fixture");

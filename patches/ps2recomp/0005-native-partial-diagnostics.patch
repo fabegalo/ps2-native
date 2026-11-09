@@ -1,0 +1,20 @@
+--- a/ps2xRecomp/include/ps2recomp/recompiler_reporter.h
++++ b/ps2xRecomp/include/ps2recomp/recompiler_reporter.h
+@@ -44,6 +44,7 @@
+             size_t additionalEntryPoints = 0;
+             size_t generatedFunctions = 0;
+             size_t unhandledInstructions = 0;
++            size_t nonInstructionErrors = 0;
+             size_t indirectFallbackPromotions = 0;
+             size_t indirectFallbackEntries = 0;
+             size_t correctnessCriticalGuestFallbacks = 0;
+--- a/ps2xRecomp/src/lib/recompiler_reporter.cpp
++++ b/ps2xRecomp/src/lib/recompiler_reporter.cpp
+@@ -239,5 +239,7 @@
+     {
+         std::lock_guard<std::mutex> lock(m_mutex);
+         m_events.push_back(Event{severity, category, message, functionName, address, hasAddress});
++        if (severity == Severity::Error)
++            ++m_counters.nonInstructionErrors;
+     }
+ }

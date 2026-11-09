@@ -49,6 +49,8 @@ struct SessionRequest {
     std::filesystem::path nvm;          // empty: none
     std::optional<std::filesystem::path> disc; // empty: firmware only (Browser)
     RendererMode renderer{RendererMode::GsFaithful};
+    std::filesystem::path native_cache; // empty: original firmware reset path
+    bool prepare_only{};
     // Explicit local manifest for a reviewed checkpoint experiment. Empty for
     // original boot from reset with the selected disc mounted.
     std::filesystem::path experimental_manifest;

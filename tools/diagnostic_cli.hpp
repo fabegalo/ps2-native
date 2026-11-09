@@ -1,6 +1,8 @@
 #pragma once
 #include "ps2native/diagnostics.hpp"
 #include "ps2native/io.hpp"
+#include <array>
+#include <optional>
 #include <charconv>
 #include <iostream>
 
@@ -11,6 +13,16 @@ inline std::uint64_t decimal(std::string_view text, std::uint64_t limit) {
     if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || text.empty() || n > limit)
         throw std::runtime_error("invalid bounded decimal option");
     return n;
+}
+inline bool parse_spu2_effect_end(std::string_view flag,std::optional<std::array<std::uint16_t,2>>& values) {
+    constexpr std::string_view prefix="--assume-spu2-effect-end-reset=";
+    if(!flag.starts_with(prefix))return false;
+    if(values)throw std::runtime_error("duplicate SPU2 initial EEA");
+    const auto text=flag.substr(prefix.size());const auto colon=text.find(':');
+    if(colon==std::string_view::npos)throw std::runtime_error("SPU2 initial EEA requires CORE0:CORE1 in decimal");
+    values=std::array<std::uint16_t,2>{static_cast<std::uint16_t>(decimal(text.substr(0,colon),15)),
+        static_cast<std::uint16_t>(decimal(text.substr(colon+1),15))};
+    return true;
 }
 inline std::filesystem::path utf8_path(std::string_view s) {
     return std::filesystem::path(std::u8string(s.begin(), s.end()));

@@ -1,13 +1,25 @@
-# Audit the archive too: dead stripping must not hide an interpreter dependency.
+# Audit the pre-link inputs too: dead stripping cannot hide an interpreter dependency.
 foreach(kind IN ITEMS NATIVE)
-    execute_process(COMMAND "${DUMPBIN}" /nologo /linkermember:2 "${${kind}}"
-        RESULT_VARIABLE result OUTPUT_VARIABLE symbols ERROR_VARIABLE error)
+    if("${${kind}}" MATCHES "[.]dll$")
+        get_filename_component(directory "${${kind}}" DIRECTORY)
+        get_filename_component(parent "${directory}" DIRECTORY)
+        file(GLOB_RECURSE objects "${directory}/CMakeFiles/ps2n_core.dir/*.obj"
+            "${directory}/ps2n_core.dir/*.obj" "${parent}/CMakeFiles/ps2n_core.dir/*.obj" "${parent}/ps2n_core.dir/*.obj")
+        if(NOT objects)
+            message(FATAL_ERROR "Native runtime object files are missing for the pre-link audit")
+        endif()
+        execute_process(COMMAND "${DUMPBIN}" /nologo /symbols ${objects}
+            RESULT_VARIABLE result OUTPUT_VARIABLE symbols ERROR_VARIABLE error)
+    else()
+        execute_process(COMMAND "${DUMPBIN}" /nologo /linkermember:2 "${${kind}}"
+            RESULT_VARIABLE result OUTPUT_VARIABLE symbols ERROR_VARIABLE error)
+    endif()
     if(NOT result EQUAL 0)
         message(FATAL_ERROR "${kind} symbol audit failed: ${error}")
     endif()
-    string(REGEX MATCH "interpret_instruction|[?]step_micro@VuControl|[?]evaluate_micro_upper@VuControl|execute_instruction@[$]0[?]0|issue_micro_shared@[$]0[?]0" interpreter "${symbols}")
+    string(REGEX MATCH "interpret_instruction|executeInstruction@IopCpuCore|[?]step_micro@VuControl|[?]evaluate_micro_upper@VuControl|execute_instruction@[$]0[?]0|issue_micro_shared@[$]0[?]0" interpreter "${symbols}")
     if(kind STREQUAL "NATIVE" AND interpreter)
         message(FATAL_ERROR "Native runtime contains interpreter symbol: ${interpreter}")
     endif()
 endforeach()
-message(STATUS "Shared runtime archive excludes EE/IOP/VU interpreters")
+message(STATUS "Native runtime build inputs exclude EE/IOP/VU interpreters")

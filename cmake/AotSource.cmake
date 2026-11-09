@@ -1,12 +1,50 @@
-# Ninja compares /showIncludes byte-for-byte. Older CMake releases can decode
-# a localized UTF-8 prefix as OEM, leaving header changes invisible to Ninja.
-# Probe syntax only, retain the exact emitted bytes, and let Ninja track headers.
+function(_ps2n_path_helper result)
+    get_property(helper GLOBAL PROPERTY PS2N_PATH_HELPER)
+    if(NOT helper)
+        get_filename_component(project_root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." ABSOLUTE)
+        set(helper "${CMAKE_BINARY_DIR}/CMakeFiles/ps2n-path${CMAKE_EXECUTABLE_SUFFIX}")
+        set(identity "${CMAKE_CXX_COMPILER_VERSION}")
+        foreach(name IN ITEMS tools/ps2n-path.cpp tools/dev_process.hpp src/io.cpp include/ps2native/io.hpp)
+            file(SHA256 "${project_root}/${name}" hash)
+            string(APPEND identity "${hash}")
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${project_root}/${name}")
+        endforeach()
+        string(SHA256 identity "${identity}")
+        set(CMAKE_TRY_COMPILE_TARGET_TYPE EXECUTABLE)
+        try_compile(helper_built "${CMAKE_BINARY_DIR}/CMakeFiles/path-bootstrap"
+            SOURCES "${project_root}/tools/ps2n-path.cpp" "${project_root}/src/io.cpp"
+            CMAKE_FLAGS "-DINCLUDE_DIRECTORIES:STRING=${project_root}/include" "-DCMAKE_CXX_COMPILER_LAUNCHER:STRING="
+            COMPILE_DEFINITIONS "-DPS2N_PATH_HELPER_ID=${identity}"
+            CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
+            COPY_FILE "${helper}" OUTPUT_VARIABLE helper_log)
+        if(NOT helper_built)
+            message(FATAL_ERROR "Cannot build the host path helper: ${helper_log}")
+        endif()
+        set_property(GLOBAL PROPERTY PS2N_PATH_HELPER "${helper}")
+    endif()
+    set(${result} "${helper}" PARENT_SCOPE)
+endfunction()
+
+# Ninja compares /showIncludes byte-for-byte. The existing host helper emits
+# an ASCII prefix and UTF-8 paths, independent of installed CL language packs.
 if(WIN32 AND MSVC AND CMAKE_GENERATOR MATCHES "Ninja")
+    _ps2n_path_helper(_ps2n_helper)
+    foreach(language IN ITEMS C CXX)
+        if(NOT "${CMAKE_${language}_COMPILER_LAUNCHER}" MATCHES "ps2n-path")
+            set(_ps2n_previous_launcher "${CMAKE_${language}_COMPILER_LAUNCHER}")
+            set(CMAKE_${language}_COMPILER_LAUNCHER "${_ps2n_helper};msvc-v1")
+            if(_ps2n_previous_launcher)
+                list(APPEND CMAKE_${language}_COMPILER_LAUNCHER ${_ps2n_previous_launcher})
+            endif()
+        endif()
+        set(CMAKE_${language}_CL_SHOWINCLUDES_PREFIX "Note: including file: ")
+    endforeach()
+    set(CMAKE_CL_SHOWINCLUDES_PREFIX "Note: including file: ")
     get_filename_component(_ps2n_root "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
-    execute_process(COMMAND "${CMAKE_CXX_COMPILER}" /nologo /Zs /showIncludes /std:c++20
+    execute_process(COMMAND "${_ps2n_helper}" msvc-v1 "${CMAKE_CXX_COMPILER}" /nologo /Zs /showIncludes /std:c++20
         "/I${_ps2n_root}/include" "${_ps2n_root}/tools/ps2n-path.cpp"
         RESULT_VARIABLE _ps2n_prefix_result OUTPUT_VARIABLE _ps2n_prefix_output
-        ERROR_VARIABLE _ps2n_prefix_error ENCODING NONE TIMEOUT 15)
+        ERROR_VARIABLE _ps2n_prefix_error ENCODING UTF-8 TIMEOUT 20)
     if(NOT "${_ps2n_prefix_result}" STREQUAL "0")
         message(FATAL_ERROR "Cannot probe MSVC include dependencies: ${_ps2n_prefix_error}")
     endif()
@@ -14,8 +52,20 @@ if(WIN32 AND MSVC AND CMAKE_GENERATOR MATCHES "Ninja")
     if(NOT _ps2n_match)
         message(FATAL_ERROR "Cannot identify the MSVC /showIncludes prefix")
     endif()
-    set(CMAKE_CL_SHOWINCLUDES_PREFIX "${CMAKE_MATCH_2}")
-    set(CMAKE_CXX_CL_SHOWINCLUDES_PREFIX "${CMAKE_MATCH_2}")
+    set(_ps2n_prefix "${CMAKE_MATCH_2}")
+    if(NOT _ps2n_prefix MATCHES "^Note: including file: +$")
+        message(FATAL_ERROR "Cannot normalize MSVC include dependencies")
+    endif()
+    set(CMAKE_CL_SHOWINCLUDES_PREFIX "${_ps2n_prefix}")
+    set(CMAKE_CXX_CL_SHOWINCLUDES_PREFIX "${_ps2n_prefix}")
+    # SDK project()/enable_language() can reload a localized compiler-info file.
+    # Set the root generator's shared prefix after those subdirectories finish.
+    function(_ps2n_finish_msvc_prefix)
+        set(CMAKE_CL_SHOWINCLUDES_PREFIX "Note: including file: " PARENT_SCOPE)
+        set(CMAKE_CXX_CL_SHOWINCLUDES_PREFIX "Note: including file: " PARENT_SCOPE)
+        set(CMAKE_C_CL_SHOWINCLUDES_PREFIX "Note: including file: " PARENT_SCOPE)
+    endfunction()
+    cmake_language(DEFER CALL _ps2n_finish_msvc_prefix)
     # Source encoding is explicit; the changed command also refreshes old AOT
     # dependency records made with a misdecoded /showIncludes prefix.
     add_compile_options(/utf-8)
@@ -37,27 +87,7 @@ function(_ps2n_target_aot_file target source)
         if(short_length GREATER 240)
             message(FATAL_ERROR "The build directory or AOT basename leaves no short path for native build tools: ${short_source}")
         endif()
-        get_property(helper GLOBAL PROPERTY PS2N_PATH_HELPER)
-        if(NOT helper)
-            get_filename_component(project_root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." ABSOLUTE)
-            set(helper "${CMAKE_BINARY_DIR}/CMakeFiles/ps2n-path${CMAKE_EXECUTABLE_SUFFIX}")
-            # Bootstrap only the host I/O code, using the selected compiler/SDK.
-            # try_compile references the original sources; COPY_FILE installs the
-            # helper executable, never copies the AOT, firmware, or project tree.
-            set(CMAKE_TRY_COMPILE_TARGET_TYPE EXECUTABLE)
-            try_compile(helper_built "${CMAKE_BINARY_DIR}/CMakeFiles/path-bootstrap"
-                SOURCES "${project_root}/tools/ps2n-path.cpp" "${project_root}/src/io.cpp"
-                CMAKE_FLAGS "-DINCLUDE_DIRECTORIES:STRING=${project_root}/include"
-                CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF
-                COPY_FILE "${helper}" OUTPUT_VARIABLE helper_log)
-            if(NOT helper_built)
-                message(FATAL_ERROR "Cannot build the host path helper: ${helper_log}")
-            endif()
-            set_property(GLOBAL PROPERTY PS2N_PATH_HELPER "${helper}")
-            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-                "${project_root}/src/io.cpp" "${project_root}/include/ps2native/io.hpp"
-                "${project_root}/tools/ps2n-path.cpp")
-        endif()
+        _ps2n_path_helper(helper)
         cmake_path(NATIVE_PATH alias native_alias)
         cmake_path(NATIVE_PATH aot_parent native_parent)
         execute_process(COMMAND "${helper}" alias "${native_alias}" "${native_parent}"

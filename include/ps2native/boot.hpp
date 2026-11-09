@@ -32,6 +32,8 @@ struct BootOptions {
     std::size_t tail_instructions{32};
     // Optional bounded host diagnostics, shared by both execution engines.
     DiagnosticRecorder* diagnostics{};
+    // Offline preparation only: witness successful guest writes before snapshotting code.
+    BusObserver* preparation_writes{};
     // Zero retains the original unlimited text trace. Diagnostic CLI runs use
     // a bound; the recorder remains the source of the circular event history.
     std::size_t max_trace_events{};

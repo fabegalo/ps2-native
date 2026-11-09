@@ -1,6 +1,7 @@
 #include "bios_program.hpp"
 #include "boot_checks.hpp"
 #include "iso_image.hpp"
+#include "iop_native_fixture.hpp"
 #include <iostream>
 using namespace ps2native;
 using namespace boot_checks;
@@ -41,7 +42,7 @@ int main(int argc,char** argv) try {
                     "exhausted DMA receiver stalls remaining sector without false CDVD completion");
             rejects([&]{(void)iop.ee_read(0x10800,4);},"not been written");
         } else {
-            require(iop.ee_cdvd_read(0x1F402008u,1)==2 && !(iop.ee_cdvd_read(0x1F402005u,1)&0x80u),
+            require(iop.ee_cdvd_read(0x1F402008u,1)==1 && !(iop.ee_cdvd_read(0x1F402005u,1)&0x80u),
                     "CDVD completes only after every requested sector was transferred");
             iop.ee_cdvd_write(0x1F402008u,1,3);
             require(iop.ee_cdvd_read(0x1F402008u,1)==0,"command reason is W1C");
@@ -54,7 +55,7 @@ int main(int argc,char** argv) try {
     dvd.run_until(40000);require(!dvd.stopped(),dvd.stop_reason().value_or(""));
     for(unsigned j=0;j<4096;++j)require(dvd.ee_read(0x10000+j,1)==bytes[j],
         "CD-style command on DVD transfers 2048 data bytes per sector without a raw envelope");
-    require(dvd.ee_cdvd_read(0x1F402008u,1)==2,"DVD completion follows actual DMA delivery");
+    require(dvd.ee_cdvd_read(0x1F402008u,1)==1,"DVD completion follows actual DMA delivery");
     Iop disabled;disabled.reset(program(16,false),nullptr);disabled.mount_disc(disc,Iop::DiscMedium::Ps2Cd);
     disabled.run_until(100);command(disabled,1);disabled.run_until(50000);
     require(!disabled.stopped(),disabled.stop_reason().value_or(""));
@@ -98,7 +99,7 @@ int main(int argc,char** argv) try {
                 rejects([&]{(void)read.ee_read(0x10000,1);},"not been written");
             } else {
                 read.ee_cdvd_write(0x1F402004u,1,8);read.run_until(1200000);
-                require(!read.stopped() && read.ee_cdvd_read(0x1F402008u,1)==2,"dual-layer media completes actual first-layer DMA");
+                require(!read.stopped() && read.ee_cdvd_read(0x1F402008u,1)==1,"dual-layer media completes actual first-layer DMA");
                 require(read.ee_read(0x10000,1)==0x20 && read.ee_read(0x10001,1)==3 && read.ee_read(0x10003,1)==16,"first-layer raw sector carries its physical sector ID");
                 for(unsigned n=0;n<2048;++n)require(read.ee_read(0x1000C+n,1)==dual[16u*2048u+n],"first-layer raw read contains original PVD bytes");
                 rejects([&]{(void)read.ee_read(0x10004,1);},"not been written");
@@ -110,7 +111,7 @@ int main(int argc,char** argv) try {
     require(toc.ee_cdvd_read(0x1F402005u,1)&0x80u,"GetToc is asynchronous");
     toc.run_until(10000);rejects([&]{(void)toc.ee_read(0x1000Cu,4);},"not been written");
     toc.run_until(30000);require(!toc.stopped(),toc.stop_reason().value_or(""));
-    require(toc.ee_cdvd_read(0x1F402008u,1)==2 && !(toc.ee_cdvd_read(0x1F402005u,1)&0x80u),
+    require(toc.ee_cdvd_read(0x1F402008u,1)==1 && !(toc.ee_cdvd_read(0x1F402005u,1)&0x80u),
         "GetToc completes after 2064-byte DMA3 transfer");
     const auto end_psn=static_cast<std::uint32_t>(0x030000u+disc->image_size()/2048u-1u);
     require(toc.ee_read(0x1000Cu,1)==0x01u && toc.ee_read(0x1000Du,1)==0x02u &&
@@ -140,7 +141,7 @@ int main(int argc,char** argv) try {
         require((toc.ee_cdvd_read(0x1F402005u,1)&0x80u) && toc.ee_cdvd_read(0x1F402008u,1)==0,
             "Standby and Pause are asynchronous");
         toc.run_until(toc.cycle()+5u);
-        require(!toc.stopped() && toc.ee_cdvd_read(0x1F402008u,1)==2 && !(toc.ee_cdvd_read(0x1F402005u,1)&0x80u),
+        require(!toc.stopped() && toc.ee_cdvd_read(0x1F402008u,1)==1 && !(toc.ee_cdvd_read(0x1F402005u,1)&0x80u),
             "Standby and Pause complete with IRQ2");
     }
     toc.ee_cdvd_write(0x1F402008u,1,3u);
@@ -148,7 +149,7 @@ int main(int argc,char** argv) try {
     toc.ee_cdvd_write(0x1F402004u,1,5u);
     require(toc.ee_cdvd_read(0x1F402005u,1)&0x80u,"Seek is asynchronous");
     toc.run_until(50000);
-    require(!toc.stopped() && toc.ee_cdvd_read(0x1F402008u,1)==2 && !(toc.ee_cdvd_read(0x1F402005u,1)&0x80u),
+    require(!toc.stopped() && toc.ee_cdvd_read(0x1F402008u,1)==1 && !(toc.ee_cdvd_read(0x1F402005u,1)&0x80u),
         "Seek completes after head movement");
     for(unsigned j=0;j<4;++j)toc.ee_cdvd_write(0x1F402005u,1,0xFFu);
     rejects([&]{toc.ee_cdvd_write(0x1F402004u,1,5u);},"outside mounted disc image");
@@ -158,7 +159,7 @@ int main(int argc,char** argv) try {
     read_dvd.ee_cdvd_write(0x1F402004u,1,8u);
     require(read_dvd.ee_cdvd_read(0x1F402005u,1)&0x80u,"ReadDvd is asynchronous");
     read_dvd.run_until(40000);require(!read_dvd.stopped(),read_dvd.stop_reason().value_or(""));
-    require(read_dvd.ee_cdvd_read(0x1F402008u,1)==2 && !(read_dvd.ee_cdvd_read(0x1F402005u,1)&0x80u),
+    require(read_dvd.ee_cdvd_read(0x1F402008u,1)==1 && !(read_dvd.ee_cdvd_read(0x1F402005u,1)&0x80u),
         "ReadDvd completes after 2064-byte DVD frame transfers");
     for(unsigned s=0;s<2u;++s) {
         const auto base=0x10000u+s*2064u,psn=0x030000u+s;

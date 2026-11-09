@@ -1,8 +1,11 @@
 #include "ps2native/frontend/session.hpp"
 #include "ps2native/frontend/content.hpp"
 #include "ps2native/io.hpp"
+#include "ps2native/hle.hpp"
 #include "ps2_runtime.h"
+#include "sdk/console_interface.hpp"
 #include <stdexcept>
+#include <chrono>
 
 namespace ps2native::frontend {
 SessionSupervisor::SessionSupervisor() : runtime_(std::make_unique<PS2Runtime>()) {}
@@ -17,14 +20,22 @@ void SessionSupervisor::prepare_firmware(const BiosImage& bios, const AotModule*
     runtime_->prepare_firmware(bios,module,hardware,nvm,assumptions,rom1);
 }
 
-void SessionSupervisor::prepare_original(const SessionRequest& request, const AotModule* module) {
-    runtime_->invalidate_preparation();
+namespace {
+struct GameInputs {
+    BiosImage bios;
+    const ConsoleHardware* hardware{};
+    std::optional<NvmImage> nvm;
+    std::shared_ptr<DiscImage> disc;
+    Iop::DiscMedium medium{};
+};
+GameInputs validate_game(const SessionRequest& request) {
     if (!request.experimental_manifest.empty()) throw std::runtime_error("Original boot refuses an experimental manifest");
     if (request.renderer != RendererMode::GsFaithful) throw std::runtime_error("Native renderer is unavailable for original boot");
     if (request.expected_rom0_sha256.empty()) throw std::runtime_error("Original boot requires the identified ROM0 SHA-256");
-    const auto bios = load_bios_rom0(read_file(request.rom0), BiosLoadOptions{request.expected_rom0_sha256});
+    auto bios = load_bios_rom0(read_file(request.rom0), BiosLoadOptions{request.expected_rom0_sha256});
     const auto* hardware = request.console_profile.empty() ? nullptr : find_console_hardware(request.console_profile);
     if (!request.console_profile.empty() && !hardware) throw std::runtime_error("Unknown console profile");
+    if(hardware && hardware->romver!=bios.version.romver)throw std::runtime_error("Console profile and BIOS ROMVER differ");
     std::optional<NvmImage> nvm;
     if (!request.nvm.empty()) {
         if (!hardware || request.expected_nvm_sha256.empty()) throw std::runtime_error("NVM requires an identified console profile and SHA-256");
@@ -44,14 +55,37 @@ void SessionSupervisor::prepare_original(const SessionRequest& request, const Ao
     }
     auto disc = std::make_shared<DiscImage>(disc_path);
     (void)disc->boot_path();
-    prepare_firmware(bios, module, hardware, nvm ? &*nvm : nullptr);
     const auto medium = probe.info.find("media");
+    return {std::move(bios),hardware,std::move(nvm),std::move(disc),
+        medium != probe.info.end() && medium->second == "DVD" ? Iop::DiscMedium::Ps2Dvd : Iop::DiscMedium::Ps2Cd};
+}
+}
+void SessionSupervisor::prepare_original(const SessionRequest& request, const AotModule* module) {
+    runtime_->invalidate_preparation();
+    auto input=validate_game(request);
+    prepare_firmware(input.bios,module,input.hardware,input.nvm ? &*input.nvm : nullptr);
     try {
-        memory().mount_disc(std::move(disc), medium != probe.info.end() && medium->second == "DVD" ? Iop::DiscMedium::Ps2Dvd : Iop::DiscMedium::Ps2Cd, true);
+        memory().mount_disc(std::move(input.disc),input.medium,true);
     } catch (...) {
         runtime_->invalidate_preparation();
         throw;
     }
+}
+
+void SessionSupervisor::prepare_game(const SessionRequest& request,const AotModule* module) {
+    runtime_->invalidate_preparation();
+    auto input=validate_game(request);
+    if(!module)throw std::runtime_error("Game requires a verified offline native module");
+    // This starts original game code with selective HLE, not a firmware boot.
+    // Unimplemented firmware/IOP services remain explicit runtime refusals.
+    prepare_hle_elf(input.disc->boot_elf(),module);
+    try {
+        memory().configure_rtc(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count()));
+        memory().hle_kernel()->configure_bios(std::make_shared<const BiosImage>(std::move(input.bios)));
+        configure_hle_console(memory(),input.hardware,input.nvm?std::make_shared<const NvmImage>(std::move(*input.nvm)):nullptr);
+        memory().mount_disc(std::move(input.disc),input.medium,true);
+    }
+    catch(...) {runtime_->invalidate_preparation();throw;}
 }
 
 void SessionSupervisor::prepare_hle_elf(const ElfImage& elf, const AotModule* module,

@@ -143,7 +143,7 @@ if(WIN32)
 endif()
 
 # ps2n-boot is the diagnostic the launcher runs; keep it next to the launcher.
-add_dependencies(ps2-native ps2n-native)
+add_dependencies(ps2-native ps2n-native ps2n-dev)
 if(APPLE)
     # Inside the bundle so the launcher finds it when the .app is moved.
     add_custom_command(TARGET ps2-native POST_BUILD
@@ -220,6 +220,9 @@ if(BUILD_TESTING)
             get_target_property(PS2N_QT_CORE_LOCATION Qt6::Core LOCATION)
         endif()
         get_filename_component(PS2N_QT_BIN "${PS2N_QT_CORE_LOCATION}" DIRECTORY)
+        get_filename_component(PS2N_QT_PREFIX "${PS2N_QT_BIN}" DIRECTORY)
+        list(APPEND PS2N_LAUNCHER_TEST_ENV "QT_QPA_PLATFORM_PLUGIN_PATH=${PS2N_QT_PREFIX}/plugins/platforms"
+            "QT_QPA_FONTDIR=$ENV{WINDIR}/Fonts")
         if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
             set_tests_properties(launcher-ui-import launcher-ui-restore launcher-experimental-session PROPERTIES
                 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${PS2N_QT_BIN}")

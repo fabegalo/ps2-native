@@ -80,6 +80,7 @@ public:
         }
     }
     void on_bus_access(const BusAccess& access) override {
+        if(options_.preparation_writes)options_.preparation_writes->on_bus_access(access);
         if (options_.diagnostics) options_.diagnostics->bus(state_, access);
         if (options_.trace != TraceLevel::Full) return;
         std::ostringstream line;
@@ -255,6 +256,7 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
     // An unaligned stop address can never match an instruction PC.
     ExecutionContext ctx{state, memory, executed, options.max_instructions, 0xFFFFFFFFu, &tracer};
     AotDispatchCache dispatch;
+    unsigned kernel_yields=0;
     const auto start_retired = state.retired_instructions;
     ObserverScope scope(memory, &tracer, options, state);
     {
@@ -269,8 +271,10 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                     report.outcome = BootOutcome::BudgetExhausted;
                     break;
                 }
-                if(state.pc==0 && memory.hle_kernel())
+                if(state.pc==0 && memory.hle_kernel()) {
+                    if(memory.hle_kernel()->complete_syscall_return())continue;
                     throw std::runtime_error("HLE thread return trampoline is not implemented; use ExitThread");
+                }
                 state.instruction_pc=state.pc;
                 state.instruction_in_delay_slot=state.delay_pending;
                 (void)poll_ee_interrupts_cached(ctx);
@@ -291,12 +295,15 @@ BootReport run_ee_boot(EEState& state, Memory& memory, const AotModule* aot, con
                 }
                 if (block != nullptr) {
                     const auto before = executed;
+                    const auto before_dispatch=ctx.kernel_dispatches;
                     // A stop address inside a block ends it early, like the budget.
                     ctx.stop_pc = options.stop_at.value_or(0xFFFFFFFFu);
                     block->execute(ctx);
                     if (executed == before && executed < options.max_instructions &&
-                        !(options.stop_at && state.pc == *options.stop_at))
-                        throw std::runtime_error("AOT block at " + hex32(state.pc) + " made no progress");
+                        !(options.stop_at && state.pc == *options.stop_at)) {
+                        if(before_dispatch==ctx.kernel_dispatches || ++kernel_yields>64u)
+                            throw std::runtime_error("AOT block at " + hex32(state.pc) + " made no progress");
+                    } else kernel_yields=0;
                 } else {
                     flush_interrupt_cache(ctx);
                     throw std::runtime_error("missing EE AOT: "+memory.code_identity(state.pc)+" pc="+hex32(state.pc)+

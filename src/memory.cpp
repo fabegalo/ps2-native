@@ -398,10 +398,10 @@ Memory::Target Memory::resolve(std::uint32_t address, std::size_t size, bool wri
     }
     std::uint32_t physical = 0;
     unsigned cache_mode = 2;
-    if (mapping_ == Mapping::DirectElf && address < kMainRamBytes) {
+    if (mapping_ == Mapping::DirectElf && !hle_kernel_ && address < kMainRamBytes) {
         physical = address;
         cache_mode = 3;
-    } else if (mapping_ == Mapping::DirectElf && address >= 0x70000000u &&
+    } else if (mapping_ == Mapping::DirectElf && !hle_kernel_ && address >= 0x70000000u &&
                address - 0x70000000u < kScratchpadBytes) {
         return {address - 0x70000000u, BusRegion::Scratchpad, address - 0x70000000u};
     } else if (address >= 0x80000000u && address < 0xC0000000u) {

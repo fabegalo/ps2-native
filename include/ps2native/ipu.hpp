@@ -99,7 +99,7 @@ public:
 private:
     // Adapted from ps2-web-recomp's bits_at (Samir Nuri, MIT).
     // e026b971324068773eed88bf502437de9e581b6b, runtime/src/ipu/ipu.cpp.
-    // See third_party/ps2-web-recomp/LICENSE. Caller checks the entire payload.
+    // See licenses/ps2-web-recomp/LICENSE. Caller checks the entire payload.
     [[nodiscard]] std::uint32_t bits_at(std::size_t bit,unsigned n) const {
         if(!n) return 0;
         std::uint64_t v=0;

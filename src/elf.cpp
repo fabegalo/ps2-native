@@ -155,4 +155,18 @@ std::uint32_t ElfImage::data_word_at(std::uint32_t address) const {
     throw std::runtime_error("Data pointer not in file-backed non-executable PT_LOAD");
 }
 
+ElfImage ee_execution_alias(ElfImage image,std::uint32_t alias) {
+    if(!alias)return image;
+    if(alias!=0x80000000u && alias!=0xA0000000u)throw std::runtime_error("invalid EE RAM execution alias");
+    if(!image.function_entries.empty() || !image.relocated_code_pointers.empty() ||
+       !image.rejected_code_pointers.empty() || !image.address_pairs.empty() ||
+       !image.unused_relocation_counts.empty() || image.ignored_rela_sections || image.unpaired_lo16_relocations)
+        throw std::runtime_error("execution alias requires a stripped image without symbol/relocation evidence");
+    for(auto& segment:image.segments) {
+        if(segment.vaddr>=Memory::kMainRamBytes || segment.memory_size>Memory::kMainRamBytes-segment.vaddr)
+            throw std::runtime_error("execution alias requires physical EE RAM segments");
+        segment.vaddr|=alias;
+    }
+    image.entry|=alias;return image;
+}
 }  // namespace ps2native

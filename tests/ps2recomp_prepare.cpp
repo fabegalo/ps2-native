@@ -1,12 +1,17 @@
 #include "direct_program.hpp"
 #include "hle_fixture.hpp"
 #include "ps2native/aot.hpp"
+#include "ps2native/aot_sources.hpp"
 #include "iso_image.hpp"
 #include "../tools/dev_process.hpp"
 #include "ps2native/io.hpp"
 #include "ps2native/sha256.hpp"
+#include "ps2native/frontend/native_module.hpp"
+#include "ps2_runtime.h"
+#include "ps2recomp/recompiler_reporter.h"
 #include <nlohmann/json.hpp>
 #include <iostream>
+#include <sstream>
 
 namespace fs = std::filesystem;
 using namespace ps2native;
@@ -14,6 +19,14 @@ void require(bool ok, const std::string& message) { if (!ok) throw std::runtime_
 std::string text(const fs::path& path) { const auto b=read_file(path);return {b.begin(),b.end()}; }
 int main(int argc,char** argv) {
     if(argc!=3 && argc!=11)return 2;
+    {
+        ps2recomp::RecompilerReporter report;
+        report.recordUnhandledInstruction("fixture",direct_test::text,5u,"strict-stop control");
+        require(report.hasErrors() && report.counters().unhandledInstructions==1 && !report.counters().nonInstructionErrors,
+                "Standalone instruction errors remain visible and distinguishable");
+        report.error("codegen","unrelated failure control");
+        require(report.counters().nonInstructionErrors==1,"Non-instruction generation errors must remain fatal");
+    }
     const auto root=fs::weakly_canonical(fs::absolute(argv[2]));
     if(!fs::create_directory(native_io_path(root)))return 2;
     try {
@@ -64,7 +77,7 @@ int main(int argc,char** argv) {
                 try {(void)write_text_if_changed(baseline,generate_aot_cpp(parse_ee_elf(read_file(image)),options));}
                 catch(const std::exception& error){throw std::runtime_error(std::string("Prior native baseline ")+mode+": "+error.what());}
                 const auto binary=root / "integrated-fixture.exe";
-                std::vector<fs::path> native_args{"/nologo","/std:c++20","/EHsc","/O2","/MD","/utf-8","/bigobj",
+                std::vector<fs::path> native_args{"/nologo","/std:c++20","/EHsc","/O2","/Ob0","/MD","/utf-8","/bigobj",
                     "/DPS2N_NATIVE_ONLY=1","/DPS2N_SDK_NATIVE_BACKEND=1",
                     option("/I",argv[4]),option("/I",argv[7]),option("/I",source),
                     option("/I",fs::path(argv[10]).parent_path()),fs::path(argv[10]),
@@ -72,6 +85,13 @@ int main(int argc,char** argv) {
                     option("/Fo",objects / ""),option("/Fe",binary),fs::path(argv[8]),fs::path(argv[9]),
                     "kernel32.lib","user32.lib","gdi32.lib","winspool.lib","shell32.lib","ole32.lib",
                     "oleaut32.lib","uuid.lib","comdlg32.lib","advapi32.lib"};
+                const auto dispatcher=source/"ps2_recompiled_functions.cpp";
+                (void)aot_sources_sha256(dispatcher);
+                std::istringstream manifest(text(source/"ps2_recompiled_functions.cpp.sources"));
+                std::string version,hash,name;manifest>>version>>hash;unsigned partitions=0;
+                while(manifest>>name>>hash){native_args.emplace_back(source/name);++partitions;}
+                require(partitions>0 && (std::string_view(mode)!="boundaries" || partitions>1),
+                    "Native SDK compilation must include every verified address partition");
                 const auto compilation=dev::process(argv[3],native_args,root / "integrated-compile.log",60);
                 require(!compilation.timed_out,std::string("SDK host compilation timed out for ")+mode);
                 require(!compilation.exit_code,text(root / "integrated-compile.log"));
@@ -89,9 +109,41 @@ int main(int argc,char** argv) {
                 call(image,prepared,false,true);
                 integrated(image,prepared / "generated",program,mode);
             }
+            auto partial=p;
+            partial.segments[0].bytes=m20::le_words({0x2402002Au,0x4BE43190u,0x24020063u,0x03E00008u,0u});
+            const auto image=root/"partial.elf",prepared=root/"partial-aot";
+            (void)write_binary_if_changed(image,direct_test::elf(partial));
+            call(image,prepared,false,true);
+            const auto metadata=nlohmann::json::parse(text(prepared/"sdk-prepare.json"));
+            require(metadata.at("native_unsupported").size()==1 &&
+                metadata.at("native_unsupported")[0].at("pc")==direct_test::text+4,
+                "Partial preparation must identify the exact missing native instruction");
+            integrated(image,prepared/"generated",partial,"partial");
+            partial.segments[0].bytes=m20::le_words({0x2402002Au,0x00000005u,0x24020063u,0x03E00008u,0u});
+            const auto unhandled_image=root/"unhandled.elf",unhandled_output=root/"unhandled-aot";
+            (void)write_binary_if_changed(unhandled_image,direct_test::elf(partial));
+            call(unhandled_image,unhandled_output,false,true);
+            const auto unhandled=nlohmann::json::parse(text(unhandled_output/"sdk-prepare.json"));
+            require(unhandled.at("sdk_unhandled_instructions").get<unsigned>()>0 &&
+                unhandled.at("native_unsupported").size()==1 &&
+                unhandled.at("native_unsupported")[0].at("pc")==direct_test::text+4,
+                "Standalone emission errors must become exact native boundaries, never skipped instructions");
+            integrated(unhandled_image,unhandled_output/"generated",partial,"partial");
+            auto boundaries=p;std::vector<std::uint32_t> words(127,0u);
+            for(const auto word:{0x10000002u,0x2402002Au,0x24020063u,0x54000001u,0x24020063u,0x03E00008u,0u})words.push_back(word);
+            boundaries.segments[0].bytes=m20::le_words({0x08043F80u,0u});
+            boundaries.segments.push_back({direct_test::text+65536-512,5,m20::le_words(words)});
+            boundaries.roots={direct_test::text+65536-512};
+            const auto boundary_image=root/"boundaries.elf",boundary_output=root/"boundaries-aot";
+            (void)write_binary_if_changed(boundary_image,direct_test::elf(boundaries));
+            call(boundary_image,boundary_output,false,true);
+            integrated(boundary_image,boundary_output/"generated",boundaries,"boundaries");
         }
         call(input,output,false,true);
         require(text(output / "sdk-prepare.json")==receipt,"reused output changed");
+        const auto relocated=root/"relocated.elf";(void)write_binary_if_changed(relocated,bytes);
+        call(relocated,output,false,true);
+        require(text(output/"sdk-prepare.json")==receipt,"Content-addressed source reuse must preserve the verified translation");
         auto stale_backend=nlohmann::json::parse(receipt);
         stale_backend["native_backend_sha256"]=std::string(64,'0');
         (void)write_text_if_changed(output / "sdk-prepare.json",stale_backend.dump());
@@ -116,11 +168,104 @@ int main(int argc,char** argv) {
         call(disc,root / "disc-aot",true,true);
         require(sha256_file(root / "disc-aot" / "boot.elf")==hash,"disc extraction differs");
 
-        p.segments[0].bytes=m20::le_words({0x00000005u,0x03E00008u,0u});
-        const auto unsupported=root / "unsupported.elf", failed=root / "unsupported-aot";
-        (void)write_binary_if_changed(unsupported,direct_test::elf(p));
+        const auto unsupported=root / "malformed.elf", failed=root / "malformed-aot";
+        (void)write_binary_if_changed(unsupported,std::vector<std::uint8_t>{0x7F,'E','L','F'});
         call(unsupported,failed,false,false);
         require(!fs::exists(native_io_path(failed)),"incomplete output was retained as usable");
+        const auto native_log=root/"native-prepare.log",native_cache=root/"native-cache";
+        auto launcher=fs::path(argv[1]).parent_path()/"ps2-native";
+#ifdef _WIN32
+        launcher+=".exe";
+#endif
+        const auto launcher_exists=file_exists(launcher);
+        const auto launcher_stamp=launcher_exists ? fs::last_write_time(launcher) : fs::file_time_type{};
+#ifdef _WIN32
+        // Match the desktop launcher: preparation must work without a parent console.
+        FreeConsole();
+#endif
+        const auto ticket=root/"prepare.cancel",cancel_input=root/"cancel.elf";
+        auto cancel_program=p;std::vector<std::uint32_t> cancel_words(32768,0u);
+        cancel_words.push_back(0x03E00008u);cancel_words.push_back(0u);
+        cancel_program.segments[0].bytes=m20::le_words(cancel_words);
+        (void)write_binary_if_changed(cancel_input,direct_test::elf(cancel_program));
+        const auto identity=sha256_file(cancel_input)+info.at("native_backend_sha256").get<std::string>()+
+            info.at("sdk_lock_sha256").get<std::string>()+"elf";
+        const auto source_key=sha256_hex({reinterpret_cast<const std::uint8_t*>(identity.data()),identity.size()});
+        const auto pending=native_cache/"translations"/(source_key+".pending");
+        (void)write_text_if_changed(ticket,"0");bool signalled=false;
+        auto cancel_arg=fs::path("--cancel-file=");cancel_arg+=ticket.native();
+        const auto interrupted=dev::process(argv[1],{"prepare-native",cancel_input,native_cache,cancel_arg},
+            native_log,30,16u*1024u*1024u,[&]{
+                if(!signalled && file_exists(pending/"sdk/recompiler.toml")){
+                    (void)write_text_if_changed(ticket,"1");signalled=true;
+                }
+                return false;
+            });
+        require(signalled && !interrupted.timed_out && interrupted.exit_code!=0 &&
+            text(native_log).find("Native preparation cancelled")!=std::string::npos && !fs::exists(native_io_path(pending)),
+            "SDK-stage cancellation must remove only its staging and release the preparation lock: "+text(native_log));
+        const auto prepare=[&] {
+            const auto result=dev::process(argv[1],{"prepare-native",input,native_cache},native_log,100,16u*1024u*1024u);
+            require(!result.timed_out && !result.exit_code,text(native_log));
+        };
+        prepare();
+        const auto native_text=text(native_log);const auto marker=native_text.rfind("native_receipt=");
+        require(marker!=std::string::npos,"Native preparation did not publish a receipt");
+        const auto begin=marker+15,end=native_text.find_first_of("\r\n",begin);
+        const auto native_receipt=fs::u8path(native_text.substr(begin,end-begin));
+        const auto native_info=nlohmann::json::parse(text(native_receipt));
+        const auto native_binary=native_receipt.parent_path()/fs::u8path(native_info.at("binary").get<std::string>());
+        const auto binary_stamp=fs::last_write_time(native_binary);
+        {
+            frontend::LoadedNativeModule module(native_receipt,hash,hash);PS2Runtime runtime;
+            runtime.prepare_direct_elf(parse_ee_elf(bytes),&module.module());runtime.cpu().set_reg32_sign_extended(31,0xFFFFFFF0u);
+            BootOptions budget;budget.max_instructions=100;budget.stop_at=0xFFFFFFF0u;
+            const auto report=runtime.run(&module.module(),budget);
+            require(report.outcome==BootOutcome::StopAddress && report.retired==3 && report.aot_instructions==3 &&
+                !report.interpreted_instructions && runtime.cpu().reg32(2)==42,"Cold native preparation must execute its generated module");
+        }
+        prepare();
+        require(fs::last_write_time(native_binary)==binary_stamp && text(native_log).find("Native module reused")!=std::string::npos,
+            "Verified native module reuse must not recompile the content");
+        require(!launcher_exists || fs::last_write_time(launcher)==launcher_stamp,"Preparing content must not rebuild the launcher");
+        {
+        const auto dynamic_input=root/"dynamic.elf";
+        constexpr auto dynamic_alias=0x80000000u;
+        const auto dynamic_program=direct_test::build("dynamic",dynamic_alias);
+        const auto dynamic_bytes=direct_test::elf(dynamic_program);
+        (void)write_binary_if_changed(dynamic_input,dynamic_bytes);
+        const auto dynamic_result=dev::process(argv[1],{"prepare-native",dynamic_input,native_cache},native_log,150,16u*1024u*1024u);
+        require(!dynamic_result.timed_out && !dynamic_result.exit_code,text(native_log));
+        const auto dynamic_text=text(native_log);const auto dynamic_marker=dynamic_text.rfind("native_receipt=");
+        require(dynamic_marker!=std::string::npos,"Dynamic preparation did not publish its parent receipt");
+        const auto line_end=dynamic_text.find_first_of("\r\n",dynamic_marker+15);
+        const auto dynamic_receipt=fs::u8path(dynamic_text.substr(dynamic_marker+15,line_end-dynamic_marker-15));
+        const auto dynamic_info=nlohmann::json::parse(text(dynamic_receipt));
+        require(dynamic_info.at("overlays").size()==1,"Preparation discovers one witnessed copied-code region");
+        const auto dynamic_hash=sha256_hex(dynamic_bytes);
+        frontend::LoadedNativeModule dynamic_module(dynamic_receipt,dynamic_hash,dynamic_hash);
+        PS2Runtime dynamic_runtime;dynamic_runtime.prepare_hle_elf(parse_ee_elf(dynamic_bytes),&dynamic_module.module());
+        BootOptions dynamic_options;dynamic_options.max_instructions=1000;
+        dynamic_options.stop_at=dynamic_program.stop+16u;
+        const auto copied=dynamic_runtime.run(&dynamic_module.module(),dynamic_options);
+        require(copied.outcome==BootOutcome::BlockPoint && copied.pc==(direct_test::dynamic_address|dynamic_alias) && !copied.interpreted_instructions,
+            "Play stops strictly before entering a copied function");
+        dynamic_runtime.memory().write32(direct_test::dynamic_address+4u,0);
+        require(!dynamic_module.activate_overlays(dynamic_runtime.memory(),copied.pc,dynamic_options),
+            "A matching first instruction cannot activate an overlay with different later bytes");
+        dynamic_runtime.memory().write32(direct_test::dynamic_address+4u,0x03E00008u);
+        require(dynamic_module.activate_overlays(dynamic_runtime.memory(),copied.pc,dynamic_options),"Verified offline overlay activates in the same runtime");
+        const auto dynamic_run=dynamic_runtime.run(&dynamic_module.module(),dynamic_options);
+        require(dynamic_run.outcome==BootOutcome::StopAddress && dynamic_runtime.cpu().reg32(2)==42 &&
+            !dynamic_run.interpreted_instructions,"Copied guest function returns through native AOT without compiler or interpreter in Play");
+        const auto region=native_cache/"regions"/(dynamic_info.at("overlays")[0].at("image_sha256").get<std::string>()+".elf");
+        auto region_bytes=read_file(region);region_bytes.back()^=1;(void)write_binary_if_changed(region,region_bytes);
+        bool refused=false;
+        try{frontend::LoadedNativeModule changed(dynamic_receipt,dynamic_hash,dynamic_hash);}
+        catch(const std::exception& error){refused=std::string(error.what()).find("SHA-256 mismatch")!=std::string::npos;}
+        require(refused,"Tampered overlay input is refused before activation");
+        region_bytes.back()^=1;(void)write_binary_if_changed(region,region_bytes);
+        } // Windows DLL handles must close before removing the owned fixture cache.
         fs::remove_all(native_io_path(root));
         std::cout<<"SDK ELF/disc preparation, Unicode/long paths, reuse, tamper and unsupported-code controls passed\n";
         return 0;

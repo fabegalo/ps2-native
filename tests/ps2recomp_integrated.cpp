@@ -13,17 +13,29 @@ template<class C> int run(int argc,C** argv)try {
     const auto elf=parse_ee_elf(read_file(std::filesystem::path(argv[1])));
     const auto stop=hle?hle_test::program().stop:frame?direct_test::frame().stop:0xFFFFFFF0u;
     PS2Runtime runtime;
-    auto reference=std::make_unique<Memory>();EEState reference_cpu;
+    PS2Runtime referenceRuntime;auto* reference=&referenceRuntime.memory();auto& reference_cpu=referenceRuntime.cpu();
     if(hle)runtime.prepare_hle_elf(elf,&sdk_aot_module());
     else runtime.prepare_direct_elf(elf,&sdk_aot_module());
-    prepare_direct_elf(elf,&aot_module(),reference_cpu,*reference);
+    referenceRuntime.prepare_direct_elf(elf,&aot_module());
     std::unique_ptr<HleKernel> reference_kernel;
-    if(hle)reference_kernel=std::make_unique<HleKernel>(reference_cpu,*reference);
+    if(hle)reference_kernel=std::make_unique<HleKernel>(referenceRuntime);
     if(!hle && !frame){runtime.cpu().set_reg32(31,stop);reference_cpu.set_reg32(31,stop);}
     std::vector<std::string> frames[2];
     BootOptions expected;expected.max_instructions=300000;expected.stop_at=stop;expected.max_trace_events=32;expected.tail_instructions=0;
     expected.on_frame=[&](const Framebuffer& f){frames[0].push_back(sha256_hex(f.rgba));};
     const auto baseline=run_ee_boot(reference_cpu,*reference,&aot_module(),expected);
+    if(mode=="partial") {
+        const auto actual=runtime.run(&sdk_aot_module(),expected);
+        require(baseline.outcome==BootOutcome::BlockPoint && actual.outcome==BootOutcome::BlockPoint &&
+            actual.pc==elf.entry+4 && actual.retired==1 && actual.aot_instructions==1 && !actual.interpreted_instructions &&
+            runtime.cpu().reg32(2)==42 && find_aot_block(sdk_aot_module(),elf.entry+4)==nullptr &&
+            find_aot_block(sdk_aot_module(),elf.entry+8)!=nullptr,
+            "Missing translation must stop before the instruction, without skipping to later native code");
+        require(checkpoint_state_sha256(runtime.cpu(),runtime.memory())==checkpoint_state_sha256(reference_cpu,*reference),
+            "Partial SDK translation must preserve the same complete stop state as the native baseline");
+        std::cout<<"SDK partial native module stops exactly at the missing translation; state and retirement agree\n";
+        return 0;
+    }
     require(baseline.outcome==BootOutcome::StopAddress,baseline.reason);
     auto options=expected;options.max_instructions=17;
     options.on_frame=[&](const Framebuffer& f){frames[1].push_back(sha256_hex(f.rgba));};
@@ -36,6 +48,8 @@ template<class C> int run(int argc,C** argv)try {
         require(slice<17999,"SDK execution exceeded its fixed native budget");
     }
     require(retired==baseline.retired && runtime.cpu().cycles()==reference_cpu.cycles() && runtime.cpu().pc==stop,"SDK instruction counts, clocks and stop boundary differ");
+    if(mode=="boundaries")require(retired==134 && runtime.cpu().reg32(2)==42,
+        "Branch delay crossing a native chunk and an annulled likely slot must preserve instructions and timing");
     for(unsigned r=0;r<32;++r)require(runtime.cpu().gpr[r].low==reference_cpu.gpr[r].low && runtime.cpu().gpr[r].high==reference_cpu.gpr[r].high,"SDK register state differs");
     if(hle) {
         require(runtime.memory().hle_kernel()->syscall_count()==15 && reference_kernel->syscall_count()==15,"SDK HLE service dispatch differs");

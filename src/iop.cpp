@@ -4,6 +4,7 @@
 #include "ps2native/sha256.hpp"
 #include "ps2native/profile.hpp"
 #include "ps2native/vu_control.hpp"
+#include "iop_services.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -70,6 +71,7 @@ constexpr std::uint32_t kVblankStartIrq = 1u << 0, kVblankEndIrq = 1u << 11;
 // Flags are raised by the modeled SIF/CDVD transfers. Unsupported DMA starts
 // refuse before changing channel state; they cannot manufacture completion.
 constexpr std::uint32_t kDmaIrq = 1u << 3;
+constexpr std::uint8_t kCdvdCommandComplete = 1u; // CDVD INTR_STAT bit 0, separate from I_STAT's CDVD line.
 constexpr const char* kIrqNames[] = {"VBLANK start", "GPU", "CDVD", "DMA", "timer 0", "timer 1", "timer 2", "SIO0",
                                      "SIO1", "SPU2", "PIO", "VBLANK end", "DVD", "PCMCIA", "timer 3", "timer 4",
                                      "timer 5", "SIO2", "HTR0", "HTR1", "HTR2", "HTR3", "USB", "EXTR", "FWRE", "FDMA"};
@@ -229,6 +231,8 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
                 bool diagnostic_spu2_quiescent, PowerEvent power_event) {
     if(static_cast<unsigned>(power_event)>3u)throw DeviceRefusal("MECHACON power event is invalid");
     power_event_=power_event;
+    hle_services_=false;
+    hle_system_=nullptr;
     native_instructions_=interpreted_instructions_=0;instruction_observer_={};
     if(diagnostic_dmacinten && (*diagnostic_dmacinten&~3u))
         throw DeviceRefusal("diagnostic IOP DMACINTEN supports only bits 0-1");
@@ -245,7 +249,7 @@ void Iop::reset(std::span<const std::uint8_t> rom0, const ConsoleHardware* hardw
     gpr_sio2_epoch_={};sio2_control_epoch_=undefined_sio2_epoch_=0;
     sio2_remote_epoch_=0;sio2_remote_bypass_.reset();
     diagnostic_sio2_port_timing_.reset();
-    sio2_digital_pads_={};sio2_response_status_=0;pad_poll_source_={};
+    sio2_digital_pads_={};sio2_response_status_=0;pad_poll_source_={};pad_output_sink_={};
     sio2_input_.clear();sio2_output_.clear();sio2_complete_at_.reset();
     diagnostic_sio2_timeout_cycles_=sio2_reply_bytes_=sio2_interrupt_enable_=0;
     sio2_completion_flag_=sio2_response_valid_=false;sio2_diagnostic_control_.reset();
@@ -1097,7 +1101,7 @@ void Iop::pump_sif0() {
             throw IopStop{"SIF0 destination tag consumes unknown FIFO bits"};
         const auto tag=sif0_fifo_[0].value,dest=sif0_fifo_[1].value;const auto id=(tag>>28u)&7u;
         if((tag&0x0FFF0000u) || (id!=0u && id!=1u && id!=7u) || (dest&0x8000000Fu))
-            throw IopStop{"SIF0 destination tag: unsupported fields, ID or scratchpad/alignment"};
+            throw IopStop{"SIF0 destination tag: unsupported fields, ID or scratchpad/alignment: tag="+hex(tag)+" destination="+hex(dest)+" source_tadr="+hex(iop_sif0_[3])+" source_madr="+hex(iop_sif0_[0])};
         const auto count=tag&0xFFFFu;
         if(dest>ee_ram_.size() || std::uint64_t{count}*16u>ee_ram_.size()-dest)
             throw IopStop{"SIF0 destination exceeds EE RAM"};
@@ -1139,7 +1143,9 @@ void Iop::configure_rtc(std::uint64_t utc_epoch_seconds) {
 }
 
 void Iop::mount_disc(std::shared_ptr<DiscImage> disc,DiscMedium medium,bool diagnostic_cav_nominal_timing) {
-    if(cycle_ || stop_ || !disc)throw DeviceRefusal("CDVD mount requires an active reset state and a disc image");
+    // Media can be attached to a ROM-less reset without starting the IOP CPU.
+    const bool romless_reset=rom_.empty() && pc_==kResetVector;
+    if(cycle_ || (stop_ && !romless_reset) || !disc)throw DeviceRefusal("CDVD mount requires an active reset state and a disc image");
     if(medium!=DiscMedium::Ps2Cd && medium!=DiscMedium::Ps2Dvd)
         throw DeviceRefusal("CDVD medium is unsupported");
     (void)disc->boot_path(); // Validate PS2 BOOT2, without loading guest code.
@@ -1249,10 +1255,247 @@ void Iop::pump_cdvd() {
             events_.push_back({cycle_,"CDVD sector "+std::to_string(cdvd_lba_)+" transferred (2048 bytes)"});
         ++cdvd_lba_;--cdvd_sectors_;
         if(cdvd_sectors_)cdvd_sector_at_=cycle_+cdvd_sector_cycles_;
-        else {cdvd_irq_|=2u;cdvd_status_=0xAu;cdvd_sticky_|=cdvd_status_;}
+        else {cdvd_irq_|=kCdvdCommandComplete;cdvd_status_=0xAu;cdvd_sticky_|=cdvd_status_;}
     }
 }
 
+namespace {
+// HLE-owned IOP kernel allocations, never addresses attributed to an original ROM.
+constexpr std::uint32_t hleCmdBuffer=0x1000u,hleCmdState=0x1100u;
+constexpr std::uint32_t hleReplyBuffer=0x1200u,hleReplyTag=0x1300u,hleSregs=0x1400u;
+constexpr std::uint32_t hleReplyData=0x1500u,hleCdvdServer=0x2000u,hleCdvdBuffer=0x2100u;
+constexpr std::uint32_t hleHeapServer=0x2200u,hleHeapBuffer=0x2300u;
+}
+void Iop::start_hle_services(Ps2RecompIopServices* services) {
+    if(hle_services_ || cycle_ || !rom_.empty() || stop_!="no ROM0 mapped for the IOP")
+        throw DeviceRefusal("IOP HLE services require the ROM-less reset boundary");
+    if(services)services->initialize_memory();
+    initialize_hle_sif();
+    stop_.reset();stop_cycle_=0;hle_services_=true;hle_system_=services;
+    events_.push_back({cycle_,"IOP HLE SIF CMD services initialized; original firmware not executed"});
+}
+void Iop::initialize_hle_sif() {
+    const bool armed=(iop_sif1_[2]&kChcrStart)!=0;
+    if(armed && (iop_sif1_[2]!=0x41000300u || sif_smcom_!=hleCmdBuffer))
+        throw IopStop{"IOP HLE SIF reinitialization found another active receiver"};
+    if(!armed)for(auto address=hleCmdBuffer;address<hleSregs+128u;address+=4u)store(address,4,0,"IOP HLE kernel allocation");
+    const auto write=[&](std::uint32_t address,std::uint32_t value){io_write(address,4,value,"IOP HLE bootstrap");};
+    const auto current=[&](std::uint32_t address){const auto* value=latch(address);return value?value->value_or(0u):0u;};
+    write(0x1F801570u,current(0x1F801570u)|0x8800u); // real DMA priority enables: SIF0 and SIF1
+    write(0x1F801578u,1u);write(0x1F80157Cu,1u);
+    write(kDicr,(current(kDicr)&0x00FFFFFFu)|(1u<<23u));
+    write(kDicr2,(current(kDicr2)&0x00FFFFFFu)|(1u<<19u)|(1u<<18u)|(armed?0u:(1u<<26u)|(1u<<27u)));
+    // DMACMAN may reset controller enables while this same receiver remains armed.
+    if(!armed) {write(0x1F801538u,0x41000300u);write(kSifSmcom,hleCmdBuffer);}
+    // Publish only after buffers, command dispatch and the receiving DMA exist.
+    if(!armed)write(kSifSmflg,0x30000u);
+}
+void Iop::stop_hle_services() noexcept {
+    if(!hle_services_)return;
+    hle_services_=false;hle_system_=nullptr;stop_="IOP HLE services detached";stop_cycle_=cycle_;
+}
+bool Iop::hle_events_pending() const noexcept {
+    if(!hle_services_ || stop_)return false;
+    const auto* status=latch(kDicr2);
+    // Native handlers can finish before a SIF completion IRQ has been created.
+    return (hle_system_ && hle_system_->has_native_work()) ||
+        !sif1_fifo_.empty() || !sif0_fifo_.empty() || (ee_sif1_chcr_&0x100u) ||
+        (iop_sif0_[2]&kChcrStart) || (status && (status->value_or(0u)&(1u<<27u))) ||
+        diagnostic_ram32(hleCmdState+4u).value_or(0u)!=0;
+}
+void Iop::tick_hle_services() {
+    // A blocked native RPC still needs completion acknowledgement on the shared SIF transport.
+    if(const auto* completed=latch(kDicr2);completed && *completed && (**completed&(1u<<26u)) && !(iop_sif0_[2]&kChcrStart))
+        io_write(kDicr2,4,(**completed&0x00FFFFFFu)|(1u<<26u),"IOP HLE SIF completion");
+    if(hle_command_active_)return;
+    struct CommandScope {bool& active;~CommandScope(){active=false;}} scope{hle_command_active_};
+    hle_command_active_=true;
+    const auto read=[&](std::uint32_t address){return static_cast<std::uint32_t>(ee_read(address,4));};
+    const auto write=[&](std::uint32_t address,std::uint32_t value){ee_write(address,4,value);};
+    const auto device=[&](std::uint32_t address,std::uint32_t value){io_write(address,4,value,"IOP HLE SIF CMD");};
+    const auto rpcReply=[&](std::uint32_t server,std::uint32_t buffer,std::uint32_t packet=hleCmdBuffer) {
+        for(unsigned offset=0;offset<64u;offset+=4u)write(hleReplyBuffer+offset,0);
+        write(hleReplyBuffer,64u);write(hleReplyBuffer+8u,0x80000008u);
+        for(unsigned offset=16u;offset<=28u;offset+=4u)write(hleReplyBuffer+offset,read(packet+offset));
+        write(hleReplyBuffer+32u,read(packet+8u));write(hleReplyBuffer+36u,server);write(hleReplyBuffer+40u,buffer);
+        write(hleCmdState+4u,2u);write(hleCmdState+12u,64u);
+    };
+    const auto completeNativeRpc=[&](const std::pair<std::uint32_t,std::uint32_t>& response,std::uint32_t packet) {
+        const auto [source,bytes]=response;rpcReply(0,0,packet);
+        if(bytes) {
+            write(hleCmdState+4u,4u);write(hleCmdState+16u,read(packet+40u)&0x1FFFFFFFu);
+            write(hleCmdState+20u,source);write(hleCmdState+24u,bytes);
+        }
+    };
+    if(hle_system_ && !read(hleCmdState+4u) && !(iop_sif0_[2]&kChcrStart) && sif0_fifo_.empty()) {
+        ps2x::iop::RpcRequest completed;
+        if(const auto response=hle_system_->rpc_poll(&completed,true)) {
+            const auto packet=completed.callToken^Ps2RecompIopServices::RpcPacketToken;
+            if(!packet || packet>kIopRamBytes-56u)
+                throw IopStop{"Native RPC completion lost its canonical packet reservation"};
+            completeNativeRpc(*response,static_cast<std::uint32_t>(packet));
+            if(hle_system_->free_heap(static_cast<std::uint32_t>(packet)))
+                throw IopStop{"Native RPC completion packet reservation was released prematurely"};
+        }
+    }
+    const auto* dicr=latch(kDicr2);
+    if(dicr && (dicr->value_or(0u)&(1u<<27u)) && !(iop_sif0_[2]&kChcrStart) && sif0_fifo_.empty() && !read(hleCmdState+4u)) {
+        if(iop_sif1_[2]&kChcrStart)throw IopStop{"IOP HLE command interrupt before destination completion"};
+        const auto header=read(hleCmdBuffer),size=header&0xFFu;
+        if(size) {
+            if(size<16u || size>112u || (size&3u))throw IopStop{"IOP HLE invalid SIF CMD packet size"};
+            if(iop_sif1_[0]<hleCmdBuffer+size || iop_sif1_[0]>hleCmdBuffer+128u)
+                throw IopStop{"IOP HLE SIF CMD size exceeds the received DMA payload"};
+            // Every declared byte must have arrived through the real RAM bus.
+            for(unsigned offset=0;offset<size;offset+=4u)(void)read(hleCmdBuffer+offset);
+            const auto command=read(hleCmdBuffer+8u),option=read(hleCmdBuffer+12u);
+            if(command==0x80000003u && hle_system_ && hle_system_->executing_native())return;
+            if(command==0x8000000Au && hle_system_ && hle_system_->executing_cpu())return;
+            // Receipt is complete before its RPC handler can block on another DMA source.
+            // Acknowledging this source never consumes FIFO data or completes the RPC.
+            device(kDicr2,(dicr->value_or(0u)&0x00FFFFFFu)|(1u<<27u));
+            switch(command) {
+                case 0x80000000u:case 0x80000002u:{
+                    const bool addressPacket=command==0x80000000u || !option;
+                    if(addressPacket && size<20u)
+                        throw IopStop{"IOP HLE malformed SIF CMD address/init packet"};
+                    if(addressPacket) {
+                        const auto target=read(hleCmdBuffer+16u),physical=target&0x1FFFFFFFu;
+                        if((target&15u) || !physical || physical>ee_ram_.size() || 128u>ee_ram_.size()-physical)
+                            throw IopStop{"IOP HLE SIF CMD EE receiver outside aligned RAM"};
+                        write(hleCmdState,physical);write(hleCmdState+4u,1u);
+                        if(command==0x80000002u)sif_msflg_|=0x20000u;
+                    } else {
+                        if(!read(hleCmdState))throw IopStop{"IOP HLE RPC sync before CMD initialization"};
+                        write(hleCmdState+8u,1u);
+                    }
+                    break;
+                }
+                case 0x80000001u:{
+                    if(size<24u || read(hleCmdBuffer+16u)>=32u)
+                        throw IopStop{"IOP HLE invalid SIF software register packet"};
+                    write(hleSregs+read(hleCmdBuffer+16u)*4u,read(hleCmdBuffer+20u));break;
+                }
+                case 0x80000003u:{
+                    if(size<24u)throw IopStop{"IOP HLE malformed reset packet"};
+                    const auto length=read(hleCmdBuffer+16u),mode=read(hleCmdBuffer+20u);
+                    if(length>80u || length>size-24u)throw IopStop{"IOP HLE reset arguments exceed their packet"};
+                    std::string arguments;
+                    for(unsigned i=0;i<length;++i) {
+                        const auto byte=static_cast<char>(ee_read(hleCmdBuffer+24u+i,1));
+                        if(!byte)break;
+                        if(static_cast<unsigned char>(byte)<32u || static_cast<unsigned char>(byte)>126u)
+                            throw IopStop{"IOP HLE reset argument encoding unsupported"};
+                        arguments.push_back(byte);
+                    }
+                    if(!hle_system_)throw IopStop{"PS2Recomp IOP reset provider unavailable"};
+                    if(!sif1_fifo_.empty() || sif1_have_tag_ || sif1_words_ || (ee_sif1_chcr_&0x100u) ||
+                        ee_dma_setup_[5][2].value_or(0u) || cdvd_sectors_ || cdvd_complete_at_)
+                        throw IopStop{"IOP HLE reset requires quiescent SIF/CDVD transfers"};
+                    for(unsigned channel=0;channel<14u;++channel) {
+                        if(channel==9u || channel==10u)continue;
+                        const auto address=channel<7u?0x1F801088u+channel*16u:0x1F801508u+(channel-7u)*16u;
+                        const auto* control=latch(address);
+                        if(control && (control->value_or(0u)&kChcrStart))
+                            throw IopStop{"IOP HLE reset refuses an active peripheral DMA channel"};
+                    }
+                    const auto identity=hle_system_->reset(arguments,mode);
+                    std::fill(ram_.begin(),ram_.end(),std::uint8_t{});
+                    std::fill(ram_known_.begin(),ram_known_.end(),std::uint8_t{0xFF});
+                    sif_smflg_=0;io_write(kSifMsflg,4,0x20000u,"IOP HLE reset CMD acknowledgement");
+                    hle_system_->boot_modules();
+                    io_write(0x1F801070u,4,~kDmaIrq,"IOP HLE reset DMA acknowledgement");
+                    io_write(kSifSmflg,4,0x40000u,"IOP HLE services reboot complete");
+                    events_.push_back({cycle_,"IOP SDK service reboot; IOPRP sha256="+identity+"; original IRX startup completed in AOT"});
+                    return;
+                }
+                case 0x80000009u:{
+                    if(size<36u)throw IopStop{"IOP HLE malformed RPC bind packet"};
+                    if(!read(hleCmdState))throw IopStop{"IOP HLE RPC bind before CMD initialization"};
+                    const auto server=read(hleCmdBuffer+32u);
+                    ps2x::iop::RpcRequest nativeRequest;nativeRequest.sid=server;
+                    if(hle_system_ && hle_system_->rpc_server(nativeRequest)) {
+                        rpcReply(nativeRequest.serverAddress,nativeRequest.serverBuffer);break;
+                    }
+                    const bool heap=server==0x80000003u;
+                    if(!hle_system_ || (!heap && (server!=0x80000592u || !hle_system_->has_cdvd()))) {
+                        // A completed bind may report an absent/not-yet-registered server.
+                        rpcReply(0u,0u);break;
+                    }
+                    const auto descriptor=heap?hleHeapServer:hleCdvdServer,buffer=heap?hleHeapBuffer:hleCdvdBuffer;
+                    for(unsigned offset=0;offset<64u;offset+=4u)write(descriptor+offset,0);
+                    for(unsigned offset=0;offset<256u;offset+=4u)write(buffer+offset,0);
+                    write(descriptor,server);write(descriptor+8u,buffer);
+                    rpcReply(descriptor,buffer);break;
+                }
+                case 0x8000000Au:{
+                    if(size<56u)throw IopStop{"IOP HLE malformed RPC call packet"};
+                    const auto descriptor=read(hleCmdBuffer+52u);const bool heap=descriptor==hleHeapServer;
+                    ps2x::iop::RpcRequest nativeRequest;nativeRequest.serverAddress=descriptor;
+                    if(hle_system_ && hle_system_->rpc_server(nativeRequest,true)) {
+                        nativeRequest.function=read(hleCmdBuffer+32u);nativeRequest.send.size=read(hleCmdBuffer+36u);
+                        nativeRequest.receive={read(hleCmdBuffer+40u)&0x1FFFFFFFu,read(hleCmdBuffer+44u)};
+                        const auto destination=nativeRequest.receive.address,size=nativeRequest.receive.size;
+                        const auto padded=(std::uint64_t{size}+15u)&~std::uint64_t{15u};
+                        if(size && (!destination || (destination&15u) || destination>ee_ram_.size() || padded>ee_ram_.size()-destination))
+                            throw IopStop{"IOP SDK RPC response outside aligned EE RAM"};
+                        const auto packet=hle_system_->allocate_heap(56u);
+                        if(!packet)throw IopStop{"Native RPC completion packet allocation failed"};
+                        for(unsigned offset=0;offset<56u;offset+=4u)write(packet+offset,read(hleCmdBuffer+offset));
+                        nativeRequest.callToken=Ps2RecompIopServices::RpcPacketToken|packet;
+                        if(const auto response=hle_system_->rpc_call(nativeRequest)) {
+                            completeNativeRpc(*response,packet);
+                            if(hle_system_->free_heap(packet))throw IopStop{"Native RPC packet reservation was released prematurely"};
+                        }
+                        break;
+                    }
+                    if(!hle_system_ || (descriptor!=hleCdvdServer && !heap) ||
+                        read(descriptor)!=(heap?0x80000003u:0x80000592u))
+                        throw IopStop{"IOP HLE call to an unregistered RPC server"};
+                    const auto function=read(hleCmdBuffer+32u),send=read(hleCmdBuffer+36u),receive=read(hleCmdBuffer+44u);
+                    if(send!=4u || (heap?(receive!=4u || (function!=1u && function!=2u)):
+                        (function || (receive!=4u && receive!=16u))) || read(hleCmdBuffer+48u)!=1u)
+                        throw IopStop{"PS2Recomp IOP RPC call shape unsupported: function="+hex(function)+" send="+std::to_string(send)+" receive="+std::to_string(receive)};
+                    const auto destination=read(hleCmdBuffer+40u)&0x1FFFFFFFu;
+                    if(!destination || (destination&15u) || destination>ee_ram_.size() || 16u>ee_ram_.size()-destination)
+                        throw IopStop{"IOP HLE RPC response outside aligned EE RAM"};
+                    const auto versions=receive==16u?hle_system_->cdvd_versions():std::array<std::uint32_t,3>{};
+                    const auto argument=read(heap?hleHeapBuffer:hleCdvdBuffer);
+                    const auto result=heap?(function==1u?hle_system_->allocate_heap(argument):
+                        static_cast<std::uint32_t>(hle_system_->free_heap(argument))):hle_system_->cdvd_init(argument);
+                    for(unsigned offset=0;offset<16u;offset+=4u)write(hleReplyData+offset,0);
+                    if(receive==16u)for(unsigned i=0;i<3;++i)write(hleReplyData+4u+i*4u,versions[i]);
+                    write(hleReplyData,result);rpcReply(0,0);
+                    write(hleCmdState+4u,3u);write(hleCmdState+16u,destination);break;
+                }
+                default:throw IopStop{"IOP HLE unsupported SIF CMD "+hex(command)};
+            }
+            write(hleCmdBuffer,0);
+        }
+        device(kDicr2,(dicr->value_or(0u)&0x00FFFFFFu)|(1u<<27u));
+        device(0x1F801538u,0x41000300u);
+    }
+    if(read(hleCmdState+4u) && !(iop_sif0_[2]&kChcrStart) && sif0_fifo_.empty()) {
+        // RPCINIT is delivered as the protocol's SET_SREG command, by SIF0 DMA.
+        // An absent bind returns null; unregistered calls remain explicit refusals.
+        const auto kind=read(hleCmdState+4u);auto tag=hleReplyTag;
+        if(kind==1u) {
+            for(unsigned offset=0;offset<32u;offset+=4u)write(hleReplyBuffer+offset,0);
+            write(hleReplyBuffer,24u);write(hleReplyBuffer+8u,0x80000001u);write(hleReplyBuffer+20u,1u);
+            write(hleCmdState+12u,32u);
+        } else if(kind==3u) {
+            write(tag,hleReplyData);write(tag+4u,4u);write(tag+8u,1u);write(tag+12u,read(hleCmdState+16u));tag+=16u;
+        } else if(kind==4u) {
+            const auto words=read(hleCmdState+24u)/4u;
+            write(tag,read(hleCmdState+20u));write(tag+4u,words);write(tag+8u,words/4u);write(tag+12u,read(hleCmdState+16u));tag+=16u;
+        }
+        const auto words=read(hleCmdState+12u)/4u;
+        write(tag,0x80000000u|hleReplyBuffer);write(tag+4u,words);
+        write(tag+8u,0x70000000u|(words/4u));write(tag+12u,read(hleCmdState));
+        device(0x1F80152Cu,hleReplyTag);device(0x1F801528u,0x01000701u);
+        write(hleCmdState+4u,0);
+    }
+}
 void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
     // No instruction, DMA beat, timer, or sample can advance before the next
     // IOP cycle. A changed/detached GS remains an immediate synchronization
@@ -1267,6 +1510,19 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
         // Detached: the VBLANK sources are unknown again.
         video_generation_.reset();
         video_ = {};
+    }
+    if(hle_services_ && hle_system_ && !hle_system_->executing_native()) {
+        try {hle_system_->run_until(cycle);tick_hle_services();}
+        catch(const std::exception& error) {
+            if(!stop_) {
+                stop_="IOP SDK native service at "+hex(pc_)+": "+error.what();
+                stop_cycle_=cycle_;events_.push_back({cycle_,"stop: "+*stop_});
+            }
+            return;
+        } catch(const IopStop& error) {
+            stop_="IOP SDK transport at "+hex(pc_)+": "+error.reason;
+            stop_cycle_=cycle_;events_.push_back({cycle_,"stop: "+*stop_});return;
+        }
     }
     while (!stop_ && cycle_ < cycle) {
         const auto pc = pc_;
@@ -1285,46 +1541,49 @@ void Iop::run_until(std::uint64_t cycle, const GsRegisters* video) {
                 events_.push_back({cycle_,"DIAGNOSTIC SIO2 serial packet complete"});
             }
             if(cdvd_complete_at_ && cycle_>=*cdvd_complete_at_) {
-                cdvd_complete_at_.reset(); cdvd_irq_|=2u;
+                cdvd_complete_at_.reset(); cdvd_irq_|=kCdvdCommandComplete;
                 if(cdvd_ncommand_==2u || cdvd_ncommand_==4u || cdvd_ncommand_==5u) {
                     cdvd_status_=0x0Au; cdvd_sticky_|=cdvd_status_;
                 }
                 events_.push_back({cycle_,"CDVD N command completion"});
             }
             if(cdvd_irq_) istat_|=1u<<2u;
-            step();
+            if(hle_services_)tick_hle_services();else step();
             ++cycle_;
             if (timers_running_) tick_timers();
             if(spu2_clock_active_)tick_spu2();
             if (video != nullptr) tick_video();
         } catch (const IopStop& stop) {
-            pc_ = pc;
-            branch_target_ = saved_target;
-            in_delay_slot_ = saved_slot;
-            stop_ = "IOP " + hex(pc) + (saved_slot ? " (delay slot)" : "") + " after " + std::to_string(cycle_) +
-                    " instructions: " + stop.reason;
+            if(!hle_services_) {pc_=pc;branch_target_=saved_target;in_delay_slot_=saved_slot;}
+            stop_ = "IOP " + hex(pc) + (saved_slot ? " (delay slot)" : "") + " at cycle " + std::to_string(cycle_) +
+                    ": " + stop.reason;
             stop_cycle_ = cycle_;
             events_.push_back({cycle_, "stop: " + *stop_});
         } catch (const DeviceRefusal& stop) {
-            pc_=pc;branch_target_=saved_target;in_delay_slot_=saved_slot;
-            stop_="IOP "+hex(pc)+(saved_slot ? " (delay slot)" : "")+" after "+std::to_string(cycle_)+" instructions: "+stop.what();
+            if(!hle_services_) {pc_=pc;branch_target_=saved_target;in_delay_slot_=saved_slot;}
+            stop_="IOP "+hex(pc)+(saved_slot ? " (delay slot)" : "")+" at cycle "+std::to_string(cycle_)+": "+stop.what();
             stop_cycle_=cycle_;events_.push_back({cycle_,"stop: "+*stop_});
         }
     }
 }
 
 std::optional<std::uint64_t> Iop::idle_loop_horizon() const {
-    if(stop_ || pending_load_ || write_ || undefined_load_ || !cop0_[Sr])return std::nullopt;
-    const auto start=in_delay_slot_ ? pc_-4u : pc_;
-    try {
-        const auto word=fetch(start);
-        const bool self_jump=(word>>26u)==2u && (((start+4u)&0xF0000000u)|((word&0x3FFFFFFu)<<2u))==start;
-        if((!self_jump && word!=0x1000FFFFu) ||
-           fetch(start+4u)!=0u || (in_delay_slot_ && branch_target_!=start))return std::nullopt;
-    } catch(const IopStop&) {return std::nullopt;}
-    if((*cop0_[Sr]&kSrIec) && (*cop0_[Sr]&(1u<<10u))) {
-        const auto line=interrupt_line();
-        if(!line || *line)return std::nullopt;
+    if(stop_)return std::nullopt;
+    if(hle_services_) {
+        if(hle_events_pending() || (hle_system_ && hle_system_->has_native_work()))return std::nullopt;
+    } else {
+        if(pending_load_ || write_ || undefined_load_ || !cop0_[Sr])return std::nullopt;
+        const auto start=in_delay_slot_ ? pc_-4u : pc_;
+        try {
+            const auto word=fetch(start);
+            const bool self_jump=(word>>26u)==2u && (((start+4u)&0xF0000000u)|((word&0x3FFFFFFu)<<2u))==start;
+            if((!self_jump && word!=0x1000FFFFu) ||
+               fetch(start+4u)!=0u || (in_delay_slot_ && branch_target_!=start))return std::nullopt;
+        } catch(const IopStop&) {return std::nullopt;}
+        if((*cop0_[Sr]&kSrIec) && (*cop0_[Sr]&(1u<<10u))) {
+            const auto line=interrupt_line();
+            if(!line || *line)return std::nullopt;
+        }
     }
     if(!ee_memory_quiescent())return std::nullopt;
     const auto sector_bytes=(cdvd_ncommand_==8u || cdvd_ncommand_==9u) ? 2064u : 2048u;
@@ -1571,6 +1830,8 @@ std::uint32_t Iop::fetch(std::uint32_t address) const {
     }
     if (a.physical >= kRomPhysical && a.physical - kRomPhysical < kRomBytes) {
         const auto o = a.physical - kRomPhysical;
+        if(o>rom_.size() || 4u>rom_.size()-o)
+            throw IopStop{"instruction fetch: ROM0 bytes are not supplied for this firmware"};
         return static_cast<std::uint32_t>(rom_[o]) | (static_cast<std::uint32_t>(rom_[o + 1]) << 8) |
                (static_cast<std::uint32_t>(rom_[o + 2]) << 16) | (static_cast<std::uint32_t>(rom_[o + 3]) << 24);
     }
@@ -1669,7 +1930,15 @@ void Iop::write_sio2_dma(unsigned channel,unsigned field,std::size_t bytes,std::
         if(bytes!=4u || field>8u || (field&3u))throw IopStop{"SIO2 DMA requires word registers or BCR halfwords"};
         const auto index=field/4u;
         if(index==2u && (value&kChcrStart)) {
-            if(!diagnostic_sio2_dma_cycles_)throw IopStop{"SIO2 DMA transfers are not modeled without explicit word-cycle timing"};
+            if(!diagnostic_sio2_dma_cycles_) {
+                std::string detail="SIO2 DMA transfers are not modeled without explicit word-cycle timing; pc="+hex(pc_)+" channel="+std::to_string(11u+channel);
+                const auto& input=sio2_dma_[0];
+                if((input.written&1u) && !(input.registers[0]&3u) && input.registers[0]<=ram_.size()-4u) {
+                    const auto word=diagnostic_ram_observed(input.registers[0]);
+                    detail+=" input="+hex(input.registers[0])+" first_word="+hex(word.value)+" unknown="+hex(word.unknown);
+                }
+                throw IopStop{std::move(detail)};
+            }
             // Bit 30 requests snooping; this IOP RAM model is coherent.
             if((value&~0x40000000u)!=(0x01000201u-channel))throw IopStop{"SIO2 DMA supports incrementing slice transfers in the channel direction only: "+hex(value)};
             if((dma.written&3u)!=3u)throw IopStop{"SIO2 DMA requires known MADR and both BCR halves"};
@@ -1846,8 +2115,13 @@ void Iop::diagnostic_sio2_unplugged_ports(unsigned mask,std::uint32_t timeout_cy
     diagnostic_sio2_timeout_cycles_=timeout_cycles;diagnostic_sio2_unplugged_ports_=mask;
 }
 void Iop::start_sio2_infrared(std::uint32_t interrupt_enable) {
-    if(!diagnostic_sio2_timeout_cycles_)
-        throw IopStop{"SIO2 transfer is not modeled (explicit infrared timeout experiment required)"};
+    if(!diagnostic_sio2_timeout_cycles_) {
+        std::string detail="SIO2 transfer is not modeled (explicit infrared timeout experiment required); pc="+hex(pc_)+
+            " control="+hex(interrupt_enable)+" input_bytes="+std::to_string(sio2_input_.size());
+        for(std::size_t n=0;n<std::min<std::size_t>(4u,sio2_input_.size());++n)
+            detail+=" byte"+std::to_string(n)+"="+hex(sio2_input_[n]);
+        throw IopStop{std::move(detail)};
+    }
     if(sio2_complete_at_ || !sio2_control_epoch_ || !sio2_output_.empty())
         throw IopStop{"SIO2 infrared start while busy, unconfigured, or with unread data"};
     std::size_t consumed=0,clocked=0;std::deque<ObservedWord> reply;
@@ -1878,9 +2152,9 @@ void Iop::start_sio2_infrared(std::uint32_t interrupt_enable) {
             if(tx<2u)throw IopStop{"SIO2 digital pad packet does not contain a command"};
             if(sio2_input_[consumed+1u]==0x42u) {
                 if(tx!=5u)throw IopStop{"SIO2 digital pad supports only a five-byte button poll"};
-                const auto buttons=pad_poll_source_
-                    ? static_cast<std::uint16_t>(pad_poll_source_(port,cycle_)|6u)
-                    : *sio2_digital_pads_[port];
+                const auto input=poll_pad_input(port);
+                if(!input)throw IopStop{"SIO2 attached pad has no connected host input"};
+                const auto buttons=static_cast<std::uint16_t>(input->buttons|6u);
                 sio2_digital_pads_[port]=buttons;
                 for(const auto byte:{0xFFu,0x41u,0x5Au,unsigned(buttons&0xFFu),unsigned(buttons>>8u)})
                     reply.push_back({byte,0});
@@ -3964,7 +4238,8 @@ void Iop::tick_video() {
 
 std::uint32_t Iop::ee_sif_read(unsigned index) const {
     const auto name = "SIF register " + hex(0x1000F200u + index * 0x10u) + " read";
-    if (stop_) throw DeviceRefusal(name + " after the IOP stopped (its later state is unknown): " + *stop_);
+    const bool dormant=rom_.empty() && pc_==kResetVector && !cycle_;
+    if (stop_ && !dormant) throw DeviceRefusal(name + " after the IOP stopped (its later state is unknown): " + *stop_);
     switch (index) {
         case 0:
             if (!sif_mscom_) throw DeviceRefusal(name + ": SIF_MSCOM not written since reset");
@@ -4146,6 +4421,9 @@ std::string Iop::code_identity(std::uint32_t pc) const {
     }
     if(physical>=0x1E000000u && physical<0x1E400000u)return "IOP ROM1 sha256="+sha256_hex(rom1_);
     return "IOP ROM0 sha256="+sha256_hex(rom_);
+}
+std::optional<std::pair<std::uint32_t,std::uint32_t>> Iop::native_module_range(std::uint32_t pc) const {
+    return hle_system_?hle_system_->module_range(pc):std::nullopt;
 }
 void Iop::step() {
     if(!begin_instruction())return;

@@ -1,0 +1,1619 @@
+--- a/ps2xRuntime/include/ps2_runtime.h
++++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -4,7 +4,14 @@
+ #include <memory>
+ #ifdef PS2N_SDK_NATIVE_BACKEND
+ #include "ps2native/boot.hpp"
++#include <vector>
++#ifdef PS2N_SDK_HLE
++using R5900Context = ps2native::EEState;
++#else
+ using R5900Context = ps2native::ExecutionContext;
++#endif
++class EeScheduler;
++namespace ps2native { class SdkMemory; }
+ namespace ps2native { const AotModule& sdk_aot_module(); }
+ #else
+ #include <cstring>
+@@ -280,6 +287,27 @@
+ class PS2Runtime
+ {
+ public:
++    EeScheduler& eeScheduler();
++    std::vector<std::string> launchArguments() const;
++    void configureGuestHeap(std::uint32_t base,std::uint32_t limit);
++    std::uint32_t guestHeapBase() const;
++    std::uint32_t guestHeapEnd() const;
++    std::uint32_t guestHeapLimit() const;
++    bool findEeSyscallOverride(std::uint32_t number,std::uint32_t& handler);
++    void setEeSyscallOverride(std::uint8_t*,std::uint32_t number,std::uint32_t handler);
++    void initializeEeKernelState(std::uint8_t*);
++
++    ps2native::SdkMemory& kernelMemory();
++    bool hasFunction(std::uint32_t address) const;
++    std::uint32_t guestMalloc(std::uint32_t bytes, std::uint32_t alignment=16);
++    void guestFree(std::uint32_t address);
++    std::uint32_t reserveAsyncCallbackStack(std::uint32_t bytes, std::uint32_t alignment);
++    void advanceIopEeCycles(std::uint64_t cycles);
++    void pollCanonicalInterrupts();
++    std::uint64_t nextCanonicalEventCycle() const;
++    struct EeExitHandlerRegistration { std::uint32_t function{}, argument{}; };
++    std::vector<EeExitHandlerRegistration> takeEeExitHandlers(int thread);
++    void removeEeExitHandlers(int thread);
+     PS2Runtime();
+     ~PS2Runtime();
+ #ifdef PS2N_SDK_NATIVE_BACKEND
+@@ -465,6 +493,7 @@
+     inline const R5900Context &cpu() const { return m_cpuContext; }
+ 
+     inline PS2Memory &memory() { return m_memory; }
++    inline PS2Memory &kernelMemory() {return memory();}
+     inline const PS2Memory &memory() const { return m_memory; }
+ 
+     inline GS &gs() { return m_gs; }
+--- a/ps2xRuntime/include/ps2_runtime_macros.h
++++ b/ps2xRuntime/include/ps2_runtime_macros.h
+@@ -1,5 +1,8 @@
+ #ifndef PS2_RUNTIME_MACROS_H
+ #define PS2_RUNTIME_MACROS_H
++#ifdef PS2N_SDK_HLE
++#include "sdk/kernel_interface.hpp"
++#else
+ #include <cstdint>
+ #include <cmath>
+ #include <cstring>
+@@ -1028,4 +1031,5 @@
+             ctx_ptr->r[reg_idx] = (val);   \
+     } while (0)
+ 
++#endif // PS2N_SDK_HLE
+ #endif // PS2_RUNTIME_MACROS_H
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -276,8 +276,12 @@
+ 
+     void reset(uint8_t *rdram, const R5900Context &mainContext);
+     void run();
++    R5900Context* prepareDispatch();
++    void finishDispatch();
++    [[nodiscard]] uint64_t nextNativeDeadline() const;
+     void requestStop();
+     void postEvent(EeEvent event);
++    void pollNativeEvents();
+     [[nodiscard]] bool checkpointDue(uint32_t cycles = kGeneratedCheckpointCycles) noexcept;
+     void accountCycles(uint32_t cycles) noexcept;
+     [[nodiscard]] bool isExecutingGuest() const noexcept;
+@@ -324,12 +328,12 @@
+     int addIrqHandler(bool dmac,
+                       uint32_t cause,
+                       uint32_t handler,
+-                      bool append,
++                      int next,
+                       uint32_t argument,
+                       uint32_t gp,
+                       uint32_t sp);
+     int removeIrqHandler(bool dmac, uint32_t cause, int id);
+-    int setIrqHandlerEnabled(bool dmac, int id, bool enabled);
++    int setIrqHandlerEnabled(bool dmac, uint32_t cause, int id, bool enabled);
+     int setIrqCauseEnabled(bool dmac, uint32_t cause, bool enabled);
+     void dispatchIrq(bool dmac, uint32_t cause);
+     void setVSyncFlag(uint32_t flagAddress, uint32_t tickAddress);
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -130,8 +130,10 @@
+     m_gsVSyncCallback = 0;
+     m_gsVSyncCallbackGp = 0;
+     m_gsVSyncCallbackSp = 0;
+-    m_runtime.memory().gs().vsyncTick.store(0u, std::memory_order_release);
+-    m_runtime.memory().resetEeTimers();
++    #ifndef PS2N_SDK_HLE
++    m_runtime.kernelMemory().gs().vsyncTick.store(0u, std::memory_order_release);
++    m_runtime.kernelMemory().resetEeTimers();
++    #endif
+ 
+     GuestThread main{};
+     main.id = kMainThreadId;
+@@ -146,23 +148,95 @@
+     main.status = EeThreadStatus::Ready;
+     m_threads.emplace(main.id, std::move(main));
+     m_readyQueues[0].push_back(kMainThreadId);
++    #ifndef PS2N_SDK_HLE
+     scheduleEvent(m_eeCycle + kVBlankPeriodCycles,
+                   std::chrono::steady_clock::now() + kVBlankPeriod,
+                   EeEvent{EeEventType::VBlankStart, 0, 0});
+-    publishSnapshot();
+-}
+-
++    #endif
++    publishSnapshot();
++}
++
++#ifndef PS2N_SDK_HLE
+ void EeScheduler::run()
+ {
+     assertExecutor();
+     m_running.store(true, std::memory_order_release);
+ 
+     while (!m_stopRequested.load(std::memory_order_acquire))
++    {
++        auto* nextContext=prepareDispatch();
++        if(!nextContext)break;
++        auto& context=*nextContext;
++        auto* running=currentThread();
++
++        if (!m_runtime.hasFunction(context.pc))
++        {
++            if (!running->invocations.empty())
++            {
++                context.pc = 0u;
++            }
++            else
++            {
++                m_runtime.reportMissingFunction(m_rdram,
++                                                &context,
++                                                context.pc,
++                                                context.pc,
++                                                PS2Runtime::GuestBranchKind::DirectJump,
++                                                "EE scheduler");
++                makeDormant(*running);
++                m_currentThreadId = 0;
++            }
++            continue;
++        }
++        PS2Runtime::RecompiledFunction function = m_runtime.lookupFunction(context.pc);
++
++        if (checkpointDue(kGuestDispatchCycles))
++        {
++            continue;
++        }
++
++        try
++        {
++            m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
++            m_guestExecuting.store(true, std::memory_order_release);
++            function(m_rdram, &context, &m_runtime);
++            m_guestExecuting.store(false, std::memory_order_release);
++            m_insideInterrupt = false;
++        }
++        catch (const EeDispatcherTransfer &)
++        {
++            m_guestExecuting.store(false, std::memory_order_release);
++            m_insideInterrupt = false;
++        }
++        catch (...)
++        {
++            m_guestExecuting.store(false, std::memory_order_release);
++            m_running.store(false, std::memory_order_release);
++            publishSnapshot();
++            throw;
++        }
++
++        finishDispatch();
++    }
++
++    m_guestExecuting.store(false, std::memory_order_release);
++    m_running.store(false, std::memory_order_release);
++    copyMainContextToRuntime();
++    publishSnapshot();
++}
++#endif
++R5900Context* EeScheduler::prepareDispatch()
++{
++    assertExecutor();
++#ifdef PS2N_SDK_HLE
++    const auto idleStart=m_runtime.cpu().cycles();
++#endif
++    for (;;)
+     {
+         processPendingEvents();
+         if (m_stopRequested.load(std::memory_order_acquire))
+         {
+-            break;
++            return nullptr;
+         }
+ 
+         if (m_currentThreadId == 0)
+@@ -170,6 +244,10 @@
+             GuestThread *next = selectReady();
+             if (!next && m_pendingInvocations.empty())
+             {
++#ifdef PS2N_SDK_HLE
++                if(m_runtime.cpu().cycles()-idleStart>=kEeClockHz)
++                    throw std::runtime_error("PS2Recomp scheduler has no runnable thread within its bounded canonical wait");
++#endif
+                 copyMainContextToRuntime();
+                 publishIdleDebugContext();
+                 publishSnapshot();
+@@ -266,69 +344,28 @@
+             continue;
+         }
+ 
+-        if (!m_runtime.hasFunction(context.pc))
+-        {
+-            if (!running->invocations.empty())
+-            {
+-                context.pc = 0u;
+-            }
+-            else
+-            {
+-                m_runtime.reportMissingFunction(m_rdram,
+-                                                &context,
+-                                                context.pc,
+-                                                context.pc,
+-                                                PS2Runtime::GuestBranchKind::DirectJump,
+-                                                "EE scheduler");
+-                makeDormant(*running);
+-                m_currentThreadId = 0;
+-            }
+-            continue;
+-        }
+-        PS2Runtime::RecompiledFunction function = m_runtime.lookupFunction(context.pc);
+-
+-        if (checkpointDue(kGuestDispatchCycles))
+-        {
+-            continue;
+-        }
+-
+-        try
+-        {
+-            m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
+-            m_guestExecuting.store(true, std::memory_order_release);
+-            function(m_rdram, &context, &m_runtime);
+-            m_guestExecuting.store(false, std::memory_order_release);
+-            m_insideInterrupt = false;
+-        }
+-        catch (const EeDispatcherTransfer &)
+-        {
+-            m_guestExecuting.store(false, std::memory_order_release);
+-            m_insideInterrupt = false;
+-        }
+-        catch (...)
+-        {
+-            m_guestExecuting.store(false, std::memory_order_release);
+-            m_running.store(false, std::memory_order_release);
+-            publishSnapshot();
+-            throw;
+-        }
+-
+-        processPendingEvents();
+-        if (m_rescheduleRequested && m_currentThreadId != 0)
+-        {
+-            GuestThread *preempted = currentThread();
+-            assert(preempted != nullptr);
+-            enqueueReady(*preempted, !m_timeSliceExpired);
+-            m_currentThreadId = 0;
+-            m_rescheduleRequested = false;
+-            m_timeSliceExpired = false;
+-        }
+-    }
+-
+-    m_guestExecuting.store(false, std::memory_order_release);
+-    m_running.store(false, std::memory_order_release);
+-    copyMainContextToRuntime();
+-    publishSnapshot();
++        m_insideInterrupt=!running->invocations.empty() && running->invocations.back().kind==GuestInvocationKind::Interrupt;
++        return &context;
++    }
++}
++
++uint64_t EeScheduler::nextNativeDeadline() const {
++    const auto event=m_nextDeadlineCycle.load(std::memory_order_acquire);
++    return event?std::min(event,m_sliceEndCycle):m_sliceEndCycle;
++}
++
++void EeScheduler::finishDispatch()
++{
++    processPendingEvents();
++    if (m_rescheduleRequested && m_currentThreadId != 0)
++    {
++        GuestThread* preempted = currentThread();
++        assert(preempted != nullptr);
++        enqueueReady(*preempted, !m_timeSliceExpired);
++        m_currentThreadId = 0;
++        m_rescheduleRequested = false;
++        m_timeSliceExpired = false;
++    }
+ }
+ 
+ void EeScheduler::requestStop()
+@@ -354,6 +391,8 @@
+     m_eventCv.notify_one();
+ }
+ 
++void EeScheduler::pollNativeEvents() {processPendingEvents();}
++
+ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+ {
+     accountCycles(cycles);
+@@ -392,12 +431,14 @@
+ {
+     const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
+     m_eeCycle += elapsed;
+-    m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
++#ifndef PS2N_SDK_HLE
++    m_pendingEeTimerInterrupts |= m_runtime.kernelMemory().advanceEeTimers(elapsed);
+     m_runtime.advanceIopEeCycles(elapsed);
+     if (m_pendingEeTimerInterrupts != 0u)
+     {
+         m_checkpointPending.store(true, std::memory_order_release);
+     }
++#endif
+ }
+ 
+ bool EeScheduler::isExecutingGuest() const noexcept
+@@ -1183,13 +1224,19 @@
+ int EeScheduler::addIrqHandler(bool dmac,
+                                uint32_t cause,
+                                uint32_t handler,
+-                               bool append,
++                               int next,
+                                uint32_t argument,
+                                uint32_t gp,
+                                uint32_t sp)
+ {
+     assertExecutor();
+     auto &handlers = dmac ? m_dmacHandlers : m_intcHandlers;
++    if(cause>=(dmac?10u:15u) || !handler || !m_runtime.hasFunction(handler))return KE_ERROR;
++    auto position=handlers.end();
++    if(next>0) {
++        position=handlers.find(next);
++        if(position==handlers.end() || position->second.cause!=cause)return KE_ERROR;
++    } else if(next!=-1 && next!=0)return KE_ERROR;
+     int &nextId = dmac ? m_nextDmacHandlerId : m_nextIntcHandlerId;
+     const int id = allocatePositiveId(nextId, handlers);
+     if (id == 0)
+@@ -1198,6 +1245,12 @@
+     }
+     int &head = dmac ? m_dmacHeadOrder : m_intcHeadOrder;
+     int &tail = dmac ? m_dmacTailOrder : m_intcTailOrder;
++    int order;
++    if(position!=handlers.end()) {
++        order=position->second.order;
++        for(auto& entry:handlers)if(entry.second.cause==cause && entry.second.order>=order)++entry.second.order;
++        ++tail;
++    } else order=next==-1?++tail:--head;
+     handlers.emplace(id,
+                      EeIrqHandler{id,
+                                   cause,
+@@ -1206,7 +1259,7 @@
+                                   gp,
+                                   sp,
+                                   true,
+-                                  append ? ++tail : --head});
++                                  order});
+     return id;
+ }
+ 
+@@ -1215,28 +1268,31 @@
+     assertExecutor();
+     auto &handlers = dmac ? m_dmacHandlers : m_intcHandlers;
+     auto it = handlers.find(id);
+-    if (it != handlers.end() && it->second.cause == cause)
+-    {
+-        handlers.erase(it);
+-    }
+-    return KE_OK;
+-}
+-
+-int EeScheduler::setIrqHandlerEnabled(bool dmac, int id, bool enabled)
++    if(it==handlers.end() || it->second.cause!=cause)return KE_ERROR;
++    handlers.erase(it);
++    return static_cast<int>(std::count_if(handlers.begin(),handlers.end(),
++        [cause](const auto& entry){return entry.second.cause==cause;}));
++}
++
++int EeScheduler::setIrqHandlerEnabled(bool dmac, uint32_t cause, int id, bool enabled)
+ {
+     assertExecutor();
+     auto &handlers = dmac ? m_dmacHandlers : m_intcHandlers;
+     auto it = handlers.find(id);
+-    if (it != handlers.end())
++    if (it != handlers.end() && it->second.cause==cause)
+     {
+         it->second.enabled = enabled;
+-    }
+-    return KE_OK;
++        return KE_OK;
++    }
++    return KE_ERROR;
+ }
+ 
+ int EeScheduler::setIrqCauseEnabled(bool dmac, uint32_t cause, bool enabled)
+ {
+     assertExecutor();
++#ifdef PS2N_SDK_HLE
++    return m_runtime.kernelMemory().setIrqCauseEnabled(dmac,cause,enabled);
++#else
+     if (cause < 32u)
+     {
+         uint32_t &mask = dmac ? m_enabledDmacMask : m_enabledIntcMask;
+@@ -1250,16 +1306,21 @@
+         }
+     }
+     return KE_OK;
++#endif
+ }
+ 
+ void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
+ {
+     assertExecutor();
++#ifdef PS2N_SDK_HLE
++    if(!m_runtime.kernelMemory().irqCauseEnabled(dmac,cause))return;
++#else
+     const uint32_t mask = dmac ? m_enabledDmacMask : m_enabledIntcMask;
+     if (cause < 32u && (mask & (1u << cause)) == 0u)
+     {
+         return;
+     }
++#endif
+     const auto &handlers = dmac ? m_dmacHandlers : m_intcHandlers;
+     std::vector<EeIrqHandler> matching;
+     for (const auto &[id, handler] : handlers)
+@@ -1277,6 +1338,9 @@
+     {
+         GuestInvocation invocation{};
+         invocation.kind = GuestInvocationKind::Interrupt;
++#ifdef PS2N_SDK_HLE
++        invocation.context.set_reg64_observed(6,0,~0ull);
++#endif
+         invocation.context.pc = handler.handler;
+         SET_GPR_U32(&invocation.context, 4, cause);
+         SET_GPR_U32(&invocation.context, 5, handler.argument);
+@@ -1299,7 +1363,11 @@
+         if (m_rdram && physical <= PS2_RAM_SIZE - sizeof(uint64_t))
+         {
+             const uint64_t zero = 0u;
++#ifdef PS2N_SDK_HLE
++            m_runtime.kernelMemory().write64(tickAddress,zero);
++#else
+             std::memcpy(m_rdram + physical, &zero, sizeof(zero));
++#endif
+         }
+     }
+ }
+@@ -1781,7 +1849,11 @@
+         std::chrono::steady_clock::time_point pacingDeadline{};
+         {
+             std::unique_lock lock(m_eventMutex);
++#ifdef PS2N_SDK_HLE
++            const auto now=std::chrono::steady_clock::time_point::max();
++#else
+             const auto now = std::chrono::steady_clock::now();
++#endif
+             for (const ScheduledEvent &item : m_deadlines)
+             {
+                 if (item.deadlineCycle <= m_eeCycle &&
+@@ -1810,7 +1882,11 @@
+                 }
+             }
+ 
++#ifdef PS2N_SDK_HLE
++            const auto pacedNow=std::chrono::steady_clock::time_point::max();
++#else
+             const auto pacedNow = std::chrono::steady_clock::now();
++#endif
+             auto firstFuture = std::partition(m_deadlines.begin(), m_deadlines.end(),
+                                               [this, pacedNow](const ScheduledEvent &item)
+                                               { return item.deadlineCycle <= m_eeCycle &&
+@@ -1845,6 +1921,7 @@
+ 
+         for (ScheduledEvent &scheduled : due)
+         {
++#ifndef PS2N_SDK_HLE
+             if (scheduled.event.type == EeEventType::VBlankStart)
+             {
+                 scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
+@@ -1854,6 +1931,7 @@
+                               scheduled.hostDeadline + kVBlankPeriod,
+                               EeEvent{EeEventType::VBlankStart, 0, 0});
+             }
++#endif
+             processEvent(scheduled.event);
+         }
+     }
+@@ -1868,22 +1946,28 @@
+         break;
+     case EeEventType::VBlankStart:
+         ++m_vsyncTick;
+-        m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
++#ifndef PS2N_SDK_HLE
++        m_runtime.kernelMemory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+         if ((m_vsyncTick & 1u) != 0u)
+         {
+-            m_runtime.memory().gs().csr.fetch_or(0x2000ull, std::memory_order_acq_rel);
++            m_runtime.kernelMemory().gs().csr.fetch_or(0x2000ull, std::memory_order_acq_rel);
+         }
+         else
+         {
+-            m_runtime.memory().gs().csr.fetch_and(~0x2000ull, std::memory_order_acq_rel);
+-        }
++            m_runtime.kernelMemory().gs().csr.fetch_and(~0x2000ull, std::memory_order_acq_rel);
++        }
++#endif
+         writeGuestU32(m_vsyncFlagAddress, 1u);
+         if (m_vsyncTickAddress != 0u)
+         {
+             const uint32_t physical = m_vsyncTickAddress & 0x1FFFFFFFu;
+             if (m_rdram && physical <= PS2_RAM_SIZE - sizeof(uint64_t))
+             {
++#ifdef PS2N_SDK_HLE
++                m_runtime.kernelMemory().write64(m_vsyncTickAddress,m_vsyncTick);
++#else
+                 std::memcpy(m_rdram + physical, &m_vsyncTick, sizeof(m_vsyncTick));
++#endif
+             }
+         }
+         m_vsyncFlagAddress = 0u;
+@@ -1900,13 +1984,17 @@
+             SET_GPR_U32(&invocation.context, 31, 0u);
+             queueInvocation(std::move(invocation));
+         }
++#ifndef PS2N_SDK_HLE
+         dispatchIrq(false, 2u);
++#endif
+         break;
+     case EeEventType::ExternalWake:
+         completeExternalWait(event.id, event.value, KE_OK);
+         break;
+     case EeEventType::VBlankEnd:
++#ifndef PS2N_SDK_HLE
+         dispatchIrq(false, 3u);
++#endif
+         break;
+     case EeEventType::Dmac:
+         break;
+@@ -1991,17 +2079,38 @@
+     {
+         return;
+     }
++    #ifdef PS2N_SDK_HLE
++    m_runtime.kernelMemory().write32(address, value);
++#else
+     std::memcpy(m_rdram + physical, &value, sizeof(value));
++#endif
+ }
+ 
+ void EeScheduler::waitForEvent()
+ {
++#ifdef PS2N_SDK_HLE
++    if(m_deadlines.empty() && !m_runtime.kernelMemory().hasCanonicalEvent())
++        throw std::runtime_error("PS2Recomp scheduler has no runnable thread or pending canonical device event");
++    const auto start=m_runtime.cpu().cycles();
++    while(m_runtime.cpu().cycles()-start<kEeClockHz) {
++        m_runtime.pollCanonicalInterrupts();
++        m_eeCycle=m_runtime.cpu().cycles();processDueDeadlines();
++        if(!m_events.empty() || !m_pendingInvocations.empty() || hasReadyAtOrAbovePriority(kPriorityCount-1) ||
++           m_stopRequested.load(std::memory_order_acquire))return;
++        const auto alarm=m_nextDeadlineCycle.load(std::memory_order_acquire);
++        const auto device=m_runtime.nextCanonicalEventCycle();
++        const auto next=alarm?std::min(alarm,device):device;
++        const auto step=next>m_eeCycle?std::min<uint64_t>(65536u,next-m_eeCycle):8u;
++        m_runtime.advanceIopEeCycles(step);
++    }
++    throw std::runtime_error("PS2Recomp scheduler has no runnable thread or canonical device event within its bounded wait");
++#else
+     std::unique_lock lock(m_eventMutex);
+     if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
+     {
+         return;
+     }
+-    const uint64_t timerCycles = m_runtime.memory().cyclesUntilNextEeTimerInterrupt();
++    const uint64_t timerCycles = m_runtime.kernelMemory().cyclesUntilNextEeTimerInterrupt();
+     const bool hasTimerDeadline = timerCycles != std::numeric_limits<uint64_t>::max();
+     if (m_deadlines.empty() && !hasTimerDeadline)
+     {
+@@ -2052,6 +2161,7 @@
+         }
+         m_checkpointPending.store(true, std::memory_order_release);
+     }
++#endif
+ }
+ 
+ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
+@@ -2109,16 +2219,20 @@
+     const GuestThread *main = thread(kMainThreadId);
+     if (main)
+     {
++        #ifndef PS2N_SDK_HLE
+         m_runtime.m_cpuContext = main->context;
++#endif
+     }
+ }
+ 
+ void EeScheduler::publishDebugContext(const R5900Context &context)
+ {
++#ifndef PS2N_SDK_HLE
+     m_runtime.m_debugPc.store(context.pc, std::memory_order_relaxed);
+     m_runtime.m_debugRa.store(getRegU32(&context, 31), std::memory_order_relaxed);
+     m_runtime.m_debugSp.store(getRegU32(&context, 29), std::memory_order_relaxed);
+     m_runtime.m_debugGp.store(getRegU32(&context, 28), std::memory_order_relaxed);
++#endif
+ }
+ 
+ void EeScheduler::publishIdleDebugContext()
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
+@@ -1,3 +1,26 @@
++#ifdef PS2N_SDK_HLE
++#include "sdk_kernel_common.hpp"
++namespace ps2_stubs {
++void sceSifStopDma(uint8_t*,R5900Context* ctx,PS2Runtime* runtime) {
++    runtime->kernelMemory().write32(0xB000C000u,0);setReturnS32(ctx,0);
++}
++void sceSifSetDma(uint8_t*,R5900Context* ctx,PS2Runtime* runtime) {
++    setReturnS32(ctx,runtime->kernelMemory().setSifDma(getRegU32(ctx,4),getRegU32(ctx,5)));
++}
++void sceSifDmaStat(uint8_t*,R5900Context* ctx,PS2Runtime* runtime) {
++    setReturnS32(ctx,runtime->kernelMemory().sifDmaStat(getRegU32(ctx,4)));
++}
++void sceSifSetDChain(uint8_t*,R5900Context* ctx,PS2Runtime* runtime) {
++    runtime->kernelMemory().setSifDChain();setReturnS32(ctx,0);
++}
++void sceSifSetReg(uint8_t*,R5900Context* ctx,PS2Runtime* runtime) {
++    setReturnU32(ctx,runtime->kernelMemory().sifReg(getRegU32(ctx,4),getRegU32(ctx,5)));
++}
++void sceSifGetReg(uint8_t*,R5900Context* ctx,PS2Runtime* runtime) {
++    setReturnU32(ctx,runtime->kernelMemory().sifReg(getRegU32(ctx,4),{}));
++}
++}
++#else
+ #include "Common.h"
+ #include "SIF.h"
+ #include "../Syscalls/RPC.h"
+@@ -845,3 +868,5 @@
+         setReturnS32(ctx, 0);
+     }
+ }
++
++#endif
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Deci2.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Deci2.cpp
+@@ -13,11 +13,30 @@
+         bool locked = false;
+     };
+ 
++#ifdef PS2N_SDK_HLE
++    struct Deci2State {
++        std::mutex mutex;
++        std::unordered_map<int32_t,Deci2Session> sessions;
++        int32_t next=1;
++        std::atomic<uint32_t> logs{0};
++    };
++    Deci2State& deci2State() {
++        auto& slot=ps2native::sdk_kernel_service_slot(0);
++        if(!slot)slot=std::make_shared<Deci2State>();
++        return *std::static_pointer_cast<Deci2State>(slot);
++    }
++#define g_deci2Mutex (deci2State().mutex)
++#define g_deci2Sessions (deci2State().sessions)
++#define g_nextDeci2Socket (deci2State().next)
++#define g_deci2LogCount (deci2State().logs)
++#else
+     std::mutex g_deci2Mutex;
+     std::unordered_map<int32_t, Deci2Session> g_deci2Sessions;
+     int32_t g_nextDeci2Socket = 1;
+     std::atomic<uint32_t> g_deci2LogCount{0};
+ 
++#endif
++
+     static bool readDeci2U32(uint8_t *rdram, uint32_t guestAddr, uint32_t &value)
+     {
+         value = 0;
+@@ -32,9 +51,9 @@
+         return true;
+     }
+ 
+-    static void readDeci2Args(uint8_t *rdram, uint32_t argsAddr, uint32_t args[4])
+-    {
+-        for (uint32_t argIndex = 0; argIndex < 4; argIndex++)
++    static void readDeci2Args(uint8_t *rdram, uint32_t argsAddr, uint32_t args[4], uint32_t count=4u)
++    {
++        for (uint32_t argIndex = 0; argIndex < count; argIndex++)
+         {
+             uint32_t value = 0;
+             readDeci2U32(rdram, argsAddr + (argIndex * sizeof(uint32_t)), value);
+@@ -88,7 +107,7 @@
+             g_nextDeci2Socket = 1;
+         }
+ 
+-        const int32_t socket = g_nextDeci2Socket;
++        const int32_t socket = g_nextDeci2Socket++;
+         Deci2Session session;
+         session.protocol = protocol;
+         session.opt = opt;
+@@ -100,18 +119,19 @@
+         return socket;
+     }
+ 
+-    static bool updateDeci2LockState(int32_t socket, bool locked)
++    static int32_t updateDeci2LockState(int32_t socket, bool locked)
+     {
+         std::lock_guard<std::mutex> lock(g_deci2Mutex);
+ 
+         auto sessionIt = g_deci2Sessions.find(socket);
+         if (sessionIt == g_deci2Sessions.end())
+         {
+-            return false;
+-        }
+-
++            return -2;
++        }
++
++        if(sessionIt->second.locked==locked)return locked?-8:-9;
+         sessionIt->second.locked = locked;
+-        return true;
++        return 0;
+     }
+ 
+     static bool closeDeci2Socket(int32_t socket)
+@@ -125,13 +145,21 @@
+ {
+     void Deci2Call(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-#if defined(_DEBUG) || defined(RUNTIME_DECI2CALL)
++#if defined(_DEBUG) || defined(RUNTIME_DECI2CALL) || defined(PS2N_SDK_HLE)
+         const int32_t code = static_cast<int32_t>(getRegU32(ctx, 4));
+         const uint32_t argsAddr = getRegU32(ctx, 5);
+ 
+         uint32_t args[4] = {};
++#ifdef PS2N_SDK_HLE
++        readDeci2Args(rdram,argsAddr,args,code==1?4u:1u);
++#else
+         readDeci2Args(rdram, argsAddr, args);
+-
++#endif
++
++#ifdef PS2N_SDK_HLE
++        // The canonical console has no attached host debugger transport.
++        if(code==3 || code==-6 || code==-7){setReturnS32(ctx,-10);return;}
++#endif
+         switch (code)
+         {
+         case 1: // sceDeci2Open(protocol, opt, handler)
+@@ -148,7 +176,7 @@
+         case 2: // sceDeci2Close(socket)
+         {
+             const int32_t socket = static_cast<int32_t>(args[0]);
+-            setReturnS32(ctx, closeDeci2Socket(socket) ? KE_OK : KE_ERROR);
++            setReturnS32(ctx, closeDeci2Socket(socket) ? KE_OK : -2);
+             return;
+         }
+         // WE dont need to do thouses
+@@ -177,7 +205,11 @@
+                 text.reserve(clampedLength);
+                 for (uint32_t byteIndex = 0; byteIndex < clampedLength; byteIndex++)
+                 {
++                    #ifdef PS2N_SDK_HLE
++                    text.push_back(static_cast<char>(ps2native::sdk_kernel_memory().read8(bufferAddr+byteIndex)));
++#else
+                     text.push_back(static_cast<char>(rdram[(bufferAddr + byteIndex) & PS2_RAM_MASK]));
++#endif
+                 }
+                 logDeci2Text("[Deci2Call:send] ", text);
+             }
+@@ -189,13 +221,13 @@
+         case -8: // sceDeci2ExLock(socket)
+         {
+             const int32_t socket = static_cast<int32_t>(args[0]);
+-            setReturnS32(ctx, updateDeci2LockState(socket, true) ? KE_OK : KE_ERROR);
++            setReturnS32(ctx, updateDeci2LockState(socket, true));
+             return;
+         }
+         case -9: // sceDeci2ExUnLock(socket)
+         {
+             const int32_t socket = static_cast<int32_t>(args[0]);
+-            setReturnS32(ctx, updateDeci2LockState(socket, false) ? KE_OK : KE_ERROR);
++            setReturnS32(ctx, updateDeci2LockState(socket, false));
+             return;
+         }
+         case 16: // kputs(char *s)
+@@ -210,6 +242,9 @@
+         }
+         default:
+         {
++#ifdef PS2N_SDK_HLE
++            throw std::runtime_error("unsupported PS2Recomp DECI2 operation "+std::to_string(code));
++#endif
+             static std::atomic<uint32_t> s_unknownDeci2Logs{0u};
+             constexpr uint32_t kMaxUnknownDeci2Logs = 64u;
+             const uint32_t logIndex = s_unknownDeci2Logs.fetch_add(1u, std::memory_order_relaxed);
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp
+@@ -13,6 +13,16 @@
+ 
+         switch (syscallNumber)
+         {
++#ifdef PS2N_SDK_HLE
++        case 0x6B:
++            ps2_stubs::sceSifStopDma(rdram,ctx,runtime);return true;
++        case 0x05: {
++            auto* thread=runtime->eeScheduler().currentThread();
++            if(!thread || thread->invocations.empty() || thread->invocations.back().kind!=GuestInvocationKind::Interrupt)
++                throw std::runtime_error("ExitHandler requires an active HLE interrupt");
++            ctx->pc=0;return true;
++        }
++#endif
+         case 0x01:
+             ResetEE(rdram, ctx, runtime);
+             return true;
+@@ -222,9 +232,11 @@
+         case static_cast<uint32_t>(-0x5A):
+             iReferEventFlagStatus(rdram, ctx, runtime);
+             return true;
++#ifndef PS2N_SDK_HLE
+         case 0x5A:
+             Copy(rdram, ctx, runtime);
+             return true;
++#endif
+         case 0x5B:
+             GetEntryAddress(rdram, ctx, runtime);
+             return true;
+@@ -314,16 +326,20 @@
+         case 0x7F:
+             GetMemorySize(rdram, ctx, runtime);
+             return true;
++#ifndef PS2N_SDK_HLE
+         case 0x82:
+             InitTLB(rdram, ctx, runtime);
+             return true;
++#endif
+         case 0x7C:
+         case static_cast<uint32_t>(-0x7C):
+             Deci2Call(rdram, ctx, runtime);
+             return true;
++#ifndef PS2N_SDK_HLE
+         case 0x83:
+             FindAddress(rdram, ctx, runtime);
+             return true;
++#endif
+         case 0x85:
+             SetMemoryMode(rdram, ctx, runtime);
+             return true;
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
+@@ -32,7 +32,7 @@
+                                .addIrqHandler(dmac,
+                                               getRegU32(ctx, 4),
+                                               getRegU32(ctx, 5),
+-                                              getRegU32(ctx, 6) != 0u,
++                                              static_cast<int>(getRegU32(ctx, 6)),
+                                               getRegU32(ctx, 7),
+                                               getRegU32(ctx, 28),
+                                               getRegU32(ctx, 29));
+@@ -60,6 +60,7 @@
+             setReturnS32(ctx,
+                          scheduler(rdram, ctx, runtime)
+                              .setIrqHandlerEnabled(dmac,
++                                                   getRegU32(ctx,4),
+                                                    static_cast<int>(getRegU32(ctx, 5)),
+                                                    enabled));
+         }
+@@ -85,8 +86,8 @@
+     {
+         const uint32_t flagAddress = getRegU32(ctx, 4);
+         const uint32_t tickAddress = getRegU32(ctx, 5);
+-        if ((flagAddress != 0u && !getEeGuestStruct<uint32_t>(rdram, flagAddress)) ||
+-            (tickAddress != 0u && !getEeGuestStruct<uint64_t>(rdram, tickAddress)))
++        if ((flagAddress != 0u && !getEeGuestOutput<uint32_t>(rdram, flagAddress)) ||
++            (tickAddress != 0u && !getEeGuestOutput<uint64_t>(rdram, tickAddress)))
+         {
+             setReturnS32(ctx, KE_ERROR);
+             return;
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Sync.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Sync.cpp
+@@ -131,7 +131,7 @@
+             setReturnS32(ctx, KE_UNKNOWN_SEMID);
+             return;
+         }
+-        auto *status = getEeGuestStruct<ee_sema_t>(rdram, getRegU32(ctx, 5));
++        auto *status = getEeGuestOutput<ee_sema_t>(rdram, getRegU32(ctx, 5));
+         if (!status)
+         {
+             setReturnS32(ctx, KE_ERROR);
+@@ -230,7 +230,7 @@
+             return;
+         }
+         const uint32_t resultAddress = getRegU32(ctx, 7);
+-        if (resultAddress != 0u && !getEeGuestStruct<uint32_t>(rdram, resultAddress))
++        if (resultAddress != 0u && !getEeGuestOutput<uint32_t>(rdram, resultAddress))
+         {
+             setReturnS32(ctx, KE_ERROR);
+             return;
+@@ -268,7 +268,7 @@
+         uint32_t *output = nullptr;
+         if (getRegU32(ctx, 7) != 0u)
+         {
+-            output = getEeGuestStruct<uint32_t>(rdram, getRegU32(ctx, 7));
++            output = getEeGuestOutput<uint32_t>(rdram, getRegU32(ctx, 7));
+             if (!output)
+             {
+                 setReturnS32(ctx, KE_ERROR);
+@@ -309,7 +309,7 @@
+             setReturnS32(ctx, KE_UNKNOWN_EVFID);
+             return;
+         }
+-        auto *status = getEeGuestStruct<EeEventFlagStatus>(rdram, getRegU32(ctx, 5));
++        auto *status = getEeGuestOutput<EeEventFlagStatus>(rdram, getRegU32(ctx, 5));
+         if (!status)
+         {
+             setReturnS32(ctx, KE_ERROR);
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+@@ -11,7 +11,10 @@
+ 
+         if (runtime)
+         {
+-            auto &gs = runtime->memory().gs();
++#ifdef PS2N_SDK_HLE
++            runtime->kernelMemory().validateCrtMode(interlaced,videoMode,frameMode);
++#endif
++            auto &gs = runtime->kernelMemory().gs();
+             const uint64_t smode2 =
+                 (static_cast<uint64_t>(interlaced) & 0x1ull) |
+                 ((static_cast<uint64_t>(frameMode) & 0x1ull) << 1);
+@@ -30,11 +33,13 @@
+                                                 << ", frameMode=" << frameMode << std::endl);
+ 
+         setReturnS32(ctx, 0);
++
+     }
+ 
+     void SetGsCrt(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         GsSetCrt(rdram, ctx, runtime);
++
+     }
+ 
+     void GsGetIMR(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+@@ -42,7 +47,7 @@
+         uint64_t imr = 0;
+         if (runtime)
+         {
+-            imr = runtime->memory().gs().imr;
++            imr = runtime->kernelMemory().gs().imr;
+         }
+ 
+         RUNTIME_LOG("PS2 GsGetIMR: Returning IMR=0x" << std::hex << imr
+@@ -51,11 +56,13 @@
+                                                      << std::dec << std::endl);
+ 
+         setReturnU64(ctx, imr); // Return in $v0/$v1
++
+     }
+ 
+     void iGsGetIMR(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         GsGetIMR(rdram, ctx, runtime);
++
+     }
+ 
+     void GsPutIMR(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+@@ -64,8 +71,8 @@
+         uint64_t oldImr = 0;
+         if (runtime)
+         {
+-            oldImr = runtime->memory().gs().imr;
+-            runtime->memory().gs().imr = newImr;
++            oldImr = runtime->kernelMemory().gs().imr;
++            runtime->kernelMemory().gs().imr = newImr;
+         }
+         RUNTIME_LOG("PS2 GsPutIMR: " << " new=0x" << newImr
+                                      << " a0_64=0x" << GPR_U64(ctx, 4)
+@@ -75,20 +82,26 @@
+                                      << " ra=0x" << getRegU32(ctx, 31)
+                                      << std::dec << std::endl);
+         setReturnU64(ctx, oldImr);
++
+     }
+ 
+     void iGsPutIMR(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         GsPutIMR(rdram, ctx, runtime);
++
+     }
+ 
+     void GsSetVideoMode(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifndef PS2N_SDK_HLE
+         int mode = getRegU32(ctx, 4); // $a0 - video mode (various flags)
+ 
+         RUNTIME_LOG("PS2 GsSetVideoMode: mode=0x" << std::hex << mode << std::dec);
+ 
+         // Do nothing for now.
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: GsSetVideoMode");
++#endif
+     }
+ 
+     void GetOsdConfigParam(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+@@ -172,7 +185,7 @@
+ 
+         for (uint32_t i = 0; i < copyBytes; ++i)
+         {
+-            const uint8_t *src = getConstMemPtr(rdram, paramAddr + i);
++            const uint8_t *src = getEeGuestStruct<uint8_t>(rdram, paramAddr + i);
+             if (!src)
+             {
+                 std::cerr << "PS2 SetOsdConfigParam2 error: Invalid parameter address: 0x"
+@@ -236,7 +249,7 @@
+ 
+         for (uint32_t i = 0; i < copyBytes; ++i)
+         {
+-            uint8_t *dst = getMemPtr(rdram, paramAddr + i);
++            uint8_t *dst = getEeGuestOutput<uint8_t>(rdram, paramAddr + i);
+             if (!dst)
+             {
+                 std::cerr << "PS2 GetOsdConfigParam2 error: Invalid parameter address: 0x"
+@@ -252,6 +265,7 @@
+ 
+     void SifLoadElfPart(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifndef PS2N_SDK_HLE
+         const uint32_t pathAddr = getRegU32(ctx, 4);     // $a0 - path
+         const uint32_t secNameAddr = getRegU32(ctx, 5);  // $a1 - section name ("all" typically)
+         const uint32_t execDataAddr = getRegU32(ctx, 6); // $a2 - t_ExecData*
+@@ -264,29 +278,45 @@
+ 
+         const int32_t ret = runSifLoadElfPart(rdram, ctx, runtime, pathAddr, secName, execDataAddr);
+         setReturnS32(ctx, ret);
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: SifLoadElfPart");
++#endif
+     }
+ 
+     void sceSifLoadElf(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifndef PS2N_SDK_HLE
+         const uint32_t pathAddr = getRegU32(ctx, 4);     // $a0 - path
+         const uint32_t execDataAddr = getRegU32(ctx, 5); // $a1 - t_ExecData*
+         const int32_t ret = runSifLoadElfPart(rdram, ctx, runtime, pathAddr, "all", execDataAddr);
+         setReturnS32(ctx, ret);
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: sceSifLoadElf");
++#endif
+     }
+ 
+     void sceSifLoadElfPart(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifndef PS2N_SDK_HLE
+         SifLoadElfPart(rdram, ctx, runtime);
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: sceSifLoadElfPart");
++#endif
+     }
+ 
+     void sceSifLoadModule(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifndef PS2N_SDK_HLE
+         // Use the same tracker as SifLoadModule so both APIs return the same module IDs.
+         SifLoadModule(rdram, ctx, runtime);
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: sceSifLoadModule");
++#endif
+     }
+ 
+     void sceSifLoadModuleBuffer(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifndef PS2N_SDK_HLE
+         const uint32_t bufferAddr = getRegU32(ctx, 4);   // $a0
+         const uint32_t argumentSize = getRegU32(ctx, 5); // $a1
+         const uint32_t argumentAddr = getRegU32(ctx, 6); // $a2
+@@ -321,10 +351,14 @@
+         trackSifModuleLoadExternal(moduleTag, loaded.moduleId);
+         logSifModuleAction("load-buffer-emulated", loaded.moduleId, moduleTag, 1u);
+         setReturnS32(ctx, loaded.moduleId);
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: sceSifLoadModuleBuffer");
++#endif
+     }
+ 
+     void TODO(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t encodedSyscallId)
+     {
++#ifndef PS2N_SDK_HLE
+         // a bit more detail mayber reomve old logic, lets get it more raw
+         std::cerr << "[Syscall TODO]"
+                   << " encoded=0x" << std::hex << encodedSyscallId
+@@ -384,6 +418,9 @@
+ 
+         // Bootstrap default: avoid hard-failing loops that probe syscall availability.
+         setReturnS32(ctx, 0);
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: TODO");
++#endif
+     }
+ 
+     bool dispatchSyscallOverride(uint32_t syscallNumber, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+@@ -418,7 +455,13 @@
+         SET_GPR_U32(&invocation.context, 31, 0u);
+         invocation.onComplete = [](const R5900Context &completed, R5900Context &parent)
+         {
++#ifdef PS2N_SDK_HLE
++            parent.set_reg128_observed(2,completed.gpr[2].low,completed.gpr[2].high,
++                completed.unknown_gpr_bits[2],completed.unknown_gpr_high_bits[2]);
++            parent.gpr_candidates[2]=completed.gpr_candidates[2];
++#else
+             parent.r[2] = completed.r[2];
++#endif
+         };
+         scheduler.invokeCurrent(std::move(invocation));
+     }
+@@ -463,6 +506,11 @@
+     {
+         const uint32_t syscallIndex = getRegU32(ctx, 4);
+         const uint32_t handler = getRegU32(ctx, 5);
++#ifdef PS2N_SDK_HLE
++        if(syscallIndex>=256u || (handler && !runtime->hasFunction(handler))) {
++            setReturnS32(ctx,KE_ERROR);return;
++        }
++#endif
+         runtime->setEeSyscallOverride(rdram, syscallIndex, handler);
+ 
+         setReturnS32(ctx, 0);
+@@ -476,6 +524,29 @@
+         const uint32_t stack = getRegU32(ctx, 5);
+         const int32_t stackSizeSigned = static_cast<int32_t>(getRegU32(ctx, 6));
+         const uint32_t currentSp = getRegU32(ctx, 29);
++#ifdef PS2N_SDK_HLE
++        // ps2sdk startup.h sargs: argc, sixteen argv pointers, 256 payload bytes.
++        // The host supplies launch arguments from the mounted content's BOOT2.
++        const auto argumentAddress=getRegU32(ctx,7);
++        const auto arguments=runtime->launchArguments();
++        constexpr uint32_t maxArguments=16u,payloadBytes=256u,payloadOffset=4u+maxArguments*4u;
++        if(argumentAddress) {
++            size_t bytes=0;
++            for(const auto& argument:arguments)bytes+=argument.size()+1u;
++            if((argumentAddress&3u) || arguments.size()>maxArguments || bytes>payloadBytes ||
++               !runtime->kernelMemory().validateGuestRange(argumentAddress,payloadOffset+payloadBytes,true)) {
++                setReturnS32(ctx,KE_ERROR);return;
++            }
++            for(uint32_t i=0;i<payloadOffset+payloadBytes;++i)runtime->kernelMemory().write8(argumentAddress+i,0);
++            uint32_t offset=payloadOffset;
++            for(size_t i=0;i<arguments.size();++i) {
++                runtime->kernelMemory().write32(argumentAddress+4u+static_cast<uint32_t>(i)*4u,argumentAddress+offset);
++                for(const auto byte:arguments[i])runtime->kernelMemory().write8(argumentAddress+offset++,static_cast<uint8_t>(byte));
++                ++offset;
++            }
++            runtime->kernelMemory().write32(argumentAddress,static_cast<uint32_t>(arguments.size()));
++        }
++#endif
+         EeScheduler &scheduler = runtime->eeScheduler();
+         scheduler.bindMainContextForSyscall(*ctx, rdram);
+ 
+@@ -559,6 +630,11 @@
+ 
+         if (runtime)
+         {
++#ifdef PS2N_SDK_HLE
++            if(heapBase>=heapLimit || !runtime->kernelMemory().validateGuestRange(heapBase,heapLimit-heapBase,true)) {
++                setReturnS32(ctx,KE_ERROR);return;
++            }
++#endif
+             runtime->configureGuestHeap(heapBase, heapLimit);
+ 
+             PS2_IF_AGRESSIVE_LOGS({
+@@ -601,9 +677,10 @@
+ 
+     void InitTLB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifndef PS2N_SDK_HLE
+         (void)rdram;
+         // TODO I`m 99% sure we dont need this we could just return ok and should be fine.
+-        auto &memory = runtime->memory();
++        auto &memory = runtime->kernelMemory();
+ 
+         const uint32_t entryCount = static_cast<uint32_t>(memory.tlbEntryCount());
+         for (uint32_t entryIndex = 0; entryIndex < entryCount; ++entryIndex)
+@@ -621,6 +698,9 @@
+         ctx->cop0_entryhi = 0u;
+ 
+         setReturnS32(ctx, KE_OK);
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: InitTLB");
++#endif
+     }
+ 
+     static inline uint32_t normalizeKernelAlias(uint32_t addr)
+@@ -790,6 +870,7 @@
+     // Returns the guest address of the matching word entry, or 0 if not found.
+     void FindAddress(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifndef PS2N_SDK_HLE
+         (void)runtime;
+ 
+         constexpr uint32_t kFindAddressWordSamples = 8u;
+@@ -911,11 +992,15 @@
+                                   matchCount);
+ 
+         setReturnU32(ctx, resultAddr);
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: FindAddress");
++#endif
+     }
+ 
+     // QueryBootMode (stub): return 0 for now
+     void QueryBootMode(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifndef PS2N_SDK_HLE
+         uint32_t mode = getRegU32(ctx, 4);
+         ensureBootModeTable(rdram);
+         uint32_t addr = 0;
+@@ -926,11 +1011,15 @@
+                 addr = it->second;
+         }
+         setReturnU32(ctx, addr);
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: QueryBootMode");
++#endif
+     }
+ 
+     // GetThreadTLS (stub): return 0
+     void GetThreadTLS(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifndef PS2N_SDK_HLE
+         EeScheduler &ee = runtime->eeScheduler();
+         ee.bindMainContextForSyscall(*ctx, rdram);
+         GuestThread *info = ee.currentThread();
+@@ -946,10 +1035,14 @@
+         }
+ 
+         setReturnU32(ctx, info->tlsBase);
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: GetThreadTLS");
++#endif
+     }
+ 
+     void Copy(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifndef PS2N_SDK_HLE
+         const uint32_t dest = getRegU32(ctx, 4);
+         const uint32_t src = getRegU32(ctx, 5);
+         const uint32_t size = getRegU32(ctx, 6);
+@@ -965,6 +1058,9 @@
+             }
+         }
+         setReturnS32(ctx, 0);
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: Copy");
++#endif
+     }
+ 
+     void GetEntryAddress(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+@@ -978,11 +1074,13 @@
+             std::memcpy(&handler, ptr, sizeof(handler));
+         }
+         setReturnU32(ctx, handler);
++
+     }
+ 
+     // 0x74 RegisterExitHandler (stub): return 0
+     void RegisterExitHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++#ifndef PS2N_SDK_HLE
+         uint32_t func = getRegU32(ctx, 4);
+         uint32_t arg = getRegU32(ctx, 5);
+         if (func == 0)
+@@ -997,5 +1095,8 @@
+         runtime->addEeExitHandler(tid, func, arg);
+ 
+         setReturnS32(ctx, 0);
++#else
++        throw std::runtime_error("PS2Recomp native interface unavailable: RegisterExitHandler");
++#endif
+     }
+ }
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
+@@ -152,6 +152,9 @@
+ 
+     void FlushCache(uint8_t *, R5900Context *ctx, PS2Runtime *)
+     {
++#ifdef PS2N_SDK_HLE
++        ps2native::sdk_kernel_memory().flush_hle_cache(getRegU32(ctx,4));
++#endif
+         setReturnS32(ctx, KE_OK);
+     }
+ 
+@@ -162,21 +165,33 @@
+ 
+     void EnableCache(uint8_t *, R5900Context *ctx, PS2Runtime *)
+     {
++#ifdef PS2N_SDK_HLE
++        throw std::runtime_error("PS2Recomp native device interface unavailable: EnableCache");
++#endif
+         setReturnS32(ctx, KE_OK);
+     }
+ 
+     void DisableCache(uint8_t *, R5900Context *ctx, PS2Runtime *)
+     {
++#ifdef PS2N_SDK_HLE
++        throw std::runtime_error("PS2Recomp native device interface unavailable: DisableCache");
++#endif
+         setReturnS32(ctx, KE_OK);
+     }
+ 
+     void ResetEE(uint8_t *, R5900Context *ctx, PS2Runtime *)
+     {
++#ifdef PS2N_SDK_HLE
++        throw std::runtime_error("PS2Recomp native device interface unavailable: ResetEE");
++#endif
+         setReturnS32(ctx, KE_OK);
+     }
+ 
+     void SetMemoryMode(uint8_t *, R5900Context *ctx, PS2Runtime *)
+     {
++#ifdef PS2N_SDK_HLE
++        throw std::runtime_error("PS2Recomp native device interface unavailable: SetMemoryMode");
++#endif
+         setReturnS32(ctx, KE_OK);
+     }
+ 
+@@ -345,7 +360,7 @@
+             setReturnS32(ctx, KE_UNKNOWN_THID);
+             return;
+         }
+-        auto *status = getEeGuestStruct<ee_thread_status_t>(rdram, getRegU32(ctx, 5));
++        auto *status = getEeGuestOutput<ee_thread_status_t>(rdram, getRegU32(ctx, 5));
+         if (!status)
+         {
+             setReturnS32(ctx, KE_ERROR);
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Common.h
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Common.h
+@@ -1,3 +1,6 @@
++#ifdef PS2N_SDK_HLE
++#include "sdk_kernel_common.hpp"
++#else
+ #include "ps2_syscalls.h"
+ #include "ps2_log.h"
+ #include "ps2_runtime.h"
+@@ -84,3 +87,7 @@
+ {
+     return const_cast<T *>(getEeGuestStruct<T>(static_cast<const uint8_t *>(rdram), address));
+ }
++
++template<class T> T* getEeGuestOutput(uint8_t* rdram,uint32_t address) {return getEeGuestStruct<T>(rdram,address);}
++
++#endif
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h
+@@ -205,42 +205,98 @@
+ static constexpr uint32_t kSifRpcDebugFlagFallbackCopy = 1u << 7;
+ static constexpr uint32_t kSifRpcDebugFlagFallbackZero = 1u << 8;
+ 
++#ifndef PS2N_SDK_HLE
+ inline std::unordered_map<uint32_t, RpcServerState> g_rpc_servers;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline std::unordered_map<uint32_t, RpcClientState> g_rpc_clients;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline SifRpcDebugEvent g_sif_rpc_debug_history[kSifRpcDebugHistoryCount]{};
++#endif
++#ifndef PS2N_SDK_HLE
+ inline uint64_t g_sif_rpc_debug_next_seq = 0;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline std::mutex g_rpc_mutex;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline std::recursive_mutex g_sif_call_rpc_mutex;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline bool g_rpc_initialized = false;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline uint32_t g_rpc_next_id = 1;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline uint32_t g_rpc_packet_index = 0;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline uint32_t g_rpc_server_index = 0;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline uint32_t g_rpc_active_queue = 0;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline std::mutex g_bootmode_mutex;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline bool g_bootmode_initialized = false;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline uint32_t g_bootmode_pool_offset = 0;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline std::unordered_map<uint8_t, uint32_t> g_bootmode_addresses;
++#endif
+ 
+ static constexpr uint32_t kGuestSyscallTableGuestBase = 0x80011F80u;
+ static constexpr uint32_t kGuestSyscallTablePhysBase = kGuestSyscallTableGuestBase & 0x1FFFFFFFu;
+ static constexpr uint32_t kGuestSyscallMirrorLimit = 0x00080000u;
+ static constexpr uint32_t kGuestSyscallTableProbeBase = 0x000002F0u;
+ 
++#ifndef PS2N_SDK_HLE
+ inline std::mutex g_tls_mutex;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline uint32_t g_tls_index = 0;
+-
++#endif
++
++#ifndef PS2N_SDK_HLE
+ inline std::mutex g_osd_mutex;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline bool g_osd_config_initialized = false;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline uint32_t g_osd_config_raw = 0;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline uint32_t g_osd_config2_raw = 0;
+-
++#endif
++
++#ifndef PS2N_SDK_HLE
+ inline std::mutex g_ps2_path_mutex;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline bool g_ps2_paths_initialized = false;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline std::filesystem::path g_host_base;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline std::filesystem::path g_cdrom_base;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline std::filesystem::path g_host_cwd;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline std::filesystem::path g_cdrom_cwd;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline std::string g_ps2_cwd_device = "host0";
++#endif
+ 
+ static constexpr uint32_t kRpcPacketSize = 64;
+ static constexpr uint32_t kRpcPacketPoolBase = 0x01F00000;
+@@ -347,8 +403,90 @@
+     bool loaded = false;
+ };
+ 
++#ifndef PS2N_SDK_HLE
+ inline std::mutex g_sif_module_mutex;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline std::unordered_map<int32_t, SifModuleRecord> g_sif_modules_by_id;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline std::unordered_map<std::string, int32_t> g_sif_module_id_by_path;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline int32_t g_next_sif_module_id = 1;
++#endif
++#ifndef PS2N_SDK_HLE
+ inline uint32_t g_sif_module_log_count = 0;
++#endif
++
++#ifdef PS2N_SDK_HLE
++struct Ps2SdkKernelState {
++    std::unordered_map<uint32_t, RpcServerState> g_rpc_servers;
++    std::unordered_map<uint32_t, RpcClientState> g_rpc_clients;
++    SifRpcDebugEvent g_sif_rpc_debug_history[kSifRpcDebugHistoryCount]{};
++    uint64_t g_sif_rpc_debug_next_seq = 0;
++    std::mutex g_rpc_mutex;
++    std::recursive_mutex g_sif_call_rpc_mutex;
++    bool g_rpc_initialized = false;
++    uint32_t g_rpc_next_id = 1;
++    uint32_t g_rpc_packet_index = 0;
++    uint32_t g_rpc_server_index = 0;
++    uint32_t g_rpc_active_queue = 0;
++    std::mutex g_bootmode_mutex;
++    bool g_bootmode_initialized = false;
++    uint32_t g_bootmode_pool_offset = 0;
++    std::unordered_map<uint8_t, uint32_t> g_bootmode_addresses;
++    std::mutex g_tls_mutex;
++    uint32_t g_tls_index = 0;
++    std::mutex g_osd_mutex;
++    bool g_osd_config_initialized = false;
++    uint32_t g_osd_config_raw = 0;
++    uint32_t g_osd_config2_raw = 0;
++    std::mutex g_ps2_path_mutex;
++    bool g_ps2_paths_initialized = false;
++    std::filesystem::path g_host_base;
++    std::filesystem::path g_cdrom_base;
++    std::filesystem::path g_host_cwd;
++    std::filesystem::path g_cdrom_cwd;
++    std::string g_ps2_cwd_device = "host0";
++    std::mutex g_sif_module_mutex;
++    std::unordered_map<int32_t, SifModuleRecord> g_sif_modules_by_id;
++    std::unordered_map<std::string, int32_t> g_sif_module_id_by_path;
++    int32_t g_next_sif_module_id = 1;
++    uint32_t g_sif_module_log_count = 0;
++};
++Ps2SdkKernelState& ps2n_sdk_kernel_state();
++#define g_rpc_servers (ps2n_sdk_kernel_state().g_rpc_servers)
++#define g_rpc_clients (ps2n_sdk_kernel_state().g_rpc_clients)
++#define g_sif_rpc_debug_history (ps2n_sdk_kernel_state().g_sif_rpc_debug_history)
++#define g_sif_rpc_debug_next_seq (ps2n_sdk_kernel_state().g_sif_rpc_debug_next_seq)
++#define g_rpc_mutex (ps2n_sdk_kernel_state().g_rpc_mutex)
++#define g_sif_call_rpc_mutex (ps2n_sdk_kernel_state().g_sif_call_rpc_mutex)
++#define g_rpc_initialized (ps2n_sdk_kernel_state().g_rpc_initialized)
++#define g_rpc_next_id (ps2n_sdk_kernel_state().g_rpc_next_id)
++#define g_rpc_packet_index (ps2n_sdk_kernel_state().g_rpc_packet_index)
++#define g_rpc_server_index (ps2n_sdk_kernel_state().g_rpc_server_index)
++#define g_rpc_active_queue (ps2n_sdk_kernel_state().g_rpc_active_queue)
++#define g_bootmode_mutex (ps2n_sdk_kernel_state().g_bootmode_mutex)
++#define g_bootmode_initialized (ps2n_sdk_kernel_state().g_bootmode_initialized)
++#define g_bootmode_pool_offset (ps2n_sdk_kernel_state().g_bootmode_pool_offset)
++#define g_bootmode_addresses (ps2n_sdk_kernel_state().g_bootmode_addresses)
++#define g_tls_mutex (ps2n_sdk_kernel_state().g_tls_mutex)
++#define g_tls_index (ps2n_sdk_kernel_state().g_tls_index)
++#define g_osd_mutex (ps2n_sdk_kernel_state().g_osd_mutex)
++#define g_osd_config_initialized (ps2n_sdk_kernel_state().g_osd_config_initialized)
++#define g_osd_config_raw (ps2n_sdk_kernel_state().g_osd_config_raw)
++#define g_osd_config2_raw (ps2n_sdk_kernel_state().g_osd_config2_raw)
++#define g_ps2_path_mutex (ps2n_sdk_kernel_state().g_ps2_path_mutex)
++#define g_ps2_paths_initialized (ps2n_sdk_kernel_state().g_ps2_paths_initialized)
++#define g_host_base (ps2n_sdk_kernel_state().g_host_base)
++#define g_cdrom_base (ps2n_sdk_kernel_state().g_cdrom_base)
++#define g_host_cwd (ps2n_sdk_kernel_state().g_host_cwd)
++#define g_cdrom_cwd (ps2n_sdk_kernel_state().g_cdrom_cwd)
++#define g_ps2_cwd_device (ps2n_sdk_kernel_state().g_ps2_cwd_device)
++#define g_sif_module_mutex (ps2n_sdk_kernel_state().g_sif_module_mutex)
++#define g_sif_modules_by_id (ps2n_sdk_kernel_state().g_sif_modules_by_id)
++#define g_sif_module_id_by_path (ps2n_sdk_kernel_state().g_sif_module_id_by_path)
++#define g_next_sif_module_id (ps2n_sdk_kernel_state().g_next_sif_module_id)
++#define g_sif_module_log_count (ps2n_sdk_kernel_state().g_sif_module_log_count)
++#endif
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/Runtime.h
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/Runtime.h
+@@ -1,3 +1,4 @@
++#ifndef PS2N_SDK_HLE
+ static void setRegU32(R5900Context *ctx, int reg, uint32_t value)
+ {
+     if (!ctx || reg < 0 || reg > 31)
+@@ -144,6 +145,7 @@
+     }
+ }
+ 
++#endif // !PS2N_SDK_HLE
+ static bool localtimeSafe(const std::time_t *t, std::tm *out)
+ {
+ #ifdef _WIN32
+@@ -325,6 +327,7 @@
+     g_osd_config_initialized = true;
+ }
+ 
++#ifndef PS2N_SDK_HLE
+ static uint32_t allocTlsAddr(uint8_t *rdram)
+ {
+     if (!rdram || kTlsPoolCount == 0)
+@@ -398,3 +401,5 @@
+ 
+     g_bootmode_initialized = true;
+ }
++
++#endif
+--- a/ps2xRuntime/include/ps2_stubs.h
++++ b/ps2xRuntime/include/ps2_stubs.h
+@@ -1,12 +1,18 @@
+ #pragma once
+ 
++#ifdef PS2N_SDK_HLE
++#include "ps2_runtime.h"
++#else
+ struct R5900Context;
++#endif
+ class  PS2Runtime;
+ 
+ #include <cstdint>
+ #include "ps2_call_list.h"
++#ifndef PS2N_SDK_HLE
+ #include "runtime/ps2_memory.h"
+ #include "Stubs/Unimplemented.h"
++#endif
+ 
+ namespace ps2_stubs
+ {

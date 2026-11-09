@@ -1,8 +1,17 @@
 #pragma once
 #include "ps2native/vu_float.hpp"
+#include "ps2native/ee_fpu.hpp"
 #include <bit>
 
 namespace ps2native {
+// ITOF0/4/12/15 chop the signed fixed-point operand; VU flags are unchanged.
+inline ObservedWord vu_fixed_to_float(ObservedWord input,unsigned fraction) {
+    if(fraction!=0u && fraction!=4u && fraction!=12u && fraction!=15u)
+        throw DeviceRefusal("ITOF fractional width is not an instruction encoding");
+    if(input.unknown)throw DeviceRefusal("ITOF consumes unknown fixed-point bits");
+    std::uint32_t flags=0;
+    return {ee_fpu_scaled_integer(static_cast<std::int32_t>(input.value),150u-fraction,flags),0};
+}
 // VU manual 2.1-2.3 and FTOI0/4/12/15, shared by micro and macro mode.
 // Pure execution helper: no serialized state and no host FP operation.
 inline ObservedWord vu_float_to_fixed(ObservedWord input,unsigned fraction,std::optional<FloatBounds> bounds={}) {

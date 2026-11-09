@@ -12,6 +12,29 @@ using namespace ps2native;
 using namespace boot_checks;
 namespace {
 constexpr std::uint32_t math(unsigned fn,unsigned fd,unsigned fs,unsigned ft){return 0x46000000u|(ft<<16u)|(fs<<11u)|(fd<<6u)|fn;}
+void min_max(Memory& memory) {
+    EEState state;state.set_cp0(Cop0::Status,kStatusCU1);
+    std::uint64_t count=0;ExecutionContext ctx{state,memory,count,100,UINT32_MAX};
+    constexpr auto maximum=math(0x28,3,1,2),minimum=math(0x29,3,1,2);
+    require(decode_mips(0,maximum).opcode==MipsOpcode::MaxS &&
+        decode_mips(0,minimum).opcode==MipsOpcode::MinS,"MIN/MAX.S decode to native operations");
+    for(const auto pair:std::array<std::array<std::uint32_t,2>,6>{{
+        {0xBF800000u,0x3F800000u},{0xC0000000u,0xBF800000u},{0x80000000u,0},
+        {1,2},{0x7F800000u,0x7FFFFFFFu},{0xFFFFFFFFu,0xFF800000u}}}) {
+        for(const bool reverse:{false,true}) {
+            state.fpr[1]=pair[reverse];state.fpr[2]=pair[!reverse];state.fcr31=0x0183C079u;
+            execute_ee_system<MipsOpcode::MaxS,maximum>(ctx);
+            require(state.fpr[3]==pair[1] && state.fcr31==0x01830079u,"MAX.S raw ordering and sticky flags");
+            execute_ee_system<MipsOpcode::MinS,minimum>(ctx);
+            require(state.fpr[3]==pair[0] && !state.unknown_fpr_bits[3],"MIN.S raw ordering");
+        }
+    }
+    state.unknown_fpr_bits[1]=1;const auto before=state;const auto retired=count;
+    rejects([&]{execute_ee_system<MipsOpcode::MaxS,maximum>(ctx);},"unknown operand bits");
+    require(state.fpr[3]==before.fpr[3] && count==retired,"uncertain MIN/MAX refuses before retirement");
+    state.unknown_fpr_bits[1]=0;state.set_cp0(Cop0::Status,0);
+    rejects([&]{execute_ee_system<MipsOpcode::MinS,minimum>(ctx);},"Status.CU1");
+}
 void integer_domains(Memory& memory) {
     for(const bool retired_path:{false,true}) {
         EEState s;s.set_cp0(Cop0::Status,kStatusCU1);
@@ -359,6 +382,7 @@ int main() try {
     addition_range_classes();
     Memory memory;reset_native_ee_fixture(memory,m20::build_firmware().rom);
     integer_domains(memory);
+    min_max(memory);
     floating_trace(memory);
     scalar_carry_experiment();
     copied_numeric_identity();

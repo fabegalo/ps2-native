@@ -682,6 +682,12 @@ void Launcher::detachNvm(const QString& biosId) {
 }
 
 bool Launcher::startGame(const QString& id) {
+    return launchGame(id,false);
+}
+bool Launcher::prepareGame(const QString& id) {
+    return launchGame(id,true);
+}
+bool Launcher::launchGame(const QString& id,bool prepare_only) {
     const auto fail = [&](const QString& reason) {
         emit notify(QStringLiteral("error"), tr("Game not started"), reason);
         return false;
@@ -700,6 +706,8 @@ bool Launcher::startGame(const QString& id) {
         state == fe::SessionState::Paused || state == fe::SessionState::Stopping)
         return fail(tr("Stop the current session before starting another game."));
     fe::SessionRequest request;
+    request.native_cache=fspath(QDir(data_dir_).filePath(QStringLiteral("native-cache")));
+    request.prepare_only=prepare_only;
     request.rom0 = bios->path;
     request.expected_rom0_sha256 = bios->value("sha256");
     request.console_profile = bios->console_profile;

@@ -41,6 +41,9 @@ void events() {
     require(gs.read(kGsCsr, 1) == 3, "FINISH reports completed synchronous work");
     gs.write(kGsImr, 4, 0xFC00, 0, {});
     require(gs.latched(kGsImr) == 0x7C00, "32-bit IMR writes also discard bit 15");
+    require(gs.read(kGsImr,4)==0x7C00u && gs.read(kGsImr,8)==0x7C00u,
+        "IMR readback exposes the current interrupt masks after write filtering");
+    rejects([&]{(void)gs.read(kGsImr,2);},"32/64-bit read");
     require(gs.take_interrupt_request(0).pending && !gs.take_interrupt_request(0).pending,
             "unmask latched events exactly once");
     gs.write(kGsCsr, 4, 0, 0, {});
@@ -702,7 +705,7 @@ void diagnostic_boundary() {
         std::copy(bytes.begin(),bytes.end(),rom.begin());
         Iop iop;iop.reset(rom,profile);iop.run_until(words.size());
         require(!iop.stopped() && iop.ee_read(0x100u,4)==0xFFFFu,
-                "R3000A reads the same measured MPU ID and transfers its actual bytes to IOP RAM");
+                "R3000A reads the same measured MPU ID and transfers its actual bytes to IOP RAM: "+iop.stop_reason().value_or(""));
     }
     rejects([&] {registers.write(0x1000F510u,4,0);},"no register model");
     assumptions.omit_f510_zero_write=true;

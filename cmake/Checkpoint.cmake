@@ -82,7 +82,7 @@ if(checkpoint_schema_hash STREQUAL "851905117fc00563d8ba2f3768354d6980b96a84f3c5
     set(checkpoint_schema_hash "49f75d1be20f1f5246aabb5853ddf72616a72910ee8a7c5984037db7798747e3")
 endif()
 file(GLOB checkpoint_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
-list(APPEND checkpoint_sources "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ps2recomp/hle_kernel.cpp")
+list(APPEND checkpoint_sources ${_sdk_hle_sources})
 list(SORT checkpoint_sources)
 set(checkpoint_runtime "${checkpoint_schema_hash}\n${CMAKE_CXX_COMPILER_ID}\n${CMAKE_CXX_COMPILER_VERSION}\n${CMAKE_BUILD_TYPE}\n${CMAKE_CXX_FLAGS}\n${PS2N_ENABLE_PROFILING}\n")
 string(APPEND checkpoint_runtime "${PS2N_ENABLE_VULKAN}\n${PS2N_ENABLE_DIRECTX}\n${PS2N_GS_DXC_SHA256}\n")
