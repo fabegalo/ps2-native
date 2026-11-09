@@ -17,6 +17,7 @@
 #include <spawn.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#include <sys/file.h>
 #include <signal.h>
 #include <unistd.h>
 #include <cerrno>
@@ -24,6 +25,40 @@ extern char** environ;
 #endif
 
 namespace ps2native::dev {
+// The OS releases ownership even when the supervising process is terminated.
+class BuildLock {
+public:
+    explicit BuildLock(const std::filesystem::path& root) {
+        const auto path=native_io_path(root/".ps2n-dev-lock");
+#ifdef _WIN32
+        handle_=CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
+        if(handle_==INVALID_HANDLE_VALUE)
+            throw std::runtime_error("developer build locked or inaccessible; Windows error "+std::to_string(GetLastError()));
+#else
+        handle_=::open(path.c_str(),O_CREAT|O_RDWR|O_CLOEXEC,0600);
+        if(handle_<0)throw std::runtime_error("developer build lock unavailable; errno "+std::to_string(errno));
+        if(::flock(handle_,LOCK_EX|LOCK_NB)!=0) {
+            const auto error=errno;::close(handle_);handle_=-1;
+            throw std::runtime_error("developer build locked; errno "+std::to_string(error));
+        }
+#endif
+    }
+    ~BuildLock() {
+#ifdef _WIN32
+        if(handle_!=INVALID_HANDLE_VALUE)CloseHandle(handle_);
+#else
+        if(handle_>=0)::close(handle_);
+#endif
+    }
+    BuildLock(const BuildLock&)=delete;
+    BuildLock& operator=(const BuildLock&)=delete;
+private:
+#ifdef _WIN32
+    HANDLE handle_{INVALID_HANDLE_VALUE};
+#else
+    int handle_{-1};
+#endif
+};
 struct ProcessResult { int exit_code{}; bool timed_out{},cancelled{}; double milliseconds{}; };
 inline ProcessResult process(const std::filesystem::path& executable, const std::vector<std::filesystem::path>& args,
                              const std::filesystem::path& log, unsigned timeout_seconds,std::uint64_t max_log_bytes=0,

@@ -473,6 +473,18 @@ public:
     void fpu_binary(MipsOpcode op,std::uint32_t word) {
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
             stop(StopKind::GuestException,"FPU arithmetic with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
+        if(m_.hle_kernel()) {
+            const auto fs=ee::rd(word),ft=ee::rt(word),fd=ee::sa(word);
+            require_fpr_known(fs,"SDK FPU arithmetic");require_fpr_known(ft,"SDK FPU arithmetic");
+            const auto a=s_.fpr[fs],b=s_.fpr[ft];
+            const auto value=op==MipsOpcode::MulS ? sdk_float_mul(a,b) :
+                op==MipsOpcode::DivS ? sdk_float_div(a,b) :
+                op==MipsOpcode::SubS ? sdk_float_sub(a,b) : sdk_float_add(a,b);
+            // Match the SDK translator's DIV.S flag handling and raw result.
+            if(op==MipsOpcode::DivS && !(b&0x7FFFFFFFu))s_.fcr31|=0x100000u;
+            s_.fpr[fd]=value;s_.unknown_fpr_bits[fd]=0;s_.fpr_affine[fd]={};
+            return;
+        }
         const auto diagnostic=m_.begin_fpu_arithmetic();
         const auto fs=ee::rd(word),ft=ee::rt(word),fd=ee::sa(word);
         const ObservedWord a{s_.fpr[fs]&~s_.unknown_fpr_bits[fs],s_.unknown_fpr_bits[fs]};
@@ -580,6 +592,10 @@ public:
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
             stop(StopKind::GuestException,"MULA.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
         require_fpr_known(ee::rd(word),"MULA.S");require_fpr_known(ee::rt(word),"MULA.S");
+        if(m_.hle_kernel()) {
+            s_.fpu_acc=sdk_float_mul(s_.fpr[ee::rd(word)],s_.fpr[ee::rt(word)]);
+            return;
+        }
         auto flags=s_.fcr31;
         const auto product=ee_fpu_multiply(s_.fpr[ee::rd(word)],s_.fpr[ee::rt(word)],flags,
             m_.begin_fpu_arithmetic() ? CoarseEarlyDigits : NoCarryExperiment);
@@ -593,6 +609,14 @@ public:
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
             stop(StopKind::GuestException,std::string(operation)+" with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
         const auto fs=ee::rd(word),ft=ee::rt(word);
+        if(m_.hle_kernel()) {
+            require_fpr_known(fs,operation);require_fpr_known(ft,operation);
+            const auto product=sdk_float_mul(s_.fpr[fs],s_.fpr[ft]);
+            const auto value=subtract ? sdk_float_sub(s_.fpu_acc,product) : sdk_float_add(s_.fpu_acc,product);
+            if(op==MipsOpcode::MsubaS || op==MipsOpcode::MaddaS)s_.fpu_acc=value;
+            else {const auto fd=ee::sa(word);s_.fpr[fd]=value;s_.unknown_fpr_bits[fd]=0;s_.fpr_affine[fd]={};}
+            return;
+        }
         if((s_.fpu_acc&0x7F800000u)==0x7F800000u)
             stop(StopKind::NotModeled,std::string(operation)+" accumulator overflow state not modeled");
         const auto diagnostic=m_.begin_fpu_arithmetic();
@@ -632,6 +656,10 @@ public:
         if(!(s_.cp0(Cop0::Status)&kStatusCU1))
             stop(StopKind::GuestException,"ADDA.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
         require_fpr_known(ee::rd(word),"ADDA.S");require_fpr_known(ee::rt(word),"ADDA.S");
+        if(m_.hle_kernel()) {
+            s_.fpu_acc=sdk_float_add(s_.fpr[ee::rd(word)],s_.fpr[ee::rt(word)]);
+            return;
+        }
         const auto fs=s_.fpr[ee::rd(word)],ft=s_.fpr[ee::rt(word)];
         const auto a=fs&0x7F800000u,b=ft&0x7F800000u;
         if(a && b)stop(StopKind::NotModeled,"ADDA.S nonzero addends: R5900 adder rounding not modeled");
@@ -846,7 +874,7 @@ void execute_ee_system(ExecutionContext& ctx,std::uint32_t dynamic_word=0,System
         case MipsOpcode::DivS:
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
                 cpu.stop(StopKind::GuestException,"DIV.S with Status.CU1 = 0; coprocessor unusable vectoring is not modeled");
-            if(state.unknown_fpr_bits[ee::rd(word)] || state.unknown_fpr_bits[ee::rt(word)]){cpu.fpu_binary(MipsOpcode::DivS,word);break;}
+            if(memory.hle_kernel() || state.unknown_fpr_bits[ee::rd(word)] || state.unknown_fpr_bits[ee::rt(word)]){cpu.fpu_binary(MipsOpcode::DivS,word);break;}
             state.fpr[ee::sa(word)]=ee_fpu_divide(state.fpr[ee::rd(word)],state.fpr[ee::rt(word)],state.fcr31);state.unknown_fpr_bits[ee::sa(word)]=0;state.fpr_affine[ee::sa(word)]={};break;
         case MipsOpcode::SqrtS: {
             if(!(state.cp0(Cop0::Status)&kStatusCU1))
@@ -855,6 +883,12 @@ void execute_ee_system(ExecutionContext& ctx,std::uint32_t dynamic_word=0,System
             // Negative nonzero inputs use sqrt(abs(FT)), set I/SI, and do
             // not trap. I/D causes are replaced; O/U and all stickies survive.
             const auto ft=ee::rt(word),fd=ee::sa(word);
+            if(memory.hle_kernel()) {
+                cpu.require_fpr_known(ft,"SDK SQRT.S");
+                state.fpr[fd]=sdk_float_sqrt(state.fpr[ft]);
+                state.unknown_fpr_bits[fd]=0;state.fpr_affine[fd]={};
+                break;
+            }
             const auto eval=[](std::uint32_t input,std::uint32_t& flags)->std::optional<std::uint32_t> {
                 const auto exponent=input&0x7F800000u;
                 const auto root=ee_fpu_sqrt(input&0x7FFFFFFFu);

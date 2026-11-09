@@ -157,6 +157,16 @@ template<class C> int run(int argc,C** argv)try {
         rejects([&]{(void)memory->data_cache_operation(0x18u,0xA0004000u,{});},"requires a cached address");
         memory->diagnostic_data_cache(true);
         std::uint64_t executed=0;ExecutionContext ctx{state,*memory,executed,100,UINT32_MAX};
+        {
+            const auto saved=state;
+            state.fpr[1]=0x45033000u;state.fpr[2]=0x39C90FD8u;
+            execute_ee_system<MipsOpcode::MulS,0x460208C2u>(ctx);
+            require(state.fpr[3]==0x3F4E119Du && !state.unknown_fpr_bits[3],
+                "HLE scalar arithmetic uses the SDK result instead of creating local numerical uncertainty");
+            state.unknown_fpr_bits[1]=1u;
+            rejects([&]{execute_ee_system<MipsOpcode::MulS,0x460208C2u>(ctx);},"unknown");
+            state=saved;executed=0;
+        }
         execute_cache_instruction(ctx,0xBC100000u);
         require(!state.cp0(Cop0::TagLo) && state.taglo_unknown==0xF87u,
             "CACHE DXLTG reads tags initialized by HLE software, preserving unknown reserved bits");

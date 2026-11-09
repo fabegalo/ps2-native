@@ -138,6 +138,19 @@ int main(int argc,char** argv) {
             (void)write_binary_if_changed(boundary_image,direct_test::elf(boundaries));
             call(boundary_image,boundary_output,false,true);
             integrated(boundary_image,boundary_output/"generated",boundaries,"boundaries");
+            auto scalar=p;
+            scalar.segments[0].bytes=m20::le_words({0x460208C2u,0x46030104u,0x03E00008u,0u});
+            const auto scalar_image=root/"scalar.elf",scalar_output=root/"scalar-aot";
+            (void)write_binary_if_changed(scalar_image,direct_test::elf(scalar));
+            call(scalar_image,scalar_output,false,true);
+            bool sdk_emission=false;
+            for(const auto& entry:fs::directory_iterator(scalar_output/"generated"))if(entry.path().extension()==".cpp") {
+                const auto source=text(entry.path());
+                if(source.find("FPU_MUL_S(ctx->f[1], ctx->f[2])")!=std::string::npos &&
+                   source.find("FPU_SQRT_S(ctx->f[3])")!=std::string::npos)sdk_emission=true;
+            }
+            require(sdk_emission,"SDK scalar translation must reach generated output without local arithmetic substitution");
+            integrated(scalar_image,scalar_output/"generated",scalar,"sdk-float");
         }
         call(input,output,false,true);
         require(text(output / "sdk-prepare.json")==receipt,"reused output changed");
@@ -227,6 +240,16 @@ int main(int argc,char** argv) {
         prepare();
         require(fs::last_write_time(native_binary)==binary_stamp && text(native_log).find("Native module reused")!=std::string::npos,
             "Verified native module reuse must not recompile the content");
+        auto discovery_info=nlohmann::json::parse(text(native_receipt));
+        require(discovery_info.at("discovery").is_object() && discovery_info.at("discovery").at("runtime_sha256").is_string() &&
+            discovery_info.at("discovery").at("diagnostic_spu2_effect_end_reset").is_null(),
+            "Discovery publishes a keyed object, including explicit absent reset inputs");
+        discovery_info["discovery"]=nlohmann::json::array({"legacy malformed discovery"});
+        (void)write_text_if_changed(native_receipt,discovery_info.dump(2));
+        prepare();
+        require(fs::last_write_time(native_binary)==binary_stamp &&
+            nlohmann::json::parse(text(native_receipt)).at("discovery").is_object(),
+            "Malformed legacy discovery metadata must be recomputed without discarding a verified native binary");
         require(!launcher_exists || fs::last_write_time(launcher)==launcher_stamp,"Preparing content must not rebuild the launcher");
         {
         const auto dynamic_input=root/"dynamic.elf";

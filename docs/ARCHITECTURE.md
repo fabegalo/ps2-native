@@ -58,11 +58,25 @@ interface original e os contratos comuns Original/Native.
 O estado atual ainda não atende a essa direção: `0004-native-aot-emission`
 seleciona o emissor local e `src/ps2recomp_runtime.cpp` executa por
 `run_ee_boot`; FPU e SPU2 locais originam os bloqueios comerciais registrados.
-O primeiro recorte proposto é consumir a emissão e o contexto do SDK,
-adaptando despacho, orçamento e dispositivos sem outro runtime ou fallback.
-Esse recorte e a substituição dos provedores de dispositivos ainda exigem
-validação das fronteiras pelo mantenedor antes da implementação; as decisões
-abaixo descrevem a integração anterior, preservada até a migração aprovada.
+O mantenedor autorizou iniciar a correção após preservar o trabalho existente
+em commit. O primeiro incremento consome a emissão original do SDK para
+ADD/SUB/MUL/DIV/SQRT escalares e operações do acumulador sobre uma vista dos
+registros canônicos, sem cópia de contexto. O patch
+`0009` expõe as operações escalares existentes sem dependência de SIMD e
+corrige SQRT.S para ler FT; `0010` isola declarações do backend integrado
+para preservar a compilação da saída padrão do SDK. A sessão HLE também
+usa essa aritmética no despacho existente; dados de origem desconhecidos
+continuam recusados. Isso substitui as provas numéricas locais nesse caminho,
+mas não certifica precisão física da FPU do SDK ou compatibilidade comercial.
+Metadados `discovery` são publicados como objeto; recibos antigos com esse
+campo em formato de array refazem a descoberta preservando o binário verificado.
+A descoberta permite os limites existentes de 64 módulos IOP e 8 regiões EE,
+sem o antigo corte intermediário de 25 tentativas. O lock do preparador usa
+posse do sistema operacional, liberada ao encerrar o processo, inclusive por
+cancelamento forçado; a presença do arquivo de lock não indica posse ativa.
+Inteiros, demais operações FPU, VU, dispositivos e o laço `run_ee_boot` ainda precisam migrar para
+as implementações/contratos do SDK. As decisões abaixo documentam a integração
+anterior e continuam descrevendo os componentes ainda não substituídos.
 
 Decisão do mantenedor em 08/11/2026: substituir o kernel HLE derivado local
 pelo HLE e escalonador compilados diretamente do PS2Recomp fixado. Adaptar

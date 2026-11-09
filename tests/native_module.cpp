@@ -15,6 +15,11 @@ template<class F> void rejects(F&& operation,const char* reason) {
     throw std::runtime_error(std::string("Expected refusal: ")+reason);
 }
 int main(int argc,char** argv) try {
+    if(argc==3 && std::string_view(argv[1])=="--child-lock") {
+        dev::BuildLock lock{fs::path(argv[2])};
+        (void)write_text_if_changed(fs::path(argv[2])/"ready","locked");
+        std::this_thread::sleep_for(std::chrono::seconds(60));return 0;
+    }
     if(argc==2 && std::string_view(argv[1])=="--child-wait") {std::this_thread::sleep_for(std::chrono::seconds(60));return 0;}
     if(argc==2 && std::string_view(argv[1])=="--child-log") {
         for(unsigned n=0;n<2048;++n)std::cout<<std::string(1024,'x')<<std::flush;
@@ -123,6 +128,23 @@ int main(int argc,char** argv) try {
         [&]{return std::chrono::steady_clock::now()-start>std::chrono::milliseconds(50);});
     require(cancelled.cancelled && !cancelled.timed_out && cancelled.exit_code==130 && cancelled.milliseconds<3000,
         "Native compilation cancellation must stop the owned child promptly");
+    {
+        const auto root=binary.parent_path()/"process-lock";
+        require(!fs::exists(root),"Refusing to overwrite existing process lock fixtures");fs::create_directory(root);
+        struct CleanupDirectory {fs::path path;~CleanupDirectory(){std::error_code error;fs::remove_all(path,error);}} cleanup_lock{root};
+        bool locked=false,concurrent_refused=false;
+        const auto stopped=dev::process(fs::absolute(argv[0]),{"--child-lock",root},cancellation_log,10,1024,
+            [&] {
+                if(file_exists(root/"ready")) {
+                    try {dev::BuildLock conflicting(root);}catch(const std::exception&){concurrent_refused=true;}
+                    locked=true;
+                }
+                return locked;
+            });
+        require(stopped.cancelled && !stopped.timed_out && locked && concurrent_refused,
+            "A live build must retain exclusive ownership until its owned process is stopped");
+        dev::BuildLock resumed(root);
+    }
     rejects([&]{(void)dev::process(fs::absolute(argv[0]),{"--child-log"},limit_log,10,1024);},"process log exceeded");
     require(regular_file_size(limit_log)<=65536,"Process evidence must remain bounded");
     std::cout<<"Native module execution, shared console ownership and hash/ABI negative controls passed\n";

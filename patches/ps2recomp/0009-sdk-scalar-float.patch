@@ -1,0 +1,135 @@
+--- a/ps2xRuntime/include/ps2_runtime_macros.h
++++ b/ps2xRuntime/include/ps2_runtime_macros.h
+@@ -5,8 +5,9 @@
+ #else
+ #include <cstdint>
+ #include <cmath>
++#include <bit>
++#ifndef PS2_SCALAR_FLOAT_ONLY
+ #include <cstring>
+-#include <bit>
+ #if defined(_MSC_VER)
+ #include <intrin.h>
+ #elif defined(USE_SSE2NEON)
+@@ -142,6 +143,8 @@
+ #define PS2_POR(a, b) _mm_or_si128((__m128i)(a), (__m128i)(b))
+ #define PS2_PXOR(a, b) _mm_xor_si128((__m128i)(a), (__m128i)(b))
+ #define PS2_PNOR(a, b) _mm_xor_si128(_mm_or_si128((__m128i)(a), (__m128i)(b)), _mm_set1_epi32(0xFFFFFFFF))
++
++#endif // !PS2_SCALAR_FLOAT_ONLY
+ 
+ // PS2 float semantics (EE FPU and VU0 macro mode). The PS2 format has no Inf, NaN or denormals:
+ //   - exponent 255 is an ordinary exponent, so 0x7F800000 is 2^128 and the largest value is 0x7FFFFFFF;
+@@ -314,6 +317,48 @@
+     return ps2_fall_normal(a, b, r) ? r : ps2_frsqrt_slow(a, b);
+ }
+ 
++// FPU (COP1) operations
++#define FPU_SET_ACC(ctx, res) (ctx->f_acc = res)
++#define FPU_ADD_S(a, b) ps2_fadd((float)(a), (float)(b))
++#define FPU_SUB_S(a, b) ps2_fsub((float)(a), (float)(b))
++#define FPU_MUL_S(a, b) ps2_fmul((float)(a), (float)(b))
++#define FPU_DIV_S(a, b) ps2_fdiv((float)(a), (float)(b))
++#define FPU_RSQRT_S(a, b) ps2_frsqrt((float)(a), (float)(b))
++#define FPU_SQRT_S(a) ps2_fsqrt((float)(a))
++#define FPU_ABS_S(a) fabsf((float)(a))
++#define FPU_MOV_S(a) ((float)(a))
++#define FPU_NEG_S(a) (-(float)(a))
++#define FPU_ROUND_L_S(a) ((int64_t)roundf((float)(a)))
++#define FPU_TRUNC_L_S(a) ((int64_t)(float)(a))
++#define FPU_CEIL_L_S(a) ((int64_t)ceilf((float)(a)))
++#define FPU_FLOOR_L_S(a) ((int64_t)floorf((float)(a)))
++#define FPU_ROUND_W_S(a) ((int32_t)nearbyintf((float)(a)))
++#define FPU_TRUNC_W_S(a) ((int32_t)(float)(a))
++#define FPU_CEIL_W_S(a) ((int32_t)ceilf((float)(a)))
++#define FPU_FLOOR_W_S(a) ((int32_t)floorf((float)(a)))
++#define FPU_CVT_S_W(a) ((float)(int32_t)(a))
++#define FPU_CVT_S_L(a) ((float)(int64_t)(a))
++#define FPU_CVT_W_S(a) ((int32_t)nearbyintf((float)(a)))
++#define FPU_CVT_L_S(a) ((int64_t)(float)(a))
++#define FPU_C_F_S(a, b) (0)
++#define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))
++#define FPU_C_EQ_S(a, b) ((float)(a) == (float)(b))
++#define FPU_C_UEQ_S(a, b) ((float)(a) == (float)(b) || isnan((float)(a)) || isnan((float)(b)))
++#define FPU_C_OLT_S(a, b) ((float)(a) < (float)(b))
++#define FPU_C_ULT_S(a, b) ((float)(a) < (float)(b) || isnan((float)(a)) || isnan((float)(b)))
++#define FPU_C_OLE_S(a, b) ((float)(a) <= (float)(b))
++#define FPU_C_ULE_S(a, b) ((float)(a) <= (float)(b) || isnan((float)(a)) || isnan((float)(b)))
++#define FPU_C_SF_S(a, b) (0)
++#define FPU_C_NGLE_S(a, b) (isnan((float)(a)) || isnan((float)(b)))
++#define FPU_C_SEQ_S(a, b) ((float)(a) == (float)(b))
++#define FPU_C_NGL_S(a, b) ((float)(a) == (float)(b) || isnan((float)(a)) || isnan((float)(b)))
++#define FPU_C_LT_S(a, b) ((float)(a) < (float)(b))
++#define FPU_C_NGE_S(a, b) ((float)(a) < (float)(b) || isnan((float)(a)) || isnan((float)(b)))
++#define FPU_C_LE_S(a, b) ((float)(a) <= (float)(b))
++#define FPU_C_NGT_S(a, b) ((float)(a) <= (float)(b) || isnan((float)(a)) || isnan((float)(b)))
++
++
++#ifndef PS2_SCALAR_FLOAT_ONLY
+ enum class Ps2VecOp
+ {
+     Add,
+@@ -835,45 +880,6 @@
+ #define PS2_PMFHL_LH(hi, lo) _mm_shuffle_epi32(_mm_packs_epi32(ps2_u64_to_epi64_pair(lo), ps2_u64_to_epi64_pair(hi)), _MM_SHUFFLE(3, 1, 2, 0))
+ #define PS2_PMFHL_SH(hi, lo) _mm_shufflehi_epi16(_mm_shufflelo_epi16(_mm_packs_epi32(ps2_u64_to_epi64_pair(lo), ps2_u64_to_epi64_pair(hi)), _MM_SHUFFLE(3, 1, 2, 0)), _MM_SHUFFLE(3, 1, 2, 0))
+ 
+-// FPU (COP1) operations
+-#define FPU_SET_ACC(ctx, res) (ctx->f_acc = res)
+-#define FPU_ADD_S(a, b) ps2_fadd((float)(a), (float)(b))
+-#define FPU_SUB_S(a, b) ps2_fsub((float)(a), (float)(b))
+-#define FPU_MUL_S(a, b) ps2_fmul((float)(a), (float)(b))
+-#define FPU_DIV_S(a, b) ps2_fdiv((float)(a), (float)(b))
+-#define FPU_RSQRT_S(a, b) ps2_frsqrt((float)(a), (float)(b))
+-#define FPU_SQRT_S(a) ps2_fsqrt((float)(a))
+-#define FPU_ABS_S(a) fabsf((float)(a))
+-#define FPU_MOV_S(a) ((float)(a))
+-#define FPU_NEG_S(a) (-(float)(a))
+-#define FPU_ROUND_L_S(a) ((int64_t)roundf((float)(a)))
+-#define FPU_TRUNC_L_S(a) ((int64_t)(float)(a))
+-#define FPU_CEIL_L_S(a) ((int64_t)ceilf((float)(a)))
+-#define FPU_FLOOR_L_S(a) ((int64_t)floorf((float)(a)))
+-#define FPU_ROUND_W_S(a) ((int32_t)nearbyintf((float)(a)))
+-#define FPU_TRUNC_W_S(a) ((int32_t)(float)(a))
+-#define FPU_CEIL_W_S(a) ((int32_t)ceilf((float)(a)))
+-#define FPU_FLOOR_W_S(a) ((int32_t)floorf((float)(a)))
+-#define FPU_CVT_S_W(a) ((float)(int32_t)(a))
+-#define FPU_CVT_S_L(a) ((float)(int64_t)(a))
+-#define FPU_CVT_W_S(a) ((int32_t)nearbyintf((float)(a)))
+-#define FPU_CVT_L_S(a) ((int64_t)(float)(a))
+-#define FPU_C_F_S(a, b) (0)
+-#define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))
+-#define FPU_C_EQ_S(a, b) ((float)(a) == (float)(b))
+-#define FPU_C_UEQ_S(a, b) ((float)(a) == (float)(b) || isnan((float)(a)) || isnan((float)(b)))
+-#define FPU_C_OLT_S(a, b) ((float)(a) < (float)(b))
+-#define FPU_C_ULT_S(a, b) ((float)(a) < (float)(b) || isnan((float)(a)) || isnan((float)(b)))
+-#define FPU_C_OLE_S(a, b) ((float)(a) <= (float)(b))
+-#define FPU_C_ULE_S(a, b) ((float)(a) <= (float)(b) || isnan((float)(a)) || isnan((float)(b)))
+-#define FPU_C_SF_S(a, b) (0)
+-#define FPU_C_NGLE_S(a, b) (isnan((float)(a)) || isnan((float)(b)))
+-#define FPU_C_SEQ_S(a, b) ((float)(a) == (float)(b))
+-#define FPU_C_NGL_S(a, b) ((float)(a) == (float)(b) || isnan((float)(a)) || isnan((float)(b)))
+-#define FPU_C_LT_S(a, b) ((float)(a) < (float)(b))
+-#define FPU_C_NGE_S(a, b) ((float)(a) < (float)(b) || isnan((float)(a)) || isnan((float)(b)))
+-#define FPU_C_LE_S(a, b) ((float)(a) <= (float)(b))
+-#define FPU_C_NGT_S(a, b) ((float)(a) <= (float)(b) || isnan((float)(a)) || isnan((float)(b)))
+ 
+ // QFSRV: Quadword Funnel Shift Right Variable
+ // Concatenates rs || rt (256 bits) and right-shifts by SA bits, taking lower 128 bits.
+@@ -1031,5 +1037,6 @@
+             ctx_ptr->r[reg_idx] = (val);   \
+     } while (0)
+ 
++#endif // !PS2_SCALAR_FLOAT_ONLY
+ #endif // PS2N_SDK_HLE
+ #endif // PS2_RUNTIME_MACROS_H
+--- a/ps2xRecomp/src/lib/fpu_translator.cpp
++++ b/ps2xRecomp/src/lib/fpu_translator.cpp
+@@ -58,7 +58,7 @@
+                                    "ctx->f[{}] = FPU_DIV_S(ctx->f[{}], ctx->f[{}]); }}",
+                                    ft, fd, fs, ft);
+             case COP1_S_SQRT:
+-                return fmt::format("ctx->f[{}] = FPU_SQRT_S(ctx->f[{}]);", fd, fs);
++                return fmt::format("ctx->f[{}] = FPU_SQRT_S(ctx->f[{}]);", fd, ft);
+             case COP1_S_ABS:
+                 return fmt::format("ctx->f[{}] = FPU_ABS_S(ctx->f[{}]);", fd, fs);
+             case COP1_S_MOV:

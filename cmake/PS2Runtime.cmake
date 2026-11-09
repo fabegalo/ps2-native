@@ -17,7 +17,7 @@ list(APPEND _sdk_hle_sources "${_sdk_kernel}/Stubs/SIF.cpp" "${_sdk_kernel}/Stub
 set_source_files_properties(${_sdk_hle_sources} src/sdk_hle.cpp PROPERTIES
     COMPILE_DEFINITIONS "PS2N_SDK_HLE=1"
     INCLUDE_DIRECTORIES "${_sdk_kernel}/Syscalls;${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_sources(ps2n_core PRIVATE ${_sdk_hle_sources} src/sdk/sif_transport.cpp)
+target_sources(ps2n_core PRIVATE ${_sdk_hle_sources} src/sdk/sif_transport.cpp src/sdk/ee_float.cpp)
 target_include_directories(ps2n_core PRIVATE
     "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/src")

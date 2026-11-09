@@ -14,6 +14,30 @@ std::vector<std::pair<std::uint32_t,std::uint32_t>> missing_translations;
 std::size_t native_instruction_count{};
 std::uint32_t execution_alias{};
 std::map<std::uint32_t,std::string> native_partitions;
+bool sdk_scalar_float(MipsOpcode opcode) {
+    switch(opcode) {
+        case MipsOpcode::AddS: case MipsOpcode::SubS: case MipsOpcode::MulS:
+        case MipsOpcode::DivS: case MipsOpcode::SqrtS: case MipsOpcode::AddaS:
+        case MipsOpcode::MulaS: case MipsOpcode::MaddS: case MipsOpcode::MsubS:
+        case MipsOpcode::MaddaS: case MipsOpcode::MsubaS:return true;
+        default:return false;
+    }
+}
+void emit_sdk_instruction(std::ostream& out,ps2recomp::CodeGenerator& generator,
+                          const ps2recomp::Instruction& instruction,const MipsInstruction& native) {
+    if(!sdk_scalar_float(native.opcode)){emit_aot_instruction(out,native);return;}
+    out<<"instruction_"<<std::uppercase<<std::hex;
+    out.width(8);out.fill('0');out<<native.pc<<std::dec<<":\n"
+       <<"    if (!aot_enter_checked(ctx, "<<native.pc<<"u, "<<native.word<<"u, false)) return;\n"
+       <<"    {\n"
+       <<"        if (!(state.cp0(Cop0::Status)&kStatusCU1)) throw GuestStop(StopKind::GuestException, \"SDK FPU with Status.CU1 = 0\");\n"
+       <<"        const auto frame=ee::begin(state, "<<native.pc<<"u);\n"
+       <<"        { SdkFloatContext sdk(state); auto* ctx=&sdk;\n"
+       <<"          "<<generator.translateInstruction(instruction)<<"\n"
+       <<"        }\n"
+       <<"        if (ee::retire(ctx,frame)) return;\n"
+       <<"    }\n";
+}
 std::optional<MipsInstruction> native_instruction(const ps2recomp::Instruction& instruction) {
     const auto decoded=try_decode_r5900(instruction.address,instruction.raw);
     if(!decoded || !mips_aot_supported(decoded->opcode))return {};
@@ -31,7 +55,7 @@ void write_sdk_native_sources(const std::filesystem::path& dispatcher) {
     AotSources sources; sources.dispatcher.assign(bytes.begin(),bytes.end());
     for(const auto& [bucket,body]:native_partitions) {
         (void)bucket;
-        auto text="#ifdef PS2N_SDK_NATIVE_BACKEND\n#include <ps2native/ee_system.hpp>\n"+body+"\n#endif\n";
+        auto text="#ifdef PS2N_SDK_NATIVE_BACKEND\n#include <ps2native/ee_system.hpp>\n#include <ps2native/sdk_float_context.hpp>\n"+body+"\n#endif\n";
         const auto hash=sha256_hex({reinterpret_cast<const std::uint8_t*>(text.data()),text.size()});
         sources.partitions.push_back({"ps2n_aot_"+hash+".cpp",std::move(text)});
     }
@@ -64,7 +88,7 @@ std::string sdk_native_function(ps2recomp::CodeGenerator& generator,const ps2rec
         }
         body<<"        default: return;\n    }\n";
         for(const auto& [pc,instruction]:decoded) {
-            if(const auto value=native_instruction(instruction))emit_aot_instruction(body,*value);
+            if(const auto value=native_instruction(instruction))emit_sdk_instruction(body,generator,instruction,*value);
             else body<<"    return; // Stop before the missing offline translation at "<<pc<<".\n";
         }
         body<<"}\n";

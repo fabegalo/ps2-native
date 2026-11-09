@@ -178,6 +178,28 @@
           "ps2xRuntime/src/lib/ps2_iop_host.cpp": "f8c25a41a5d28e630f75a0eca82c966c0ab80e4508649fb661f72ffa30e2710f",
           "ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp": "8d805db27ab0b7822b759102d9cd0436feac1e0f0440eb91d8712e02518e161b"
         }
+      },
+      {
+        "file": "patches/ps2recomp/0009-sdk-scalar-float.patch",
+        "sha256": "f61af467abf0653edafc886ceed260886a7443bd8f89a58ffc033a5a0932e2a2",
+        "base_files": {
+          "ps2xRuntime/include/ps2_runtime_macros.h": "db6de21b386ca4fb8a0b61af9d7f57200a22b772f7e1f9b745c837978108ad97",
+          "ps2xRecomp/src/lib/fpu_translator.cpp": "451512275b254d0c10779b76806301841549ac1f982bd44b94847282d56ab454"
+        },
+        "files": {
+          "ps2xRuntime/include/ps2_runtime_macros.h": "d6c1080326c06c6b4d667dc2659535030b6532ea6bfb67f02e3bdcef800edbcd",
+          "ps2xRecomp/src/lib/fpu_translator.cpp": "562480379db37dba63add04a37ea6d887a96d38ae21d1d308757b7e7252afdd9"
+        }
+      },
+      {
+        "file": "patches/ps2recomp/0010-native-interface-isolation.patch",
+        "sha256": "3dcc42feb93cb60628ab3b3957946d662b06cc28646b98b6b5c844504ea7d5d4",
+        "base_files": {
+          "ps2xRuntime/include/ps2_runtime.h": "3e553898b70c9ea96e5e7c631e792028a3a6947f9821bc75dc2328379708e1ce"
+        },
+        "files": {
+          "ps2xRuntime/include/ps2_runtime.h": "3912dd9866ecaa7fb38504e41cb7fcdd15a95891cb8e2fb01a0a686673748619"
+        }
       }
     ],
     "path": "out/ps2recomp-reference"

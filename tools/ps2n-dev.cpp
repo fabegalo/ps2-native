@@ -68,13 +68,6 @@ std::string identify(const fs::path& input, const std::string& requested) {
     else (void)DiscImage(input).boot_elf();
     return kind;
 }
-struct BuildLock {
-    fs::path path;
-    explicit BuildLock(const fs::path& root) : path(root / ".ps2n-dev-lock") {
-        if (!fs::create_directory(native_io_path(path))) throw std::runtime_error("developer build locked; another run may be active (remove stale lock only after verifying no process remains)");
-    }
-    ~BuildLock() { std::error_code ec; fs::remove(native_io_path(path),ec); }
-};
 int prepare_iop(const fs::path& input_path,const fs::path& cache_root,const fs::path& cancel) {
     using nlohmann::json;
     const auto input=fs::absolute(input_path);
@@ -282,7 +275,7 @@ int discover_native(const fs::path& input_path,const fs::path& cache_root,bool d
         const auto alias=overlay.value("execution_alias",0u);
         frontend::LoadedNativeModule verified(root/digest(hash+native_runtime_abi()+(alias?":"+std::to_string(alias):""))/"native-prepare.json",hash,hash,alias);
     }
-    if(info.contains("discovery") && info["discovery"].value("runtime_sha256","")==runtime_hash &&
+    if(info.contains("discovery") && info["discovery"].is_object() && info["discovery"].value("runtime_sha256","")==runtime_hash &&
        (info["discovery"].value("outcome","")!="instruction budget reached" ||
         info["discovery"].value("retired",std::uint64_t{})>=discovery_budget)) {
         std::cout<<"Native discovery reused; compatibility remains unverified\n";return 0;
@@ -305,7 +298,9 @@ int discover_native(const fs::path& input_path,const fs::path& cache_root,bool d
     auto compilation_time=std::chrono::steady_clock::duration::zero();
     const auto elapsed=[&]{return std::chrono::steady_clock::now()-start-compilation_time;};
     BootReport boundary;
-    for(unsigned attempt=0;attempt<=24;++attempt) {
+    constexpr unsigned max_iop_modules=64u,max_ee_regions=8u;
+    // Each iteration can discover one dependency; allow a final execution after all of them.
+    for(unsigned attempt=0;attempt<=max_iop_modules+max_ee_regions;++attempt) {
         if(cancelled())throw std::runtime_error("Native preparation cancelled");
         if(attempt && elapsed()>std::chrono::seconds(240)) {
             boundary.reason="Native discovery reached its 240-second limit";break;
@@ -348,7 +343,7 @@ int discover_native(const fs::path& input_path,const fs::path& cache_root,bool d
             if(!region || (region->first&3u) || !region->second || region->second>1024u*1024u) {
                 boundary.reason+="; no bounded SDK executable range at this IOP PC";break;
             }
-            if(iop_modules.size()>=64u){boundary.reason+="; native discovery reached its sixty-four-IOP-module limit";break;}
+            if(iop_modules.size()>=max_iop_modules){boundary.reason+="; native discovery reached its sixty-four-IOP-module limit";break;}
             std::vector<ObservedWord> words;
             for(unsigned offset=0;offset<(region->second+3u)/4u*4u;offset+=4u)
                 words.push_back(iop.diagnostic_ram_observed(region->first+offset));
@@ -371,7 +366,7 @@ int discover_native(const fs::path& input_path,const fs::path& cache_root,bool d
         }
         if(boundary.outcome!=BootOutcome::BlockPoint ||
            (!boundary.reason.starts_with("missing EE AOT:") && boundary.reason.find("code modified")==std::string::npos))break;
-        if(overlays.size()>=8){boundary.reason+="; native discovery reached its eight-region limit";break;}
+        if(overlays.size()>=max_ee_regions){boundary.reason+="; native discovery reached its eight-region limit";break;}
         const auto pc=boundary.pc,physical=pc>=0x80000000u && pc<0xC0000000u?pc&0x1FFFFFFFu:pc;
         if(!writes.word(physical)){boundary.reason+="; no witnessed guest write to this entry; snapshot refused";break;}
         auto begin=physical,end=physical+4;
@@ -410,7 +405,8 @@ int discover_native(const fs::path& input_path,const fs::path& cache_root,bool d
     if(sha256_file(input)!=input_hash)throw std::runtime_error("Content changed during native discovery");
     if(boundary.outcome==BootOutcome::BudgetExhausted && boundary.reason.empty())
         boundary.reason="Native discovery reached its "+std::to_string(discovery_budget)+"-instruction startup limit";
-    info["discovery"]={{{"diagnostic_spu2_effect_end_reset",spu2_effect_end?nlohmann::json(*spu2_effect_end):nlohmann::json(nullptr)},"runtime_sha256",runtime_hash},{"instruction_budget",discovery_budget},{"diagnostic_ee_early_digit_carry",ee_early_digit_carry},{"diagnostic_cache_uncached_hits",diagnostic_cache_uncached_hits},{"diagnostic_spu2_reserved_latches",spu2_reserved_latches},{"diagnostic_spu2_7ca_latch",spu2_7ca_latch},{"diagnostic_spu2_quiescent_reset",spu2_quiescent_reset},{"diagnostic_spu2_pio_word_cycles",spu2_pio_word_cycles},{"pc",boundary.pc},{"retired",boundary.retired},
+    info["discovery"]={{"diagnostic_spu2_effect_end_reset",spu2_effect_end?json(*spu2_effect_end):json(nullptr)},
+        {"runtime_sha256",runtime_hash},{"instruction_budget",discovery_budget},{"diagnostic_ee_early_digit_carry",ee_early_digit_carry},{"diagnostic_cache_uncached_hits",diagnostic_cache_uncached_hits},{"diagnostic_spu2_reserved_latches",spu2_reserved_latches},{"diagnostic_spu2_7ca_latch",spu2_7ca_latch},{"diagnostic_spu2_quiescent_reset",spu2_quiescent_reset},{"diagnostic_spu2_pio_word_cycles",spu2_pio_word_cycles},{"pc",boundary.pc},{"retired",boundary.retired},
         {"rtc_epoch_utc",rtcUtc},
         {"console_profile",profile},{"nvm_sha256",console.nvm?console.nvm->sha256:""},
         {"diagnostic_dvd_geometry",geometryKey},

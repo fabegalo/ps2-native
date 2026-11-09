@@ -10,6 +10,14 @@ struct EEState;
 struct ExecutionContext;
 struct BiosImage;
 
+// Raw-word adapters to the SDK's scalar math; no CPU state or alternate executor.
+std::uint32_t sdk_float_add(std::uint32_t,std::uint32_t);
+std::uint32_t sdk_float_sub(std::uint32_t,std::uint32_t);
+std::uint32_t sdk_float_mul(std::uint32_t,std::uint32_t);
+std::uint32_t sdk_float_div(std::uint32_t,std::uint32_t);
+std::uint32_t sdk_float_sqrt(std::uint32_t);
+std::uint32_t sdk_float_rsqrt(std::uint32_t,std::uint32_t);
+
 // Host attachment for directly compiled PS2Recomp kernel services and scheduler.
 // Only context, checked memory and canonical device interfaces live here.
 class HleKernel {

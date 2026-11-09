@@ -20,6 +20,33 @@ template<class C> int run(int argc,C** argv)try {
     std::unique_ptr<HleKernel> reference_kernel;
     if(hle)reference_kernel=std::make_unique<HleKernel>(referenceRuntime);
     if(!hle && !frame){runtime.cpu().set_reg32(31,stop);reference_cpu.set_reg32(31,stop);}
+    if(mode=="sdk-float") {
+        auto& state=runtime.cpu();
+        state.set_cp0(Cop0::Status,state.cp0(Cop0::Status)|kStatusCU1);
+        state.fpr[1]=0x45033000u; // 2099.0f: first previously uncertified table product.
+        state.fpr[2]=0x39C90FD8u;
+        state.fpr[0]=0x41800000u; // SQRT must read FT, never this FS value.
+        BootOptions options;options.max_instructions=1;options.stop_at=stop;
+        options.max_trace_events=0;options.tail_instructions=0;
+        std::uint64_t instructions=0;
+        for(unsigned slice=0;slice<16;++slice) {
+            const auto report=runtime.run(&sdk_aot_module(),options);instructions+=report.retired;
+            require(report.outcome!=BootOutcome::BlockPoint,report.reason);
+            require(report.aot_instructions==report.retired && !report.interpreted_instructions,"SDK float execution must stay native");
+            if(report.outcome==BootOutcome::StopAddress)break;
+        }
+        require(state.pc==stop && instructions==4 && state.fpr[3]==0x3F4E119Du && state.fpr[4]==0x3F65AE7Au,
+            "SDK-generated MUL.S/SQRT.S must use canonical registers and SDK arithmetic across one-instruction slices");
+        runtime.prepare_direct_elf(elf,&sdk_aot_module());
+        runtime.cpu().set_cp0(Cop0::Status,runtime.cpu().cp0(Cop0::Status)|kStatusCU1);
+        runtime.cpu().fpr[1]=0x45033000u;runtime.cpu().fpr[2]=0x39C90FD8u;
+        runtime.cpu().unknown_fpr_bits[1]=1u;
+        const auto unknown=runtime.run(&sdk_aot_module(),options);
+        require(unknown.outcome==BootOutcome::BlockPoint && !unknown.retired && runtime.cpu().unknown_fpr_bits[1]==1u,
+            "SDK float view must refuse unknown source bits without retiring or erasing them");
+        std::cout<<"SDK scalar emission: native MUL/SQRT, canonical state, sliced timing and unknown-input refusal passed\n";
+        return 0;
+    }
     std::vector<std::string> frames[2];
     BootOptions expected;expected.max_instructions=300000;expected.stop_at=stop;expected.max_trace_events=32;expected.tail_instructions=0;
     expected.on_frame=[&](const Framebuffer& f){frames[0].push_back(sha256_hex(f.rgba));};
