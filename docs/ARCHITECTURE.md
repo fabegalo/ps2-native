@@ -71,11 +71,13 @@ usa essa aritmética no despacho existente; dados de origem desconhecidos
 continuam recusados. Isso substitui as provas numéricas locais nesse caminho,
 mas não certifica precisão física da FPU do SDK ou compatibilidade comercial.
 As permutações PEXEW/PROT3W também usam o emissor do SDK sem depender do
-decodificador local, com correção da ordem das palavras no SDK. O dispositivo
+decodificador local, com correção da ordem das palavras no SDK. MOVZ/MOVN usam
+o emissor do SDK com a correção low-64 do patch 06 de gow-native-pc e preservam
+os certificados e bits desconhecidos dos registradores canônicos. O dispositivo
 SPU2 do SDK possui o estado único e a síntese ADPCM/ADSR; latches, integração
 DMA/IRQ e avanço do relógio continuam conectados pelo IOP existente. Isso é
 uma migração parcial: efeitos audíveis ainda não implementados continuam
-recusados. A configuração ESA/EEA é consumida na borda de síntese.
+recusados. A configuração ESA/EEA é consumida na borda de síntese. Com ESA/EEA desconhecida, somente ganhos de efeitos zero, IRQs desligadas e ausência de transferências permitem avançar, invalidando a cada borda o conhecimento de toda a RAM potencialmente alterada; nenhum valor de registrador ou byte zero é inventado.
 Metadados `discovery` são publicados como objeto; recibos antigos com esse
 campo em formato de array refazem a descoberta preservando o binário verificado.
 A descoberta permite os limites existentes de 64 módulos IOP e 8 regiões EE,

@@ -2,9 +2,9 @@
 file(GLOB_RECURSE native_contract_files CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/include/ps2native/*.hpp"
     "${CMAKE_SOURCE_DIR}/cmake/*.cmake")
-list(APPEND native_contract_files "${CMAKE_SOURCE_DIR}/CMakeLists.txt" "${CMAKE_SOURCE_DIR}/src/sdk/iop_module_interface.hpp")
-list(APPEND native_contract_files "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_runtime_macros.h"
-    "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/native/spu2.h")
+list(APPEND native_contract_files "${CMAKE_SOURCE_DIR}/CMakeLists.txt" "${CMAKE_SOURCE_DIR}/src/sdk/iop_module_interface.hpp"
+    "${CMAKE_SOURCE_DIR}/src/iop_aot.cpp")
+list(APPEND native_contract_files "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_runtime_macros.h")
 set(_sdk_context_header "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_runtime.h")
 file(READ "${_sdk_context_header}" _sdk_context)
 string(REPLACE "\r\n" "\n" _sdk_context "${_sdk_context}")
@@ -18,7 +18,7 @@ string(SUBSTRING "${_sdk_context}" 0 ${_sdk_context_end} _sdk_context)
 string(SHA256 _sdk_context_hash "${_sdk_context}")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_sdk_context_header}")
 list(SORT native_contract_files)
-set(native_contract "ps2n-native-module-v1;${_sdk_context_hash};${PS2N_PS2RECOMP_CODEGEN_LOCK_SHA256};${PS2N_PS2RECOMP_BACKEND_SHA256};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_CXX_COMPILER_ARCHITECTURE_ID};${CMAKE_GENERATOR_PLATFORM};${CMAKE_SYSTEM_NAME};${CMAKE_SYSTEM_PROCESSOR};${CMAKE_SIZEOF_VOID_P};${CMAKE_CXX_FLAGS};${CMAKE_CXX_FLAGS_RELEASE};${CMAKE_CXX_FLAGS_DEBUG};${CMAKE_CXX_FLAGS_RELWITHDEBINFO};${CMAKE_CXX_FLAGS_MINSIZEREL};${CMAKE_MSVC_RUNTIME_LIBRARY};${PS2N_ENABLE_PROFILING};${PS2N_ENABLE_VULKAN};${PS2N_ENABLE_DIRECTX}")
+set(native_contract "ps2n-native-module-v1;${_sdk_context_hash};${PS2N_SDK_SPU2_STATE_SHA256};${PS2N_PS2RECOMP_CODEGEN_LOCK_SHA256};${PS2N_PS2RECOMP_BACKEND_SHA256};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_CXX_COMPILER_ARCHITECTURE_ID};${CMAKE_GENERATOR_PLATFORM};${CMAKE_SYSTEM_NAME};${CMAKE_SYSTEM_PROCESSOR};${CMAKE_SIZEOF_VOID_P};${CMAKE_CXX_FLAGS};${CMAKE_CXX_FLAGS_RELEASE};${CMAKE_CXX_FLAGS_DEBUG};${CMAKE_CXX_FLAGS_RELWITHDEBINFO};${CMAKE_CXX_FLAGS_MINSIZEREL};${CMAKE_MSVC_RUNTIME_LIBRARY};${PS2N_ENABLE_PROFILING};${PS2N_ENABLE_VULKAN};${PS2N_ENABLE_DIRECTX}")
 foreach(path IN LISTS native_contract_files)
     file(SHA256 "${path}" hash)
     file(RELATIVE_PATH name "${CMAKE_SOURCE_DIR}" "${path}")

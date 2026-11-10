@@ -220,6 +220,28 @@
           "ps2xRuntime/include/native/spu2.h": "f04d4d0bf9582463cd1721ed18ada5369cbbce8cbb6caf4f15a8a495360739bc",
           "ps2xRuntime/include/native/spu_gaussian.inc": "610e28fccf84fa9b7ca405850328763641f58ad1a8ad8f1a2981e4c5dc99ffbd"
         }
+      },
+      {
+        "file": "patches/ps2recomp/0013-spu2-silent-uncertainty.patch",
+        "sha256": "4a263d1026b268b60971d4e3da6c9811d4732024520998ec365aa62f8c4c1eb5",
+        "base_files": {
+          "ps2xRuntime/include/native/spu2.h": "f04d4d0bf9582463cd1721ed18ada5369cbbce8cbb6caf4f15a8a495360739bc"
+        },
+        "files": {
+          "ps2xRuntime/include/native/spu2.h": "6f6592bc5403c93cf140fdd3e08b07c21b36f13762821c9ca08fef6fb3d28c90"
+        }
+      },
+      {
+        "file": "patches/ps2recomp/0014-movz-movn-low64.patch",
+        "sha256": "f8cb8122d337fc028c0e989953bfbfb3a52fceb6da75bcc9efdd5d086b65eda4",
+        "base_files": {
+          "ps2xRecomp/src/lib/special_translator.cpp": "98adc0305effdd57ca34ea029070f117379bd7e78c9f8944a8e9276c8c7bd3cd",
+          "ps2xRuntime/include/ps2_runtime_macros.h": "6747500cf07e0cdc0448a0de721d3a36a37488bd0d216cb8412939075aaa1b1a"
+        },
+        "files": {
+          "ps2xRecomp/src/lib/special_translator.cpp": "ebfd5a9b14b4ad4ef48e18ca4efebde75ae429bf479173ae02f748388dac168a",
+          "ps2xRuntime/include/ps2_runtime_macros.h": "13b49e51f7eb228ab8489d180d8247acd2f7e5146538fb3178c07bbc2c042500"
+        }
       }
     ],
     "path": "out/ps2recomp-reference"

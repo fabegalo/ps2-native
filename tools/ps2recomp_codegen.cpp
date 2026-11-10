@@ -28,15 +28,22 @@ bool sdk_packed_words(const ps2recomp::Instruction& instruction) {
     return instruction.opcode==0x1Cu && instruction.function==ps2recomp::MMI_MMI2 &&
         (instruction.sa==ps2recomp::MMI2_PEXEW || instruction.sa==ps2recomp::MMI2_PROT3W);
 }
+bool sdk_conditional_move(const ps2recomp::Instruction& instruction) {
+    return instruction.opcode==0 &&
+        (instruction.function==ps2recomp::SPECIAL_MOVZ || instruction.function==ps2recomp::SPECIAL_MOVN);
+}
+bool sdk_register_instruction(const ps2recomp::Instruction& instruction) {
+    return sdk_packed_words(instruction) || sdk_conditional_move(instruction);
+}
 void emit_sdk_instruction(std::ostream& out,ps2recomp::CodeGenerator& generator,
                           const ps2recomp::Instruction& instruction,const std::optional<MipsInstruction>& native) {
-    const bool packed=sdk_packed_words(instruction);
-    if(!packed && native && !sdk_scalar_float(native->opcode)){emit_aot_instruction(out,*native);return;}
+    const bool registers=sdk_register_instruction(instruction);
+    if(!registers && native && !sdk_scalar_float(native->opcode)){emit_aot_instruction(out,*native);return;}
     out<<"instruction_"<<std::uppercase<<std::hex;
     out.width(8);out.fill('0');out<<instruction.address<<std::dec<<":\n"
        <<"    if (!aot_enter_checked(ctx, "<<instruction.address<<"u, "<<instruction.raw<<"u, false)) return;\n"
        <<"    {\n"
-       <<(packed ? "" : "        if (!(state.cp0(Cop0::Status)&kStatusCU1)) throw GuestStop(StopKind::GuestException, \"SDK FPU with Status.CU1 = 0\");\n")
+       <<(registers ? "" : "        if (!(state.cp0(Cop0::Status)&kStatusCU1)) throw GuestStop(StopKind::GuestException, \"SDK FPU with Status.CU1 = 0\");\n")
        <<"        const auto frame=ee::begin(state, "<<instruction.address<<"u);\n"
        <<"        { SdkFloatContext sdk(state); auto* ctx=&sdk;\n"
        <<"          "<<generator.translateInstruction(instruction)<<"\n"
@@ -88,13 +95,13 @@ std::string sdk_native_function(ps2recomp::CodeGenerator& generator,const ps2rec
            <<"    using namespace ps2native; auto& state=ctx.state; auto& memory=ctx.memory;\n"
            <<"    switch(state.pc) {\n";
         for(const auto& [pc,instruction]:decoded) {
-            if(!sdk_packed_words(instruction) && !native_instruction(instruction))continue;
+            if(!sdk_register_instruction(instruction) && !native_instruction(instruction))continue;
             body<<"        case "<<pc<<"u: goto instruction_"<<std::uppercase<<std::hex;
             body.width(8);body.fill('0');body<<pc<<std::dec<<";\n";
         }
         body<<"        default: return;\n    }\n";
         for(const auto& [pc,instruction]:decoded) {
-            if(const auto value=native_instruction(instruction); value || sdk_packed_words(instruction))emit_sdk_instruction(body,generator,instruction,value);
+            if(const auto value=native_instruction(instruction); value || sdk_register_instruction(instruction))emit_sdk_instruction(body,generator,instruction,value);
             else body<<"    return; // Stop before the missing offline translation at "<<pc<<".\n";
         }
         body<<"}\n";
@@ -131,7 +138,7 @@ std::string sdk_native_registration(ps2recomp::CodeGenerator& generator,const st
             const auto [word,inserted]=words.emplace(instruction.address,instruction.raw);
             if(!inserted && word->second!=instruction.raw)throw std::runtime_error("SDK native module has conflicting instruction bytes");
             const auto value=native_instruction(instruction);
-            if(!value && !sdk_packed_words(instruction)){missing.emplace(instruction.address,instruction.raw);continue;}
+            if(!value && !sdk_register_instruction(instruction)){missing.emplace(instruction.address,instruction.raw);continue;}
             entries.emplace(instruction.address,Entry{instruction.raw,function.start});
         }
         if(entries.contains(function.start|execution_alias))indirect.insert(function.start|execution_alias);

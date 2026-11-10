@@ -2257,7 +2257,8 @@ void Iop::validate_spu2_adma(unsigned core) const {
         const auto word=spu2_control_[c];
         if(!word || ((word->value|word->unknown)&0x40u))
             throw IopStop{"SPU2 ADMA requires both shared-RAM IRQ comparators explicitly disabled"};
-        if(spu2_effects_active(c))(void)spu2_effect_area(c);
+        if(spu2_effects_active(c) && spu2_effect_area(c).first<0x2800u)
+            throw IopStop{"SPU2 ADMA cannot share RAM with an unknown effect workspace"};
     }
     const auto control=spu2_control_[core];
     if((control->unknown&0x80F0u) || (control->value&0x8070u)!=0x8000u)
@@ -2450,7 +2451,9 @@ std::pair<std::uint32_t,std::uint32_t> Iop::spu2_effect_area(unsigned core) cons
     };
     const auto high=field(base+0x2E0u),low=field(base+0x2E2u),end=field(base+0x33Cu);
     if(((!high || !low) && !diagnostic_spu2_effect_start_) || (!end && !diagnostic_spu2_effect_end_))
-        throw IopStop{"SPU2 effects require a known workspace start and end"};
+        // A may-write bound, never a guessed ESA/EEA. Consumers must prove
+        // silent output/no IRQs or refuse any overlapping DMA access.
+        return {0u,0xFFFFFu};
     const auto initial=diagnostic_spu2_effect_start_ ? (*diagnostic_spu2_effect_start_)[core] : 0u;
     const auto first=((high.value_or(initial>>16u)&0xFu)<<16u)|(low.value_or(initial)&0xFFFFu);
     const auto last=((end ? *end : (*diagnostic_spu2_effect_end_)[core])&0xFu)<<16u|0xFFFFu;
@@ -2507,33 +2510,43 @@ void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
 }
 void Iop::tick_spu2() {
     if(spu2_irq_pending_[0] || spu2_irq_pending_[1])istat_|=1u<<9u;
-    bool sample_edge=false;
+    bool opaque_effects=false;
     for(unsigned core=0;core<2;++core) {
         if(spu2_next_sample_[core] && cycle_>=*spu2_next_sample_[core]) {
-            sample_edge=true;
             if(spu2_effect_area_dirty_[core] && spu2_effects_active(core)) {
                 // ESA/EEA halfword writes are not atomic as a group. Consume
                 // their final configuration at the next synthesis boundary,
                 // before any RAM-dependent audio state can be observed.
                 const auto area=spu2_effect_area(core);
                 const auto mode=spu2_control_[core]->value&0x30u;
+                if(!area.first && (spu2_adma_[0].enabled || spu2_adma_[1].enabled ||
+                   (spu2_adma_[0].normal && spu2_adma_[0].next) || (spu2_adma_[1].normal && spu2_adma_[1].next)))
+                    throw IopStop{"SPU2 unknown effect workspace cannot share RAM with DMA"};
                 if(area.first<=area.second) {
                     for(unsigned channel=0;channel<2u;++channel) {
                         const auto gain=latch(0x1F900764u+core*0x28u+channel*2u);
-                        if((!gain || !*gain || **gain!=0u) && !diagnostic_spu2_adma_cycles_)
+                        if(!gain || !*gain || **gain!=0u)
                             throw IopStop{"SPU2 uncomputed effects require known zero left and right output gains"};
                     }
                 }
-                const auto other=spu2_control_[core^1u];
-                if(!other || ((other->value|other->unknown)&0x40u))
-                    throw IopStop{"SPU2 effect RAM writes require both IRQ comparators disabled"};
+                for(const auto& control:spu2_control_)
+                    if(!control || ((control->value|control->unknown)&0x40u))
+                        throw IopStop{"SPU2 effect RAM writes require both IRQ comparators disabled"};
                 if(mode==0x10u || spu2_transfer_[0].next || spu2_transfer_[1].next ||
                    (!diagnostic_spu2_adma_cycles_ && (mode==0x20u || spu2_adma_[0].enabled || spu2_adma_[1].enabled)))
                     throw IopStop{"SPU2 active effects and transfer bus arbitration is not modeled"};
                 if(!spu2_ram_written_.empty())std::fill(spu2_ram_written_.begin()+area.first,
                     spu2_ram_written_.begin()+area.second+1u,std::uint8_t{0});
-                spu2_effect_area_dirty_[core]=false;
+                // An unknown area may overwrite newly captured samples on
+                // every edge; retain uncertainty until ESA/EEA are established.
+                spu2_effect_area_dirty_[core]=!area.first;opaque_effects|=!area.first;
             }
+        }
+    }
+    bool sample_edge=false;
+    for(unsigned core=0;core<2;++core) {
+        if(spu2_next_sample_[core] && cycle_>=*spu2_next_sample_[core]) {
+            sample_edge=true;
             const auto off=std::uint32_t{spu2_keys_[core][2].value_or(0)}|
                 (std::uint32_t{spu2_keys_[core][3].value_or(0)}<<16u);
             const auto on=std::uint32_t{spu2_keys_[core][0].value_or(0)}|
@@ -2558,7 +2571,9 @@ void Iop::tick_spu2() {
                     *upper=static_cast<std::uint16_t>(*upper>step ? *upper-step : 0u);
                     if(!*upper)spu2_release_pending_[core]&=~(1u<<voice);
                 }
+            if(opaque_effects)std::fill(spu2_ram_written_.begin(),spu2_ram_written_.end(),std::uint8_t{0});
             const auto sample=synthesize_spu2(core,*spu2_next_sample_[core]);
+            if(opaque_effects)std::fill(spu2_ram_written_.begin(),spu2_ram_written_.end(),std::uint8_t{0});
             // Pending key commands are consumed at a synthesis boundary.
             // Their observable readback is not an active-voice bitmap.
             for(auto& key:spu2_keys_[core])if(key)key=0;
@@ -3459,7 +3474,7 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         if((physical==0x1F900764u || physical==0x1F900766u || physical==0x1F90078Cu || physical==0x1F90078Eu) &&
            *value && spu2_effects_active((physical-0x1F900764u)/0x28u)) {
             const auto area=spu2_effect_area((physical-0x1F900764u)/0x28u);
-            if(area.first<=area.second && !diagnostic_spu2_adma_cycles_)
+            if(area.first<=area.second)
                 throw IopStop{"SPU2 effect gain cannot expose an uncomputed DSP output"};
         }
         if(is_spu2_effect_coefficient(physical) || is_spu2_effect_offset(physical)) {

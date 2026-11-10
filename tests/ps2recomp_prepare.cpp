@@ -156,12 +156,20 @@ int main(int argc,char** argv) {
             require(sdk_emission,"SDK scalar translation must reach generated output without local arithmetic substitution");
             integrated(scalar_image,scalar_output/"generated",scalar,"sdk-float");
             auto packed=p;
-            packed.segments[0].bytes=m20::le_words({0x70021F89u,0x70031FC9u,0x70020789u,0x70002789u,0x03E00008u,0u});
+            packed.segments[0].bytes=m20::le_words({0x70021F89u,0x70031FC9u,0x70020789u,0x70002789u,
+                0x00C7400Au,0x012A580Bu,0x00C7600Bu,0x00CD000Au,0x03E00008u,0x70022F89u});
             const auto packed_image=root/"packed.elf",packed_output=root/"packed-aot";
             (void)write_binary_if_changed(packed_image,direct_test::elf(packed));
             call(packed_image,packed_output,false,true);
             const auto packed_info=nlohmann::json::parse(text(packed_output/"sdk-prepare.json"));
             require(packed_info.at("native_unsupported").empty(),"SDK packed translations must not be gated by the local decoder");
+            bool sdk_moves=false;
+            for(const auto& entry:fs::directory_iterator(packed_output/"generated"))if(entry.path().extension()==".cpp") {
+                const auto source=text(entry.path());
+                if(source.find("SET_GPR_U64(ctx, 8, GPR_U64(ctx, 6))")!=std::string::npos &&
+                   source.find("SET_GPR_U64(ctx, 11, GPR_U64(ctx, 9))")!=std::string::npos)sdk_moves=true;
+            }
+            require(sdk_moves,"Reused MOVZ/MOVN correction must reach SDK-generated native code");
             integrated(packed_image,packed_output/"generated",packed,"sdk-mmi");
         }
         call(input,output,false,true);

@@ -1,5 +1,19 @@
 # The SDK class owns the existing console components in its native backend.
 # The upstream standalone runtime, IOP and VU interpreters are not linked here.
+# Content modules use the SPU2 state layout through Iop, never its synthesis
+# methods. Those are instantiated by iop.cpp in the shared runtime only.
+set(_sdk_spu2_header "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/native/spu2.h")
+file(READ "${_sdk_spu2_header}" _sdk_spu2)
+string(REPLACE "\r\n" "\n" _sdk_spu2 "${_sdk_spu2}")
+string(FIND "${_sdk_spu2}" "\nnamespace spu2_detail {\n" _sdk_spu2_end)
+if(_sdk_spu2_end LESS 0)
+    message(FATAL_ERROR "SDK native SPU2 state declaration boundary changed")
+endif()
+string(SUBSTRING "${_sdk_spu2}" 0 ${_sdk_spu2_end} _sdk_spu2)
+string(SHA256 PS2N_SDK_SPU2_STATE_SHA256 "${_sdk_spu2}")
+set(PS2N_SDK_SPU2_STATE_CONTRACT "${_sdk_spu2}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_sdk_spu2_header}")
+
 add_library(ps2n_sdk_runtime INTERFACE)
 target_sources(ps2n_core PRIVATE src/ps2recomp_runtime.cpp)
 target_include_directories(ps2n_sdk_runtime INTERFACE "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include")

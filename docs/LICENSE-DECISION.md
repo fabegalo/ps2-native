@@ -25,6 +25,10 @@ SetupThread, SetupHeap/EndOfHeap, GetMemorySize e FlushCache (adaptada ao cache
 compartilhado, sem usar o stub de sucesso do upstream). Serviços ausentes são
 recusados explicitamente.
 
+## Correção MOVZ/MOVN reutilizada — 09/11/2026
+
+O patch `0014` adapta o patch 06 de [Vnnc1/gow-native-pc](https://github.com/Vnnc1/gow-native-pc/tree/d28a63d3fd0f2a412ff9018b52d2a9a3cbdb18fd/engine/patches), sob GPL-3.0. O cabeçalho preserva a origem e os créditos ao port God of War II (cxldsakeb, DaniSBR1 e contribuidores; commit `ddcc548`). A incorporação segue os termos GPL já adotados para o SDK; não inclui código gerado de jogos, outro runtime ou overrides por título.
+
 ## Reutilização efetiva: leitor do IPU — 07/11/2026
 
 A rotina `bits_at` de [ps2-web-recomp, revisão

@@ -3,8 +3,10 @@
 #include "ps2native/ee.hpp"
 #include "ps2native/execution.hpp"
 #include <bit>
+#include <memory>
+#include <vector>
 
-// Use the SDK's original scalar operations without its SIMD/private CPU state.
+// Use SDK operations through canonical register views, without private CPU state.
 #define PS2_SCALAR_FLOAT_ONLY
 #include <ps2_runtime_macros.h>
 #undef PS2_SCALAR_FLOAT_ONLY
@@ -13,6 +15,34 @@ namespace ps2native {
 // A view into canonical registers, never a second register file or a snapshot.
 struct SdkFloatContext {
     EEState& state;
+    struct Word64 {
+        std::uint64_t value{},unknown{};
+        std::shared_ptr<const std::vector<std::uint64_t>> possible;
+        std::array<std::optional<std::array<std::uint32_t,2>>,2> bounds;
+        bool operator==(std::uint64_t other) const {
+            if((value^other)&~unknown)return false;
+            if(!unknown)return true;
+            if(possible) {
+                bool equal=false,different=false;
+                for(auto candidate:*possible){equal|=candidate==other;different|=candidate!=other;}
+                if(equal!=different)return equal;
+            }
+            throw GuestStop(StopKind::Undefined,"SDK conditional move consumes an unknown condition");
+        }
+        bool operator!=(std::uint64_t other) const { return !(*this==other); }
+    };
+    Word64 gpr_word(unsigned index) const {
+        if(!index)return {};
+        const auto& bounds=state.gpr_candidates[index].bounds;
+        return {state.gpr[index].low,state.unknown_gpr_bits[index],state.reg64_candidates(index),{bounds[0],bounds[1]}};
+    }
+    void set_gpr_word(unsigned index,const Word64& word) {
+        if(!index)return;
+        if(word.possible)state.set_reg64_candidates(index,*word.possible);
+        else state.set_reg64_observed(index,word.value,word.unknown);
+        state.gpr_candidates[index].bounds[0]=word.bounds[0];
+        state.gpr_candidates[index].bounds[1]=word.bounds[1];
+    }
     struct Word { std::uint32_t value,unknown; };
     using Words=std::array<Word,4>;
     Words gpr_vec(unsigned index) const {

@@ -419,14 +419,16 @@ int main() try {
                 "inverted-area experiment omits DSP accesses without clearing or fabricating RAM");
         }
         iop.run_until(2304u);
-        if(mode==13u || mode==20u || mode==22u)require(!iop.spu2_ram_halfword(0x1FFF8u),"extending active EEA invalidates newly reachable RAM");
+        if(mode==3u || mode==11u || mode==13u || mode==20u || mode==22u)require(!iop.spu2_ram_halfword(0x1FFF8u),"extending active EEA invalidates newly reachable RAM");
         else require(iop.spu2_ram_halfword(0x1FFF8u)==0x5678u,"rejected or disjoint workspace writes preserve unrelated RAM");
-        if(mode==0u || mode==8u || mode==9u || mode==10u || mode==13u || mode==16u || mode==17u || mode==20u || mode==22u)require(!iop.stopped() && !iop.spu2_ram_halfword(0xFFF8u) &&
+        if(mode==0u || mode==3u || mode==9u || mode==10u || mode==11u || mode==13u || mode==16u || mode==17u)require(!iop.stopped() && !iop.spu2_ram_halfword(0xFFF8u) &&
             iop.spu2_last_sample(effect_core)->left==0 && iop.spu2_last_sample(effect_core)->right==0,
             "zero effect gains prove output while workspace bytes become unknown, including after disable");
+        else if(mode==8u || mode==20u || mode==22u)require(!iop.stopped() && iop.spu2_ram_halfword(0xFFF8u)==0xABCDu,
+            "Disabling or moving effects before their first access preserves the untouched former workspace");
         else {
-            require(iop.stopped(),"unknown effects refuse audible gain, absent workspace, IRQ, dynamic-buffer overlap and transfer arbitration");
-            if(mode==1u || mode==3u || mode==4u || mode==5u)
+            require(iop.stopped(),"unknown effects refuse audible gain, IRQ, dynamic-buffer overlap and transfer arbitration");
+            if(mode==1u || mode==4u || mode==5u)
                 require(iop.spu2_ram_halfword(0xFFF8u)==0xABCDu,"rejected effect start leaves prior RAM knowledge untouched");
         }
         bool late=false;try{iop.diagnostic_spu2_effect_start_reset({0xFFF8u,0xFFF8u});}catch(const DeviceRefusal&){late=true;}
