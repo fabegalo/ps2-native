@@ -1268,6 +1268,7 @@ template<class C> int run(int argc,C** argv)try {
         HleKernel kernel(runtime);
         memory->mount_disc(std::make_shared<DiscImage>(cdvdDisc),Iop::DiscMedium::Ps2Cd);
         auto syntheticBoard=*find_console_hardware("SCPH-70004:GH-032-32");syntheticBoard.romver=m20::kRomver;
+        syntheticBoard.gs_revision_id=std::array<std::uint8_t,2>{0x37u,0xA5u};
         if(withBios) {
             m20::File cdvd{"CDVDMAN",residentIrX,{}},fsv{"CDVDFSV",residentIrX,{}};
             m20::field(cdvd.extinfo,2,0x1234,{});m20::field(fsv.extinfo,2,0x2345,{});
@@ -1278,7 +1279,15 @@ template<class C> int run(int argc,C** argv)try {
             const std::array modules{dma,cdvd,fsv,modload,loadfile};
             kernel.configure_bios(std::make_shared<const BiosImage>(load_bios_rom0(m20::build_firmware(m20::Stage::M20,modules).rom)));
             rejects([&]{configure_hle_console(*memory,find_console_hardware("SCPH-70004:GH-032-32"),nullptr);},"ROMVER differ");
+            const auto unboundCsr=memory->load64_observed(kGsCsr);
+            require((unboundCsr.unknown&0xFFFF0000ull)==0xFFFF0000ull,
+                "An absent or rejected HLE console profile must not invent a GS identity");
             configure_hle_console(*memory,&syntheticBoard,nullptr);
+            const auto csr=memory->load64_observed(kGsCsr);
+            require(!(csr.unknown&0xFFFF0000ull) && (csr.value&0xFFFF0000ull)==0xA5370000ull &&
+                (csr.unknown&~0xFFFF0000ull)==(unboundCsr.unknown&~0xFFFF0000ull) &&
+                !((csr.value^unboundCsr.value)&~csr.unknown&~0xFFFF0000ull),
+                "SDK console binding supplies measured GS REV/ID without changing other CSR values or knowledge");
             auto& iop=const_cast<Iop&>(memory->iop());
             iop.ee_cdvd_write(0x1F402017u,1u,0u);iop.ee_cdvd_write(0x1F402016u,1u,3u);
             for(const auto byte:syntheticBoard.mechacon->version)require(iop.ee_cdvd_read(0x1F402018u,1u)==byte,

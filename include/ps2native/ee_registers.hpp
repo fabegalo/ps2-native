@@ -56,6 +56,9 @@ inline constexpr std::uint32_t kIntcSources = 0x7FFFu;
 
 class EeRegisters {
     friend struct CheckpointAccess;
+    // RUNTIME_HELPERS_BEGIN
+    friend class Ps2RecompIopServices;
+    // RUNTIME_HELPERS_END
 public:
     // State after a hardware reset of the console `hardware` (nullptr: none
     // selected, so board-specific registers refuse reads), with the IOP at its

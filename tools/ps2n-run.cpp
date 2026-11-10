@@ -284,7 +284,8 @@ template<class C> int run_main(int argc, C** argv) {
         }
         std::cout << "status=0x" << std::hex << state.cp0(ps2native::Cop0::Status)
                   << " cause=0x" << state.cp0(ps2native::Cop0::Cause) << " epc=0x" << state.cp0(ps2native::Cop0::Epc)
-                  << " v1=0x" << state.reg32(3) << std::dec
+                  << " v1=0x" << static_cast<std::uint32_t>(state.gpr[3].low)
+                  << "/?0x" << static_cast<std::uint32_t>(state.unknown_gpr_bits[3]) << std::dec
                   << " gs_pixel_writes=" << memory.gs().vram().pixel_writes() << '\n';
         std::string trace="# ELF sha256 "+ps2native::sha256_hex(elf.bytes)+"\n";
         for (const auto& line:report.trace) trace+=line+'\n';

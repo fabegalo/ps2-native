@@ -59,7 +59,9 @@ void Ps2RecompIopServices::configure_console(Memory& memory,const ConsoleHardwar
     if(hardware && (!services->bios_ || hardware->romver!=services->bios_->version.romver))throw DeviceRefusal("Console profile and HLE BIOS ROMVER differ");
     if(nvm && (!hardware || !hardware->mechacon || nvm->model_name!=hardware->model || nvm->layout!=hardware->mechacon->layout))
         throw DeviceRefusal("HLE NVM does not match its console profile");
-    services->consoleNvm_=std::move(nvm);iop.hardware_=hardware;iop.nvm_=services->consoleNvm_.get();
+    services->consoleNvm_=std::move(nvm);
+    memory.registers_.hardware_=hardware;
+    iop.hardware_=hardware;iop.nvm_=services->consoleNvm_.get();
 }
 void sdk_iop_bus_write(Iop& iop,std::uint32_t address,unsigned bytes,std::uint32_t value) {Ps2RecompIopServices::write_device(iop,address,bytes,value);}
 std::uint32_t Ps2RecompIopServices::read_device(Iop& iop,std::uint32_t address,unsigned bytes) {

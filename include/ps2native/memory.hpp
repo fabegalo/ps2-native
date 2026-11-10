@@ -81,6 +81,9 @@ struct TlbEntry {
 
 class Memory {
     friend struct CheckpointAccess;
+    // RUNTIME_HELPERS_BEGIN
+    friend class Ps2RecompIopServices;
+    // RUNTIME_HELPERS_END
 public:
     enum class Privilege : std::uint8_t { Kernel, Supervisor, User, Reserved };
     static constexpr std::size_t kMainRamBytes = 32u * 1024u * 1024u;
