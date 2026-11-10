@@ -1,4 +1,4 @@
-# PS2Recomp is the execution layer, consumed unmodified at the commit pinned in
+# PS2Recomp is the execution layer, consumed with locked patches at the commit pinned in
 # deps.lock.json (as x360-native consumes ReXGlue):
 #   ps2xRecomp/ps2xAnalyzer  built as their own top-level project (README flow)
 #   ps2xRuntime/ps2xIOP      added here; each prepared game links ps2_runtime
@@ -34,11 +34,50 @@ execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${_ps2recomp}" rev-parse HEAD
 if(NOT _result EQUAL 0 OR NOT _actual STREQUAL PS2N_PS2RECOMP_COMMIT)
     message(FATAL_ERROR "PS2Recomp at ${_ps2recomp} is ${_actual}; deps.lock.json pins ${PS2N_PS2RECOMP_COMMIT}")
 endif()
-execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${_ps2recomp}" status --porcelain --untracked-files=no
-    OUTPUT_VARIABLE _changes OUTPUT_STRIP_TRAILING_WHITESPACE)
-if(_changes)
-    message(FATAL_ERROR "PS2Recomp checkout ${_ps2recomp} has local changes; it is used unmodified:\n${_changes}")
+# As with ReXGlue, accept only the patched files and exact bytes in the lock.
+set(_patched_files "")
+string(JSON _patch_count LENGTH "${_ps2n_lock}" ps2recomp patches)
+if(_patch_count GREATER 0)
+    math(EXPR _last_patch "${_patch_count} - 1")
+    foreach(_i RANGE ${_last_patch})
+        string(JSON _patch GET "${_ps2n_lock}" ps2recomp patches ${_i})
+        string(JSON _file GET "${_patch}" file)
+        string(JSON _want GET "${_patch}" sha256)
+        file(READ "${PROJECT_SOURCE_DIR}/${_file}" _text)
+        string(REPLACE "\r\n" "\n" _text "${_text}")
+        string(SHA256 _have "${_text}")
+        if(NOT _have STREQUAL _want)
+            message(FATAL_ERROR "PS2Recomp patch hash mismatch: ${_file}")
+        endif()
+        string(JSON _files GET "${_patch}" files)
+        string(JSON _file_count LENGTH "${_files}")
+        math(EXPR _last_file "${_file_count} - 1")
+        foreach(_j RANGE ${_last_file})
+            string(JSON _path MEMBER "${_files}" ${_j})
+            string(JSON _want GET "${_files}" "${_path}")
+            file(READ "${_ps2recomp}/${_path}" _text)
+            string(REPLACE "\r\n" "\n" _text "${_text}")
+            string(SHA256 _have "${_text}")
+            if(NOT _have STREQUAL _want)
+                message(FATAL_ERROR "PS2Recomp patch missing/modified: ${_path}. Run scripts/apply-sdk-patches.ps1")
+            endif()
+            list(APPEND _patched_files "${_path}")
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                "${PROJECT_SOURCE_DIR}/${_file}" "${_ps2recomp}/${_path}")
+        endforeach()
+    endforeach()
 endif()
+execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${_ps2recomp}" diff HEAD --name-only
+    OUTPUT_VARIABLE _changes OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _result)
+if(NOT _result EQUAL 0)
+    message(FATAL_ERROR "Cannot inspect PS2Recomp working tree")
+endif()
+string(REPLACE "\n" ";" _changes "${_changes}")
+foreach(_path IN LISTS _changes)
+    if(NOT _path IN_LIST _patched_files)
+        message(FATAL_ERROR "Unrecorded PS2Recomp change: ${_path}")
+    endif()
+endforeach()
 set(PS2N_PS2RECOMP_DIR "${_ps2recomp}")
 
 # Recompiler and analyzer: the upstream top-level build, tools only.
@@ -64,7 +103,7 @@ add_subdirectory("${_ps2recomp}/ps2xIOP" ps2recomp/iop EXCLUDE_FROM_ALL)
 add_subdirectory("${_ps2recomp}/ps2xRuntime" ps2recomp/runtime EXCLUDE_FROM_ALL)
 
 # One executable per prepared game: the generated PS2Recomp sources, the
-# ps2-native host entry point and the unchanged ps2_runtime library.
+# ps2-native host entry point and the hash-verified ps2_runtime library.
 function(ps2n_add_game id generated)
     file(GLOB _sources CONFIGURE_DEPENDS "${generated}/*.cpp")
     add_executable(ps2n-game-${id} EXCLUDE_FROM_ALL ${_sources} "${PROJECT_SOURCE_DIR}/tools/ps2n_game_main.cpp")

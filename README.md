@@ -50,7 +50,9 @@ The **original PlayStation 2 Browser** and system configuration screens are targ
 Requirements: **CMake 3.21+**, a **C++20 compiler** and **Ninja** (or a supported native build generator). No mandatory external SDK or AVX instruction-set requirement.
 
 ```sh
-cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+git submodule update --init external/ps2recomp
+git -C external/ps2recomp apply ../../patches/ps2recomp/*.patch
+cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2X_RELEASE_LTCG=OFF
 cmake --build out/build --parallel
 ctest --test-dir out/build --output-on-failure
 ```
@@ -61,7 +63,7 @@ GitHub Actions builds and tests **Windows x86-64/ARM64, Linux x86-64/ARM64 (incl
 
 ### Developer tools
 
-Execution uses [PS2Recomp](https://github.com/ran-j/PS2Recomp) unmodified, from the `external/ps2recomp` submodule (`git submodule update --init`).
+Execution uses the pinned [PS2Recomp](https://github.com/ran-j/PS2Recomp) submodule with versioned patches authenticated by `deps.lock.json`. On Windows, `scripts/apply-sdk-patches.ps1` applies them idempotently (`-Check` verifies, `-Revert` restores the pin). Release without LTCG avoids very long MSVC links for large games; other upstream Release flags remain unchanged.
 
 ```sh
 # Extract a legally obtained disc, recompile it with PS2Recomp, build and run it.

@@ -43,6 +43,10 @@ jobs:
           persist-credentials: false
           submodules: true
 
+      - name: Apply locked PS2Recomp patches
+        shell: bash
+        run: git -C external/ps2recomp apply ../../patches/ps2recomp/*.patch
+
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -57,7 +61,7 @@ jobs:
       - name: Configure and build (Unix / Ninja)
         if: runner.os != 'Windows'
         run: |
-          cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_LAUNCHER=OFF
+          cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_LAUNCHER=OFF -DPS2X_RELEASE_LTCG=OFF
           cmake --build out/build --parallel 2 --target ps2n ps2n-content-tests ps2_runtime
 
       # Ninja inside the MSVC developer shell: ps2n builds prepared games with
@@ -73,7 +77,7 @@ jobs:
           $hostArch = if ($env:RUNNER_ARCH -eq "ARM64") { "arm64" } else { "x64" }
           $targetArch = "${{ matrix.arch }}".ToLowerInvariant()
           Enter-VsDevShell -VsInstallPath $installation -SkipAutomaticLocation -DevCmdArguments "-arch=$targetArch -host_arch=$hostArch"
-          cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_LAUNCHER=OFF
+          cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_LAUNCHER=OFF -DPS2X_RELEASE_LTCG=OFF
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build out/build --parallel 2 --target ps2n ps2n-content-tests ps2_runtime
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

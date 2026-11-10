@@ -4,6 +4,31 @@
     "url": "https://github.com/ran-j/PS2Recomp.git",
     "commit": "e5636981a1c9de368f6b71e819c3dc188dfedbf4",
     "license": "GPL-3.0",
-    "patches": []
+    "patches": [
+      {
+        "file": "patches/ps2recomp/0001-release-ltcg-option.patch",
+        "sha256": "69de14b76d21afd49a03a147315cbdf06a21818761b2b4bfda3caa7ed060106c",
+        "base_files": {
+          "ps2xRuntime/cmake/ReleaseMode.cmake": "66a8b82f682c0b0d3e69f9bd870f2542db29207951fa096c85b91a367c8350d0"
+        },
+        "files": {
+          "ps2xRuntime/cmake/ReleaseMode.cmake": "b1906e2cffbcd7cf6209279f7c583fd2f8d9977286232b2a0c490c84229d9b43"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0002-kernel-fs-sema-and-ireleasealarm.patch",
+        "sha256": "09ea396a0f6b8b6c9b7edf07f93fefc3f6b31dceec0a459ac5a2303597e82a74",
+        "base_files": {
+          "ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp": "a77e0e297f2f9ea03f011a1bec81c38d99b13aa83cfae863290205a4c7ca7554",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp": "0c610a9dbc17751bd8d813dbd4c8eb101bd0de14560a362286e0c59a96c98fd8"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp": "f03c2654de791d5a5f7c6e1fb60ad1aa10a9c18966d71eb6ec58a09c19914b49",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp": "25bcd64e958a99534f59ecc627884a78c8cad767137fb0dd282ccd52fd933bcf"
+        },
+        "hash_format": "utf8-lf"
+      }
+    ]
   }
 }

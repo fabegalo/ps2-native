@@ -1,0 +1,28 @@
+PS2Recomp kernel HLE gaps: sceFsSemInit succeeds like sceFsInit (fileio is HLE),
+and syscall -0xFE (iReleaseAlarm, the interrupt form of 0xFE) cancels an alarm.
+
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp
+index b1083af..b58bb2f 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp
+@@ -20,7 +20,7 @@ namespace ps2_stubs
+ 
+     void sceFsSemInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        TODO_NAMED("sceFsSemInit", rdram, ctx, runtime);
++        setReturnS32(ctx, 0);
+     }
+ 
+     void sceFsSigSema(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp
+index 121fcc7..15fbbd5 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp
+@@ -71,6 +71,7 @@ namespace ps2_syscalls
+             iSetAlarm(rdram, ctx, runtime);
+             return true;
+         case static_cast<uint32_t>(-0x1F):
++        case static_cast<uint32_t>(-0xFE):
+         case static_cast<uint32_t>(-0xFF):
+             iCancelAlarm(rdram, ctx, runtime);
+             return true;

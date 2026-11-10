@@ -50,7 +50,9 @@ O **Browser original do PlayStation 2** e as telas de configuraÃ§Ã£o do sist
 Requisitos: **CMake 3.21+**, **compilador C++20** e **Ninja** (ou gerador nativo compatÃ­vel). NÃ£o hÃ¡ SDK externo obrigatÃ³rio nem exigÃªncia de instruÃ§Ãµes AVX.
 
 ```sh
-cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+git submodule update --init external/ps2recomp
+git -C external/ps2recomp apply ../../patches/ps2recomp/*.patch
+cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2X_RELEASE_LTCG=OFF
 cmake --build out/build --parallel
 ctest --test-dir out/build --output-on-failure
 ```
@@ -61,7 +63,7 @@ O GitHub Actions compila e testa **Windows x86-64/ARM64, Linux x86-64/ARM64 (inc
 
 ### Ferramentas de desenvolvimento
 
-A execução usa o [PS2Recomp](https://github.com/ran-j/PS2Recomp) sem modificação, do submódulo `external/ps2recomp` (`git submodule update --init`).
+A execução usa o submódulo fixado do [PS2Recomp](https://github.com/ran-j/PS2Recomp), com patches versionados autenticados por `deps.lock.json`. No Windows, `scripts/apply-sdk-patches.ps1` aplica os patches de forma idempotente (`-Check` verifica, `-Revert` restaura o pin). Release sem LTCG evita links muito demorados no MSVC para jogos grandes; as demais flags Release do upstream são preservadas.
 
 ```sh
 # Extrair um disco obtido legalmente, recompilar com o PS2Recomp, compilar e executar.

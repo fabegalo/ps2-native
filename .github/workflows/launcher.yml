@@ -63,6 +63,10 @@ jobs:
           persist-credentials: false
           submodules: true
 
+      - name: Apply locked PS2Recomp patches
+        shell: bash
+        run: git -C external/ps2recomp apply ../../patches/ps2recomp/*.patch
+
       - name: Install Qt 6 (Ubuntu packages)
         if: runner.os == 'Linux'
         run: |
@@ -129,7 +133,7 @@ jobs:
 
       - name: Configure (Unix / Ninja)
         if: runner.os != 'Windows'
-        run: cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_LAUNCHER=ON "-DCMAKE_PREFIX_PATH=$QT_PREFIX"
+        run: cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_LAUNCHER=ON -DPS2X_RELEASE_LTCG=OFF "-DCMAKE_PREFIX_PATH=$QT_PREFIX"
 
       - name: Configure (Windows / MSVC)
         if: runner.os == 'Windows'
@@ -137,7 +141,7 @@ jobs:
         run: |
           $extra = @()
           if ($env:QT_HOST) { $extra += "-DQT_HOST_PATH=$env:QT_HOST" }
-          cmake -S . -B out/build -G "Visual Studio 18 2026" -A "${{ matrix.arch }}" -DPS2N_LAUNCHER=ON "-DCMAKE_PREFIX_PATH=$env:QT_PREFIX" @extra
+          cmake -S . -B out/build -G "Visual Studio 18 2026" -A "${{ matrix.arch }}" -DPS2N_LAUNCHER=ON -DPS2X_RELEASE_LTCG=OFF "-DCMAKE_PREFIX_PATH=$env:QT_PREFIX" @extra
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build launcher and its tools

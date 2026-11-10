@@ -28,9 +28,9 @@ The common architecture above is already requested. Its unvalidated internal cho
 
 ## 3. Repository implementation map
 
-- Execution (maintainer decision 2026-11-10): PS2Recomp, consumed unmodified at the `deps.lock.json` pin from the `external/ps2recomp` submodule, the way x360-native consumes ReXGlue. Its recompiler/analyzer prepare each game and `ps2_runtime`/`ps2xIOP` execute it (kernel/IOP HLE, GS, SPU2, pad, memory cards). The repository-owned R5900/VU AOT, EE/IOP/device model, GS backends and checkpoint tools were removed; do not reintroduce a second runtime or patch PS2Recomp locally. Fix runtime gaps upstream or by moving the pin.
+- Execution (maintainer decision 2026-11-10): PS2Recomp, consumed at the `deps.lock.json` pin with versioned, hash-verified patches (maintainer approval 2026-11-10) from the `external/ps2recomp` submodule, the way x360-native consumes ReXGlue. Its recompiler/analyzer prepare each game and `ps2_runtime`/`ps2xIOP` execute it (kernel/IOP HLE, GS, SPU2, pad, memory cards). The repository-owned R5900/VU AOT, EE/IOP/device model, GS backends and checkpoint tools were removed; do not reintroduce a second runtime or make unrecorded PS2Recomp edits. SDK fixes use `patches/ps2recomp`, `scripts/apply-sdk-patches.ps1` and the patch/base/result hashes in `deps.lock.json`, as with ReXGlue; upstream fixes or pin updates remain preferred.
 - Repository code: content/disc/BIOS/NVM identification (`src/`, `include/ps2native/`), `tools/ps2n.cpp` (prepare, recompile, build, run and missing-entry learning), `tools/ps2n_game_main.cpp` (host entry linked with `ps2_runtime`), `cmake/PS2Recomp.cmake` and the Qt launcher in `launcher/`, whose Play runs `ps2n play`.
-- Preserve ROM/NVM revision matching and the unmodified-upstream check. Consult only relevant sections of `STATUS.md`, `docs/NEXT-TASK.md`, `docs/ARCHITECTURE.md` and `docs/LICENSE-DECISION.md`. Reference emulators/ports inform behavior and licensed reuse, not automatic architectural vetoes.
+- Preserve ROM/NVM revision matching and the pinned-revision and locked-patch checks. Consult only relevant sections of `STATUS.md`, `docs/NEXT-TASK.md`, `docs/ARCHITECTURE.md` and `docs/LICENSE-DECISION.md`. Reference emulators/ports inform behavior and licensed reuse, not automatic architectural vetoes.
 
 ## 4. Implementation, correctness and validation
 

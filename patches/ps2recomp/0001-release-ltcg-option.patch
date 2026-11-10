@@ -1,0 +1,48 @@
+PS2Recomp Release LTCG switch; retains all other upstream Release flags.
+Motivation: https://github.com/Vnnc1/gow-native-pc/blob/main/engine/patches/01-release-ltcg-option.patch
+
+--- a/ps2xRuntime/cmake/ReleaseMode.cmake
++++ b/ps2xRuntime/cmake/ReleaseMode.cmake
+@@ -1,6 +1,8 @@
+ include(CheckIPOSupported)
+ 
+ check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
++
++option(PS2X_RELEASE_LTCG "Enable whole-program Release optimization" ON)
+ 
+ function(EnableFastReleaseMode TargetName)
+     message("> Enabling optimization for: ${TargetName}")
+@@ -10,7 +12,6 @@
+                 /O2 # speed
+                 /Ob2 # inline aggressively
+                 /Oi # intrinsics
+-                /GL # whole program opt
+                 /Gy # function-level linking
+                 /Gw # global data in COMDAT
+                 /GF # string pooling
+@@ -26,7 +27,6 @@
+         if(TARGET ${TargetName})
+             target_link_options(${TargetName} PRIVATE
+                 $<$<CONFIG:Release>:
+-                    /LTCG # link-time code generation
+                     /OPT:REF # remove unreferenced
+                     /OPT:ICF # fold identical COMDATs
+                 >
+@@ -34,9 +34,14 @@
+         endif()
+     endif()
+ 
+-    if(IPO_SUPPORTED)
++    if(MSVC AND PS2X_RELEASE_LTCG)
++        target_compile_options(${TargetName} PRIVATE $<$<CONFIG:Release>:/GL>)
++        target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:/LTCG>)
++    endif()
++
++    if(PS2X_RELEASE_LTCG AND IPO_SUPPORTED)
+         set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+-    else()
++    elseif(PS2X_RELEASE_LTCG)
+         message(WARNING "Interprocedural optimization not supported: ${ipo_error}")
+     endif()
+ endfunction()
+\ No newline at end of file
