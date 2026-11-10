@@ -42,6 +42,62 @@ template<unsigned Core,bool UnknownAddress> void transfer_address() {
     else require(!iop.stopped() && iop.diagnostic_gpr(2).value==3u && iop.diagnostic_gpr(2).unknown==0xFFF0u,
         "TSA read-modify-write ignores reserved write bits without inventing their readback");
 }
+template<bool RejectControl> void sdk_addiu() {
+    constexpr std::array words{0x3C08BF90u,0x3409000Fu,0xA50901A8u,0x950901A8u,0u,
+        0x00094C00u,0x3529849Fu,0x25320200u,0x26520000u,RejectControl?0x02400008u:0u,
+        0xA51201AAu,0x950A01AAu,0u,0x1000FFFFu,0u};
+    const auto native=entries<words>();std::vector<std::uint8_t> rom(4u*1024u*1024u);
+    for(unsigned n=0;n<words.size();++n)for(unsigned b=0;b<4;++b)rom[n*4+b]=static_cast<std::uint8_t>(words[n]>>(b*8));
+    const auto source=sha256_hex(rom),identity=iop_aot_identity(source,native);
+    const IopAotModule module{source,identity,native};const IopAotRegistration registration(module);
+    Iop iop;iop.reset(rom,nullptr,nullptr,false,std::nullopt,{},false,true);iop.run_until(30);
+    require(iop.diagnostic_gpr(18).value==0xF869Fu && iop.diagnostic_gpr(18).unknown==0xFFF00000u,
+        "SDK ADDIU preserves partial operands, signed immediate addition and exact copies without fabricated high bits");
+    if constexpr(RejectControl)require(iop.stopped() && iop.stop_reason()->find("unknown operand")!=std::string::npos,
+        "An uncertain computed address still refuses an indirect control transfer");
+    else require(!iop.stopped() && iop.gpr(10)==0x869Fu && !iop.interpreted_instructions(),
+        "Native SDK ADDIU reaches the actual shared SPU2 device with its known low halfword");
+}
+template<std::uint32_t Trap,unsigned Cause,bool Delay> void sdk_exception() {
+    constexpr std::array words{0x3C017FFFu,0x3421FFFFu,0x24020001u,Delay?0x10020001u:0u,Trap};
+    const auto native=entries<words>();std::vector<std::uint8_t> rom(4u*1024u*1024u);
+    for(unsigned n=0;n<words.size();++n)for(unsigned b=0;b<4;++b)rom[n*4+b]=static_cast<std::uint8_t>(words[n]>>(b*8));
+    const auto source=sha256_hex(rom),identity=iop_aot_identity(source,native);
+    const IopAotModule module{source,identity,native};const IopAotRegistration registration(module);
+    Iop iop;iop.reset(rom,nullptr,nullptr,false,std::nullopt,{},false,true);iop.run_until(5);
+    require(!iop.stopped() && iop.pc()==0xBFC00180u && iop.native_instructions()==5u &&
+        iop.diagnostic_cop0(13)==std::optional{(Delay?0x80000000u:0u)|(Cause<<2u)} &&
+        iop.diagnostic_cop0(14)==std::optional{Delay?0xBFC0000Cu:0xBFC00010u},
+        "SDK faults preserve exception code, EPC and BD even in a not-taken branch delay slot");
+    if constexpr(Cause==4u || Cause==5u)require(iop.diagnostic_cop0(8)==std::optional{1u},"SDK alignment faults preserve BadVAddr");
+}
+void sdk_integer_edges() {
+    constexpr std::array words{0x2401FFF9u,0x24020003u,0x00220018u,0x00001812u,0x00002010u,
+        0x0022001Au,0x00002812u,0x00003010u,0x0020001Au,0x00003812u,0x00004010u,
+        0x3C018000u,0x2402FFFFu,0x0022001Au,0x00004812u,0x00005010u,
+        0x3C01FFFFu,0x3421FFFFu,0x24020002u,0x00220019u,0x00005812u,0x00006010u,
+        0x0020001Bu,0x00006812u,0x00007010u,0x1000FFFFu,0u};
+    const auto native=entries<words>();std::vector<std::uint8_t> rom(4u*1024u*1024u);
+    for(unsigned n=0;n<words.size();++n)for(unsigned b=0;b<4;++b)rom[n*4+b]=static_cast<std::uint8_t>(words[n]>>(b*8));
+    const auto source=sha256_hex(rom),identity=iop_aot_identity(source,native);
+    const IopAotModule module{source,identity,native};const IopAotRegistration registration(module);
+    Iop iop;iop.reset(rom,nullptr,nullptr,false,std::nullopt,{},false,true);iop.run_until(30);
+    require(!iop.stopped() && iop.gpr(3)==0xFFFFFFEBu && iop.gpr(4)==~0u && iop.gpr(5)==0xFFFFFFFEu &&
+        iop.gpr(6)==~0u && iop.gpr(7)==1u && iop.gpr(8)==0xFFFFFFF9u && iop.gpr(9)==0x80000000u &&
+        iop.gpr(10)==0u && iop.gpr(11)==0xFFFFFFFEu && iop.gpr(12)==1u && iop.gpr(13)==~0u && iop.gpr(14)==~0u,
+        "SDK native signed/unsigned multiplication, division by zero and INT_MIN/-1 match independent architectural results");
+}
+void sdk_jalr_zero() {
+    constexpr std::array words{0x3C01BFC0u,0x34210018u,0x341F0037u,0x00200009u,0x24020001u,
+        0x24020063u,0x2403002Au,0x1000FFFFu,0u};
+    const auto native=entries<words>();std::vector<std::uint8_t> rom(4u*1024u*1024u);
+    for(unsigned n=0;n<words.size();++n)for(unsigned b=0;b<4;++b)rom[n*4+b]=static_cast<std::uint8_t>(words[n]>>(b*8));
+    const auto source=sha256_hex(rom),identity=iop_aot_identity(source,native);
+    const IopAotModule module{source,identity,native};const IopAotRegistration registration(module);
+    Iop iop;iop.reset(rom,nullptr,nullptr,false,std::nullopt,{},false,true);iop.run_until(12);
+    require(!iop.stopped() && iop.gpr(31)==55u && !iop.gpr(0) && iop.gpr(2)==1u && iop.gpr(3)==42u,
+        "Native JALR with rd zero preserves RA and executes its delay instruction before the target");
+}
 struct SeededIop : Iop {
     void seed() { spu2_ram_.resize(0x100000);spu2_ram_written_.resize(0x100000);spu2_ram_[0x40000]=0x1234;spu2_ram_written_[0x40000]=1; }
     void enable_input() { spu2_adma_[1].enabled=true; }
@@ -204,6 +260,10 @@ void checkpoint_roundtrip(const std::filesystem::path& file) {
 int main(int argc,char** argv) try {
     require(argc==2,"Expected owned checkpoint fixture path");
     transfer_address<0,false>();transfer_address<1,false>();transfer_address<0,true>();transfer_address<1,true>();
+    sdk_addiu<false>();sdk_addiu<true>();
+    sdk_exception<0x00221820u,12,false>();sdk_exception<0x00221820u,12,true>();
+    sdk_exception<0x8C030001u,4,true>();sdk_exception<0xAC030001u,5,true>();
+    sdk_integer_edges();sdk_jalr_zero();
     timing<false>();timing<true>();timing<true,true>();timing<true,false,true>();timing<false,true>();timing<false,false,true>();timing<false,false,false,true>();
     for(unsigned filter=0;filter<5;++filter){Device device;device.synthesis(filter,true,filter==4);}
     Device unknown;unknown.synthesis(0,false,false);

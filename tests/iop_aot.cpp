@@ -2,11 +2,20 @@
 #include "boot_checks.hpp"
 #include "ps2native/iop.hpp"
 #include "ps2native/iop_aot.hpp"
+#include <native/iop_cpu.h>
 #include <iostream>
 #include <memory>
 using namespace ps2native;
 using namespace boot_checks;
 int main() try {
+    for(unsigned known=0;known<256;++known)for(unsigned bits=0;bits<256;++bits)if(!(bits&~known)) {
+        const ps2x::iop::native::Word word{bits,0xFFFFFF00u|known};
+        for(const auto constant:{1u,0x200u,0xFFFFFFFFu}) {
+            const auto result=ps2x::iop::native::add(word,{constant});
+            for(unsigned value=0;value<256;++value)if((value&known)==bits)
+                require(!(((value+constant)^result.value)&result.known),"SDK addition knowledge contains every concrete completion, including carry and wrap");
+        }
+    }
     const auto bytes=iop_aot_fixture::image();
     auto native=std::make_unique<Iop>(),reference=std::make_unique<Iop>();
     native->load_program(bytes,0,0x1000);reference->load_program(bytes,0,0x1000);

@@ -14,6 +14,13 @@ Também são compilados do SDK o carregador IRX, o kernel IOP, CDVD, RPC e
 imports do `ps2xIOP` (`cmake/PS2Runtime.cmake`); CPU, RAM e interpretador
 independentes do IOP upstream não são ligados.
 
+O patch `0016`, aprovado em 10/11/2026, adapta a semântica de `iop_cpu.cpp`
+do SDK fixado para instruções constantes compiladas offline em
+`native/iop_cpu.h`. A implementação derivada mantém GPL-3.0 e os créditos
+PS2Recomp; os adaptadores de conhecimento/proveniência e bytes preservam BSD-3-Clause.
+O executor e os auxiliares aritméticos locais são substituídos, sem ligar
+o interpretador ou importar outro estado de CPU/memória.
+
 O código original mantém seus avisos BSD-3-Clause. Os binários que ligam este
 componente GPL devem ser distribuídos sob os termos GPL-3.0, com código-fonte
 correspondente e avisos aplicáveis; não são uma distribuição exclusivamente BSD.

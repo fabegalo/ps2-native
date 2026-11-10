@@ -33,6 +33,7 @@ template<class C> int run_main(int argc, C** argv) {
             std::cerr << "         [--console=MODEL:MAINBOARD] [--nvm=FILE --nvm-sha256=HASH] (matching HLE console inputs)\n";
             std::cerr << "         [--assume-ee-early-digit-carry] (HLE: unverified external-reference scalar multiplier)\n";
             std::cerr << "         [--assume-spu2-pio-word-cycles=N] (HLE: unverified positive IOP cycles per 16-bit word)\n";
+            std::cerr << "         [--assume-spu2-adma-word-cycles=N] (HLE: unverified shared DMA bus timing)\n";
             std::cerr << "         [--assume-spu2-quiescent-reset] (HLE: unverified initially inactive voices and inputs)\n";
             std::cerr << "         [--assume-spu2-effect-end-reset=CORE0:CORE1] (HLE: unverified decimal four-bit EEA)\n";
             std::cerr << "         [--assume-spu2-reserved-latches] (HLE: unmeasured unassigned-register effects)\n";
@@ -69,7 +70,7 @@ template<class C> int run_main(int argc, C** argv) {
         bool disc_input=false;
         std::optional<std::array<std::uint16_t,2>> spu2_effect_end;
         bool hle=false,ee_early_digit_carry=false,diagnostic_cache_uncached_hits=false,spu2_7ca_latch=false,spu2_reserved_latches=false,spu2_quiescent_reset=false;
-        std::uint32_t spu2_pio_word_cycles=0;
+        std::uint32_t spu2_pio_word_cycles=0,spu2_adma_word_cycles=0;
         for (int i = 2; i < argc; ++i) {
             const auto flag = ps2native::path_utf8(std::filesystem::path(argv[i]));
             if(dvd.parse(flag))continue;
@@ -109,6 +110,11 @@ template<class C> int run_main(int argc, C** argv) {
             else if (flag == "--assume-spu2-reserved-latches") spu2_reserved_latches=true;
             else if (flag == "--assume-spu2-7ca-latch") spu2_7ca_latch=true;
             else if (flag == "--assume-spu2-quiescent-reset") spu2_quiescent_reset=true;
+            else if (flag.starts_with("--assume-spu2-adma-word-cycles=")) {
+                if(spu2_adma_word_cycles)throw std::runtime_error("duplicate SPU2 DMA timing");
+                spu2_adma_word_cycles=static_cast<std::uint32_t>(ps2native::cli::decimal(flag.substr(31),UINT32_MAX));
+                if(!spu2_adma_word_cycles)throw std::runtime_error("SPU2 DMA word cycles must be positive");
+            }
             else if (flag.starts_with("--assume-spu2-pio-word-cycles=")) {
                 if(spu2_pio_word_cycles)throw std::runtime_error("duplicate SPU2 PIO timing");
                 spu2_pio_word_cycles=static_cast<std::uint32_t>(ps2native::cli::decimal(flag.substr(30),UINT32_MAX));
@@ -130,6 +136,7 @@ template<class C> int run_main(int argc, C** argv) {
         if((!rom0.empty() || !rom0_hash.empty()) && !hle)throw std::runtime_error("HLE ROM0 dependency requires --hle");
         if(ee_early_digit_carry && !hle)throw std::runtime_error("Diagnostic EE scalar carry requires --hle");
         if(spu2_pio_word_cycles && !hle)throw std::runtime_error("Diagnostic SPU2 PIO timing requires --hle");
+        if(spu2_adma_word_cycles && !hle)throw std::runtime_error("Diagnostic SPU2 DMA timing requires --hle");
         if(spu2_quiescent_reset && !hle)throw std::runtime_error("Diagnostic SPU2 quiescent reset requires --hle");
         if(spu2_effect_end && !hle)throw std::runtime_error("Diagnostic SPU2 initial EEA requires --hle");
         if(spu2_reserved_latches && !hle)throw std::runtime_error("Diagnostic SPU2 reserved latches requires --hle");
@@ -171,6 +178,10 @@ template<class C> int run_main(int argc, C** argv) {
             if(spu2_pio_word_cycles) {
                 const_cast<ps2native::Iop&>(memory.iop()).diagnostic_spu2_pio_word_cycles(spu2_pio_word_cycles);
                 std::cout<<"diagnostic_spu2_pio_word_cycles="<<spu2_pio_word_cycles<<" (unverified timing)\n";
+            }
+            if(spu2_adma_word_cycles) {
+                const_cast<ps2native::Iop&>(memory.iop()).diagnostic_spu2_adma_word_cycles(spu2_adma_word_cycles);
+                std::cout<<"diagnostic_spu2_adma_word_cycles="<<spu2_adma_word_cycles<<" (unverified shared-bus timing)\n";
             }
             if(spu2_quiescent_reset) {
                 ps2native::configure_hle_spu2_quiescent_reset(memory);

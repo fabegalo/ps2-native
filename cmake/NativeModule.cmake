@@ -4,7 +4,8 @@ file(GLOB_RECURSE native_contract_files CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/cmake/*.cmake")
 list(APPEND native_contract_files "${CMAKE_SOURCE_DIR}/CMakeLists.txt" "${CMAKE_SOURCE_DIR}/src/sdk/iop_module_interface.hpp"
     "${CMAKE_SOURCE_DIR}/src/iop_aot.cpp")
-list(APPEND native_contract_files "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_runtime_macros.h")
+list(APPEND native_contract_files "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_runtime_macros.h"
+    "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/native/iop_cpu.h")
 set(_sdk_context_header "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_runtime.h")
 file(READ "${_sdk_context_header}" _sdk_context)
 string(REPLACE "\r\n" "\n" _sdk_context "${_sdk_context}")

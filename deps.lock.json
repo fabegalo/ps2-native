@@ -254,6 +254,13 @@
           "ps2xIOP/src/emulator/imports/iop_stdio.cpp": "be6d440811153e9bb94ca4fbb59a0f233f9ee666e89addc9d83d160513025345",
           "ps2xIOP/src/emulator/imports/iop_sysclib.cpp": "c4953b1ccc3a3095fbd1914c2a58bd2665cef2536f9c23128c86716f55fde5f0"
         }
+      },
+      {
+        "file": "patches/ps2recomp/0016-native-iop-aot.patch",
+        "sha256": "834f5f021ee9de583dd23d4fd729d48d6f4b960f04744f0a4b37b52cc7224ced",
+        "files": {
+          "ps2xRuntime/include/native/iop_cpu.h": "d98130ef694a3c4bd0d8fb00d1fedad1d3d3a9f5bc82efda73fa82d9fefa3e49"
+        }
       }
     ],
     "path": "out/ps2recomp-reference"

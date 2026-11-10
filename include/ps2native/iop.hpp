@@ -42,6 +42,9 @@
 #include <unordered_map>
 #include <vector>
 
+    // RUNTIME_HELPERS_BEGIN
+namespace ps2x::iop::native { struct Cpu; }
+    // RUNTIME_HELPERS_END
 namespace ps2native {
 inline constexpr std::uint64_t kEeCyclesPerIopCycle = 8u; // 294.912 MHz / 36.864 MHz
 inline constexpr std::uint32_t kIopRamBytes = 2u * 1024u * 1024u; // PS2Ident: 2097152 on every model
@@ -66,6 +69,11 @@ class Iop : protected ps2recomp::NativeSpu2<Iop,ObservedWord,DeviceRefusal> {
     friend class ps2recomp::NativeSpu2<Iop,ObservedWord,DeviceRefusal>;
     friend struct CheckpointAccess;
     friend class Ps2RecompIopServices;
+    // RUNTIME_HELPERS_BEGIN
+    friend struct ps2x::iop::native::Cpu;
+    using NativeObservedWord=ObservedWord;
+    using NativeExecutionStop=IopExecutionStop;
+    // RUNTIME_HELPERS_END
 public:
     using Spu2Sample=ps2recomp::Spu2Sample;
     using Spu2VoiceState=ps2recomp::Spu2VoiceState;
@@ -451,7 +459,6 @@ private:
     void step();
     // RUNTIME_HELPERS_BEGIN
     bool begin_instruction();
-    template<std::uint32_t Word> void execute_instruction();
     bool iop_aot_required_{};
     bool iop_aot_enabled_{true};
     std::uint64_t native_instructions_{},interpreted_instructions_{};
@@ -479,24 +486,6 @@ private:
     [[nodiscard]] std::uint32_t timer_read(unsigned index, std::uint32_t reg, const std::string& name);
     void timer_write(unsigned index, std::uint32_t reg, std::optional<std::uint32_t> value, const std::string& name);
     [[nodiscard]] std::uint32_t reg(unsigned index) const;
-    // Register value of which only the bits in `mask` are used: known when
-    // those bits are, even if others are not.
-    [[nodiscard]] std::uint32_t masked_reg(unsigned index, std::uint32_t mask) const;
-    // AND of two registers, either possibly partly unknown: a bit is known
-    // when known in both, or known 0 in one of them.
-    void and_regs(unsigned rd, unsigned rs, unsigned rt);
-    void and_immediate(unsigned destination, unsigned source, std::uint32_t mask);
-    void or_value(unsigned rd,unsigned rs,std::uint32_t value,std::uint32_t known,const std::string& origin,std::uint64_t epoch=0);
-    // rs == rt, decided when the known bits already differ even if some
-    // bits are unknown; otherwise both must be known.
-    [[nodiscard]] bool regs_equal(unsigned rs, unsigned rt) const;
-    // Value to store: may be unknown (copied as unknown into RAM or a latch).
-    [[nodiscard]] std::optional<std::uint32_t> stored_reg(unsigned index) const;
-    void set_reg(unsigned index, std::uint32_t value);
-    void copy_reg(unsigned destination, unsigned source);
-    void shift_right(unsigned destination, unsigned source, unsigned amount);
-    void shift_left(unsigned destination, unsigned source, unsigned amount);
-    void add_sub_unsigned(unsigned destination,unsigned left,unsigned right,bool subtract);
     void load_reg(unsigned index, std::uint32_t value);
     [[nodiscard]] Access translate(std::uint32_t address, std::size_t bytes, bool write, const char* what) const;
     [[nodiscard]] std::uint32_t fetch(std::uint32_t address) const;

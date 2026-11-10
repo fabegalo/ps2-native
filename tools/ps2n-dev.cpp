@@ -243,7 +243,7 @@ std::uint64_t disk_bytes(const fs::path& root) {
 }
 int discover_native(const fs::path& input_path,const fs::path& cache_root,bool disc,const fs::path& cancel,
                     const fs::path& rom0={},const std::string& rom0_hash={},const std::string& profile={},const fs::path& nvm={},const std::string& nvm_hash={},
-                    std::optional<DiscImage::DiagnosticDvdGeometry> geometry={},bool diagnostic_cache_uncached_hits=false,bool spu2_7ca_latch=false,bool spu2_quiescent_reset=false,std::uint32_t spu2_pio_word_cycles=0,bool ee_early_digit_carry=false,std::uint64_t discovery_budget=50000000u,bool spu2_reserved_latches=false,std::optional<std::array<std::uint16_t,2>> spu2_effect_end={}) {
+                    std::optional<DiscImage::DiagnosticDvdGeometry> geometry={},bool diagnostic_cache_uncached_hits=false,bool spu2_7ca_latch=false,bool spu2_quiescent_reset=false,std::uint32_t spu2_pio_word_cycles=0,bool ee_early_digit_carry=false,std::uint64_t discovery_budget=50000000u,bool spu2_reserved_latches=false,std::optional<std::array<std::uint16_t,2>> spu2_effect_end={},std::uint32_t spu2_adma_word_cycles=0) {
     using nlohmann::json;
     const auto input=fs::absolute(input_path),root=fs::absolute(cache_root);
     const auto input_hash=sha256_file(input);
@@ -260,7 +260,7 @@ int discover_native(const fs::path& input_path,const fs::path& cache_root,bool d
     const auto console=load_hle_console(profile,nvm,nvm_hash);
     if(console.hardware && (!bios || console.hardware->romver!=bios->version.romver))throw std::runtime_error("Console profile and HLE BIOS ROMVER differ");
     const auto geometryKey=geometry?std::to_string(geometry->layer0_sectors)+(geometry->opposite_track_path?":otp":":ptp"):"no-diagnostic-geometry";
-    const auto runtime_hash=digest(sha256_file(fs::path(PS2N_CORE_FILE))+sha256_file(tool)+(bios?bios->sha256:"no-rom0")+profile+(console.nvm?console.nvm->sha256:"no-nvm")+geometryKey+(diagnostic_cache_uncached_hits?":uncached-cache-hits":":strict-cache-hits")+(spu2_effect_end?":spu2-eea:"+std::to_string((*spu2_effect_end)[0])+":"+std::to_string((*spu2_effect_end)[1]):":unknown-spu2-eea")+(spu2_reserved_latches?":spu2-reserved-latches":":strict-spu2-reserved")+(spu2_7ca_latch?":spu2-7ca-latch":":strict-spu2-7ca")+(spu2_quiescent_reset?":spu2-quiescent-reset":":unknown-spu2-reset")+":spu2-pio-cycles:"+std::to_string(spu2_pio_word_cycles)+(ee_early_digit_carry?":ee-early-digit-carry":":strict-ee-carry"));
+    const auto runtime_hash=digest(sha256_file(fs::path(PS2N_CORE_FILE))+std::to_string(spu2_adma_word_cycles)+":"+sha256_file(tool)+(bios?bios->sha256:"no-rom0")+profile+(console.nvm?console.nvm->sha256:"no-nvm")+geometryKey+(diagnostic_cache_uncached_hits?":uncached-cache-hits":":strict-cache-hits")+(spu2_effect_end?":spu2-eea:"+std::to_string((*spu2_effect_end)[0])+":"+std::to_string((*spu2_effect_end)[1]):":unknown-spu2-eea")+(spu2_reserved_latches?":spu2-reserved-latches":":strict-spu2-reserved")+(spu2_7ca_latch?":spu2-7ca-latch":":strict-spu2-7ca")+(spu2_quiescent_reset?":spu2-quiescent-reset":":unknown-spu2-reset")+":spu2-pio-cycles:"+std::to_string(spu2_pio_word_cycles)+(ee_early_digit_carry?":ee-early-digit-carry":":strict-ee-carry"));
     const auto cancelled=[&]() noexcept {
         if(cancel.empty())return false;
         try {InputFile ticket(cancel);std::array<std::uint8_t,1> state{};
@@ -310,6 +310,7 @@ int discover_native(const fs::path& input_path,const fs::path& cache_root,bool d
         if(ee_early_digit_carry)runtime.memory().diagnostic_ee_early_digit_carry();
         if(diagnostic_cache_uncached_hits)runtime.memory().diagnostic_data_cache(true);
         if(spu2_pio_word_cycles)const_cast<Iop&>(runtime.memory().iop()).diagnostic_spu2_pio_word_cycles(spu2_pio_word_cycles);
+        if(spu2_adma_word_cycles)const_cast<Iop&>(runtime.memory().iop()).diagnostic_spu2_adma_word_cycles(spu2_adma_word_cycles);
         if(spu2_quiescent_reset)configure_hle_spu2_quiescent_reset(runtime.memory());
         if(spu2_effect_end)const_cast<Iop&>(runtime.memory().iop()).diagnostic_spu2_effect_end_reset(*spu2_effect_end);
         if(spu2_reserved_latches)const_cast<Iop&>(runtime.memory().iop()).diagnostic_spu2_reserved_latches();
@@ -406,6 +407,7 @@ int discover_native(const fs::path& input_path,const fs::path& cache_root,bool d
     if(boundary.outcome==BootOutcome::BudgetExhausted && boundary.reason.empty())
         boundary.reason="Native discovery reached its "+std::to_string(discovery_budget)+"-instruction startup limit";
     info["discovery"]={{"diagnostic_spu2_effect_end_reset",spu2_effect_end?json(*spu2_effect_end):json(nullptr)},
+        {"diagnostic_spu2_adma_word_cycles",spu2_adma_word_cycles},
         {"runtime_sha256",runtime_hash},{"instruction_budget",discovery_budget},{"diagnostic_ee_early_digit_carry",ee_early_digit_carry},{"diagnostic_cache_uncached_hits",diagnostic_cache_uncached_hits},{"diagnostic_spu2_reserved_latches",spu2_reserved_latches},{"diagnostic_spu2_7ca_latch",spu2_7ca_latch},{"diagnostic_spu2_quiescent_reset",spu2_quiescent_reset},{"diagnostic_spu2_pio_word_cycles",spu2_pio_word_cycles},{"pc",boundary.pc},{"retired",boundary.retired},
         {"rtc_epoch_utc",rtcUtc},
         {"console_profile",profile},{"nvm_sha256",console.nvm?console.nvm->sha256:""},
@@ -653,6 +655,7 @@ template<class C> int dev_main(int argc,C** argv) {
                          "              [--discovery-budget=N] (default 50000000 EE instructions; 240-second execution limit)\n"
                          "              [--assume-ee-early-digit-carry] (unverified external-reference scalar multiplier)\n"
                          "              [--assume-spu2-pio-word-cycles=N] (positive unverified IOP cycles per word)\n"
+                         "              [--assume-spu2-adma-word-cycles=N] (unverified shared DMA bus timing)\n"
                          "              [--assume-spu2-quiescent-reset] (unverified inactive voices and inputs)\n"
                          "              [--assume-spu2-effect-end-reset=CORE0:CORE1] (unverified decimal four-bit EEA)\n"
                          "              [--assume-spu2-reserved-latches] (unmeasured unassigned-register effects)\n"
@@ -672,10 +675,10 @@ template<class C> int dev_main(int argc,C** argv) {
             }
             return prepare_iop(fs::path(argv[2]),fs::path(argv[3]),cancel);
         }
-        if(command=="prepare-native" && argc>=4 && argc<=19) {
+        if(command=="prepare-native" && argc>=4 && argc<=20) {
             std::optional<std::array<std::uint16_t,2>> spu2_effect_end;
             bool disc=false,artifact_only=false,ee_early_digit_carry=false,diagnostic_cache_uncached_hits=false,spu2_7ca_latch=false,spu2_reserved_latches=false,spu2_quiescent_reset=false;fs::path cancel,rom0,nvm;std::string rom0_hash,profile,nvm_hash;std::optional<std::uint32_t> alias;
-            std::uint32_t spu2_pio_word_cycles=0;
+            std::uint32_t spu2_pio_word_cycles=0,spu2_adma_word_cycles=0;
             std::uint64_t discovery_budget=50000000u;bool discovery_budget_given=false;
             cli::DiagnosticDvdOptions dvd;
             for(int i=4;i<argc;++i) {
@@ -697,6 +700,11 @@ template<class C> int dev_main(int argc,C** argv) {
                 else if(flag=="--assume-spu2-reserved-latches")spu2_reserved_latches=true;
                 else if(flag=="--assume-spu2-7ca-latch")spu2_7ca_latch=true;
                 else if(flag=="--assume-spu2-quiescent-reset")spu2_quiescent_reset=true;
+                else if(flag.starts_with("--assume-spu2-adma-word-cycles=")) {
+                    if(spu2_adma_word_cycles)throw std::runtime_error("duplicate SPU2 DMA timing");
+                    spu2_adma_word_cycles=static_cast<std::uint32_t>(cli::decimal(flag.substr(31),UINT32_MAX));
+                    if(!spu2_adma_word_cycles)throw std::runtime_error("SPU2 DMA word cycles must be positive");
+                }
                 else if(flag.starts_with("--assume-spu2-pio-word-cycles=")) {
                     if(spu2_pio_word_cycles)throw std::runtime_error("duplicate SPU2 PIO timing");
                     spu2_pio_word_cycles=static_cast<std::uint32_t>(cli::decimal(flag.substr(30),UINT32_MAX));
@@ -715,6 +723,8 @@ template<class C> int dev_main(int argc,C** argv) {
             if(ee_early_digit_carry && artifact_only)throw std::runtime_error("Diagnostic EE scalar carry requires native discovery");
             if(ee_early_digit_carry)std::cout<<"diagnostic_ee_early_digit_carry=external-reference-coarse-multiplier-unverified\n";
             if(spu2_pio_word_cycles && artifact_only)throw std::runtime_error("Diagnostic SPU2 PIO timing requires native discovery");
+            if(spu2_adma_word_cycles && artifact_only)throw std::runtime_error("Diagnostic SPU2 DMA timing requires native discovery");
+            if(spu2_adma_word_cycles)std::cout<<"diagnostic_spu2_adma_word_cycles="<<spu2_adma_word_cycles<<" (unverified shared-bus timing)\n";
             if(spu2_pio_word_cycles)std::cout<<"diagnostic_spu2_pio_word_cycles="<<spu2_pio_word_cycles<<" (unverified timing)\n";
             if(spu2_quiescent_reset && artifact_only)throw std::runtime_error("Diagnostic SPU2 quiescent reset requires native discovery");
             if(spu2_quiescent_reset)std::cout<<"diagnostic_spu2_quiescent_reset=unverified-inactive-voices-and-inputs\n";
@@ -730,7 +740,7 @@ template<class C> int dev_main(int argc,C** argv) {
             if(rom0.empty() && !rom0_hash.empty())throw std::runtime_error("ROM0 hash requires its original image path");
             const auto geometry=dvd.geometry(disc);
             const auto result=prepare_native(fs::path(argv[2]),fs::path(argv[3]),disc,cancel,alias.value_or(0));
-            return result || artifact_only?result:discover_native(fs::path(argv[2]),fs::path(argv[3]),disc,cancel,rom0,rom0_hash,profile,nvm,nvm_hash,geometry,diagnostic_cache_uncached_hits,spu2_7ca_latch,spu2_quiescent_reset,spu2_pio_word_cycles,ee_early_digit_carry,discovery_budget,spu2_reserved_latches,spu2_effect_end);
+            return result || artifact_only?result:discover_native(fs::path(argv[2]),fs::path(argv[3]),disc,cancel,rom0,rom0_hash,profile,nvm,nvm_hash,geometry,diagnostic_cache_uncached_hits,spu2_7ca_latch,spu2_quiescent_reset,spu2_pio_word_cycles,ee_early_digit_carry,discovery_budget,spu2_reserved_latches,spu2_effect_end,spu2_adma_word_cycles);
         }
         if(command=="prepare-sdk" && argc>=4 && argc<=6) {
             bool disc=false;std::optional<std::uint32_t> alias;

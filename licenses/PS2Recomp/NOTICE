@@ -52,4 +52,12 @@ IopMemory allocation bookkeeping is adapted from emulator/core/iop_memory.cpp.
 Patch 0006 selects iop_memory_native.hpp for the shared memory interface;
 its ELF/IRX parsing and relocation implementation stays upstream. This
 adapter borrows the existing Iop RAM and preserves its undefined-byte and
-stopped-device refusals. No upstream IOP CPU, RAM or interpreter is linked.
+stopped-device refusals. The independent upstream RAM and interpreter are not linked.
+
+Patch 0016 adapts emulator/core/iop_cpu.cpp to native/iop_cpu.h in the SDK.
+Instruction words are template arguments compiled offline; the SDK executor
+borrows canonical Iop registers, pending loads, exceptions and the existing bus.
+The former local instruction switch and arithmetic helpers were removed.
+BSD-3-Clause knowledge/provenance and byte-merge adapters retain their original
+terms. This is a GPL native adaptation credited to PS2Recomp contributors,
+not the standalone IopCpuCore interpreter or a second CPU state.

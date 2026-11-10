@@ -48,6 +48,10 @@ abaixo continuam explícitas e não representam o fluxo completo funcionando.
 
 Em 09/11/2026, o mantenedor validou o SPU2 nativo no SDK, reaproveitando estado e síntese existentes, com drivers IRX AOT, RAM/vozes/relógio únicos e integração ao IRQ/DMA do console. LIBSD HLE não foi selecionada; o tocador VAG do SDK não substitui o dispositivo.
 
+Em 10/11/2026, o mantenedor validou substituir o executor IOP local por AOT no próprio SDK, derivado da semântica upstream. A migração preserva memória/dispositivos/relógio únicos, delay slots, exceções e invalidação de código, sem interpretador. A implementação local só sai quando o substituto correspondente estiver ligado e validado; mover o executor antigo para um patch não satisfaz esta decisão.
+
+O patch `0016` implementa esse executor em `native/iop_cpu.h`, derivado de `ps2xIOP/src/emulator/core/iop_cpu.cpp`. `iop_ops.hpp` fica restrito à identidade da instrução e à chamada AOT; o switch e os auxiliares aritméticos locais foram removidos. Registradores e barramento continuam canônicos, com observações temporárias de conhecimento/proveniência. Regressões nativas cobrem ADDIU parcial, traps/EPC/BD, alinhamento, multiplicação/divisão e JALR para `$zero`, além de IOP/SPU2 e serviços HLE. Isso não certifica o Super ou os demais caminhos ainda locais do EE/GPU.
+
 Direção determinada pelo mantenedor em 09/11/2026: seguir a integração do
 x360-native, consumindo o PS2Recomp como implementação de recompilação,
 runtime e serviços, com correções genéricas em patches reproduzíveis do SDK
