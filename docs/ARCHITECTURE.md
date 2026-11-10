@@ -46,6 +46,8 @@ abaixo continuam explícitas e não representam o fluxo completo funcionando.
 
 ### Estado da integração
 
+Em 09/11/2026, o mantenedor validou o SPU2 nativo no SDK, reaproveitando estado e síntese existentes, com drivers IRX AOT, RAM/vozes/relógio únicos e integração ao IRQ/DMA do console. LIBSD HLE não foi selecionada; o tocador VAG do SDK não substitui o dispositivo.
+
 Direção determinada pelo mantenedor em 09/11/2026: seguir a integração do
 x360-native, consumindo o PS2Recomp como implementação de recompilação,
 runtime e serviços, com correções genéricas em patches reproduzíveis do SDK
@@ -68,6 +70,12 @@ para preservar a compilação da saída padrão do SDK. A sessão HLE também
 usa essa aritmética no despacho existente; dados de origem desconhecidos
 continuam recusados. Isso substitui as provas numéricas locais nesse caminho,
 mas não certifica precisão física da FPU do SDK ou compatibilidade comercial.
+As permutações PEXEW/PROT3W também usam o emissor do SDK sem depender do
+decodificador local, com correção da ordem das palavras no SDK. O dispositivo
+SPU2 do SDK possui o estado único e a síntese ADPCM/ADSR; latches, integração
+DMA/IRQ e avanço do relógio continuam conectados pelo IOP existente. Isso é
+uma migração parcial: efeitos audíveis ainda não implementados continuam
+recusados. A configuração ESA/EEA é consumida na borda de síntese.
 Metadados `discovery` são publicados como objeto; recibos antigos com esse
 campo em formato de array refazem a descoberta preservando o binário verificado.
 A descoberta permite os limites existentes de 64 módulos IOP e 8 regiões EE,

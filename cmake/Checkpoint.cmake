@@ -97,9 +97,9 @@ foreach(source IN LISTS checkpoint_sources)
     string(APPEND checkpoint_runtime "${content}\n")
 endforeach()
 # Coefficient ROM data is part of audio execution, not the checkpoint layout.
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/spu_gaussian.inc" audio_rom)
+file(READ "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/native/spu_gaussian.inc" audio_rom)
 string(APPEND checkpoint_runtime "${audio_rom}")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/spu_gaussian.inc")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/native/spu_gaussian.inc")
 # Shader source and embedded bytecode both affect guest-visible VRAM results.
 file(GLOB gs_shader_files CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/gs_flat.*" "${CMAKE_CURRENT_SOURCE_DIR}/src/gs_flat_*.inc")
 list(SORT gs_shader_files)
@@ -112,7 +112,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${gs_shader_files
 # Runtime-only headers must also trigger a reconfigure: filtering them out of
 # the wire schema must never leave the runtime fingerprint stale after an edit.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${checkpoint_runtime_headers} ${checkpoint_sources} "${CMAKE_CURRENT_SOURCE_DIR}/src/checkpoint_fields.inc")
-foreach(sdk_contract IN ITEMS "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_runtime.h" "${PS2N_LOCK_FILE}")
+foreach(sdk_contract IN ITEMS "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/native/spu2.h" "${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include/ps2_runtime.h" "${PS2N_LOCK_FILE}")
     file(READ "${sdk_contract}" sdk_content)
     string(REPLACE "\r\n" "\n" sdk_content "${sdk_content}")
     string(APPEND checkpoint_runtime "${sdk_content}\n")

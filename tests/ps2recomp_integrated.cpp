@@ -16,10 +16,32 @@ template<class C> int run(int argc,C** argv)try {
     PS2Runtime referenceRuntime;auto* reference=&referenceRuntime.memory();auto& reference_cpu=referenceRuntime.cpu();
     if(hle)runtime.prepare_hle_elf(elf,&sdk_aot_module());
     else runtime.prepare_direct_elf(elf,&sdk_aot_module());
-    referenceRuntime.prepare_direct_elf(elf,&aot_module());
+    if(mode!="sdk-mmi")referenceRuntime.prepare_direct_elf(elf,&aot_module());
     std::unique_ptr<HleKernel> reference_kernel;
     if(hle)reference_kernel=std::make_unique<HleKernel>(referenceRuntime);
     if(!hle && !frame){runtime.cpu().set_reg32(31,stop);reference_cpu.set_reg32(31,stop);}
+    if(mode=="sdk-mmi") {
+        auto& state=runtime.cpu();
+        state.set_reg128_observed(2,0x2222222211111110ull,0x4444444433333331ull,1,2);
+        BootOptions options;options.max_instructions=1;options.stop_at=stop;options.max_trace_events=0;options.tail_instructions=0;
+        for(unsigned n=0;n<6;++n) {
+            const auto report=runtime.run(&sdk_aot_module(),options);
+            require(report.outcome!=BootOutcome::BlockPoint,report.reason);
+            require(report.aot_instructions==report.retired && !report.interpreted_instructions,"Packed SDK code remains AOT");
+            if(!n)require(state.gpr[3].low==0x2222222233333331ull && state.gpr[3].high==0x4444444411111110ull &&
+                state.unknown_gpr_bits[3]==2 && state.unknown_gpr_high_bits[3]==1,"PEXEW preserves all lane values and unknown masks");
+            if(n==1)require(state.gpr[3].low==0x1111111022222222ull && state.gpr[3].high==0x4444444433333331ull &&
+                state.unknown_gpr_bits[3]==0x100000000ull && state.unknown_gpr_high_bits[3]==2,"PROT3W supports destination/source aliasing");
+        }
+        require(state.pc==stop && !state.gpr[4].low && !state.gpr[4].high && !state.gpr[0].low,"SDK permutations preserve the zero register");
+        runtime.prepare_direct_elf(elf,&sdk_aot_module());
+        runtime.memory().write32(elf.entry,0xFFFFFFFFu);
+        const auto changed=runtime.run(&sdk_aot_module(),options);
+        require(changed.outcome==BootOutcome::BlockPoint && !changed.retired && changed.reason.find("code modified")!=std::string::npos,
+            "SDK-only instructions must retain code invalidation checks");
+        std::cout<<"SDK-only packed emission: lane order, aliases, zero, masks and sliced AOT passed\n";
+        return 0;
+    }
     if(mode=="sdk-float") {
         auto& state=runtime.cpu();
         state.set_cp0(Cop0::Status,state.cp0(Cop0::Status)|kStatusCU1);

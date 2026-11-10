@@ -16,7 +16,7 @@ add_library(ps2n_core SHARED
     src/ee_system.cpp src/boot.cpp src/diagnostics.cpp src/analysis.cpp src/ee_registers.cpp
     src/gs_registers.cpp src/rdram.cpp src/mch.cpp src/console.cpp src/iop.cpp src/nvm.cpp
     src/video_encoder.cpp src/gif.cpp src/gs_vram.cpp src/gs_renderer.cpp src/framebuffer.cpp src/vu_micro.cpp src/vu_aot.cpp
-    src/iop_spu2.cpp src/audio.cpp src/iop_aot.cpp src/sdk_hle.cpp)
+    src/audio.cpp src/iop_aot.cpp src/sdk_hle.cpp)
 set_target_properties(ps2n_core PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 target_compile_definitions(ps2n_core PUBLIC PS2N_NATIVE_ONLY=1)
 target_include_directories(ps2n_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")

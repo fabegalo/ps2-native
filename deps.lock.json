@@ -200,6 +200,26 @@
         "files": {
           "ps2xRuntime/include/ps2_runtime.h": "3912dd9866ecaa7fb38504e41cb7fcdd15a95891cb8e2fb01a0a686673748619"
         }
+      },
+      {
+        "file": "patches/ps2recomp/0011-native-packed-words.patch",
+        "sha256": "af62e0c01ceba9849a34ba193b1469ae1cd07c6b41545fdc1112b60951a4e1fe",
+        "base_files": {
+          "ps2xRuntime/include/ps2_runtime_macros.h": "d6c1080326c06c6b4d667dc2659535030b6532ea6bfb67f02e3bdcef800edbcd",
+          "ps2xRecomp/src/lib/mmi_translation_helpers.cpp": "1402bdb9f81923a8c91c7fa790399a2563ebc5f7cd0c899b7c29cb7c6bafc5ee"
+        },
+        "files": {
+          "ps2xRuntime/include/ps2_runtime_macros.h": "6747500cf07e0cdc0448a0de721d3a36a37488bd0d216cb8412939075aaa1b1a",
+          "ps2xRecomp/src/lib/mmi_translation_helpers.cpp": "77df82f592c4857fcd3b62e9a552595312143a110567db37f31b800707215b4c"
+        }
+      },
+      {
+        "file": "patches/ps2recomp/0012-native-spu2-device.patch",
+        "sha256": "dae7665ff162c2cc776fd71df5fce536cd3a4d08ae84223d61a9e2d58a9cd96f",
+        "files": {
+          "ps2xRuntime/include/native/spu2.h": "f04d4d0bf9582463cd1721ed18ada5369cbbce8cbb6caf4f15a8a495360739bc",
+          "ps2xRuntime/include/native/spu_gaussian.inc": "610e28fccf84fa9b7ca405850328763641f58ad1a8ad8f1a2981e4c5dc99ffbd"
+        }
       }
     ],
     "path": "out/ps2recomp-reference"

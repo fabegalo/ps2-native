@@ -2492,32 +2492,9 @@ void Iop::write_spu2_control(std::uint32_t physical,ObservedWord word) {
         if(!diagnostic_spu2_quiescent_ || (word.unknown&0xC0u))
             throw IopStop{"SPU2 active voices, effects or IRQ processing is not modeled"};
     }
-    std::optional<std::pair<std::uint32_t,std::uint32_t>> invalidate_effects;
-    if((word.value&0x8080u)==0x8080u) {
-        invalidate_effects=spu2_effect_area(core);
-        if(invalidate_effects->first<=invalidate_effects->second) {
-            for(unsigned channel=0;channel<2u;++channel) {
-                const auto gain=latch(0x1F900764u+core*0x28u+channel*2u);
-                if((!gain || !*gain || **gain!=0u) && !diagnostic_spu2_adma_cycles_)
-                    throw IopStop{"SPU2 uncomputed effects require known zero left and right output gains"};
-            }
-        }
-        const auto other=spu2_control_[core^1u];
-        if(!other || ((other->value|other->unknown)&0x40u))
-            throw IopStop{"SPU2 effect RAM writes require both IRQ comparators disabled"};
-        if(mode==0x10u || spu2_transfer_[0].next || spu2_transfer_[1].next ||
-           (!diagnostic_spu2_adma_cycles_ && (mode==0x20u || spu2_adma_[0].enabled || spu2_adma_[1].enabled)))
-            throw IopStop{"SPU2 active effects and transfer bus arbitration is not modeled"};
-    }
     if(mode==0x10u)validate_spu2_pio(core,word);
-    // Validate before changing retained control, clocks or pending work.
-    if(invalidate_effects && !spu2_ram_written_.empty()) {
-        // The DSP may write any workspace tap. Preserve backing bytes but
-        // invalidate knowledge; never pretend that processing cleared RAM.
-        std::fill(spu2_ram_written_.begin()+invalidate_effects->first,
-                  spu2_ram_written_.begin()+invalidate_effects->second+1u,std::uint8_t{0});
-    }
-    spu2_effect_area_dirty_[core]=false;
+    // Enabling a DSP does not consume ESA/EEA before its first sample edge.
+    spu2_effect_area_dirty_[core]=(word.value&0x8080u)==0x8080u;
     if(word.value&0x8000u) {
         // 36.864 MHz / 48 kHz = 768 IOP cycles; reset-aligned phase is modeled.
         if(!spu2_next_sample_[core])spu2_next_sample_[core]=(cycle_/768u+1u)*768u;
@@ -2539,6 +2516,20 @@ void Iop::tick_spu2() {
                 // their final configuration at the next synthesis boundary,
                 // before any RAM-dependent audio state can be observed.
                 const auto area=spu2_effect_area(core);
+                const auto mode=spu2_control_[core]->value&0x30u;
+                if(area.first<=area.second) {
+                    for(unsigned channel=0;channel<2u;++channel) {
+                        const auto gain=latch(0x1F900764u+core*0x28u+channel*2u);
+                        if((!gain || !*gain || **gain!=0u) && !diagnostic_spu2_adma_cycles_)
+                            throw IopStop{"SPU2 uncomputed effects require known zero left and right output gains"};
+                    }
+                }
+                const auto other=spu2_control_[core^1u];
+                if(!other || ((other->value|other->unknown)&0x40u))
+                    throw IopStop{"SPU2 effect RAM writes require both IRQ comparators disabled"};
+                if(mode==0x10u || spu2_transfer_[0].next || spu2_transfer_[1].next ||
+                   (!diagnostic_spu2_adma_cycles_ && (mode==0x20u || spu2_adma_[0].enabled || spu2_adma_[1].enabled)))
+                    throw IopStop{"SPU2 active effects and transfer bus arbitration is not modeled"};
                 if(!spu2_ram_written_.empty())std::fill(spu2_ram_written_.begin()+area.first,
                     spu2_ram_written_.begin()+area.second+1u,std::uint8_t{0});
                 spu2_effect_area_dirty_[core]=false;

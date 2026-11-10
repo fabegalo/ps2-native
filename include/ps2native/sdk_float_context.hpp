@@ -12,6 +12,23 @@
 namespace ps2native {
 // A view into canonical registers, never a second register file or a snapshot.
 struct SdkFloatContext {
+    EEState& state;
+    struct Word { std::uint32_t value,unknown; };
+    using Words=std::array<Word,4>;
+    Words gpr_vec(unsigned index) const {
+        if(!index)return {};
+        const auto& r=state.gpr[index];
+        const auto lo=state.unknown_gpr_bits[index],hi=state.unknown_gpr_high_bits[index];
+        return {{{static_cast<std::uint32_t>(r.low),static_cast<std::uint32_t>(lo)},
+                 {static_cast<std::uint32_t>(r.low>>32u),static_cast<std::uint32_t>(lo>>32u)},
+                 {static_cast<std::uint32_t>(r.high),static_cast<std::uint32_t>(hi)},
+                 {static_cast<std::uint32_t>(r.high>>32u),static_cast<std::uint32_t>(hi>>32u)}}};
+    }
+    void set_gpr_vec(unsigned index,const Words& words) {
+        const auto pair=[&](unsigned n,bool mask){return std::uint64_t{mask?words[n].unknown:words[n].value}|
+            (std::uint64_t{mask?words[n+1].unknown:words[n+1].value}<<32u);};
+        state.set_reg128_observed(index,pair(0,false),pair(2,false),pair(0,true),pair(2,true));
+    }
     struct Register {
         std::uint32_t& bits;
         std::uint32_t* unknown{};
@@ -35,6 +52,6 @@ struct SdkFloatContext {
     } f;
     Register f_acc;
     std::uint32_t& fcr31;
-    explicit SdkFloatContext(EEState& state):f{state},f_acc{state.fpu_acc},fcr31(state.fcr31) {}
+    explicit SdkFloatContext(EEState& state):state(state),f{state},f_acc{state.fpu_acc},fcr31(state.fcr31) {}
 };
 }

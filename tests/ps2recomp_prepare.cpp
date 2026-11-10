@@ -74,7 +74,11 @@ int main(int argc,char** argv) {
                 const auto baseline=root / "baseline.cpp";
                 // Unreachable static edges remain explicit boundaries; both executions are native-only.
                 AotOptions options{program.roots,{},true};
-                try {(void)write_text_if_changed(baseline,generate_aot_cpp(parse_ee_elf(read_file(image)),options));}
+                try {
+                    if(std::string_view(mode)=="sdk-mmi")
+                        (void)write_text_if_changed(baseline,"#include <ps2native/aot_runtime.hpp>\nnamespace ps2native { const AotModule& aot_module(){ static const AotModule m{}; return m; } }\n");
+                    else (void)write_text_if_changed(baseline,generate_aot_cpp(parse_ee_elf(read_file(image)),options));
+                }
                 catch(const std::exception& error){throw std::runtime_error(std::string("Prior native baseline ")+mode+": "+error.what());}
                 const auto binary=root / "integrated-fixture.exe";
                 std::vector<fs::path> native_args{"/nologo","/std:c++20","/EHsc","/O2","/Ob0","/MD","/utf-8","/bigobj",
@@ -151,6 +155,14 @@ int main(int argc,char** argv) {
             }
             require(sdk_emission,"SDK scalar translation must reach generated output without local arithmetic substitution");
             integrated(scalar_image,scalar_output/"generated",scalar,"sdk-float");
+            auto packed=p;
+            packed.segments[0].bytes=m20::le_words({0x70021F89u,0x70031FC9u,0x70020789u,0x70002789u,0x03E00008u,0u});
+            const auto packed_image=root/"packed.elf",packed_output=root/"packed-aot";
+            (void)write_binary_if_changed(packed_image,direct_test::elf(packed));
+            call(packed_image,packed_output,false,true);
+            const auto packed_info=nlohmann::json::parse(text(packed_output/"sdk-prepare.json"));
+            require(packed_info.at("native_unsupported").empty(),"SDK packed translations must not be gated by the local decoder");
+            integrated(packed_image,packed_output/"generated",packed,"sdk-mmi");
         }
         call(input,output,false,true);
         require(text(output / "sdk-prepare.json")==receipt,"reused output changed");
