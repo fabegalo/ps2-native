@@ -1,12 +1,11 @@
 #include "ps2native/elf.hpp"
-#include "ps2native/memory.hpp"
+// 32 MiB EE main RAM.
+namespace { constexpr std::uint32_t kMainRamBytes = 32u * 1024u * 1024u; }
 
 #include <algorithm>
 #include <stdexcept>
 
 namespace ps2native {
-// Implemented separately to isolate relocation-specific ELF validation.
-void discover_relocated_code_pointers(ElfImage& image);
 namespace {
 std::uint16_t u16(std::span<const std::uint8_t> b, std::size_t pos) {
     if (pos > b.size() || b.size() - pos < 2) throw std::runtime_error("ELF truncated (u16)");
@@ -56,7 +55,7 @@ ElfImage parse_ee_elf(std::span<const std::uint8_t> data) {
              (seg.vaddr % align) != (seg.file_offset % align))) ||
             seg.file_size > seg.memory_size ||
             !in_range(data.size(), seg.file_offset, seg.file_size) ||
-            !in_range(Memory::kMainRamBytes, seg.vaddr, seg.memory_size))
+            !in_range(kMainRamBytes, seg.vaddr, seg.memory_size))
             throw std::runtime_error("Invalid or unmapped PT_LOAD segment");
         if (seg.memory_size == 0) continue;
         for (const auto& existing : elf.segments) {
@@ -122,7 +121,6 @@ ElfImage parse_ee_elf(std::span<const std::uint8_t> data) {
     elf.function_entries.erase(std::unique(elf.function_entries.begin(), elf.function_entries.end()),
                                elf.function_entries.end());
     elf.bytes.assign(data.begin(), data.end());
-    discover_relocated_code_pointers(elf);
     return elf;
 }
 
@@ -155,18 +153,4 @@ std::uint32_t ElfImage::data_word_at(std::uint32_t address) const {
     throw std::runtime_error("Data pointer not in file-backed non-executable PT_LOAD");
 }
 
-ElfImage ee_execution_alias(ElfImage image,std::uint32_t alias) {
-    if(!alias)return image;
-    if(alias!=0x80000000u && alias!=0xA0000000u)throw std::runtime_error("invalid EE RAM execution alias");
-    if(!image.function_entries.empty() || !image.relocated_code_pointers.empty() ||
-       !image.rejected_code_pointers.empty() || !image.address_pairs.empty() ||
-       !image.unused_relocation_counts.empty() || image.ignored_rela_sections || image.unpaired_lo16_relocations)
-        throw std::runtime_error("execution alias requires a stripped image without symbol/relocation evidence");
-    for(auto& segment:image.segments) {
-        if(segment.vaddr>=Memory::kMainRamBytes || segment.memory_size>Memory::kMainRamBytes-segment.vaddr)
-            throw std::runtime_error("execution alias requires physical EE RAM segments");
-        segment.vaddr|=alias;
-    }
-    image.entry|=alias;return image;
-}
 }  // namespace ps2native

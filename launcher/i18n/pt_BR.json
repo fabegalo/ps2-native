@@ -379,5 +379,19 @@
   "Native AOT with selective HLE. Missing translations and services stop explicitly; compatibility incomplete.": "AOT nativo com HLE seletiva. Traduções e serviços ausentes interrompem a execução explicitamente; compatibilidade incompleta.",
   "Native AOT session with selective HLE — compatibility incomplete": "Sessão AOT nativa com HLE seletiva — compatibilidade incompleta",
   "Import your discs, prepare verified native code, and select Play. Compatibility is incomplete; unsupported translations and services are reported explicitly.": "Importe seus discos, prepare o código nativo verificado e selecione Jogar. A compatibilidade é incompleta; traduções e serviços sem suporte são informados explicitamente.",
-  "Prepares original PlayStation 2 code as offline native modules for the shared runtime with selective HLE. Compatibility is incomplete. Missing translations and services stop explicitly, without an interpreted fallback.": "Prepara o código original do PlayStation 2 como módulos nativos offline para o runtime compartilhado com HLE seletiva. A compatibilidade é incompleta. Traduções e serviços ausentes interrompem a execução explicitamente, sem interpretação alternativa."
+  "Prepares original PlayStation 2 code as offline native modules for the shared runtime with selective HLE. Compatibility is incomplete. Missing translations and services stop explicitly, without an interpreted fallback.": "Prepara o código original do PlayStation 2 como módulos nativos offline para o runtime compartilhado com HLE seletiva. A compatibilidade é incompleta. Traduções e serviços ausentes interrompem a execução explicitamente, sem interpretação alternativa.",
+  "System ready": "Sistema pronto",
+  "BIOS %1 (%2, %3). Games run through PS2Recomp: open the library and press Play.": "BIOS %1 (%2, %3). Os jogos rodam pelo PS2Recomp: abra a biblioteca e clique em Jogar.",
+  "Import your discs and press Play: PS2Recomp recompiles and runs them. A BIOS dumped from your own console identifies the system; ps2-native never bundles or downloads firmware.": "Importe seus discos e clique em Jogar: o PS2Recomp os recompila e executa. Uma BIOS extraída do seu próprio console identifica o sistema; o ps2-native nunca inclui nem baixa firmware.",
+  "PS2Recomp runs games directly; the original firmware Browser is not executed.": "O PS2Recomp executa os jogos diretamente; o Browser do firmware original não é executado.",
+  "Wait for the running game or preparation to finish.": "Aguarde o jogo em execução ou a preparação terminar.",
+  "Execution": "Execução",
+  "ps2n (PS2Recomp)": "ps2n (PS2Recomp)",
+  "Not available: the PS2Recomp runtime does not expose these settings yet.": "Indisponível: o runtime do PS2Recomp ainda não expõe essas configurações.",
+  "Finished.": "Concluído.",
+  "ps2n stopped (exit code %1). See %2 and the logs in the game folder.": "O ps2n parou (código %1). Veja %2 e os logs na pasta do jogo.",
+  "Another game is running or being prepared.": "Outro jogo está em execução ou sendo preparado.",
+  "ps2n was not found next to the launcher: %1": "O ps2n não foi encontrado ao lado do launcher: %1",
+  "Preparing with PS2Recomp. The first time takes several minutes.": "Preparando com o PS2Recomp. Na primeira vez leva vários minutos.",
+  "Starting. The first time PS2Recomp prepares the game, which takes several minutes.": "Iniciando. Na primeira vez o PS2Recomp prepara o jogo, o que leva vários minutos."
 }

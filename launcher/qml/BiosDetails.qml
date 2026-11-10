@@ -97,14 +97,6 @@ Rectangle {
                     reason: qsTr("Only a verified BIOS can be active.")
                     onClicked: Launcher.setActiveBios(panel.entryId)
                 }
-                AppButton {
-                    text: qsTr("Boot diagnostic")
-                    iconName: "terminal"
-                    variant: "primary"
-                    available: panel.valid && Launcher.bootToolAvailable
-                    reason: !panel.valid ? qsTr("This BIOS was not verified.") : qsTr("ps2n-boot was not found. Set its location in Settings.")
-                    onClicked: panel.tab = "diagnostic"
-                }
             }
         }
 
@@ -113,8 +105,7 @@ Rectangle {
             model: [
                 { key: "overview", label: qsTr("Overview") },
                 { key: "console", label: qsTr("Console & NVM") },
-                { key: "romdir", label: qsTr("ROMDIR"), count: (panel.entry.details || []).length },
-                { key: "diagnostic", label: qsTr("Diagnostic") }
+                { key: "romdir", label: qsTr("ROMDIR"), count: (panel.entry.details || []).length }
             ]
             onPicked: key => panel.tab = key
         }
@@ -122,7 +113,7 @@ Rectangle {
         StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: ["overview", "console", "romdir", "diagnostic"].indexOf(panel.tab)
+            currentIndex: ["overview", "console", "romdir"].indexOf(panel.tab)
 
             // Overview
             Flickable {
@@ -397,24 +388,6 @@ Rectangle {
                 }
             }
 
-            // Diagnostic: fills the tab; scrolls when its result and log need more room.
-            Flickable {
-                id: diagnosticScroll
-                contentHeight: Math.max(height, diagnostic.implicitHeight + 8)
-                clip: true
-                boundsBehavior: Flickable.StopAtBounds
-                ScrollBar.vertical: AppScrollBar {}
-                DiagnosticPanel {
-                    id: diagnostic
-                    width: diagnosticScroll.width - 12
-                    height: diagnosticScroll.contentHeight - 8
-                    biosId: panel.entryId
-                    biosValid: panel.valid
-                    biosTitle: panel.entry.title || ""
-                    consoleProfile: panel.entry.consoleProfile || ""
-                    nvmStatus: panel.entry.nvmStatus || ""
-                }
-            }
         }
     }
 }

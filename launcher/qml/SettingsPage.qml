@@ -14,17 +14,10 @@ Flickable {
     boundsBehavior: Flickable.StopAtBounds
     ScrollBar.vertical: AppScrollBar {}
 
-    readonly property var budgets: [1000000, 10000000, 50000000, 100000000, 500000000]
-
     FolderDialog {
         id: coversDialog
         title: qsTr("Folder with cover images")
         onAccepted: Launcher.setCoversFolder(selectedFolder)
-    }
-    FileDialog {
-        id: toolDialog
-        title: qsTr("Locate ps2n-boot")
-        onAccepted: Launcher.setBootToolOverride(selectedFile)
     }
 
     ColumnLayout {
@@ -134,47 +127,23 @@ Flickable {
             }
         }
 
-        // Diagnostic
+        // Execution
         Card {
             Layout.fillWidth: true
             ColumnLayout {
                 anchors.fill: parent
                 spacing: 18
-                SectionTitle { Layout.fillWidth: true; text: qsTr("Boot diagnostic"); iconName: "terminal" }
+                SectionTitle { Layout.fillWidth: true; text: qsTr("Execution"); iconName: "terminal" }
                 SettingRow {
                     Layout.fillWidth: true
-                    title: qsTr("ps2n-boot")
-                    description: Launcher.bootTool
+                    title: qsTr("ps2n (PS2Recomp)")
+                    description: Launcher.gameTool
                     iconName: "file"
-                    Row {
-                        spacing: 8
-                        Badge {
-                            text: Launcher.bootToolAvailable ? qsTr("Found") : qsTr("Not found")
-                            tone: Launcher.bootToolAvailable ? Theme.success : Theme.danger
-                            dot: true
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                        AppButton { visible: Launcher.bootToolOverride.length > 0; text: qsTr("Automatic"); compact: true; variant: "ghost"; onClicked: Launcher.clearBootToolOverride() }
-                        AppButton { text: qsTr("Locate…"); compact: true; onClicked: toolDialog.open() }
+                    Badge {
+                        text: Launcher.gameToolAvailable ? qsTr("Found") : qsTr("Not found")
+                        tone: Launcher.gameToolAvailable ? Theme.success : Theme.danger
+                        dot: true
                     }
-                }
-                SettingRow {
-                    Layout.fillWidth: true
-                    title: qsTr("Default instruction budget")
-                    description: qsTr("How many EE instructions a diagnostic may retire before it stops.")
-                    iconName: "clock"
-                    AppComboBox {
-                        model: page.budgets.map(b => Launcher.formatCount(b))
-                        currentIndex: Math.max(0, page.budgets.indexOf(Launcher.diagnosticBudget))
-                        onActivated: index => Launcher.diagnosticBudget = page.budgets[index]
-                    }
-                }
-                SettingRow {
-                    Layout.fillWidth: true
-                    title: qsTr("Full trace")
-                    description: qsTr("Record every instruction and data access. Much larger output.")
-                    iconName: "list"
-                    AppSwitch { checked: Launcher.diagnosticFullTrace; onToggled: Launcher.diagnosticFullTrace = checked }
                 }
             }
         }
@@ -208,7 +177,7 @@ Flickable {
                     Layout.fillWidth: true
                     available: false
                     title: qsTr("Internal resolution, aspect ratio, V-Sync")
-                    description: qsTr("Not available: the experimental GS model runs only in diagnostics and is not a validated renderer yet.")
+                    description: qsTr("Not available: the PS2Recomp runtime does not expose these settings yet.")
                     iconName: "monitor"
                     Icon { name: "lock"; size: 18; color: Theme.textFaint }
                 }

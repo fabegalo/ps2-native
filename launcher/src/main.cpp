@@ -1,12 +1,10 @@
 // ps2-native desktop launcher: manages the user's BIOS dumps, console NVM and
-// disc images and runs the boot diagnostic. It never replaces the firmware's
-// own screens (Browser, System Configuration): those belong to the original
-// system once the runtime can execute it.
+// disc images. Play runs `ps2n play <disc>`: PS2Recomp recompiles the game and
+// its runtime executes it in its own window.
 #include "automation.hpp"
 #include "icon_provider.hpp"
 #include "launcher.hpp"
 #include "translation.hpp"
-#include "experimental_session.hpp"
 
 #include <QCommandLineParser>
 #include <QDir>
@@ -52,13 +50,9 @@ int main(int argc, char* argv[]) {
                                             QStringLiteral("n"));
     const QCommandLineOption expect_valid({QStringLiteral("expect-valid")}, QStringLiteral("Valid entries expected (automation)."),
                                           QStringLiteral("n"));
-    const QCommandLineOption diagnostic({QStringLiteral("run-diagnostic")},
-                                        QStringLiteral("Run the boot diagnostic on the active BIOS (automation)."));
     const QCommandLineOption window_size({QStringLiteral("window-size")}, QStringLiteral("Initial window size WxH."),
                                          QStringLiteral("size"));
-    const QCommandLineOption cache_diagnostic({QStringLiteral("diagnostic-cache-uncached-hits")},
-        QStringLiteral("HLE diagnostic: use unverified physical translation for uncached cache-hit aliases."));
-    parser.addOptions({data_dir, automate, import_option, screenshots, expect_entries, expect_valid, diagnostic, window_size, cache_diagnostic});
+    parser.addOptions({data_dir, automate, import_option, screenshots, expect_entries, expect_valid, window_size});
     parser.process(app);
 
     QString data = parser.value(data_dir);
@@ -67,15 +61,9 @@ int main(int argc, char* argv[]) {
     data = QDir(data).absolutePath();
 
     ps2launcher::Launcher launcher(data);
-    ps2launcher::ExperimentalSession session;
-    launcher.setRuntimeSession(&session);
-    qmlRegisterSingletonInstance("PS2Native.Backend",1,0,"Experimental",&session);
-    qmlRegisterType<ps2launcher::GameView>("PS2Native.Backend",1,0,"GameView");
     qmlRegisterSingletonInstance("PS2Native.Backend", 1, 0, "Launcher", &launcher);
     qmlRegisterUncreatableType<ps2launcher::EntryListModel>("PS2Native.Backend", 1, 0, "EntryListModel", QStringLiteral("backend"));
     qmlRegisterUncreatableType<ps2launcher::EntryFilterModel>("PS2Native.Backend", 1, 0, "EntryFilterModel", QStringLiteral("backend"));
-    qmlRegisterUncreatableType<ps2launcher::DiagnosticRunner>("PS2Native.Backend", 1, 0, "DiagnosticRunner", QStringLiteral("backend"));
-    qmlRegisterUncreatableType<ps2launcher::LogModel>("PS2Native.Backend", 1, 0, "LogModel", QStringLiteral("backend"));
 
     QQmlApplicationEngine engine;
     ps2launcher::Translation translation;
@@ -103,7 +91,6 @@ int main(int argc, char* argv[]) {
     engine.load(QUrl(QStringLiteral("qrc:/qt/qml/PS2Native/qml/Main.qml")));
     if (engine.rootObjects().isEmpty()) return 1;
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &launcher, [&launcher] { launcher.flush(); });
-    QObject::connect(&app,&QCoreApplication::aboutToQuit,&session,&ps2launcher::ExperimentalSession::stop);
 
     launcher.initialize();
     std::unique_ptr<ps2launcher::Automation> automation;
@@ -113,8 +100,6 @@ int main(int argc, char* argv[]) {
         options.screenshot_dir = parser.value(screenshots);
         options.expect_entries = parser.isSet(expect_entries) ? parser.value(expect_entries).toInt() : -1;
         options.expect_valid = parser.isSet(expect_valid) ? parser.value(expect_valid).toInt() : -1;
-        options.run_diagnostic = parser.isSet(diagnostic);
-        options.expect_diagnostic_result = options.run_diagnostic;
         automation = std::make_unique<ps2launcher::Automation>(launcher, engine, options);
         automation->start();
     }

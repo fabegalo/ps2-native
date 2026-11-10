@@ -61,18 +61,14 @@ O GitHub Actions compila e testa **Windows x86-64/ARM64, Linux x86-64/ARM64 (inc
 
 ### Ferramentas de desenvolvimento
 
+A execução usa o [PS2Recomp](https://github.com/ran-j/PS2Recomp) sem modificação, do submódulo `external/ps2recomp` (`git submodule update --init`).
+
 ```sh
-# Gerar C++ nativo a partir de um ELF MIPS suportado e obtido legalmente.
-./out/build/ps2n-aot entrada.elf out/build/generated/programa.cpp
-
-# Diagnosticar o boot de uma ROM0 fornecida pelo usuÃ¡rio.
-./out/build/ps2n-boot bios/sua-rom0.bin --console=MODELO:PLACA --trace=events
-
-# Caso exista, fornecer a NVM extraÃ­da do mesmo console.
-./out/build/ps2n-boot bios/sua-rom0.bin --console=MODELO:PLACA --nvm=bios/sua-nvm.nvm --trace=events
+# Extrair um disco obtido legalmente, recompilar com o PS2Recomp, compilar e executar.
+./out/build/ps2n play seu-disco.cue
 ```
 
-`ps2n-aot` gera C++ que precisa ser ligado a um host compatÃ­vel; nÃ£o produz sozinho um jogo executÃ¡vel. `ps2n-boot` Ã© uma ferramenta de diagnÃ³stico e pode parar em hardware nÃ£o implementado. O encerramento do processo nÃ£o deve ser confundido com uma BIOS inicializada com sucesso.
+`ps2n play` mantém cada jogo preparado em `out/build/games/<id>` e recompila automaticamente quando o runtime reporta um entry point ausente. A primeira preparação leva vários minutos; a compatibilidade depende do PS2Recomp e do jogo.
 
 ROM0, ROM1/ROM2, NVM, jogos e traduÃ§Ãµes proprietÃ¡rias geradas **nÃ£o sÃ£o fornecidos**. Mantenha esses arquivos localmente e nÃ£o os publique no repositÃ³rio. A correspondÃªncia BIOS/NVM deve ser validada, nÃ£o presumida pelo nome.
 

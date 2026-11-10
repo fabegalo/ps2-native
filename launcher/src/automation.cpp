@@ -75,7 +75,7 @@ void Automation::wait_idle(const std::function<void()>& next, int timeout_ms) {
     // Idle twice in a row: a finished task may queue the next one (identification after a scan).
     auto idle_ticks = std::make_shared<int>(0);
     connect(timer, &QTimer::timeout, this, [this, timer, clock, idle_ticks, next, timeout_ms] {
-        if (launcher_.loaded() && launcher_.pendingTasks() == 0 && !launcher_.diagnostic()->running()) ++*idle_ticks;
+        if (launcher_.loaded() && launcher_.pendingTasks() == 0) ++*idle_ticks;
         else *idle_ticks = 0;
         if (*idle_ticks >= 3) {
             timer->stop();
@@ -96,26 +96,6 @@ void Automation::step() {
     if (window == nullptr) {
         fail(QStringLiteral("no window"));
         return finish();
-    }
-    if (options_.run_diagnostic) {
-        options_.run_diagnostic = false;
-        const auto id = launcher_.activeBiosId();
-        if (id.isEmpty() || !launcher_.startDiagnostic(id)) {
-            fail(QStringLiteral("diagnostic did not start (active BIOS '%1')").arg(id));
-        } else {
-            out() << "automation: diagnostic started" << Qt::endl;
-            wait_idle([this] {
-                const auto summary = launcher_.diagnostic()->summary();
-                out() << "automation: diagnostic " << launcher_.diagnostic()->state() << ", outcome '"
-                      << summary.value(QStringLiteral("outcome")).toString() << "', "
-                      << launcher_.diagnostic()->lineCount() << " lines" << Qt::endl;
-                if (options_.expect_diagnostic_result && !summary.value(QStringLiteral("finished")).toBool())
-                    fail(QStringLiteral("diagnostic produced no result: %1").arg(launcher_.diagnostic()->errorText()));
-                pages_.insert(pages_.indexOf(QStringLiteral("settings")), QStringLiteral("bios-diagnostic"));
-                step();
-            }, 600000);
-            return;
-        }
     }
     if (pages_.isEmpty()) return finish();
     const QString page = pages_.takeFirst();

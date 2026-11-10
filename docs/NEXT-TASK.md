@@ -1,5 +1,12 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
+## Atual — PS2Recomp sem modificação, 10/11/2026
+
+As seções abaixo descrevem o runtime próprio removido e são histórico.
+Próximo passo: `ps2n play <disco>` para Shadow, Simpsons e God of War;
+investigar por que o GS do PS2Recomp não mostra sprites texturizados no
+Super Bust e corrigir upstream ou mover o pin.
+
 ## Pré-requisito após a remoção do interpretador — 08/11/2026
 
 As seções abaixo partem de checkpoints e janelas do executável híbrido

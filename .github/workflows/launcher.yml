@@ -3,7 +3,7 @@ name: Launcher - Qt 6 desktop UI (six native targets)
 # The desktop launcher is optional: the core workflow builds without Qt
 # (PS2N_LAUNCHER=AUTO skips it). Here Qt 6 is installed and the launcher is
 # required, built and exercised headlessly (offscreen platform, software
-# Quick backend): import, identification, every page, diagnostic, restore.
+# Quick backend): import, identification, every page, restore.
 # Qt modules used are LGPL-3.0 and linked dynamically; nothing is published.
 
 on:
@@ -12,14 +12,13 @@ on:
     paths:
       - "launcher/**"
       - "src/**"
-      - "shaders/**"
       - "include/**"
-      - "tests/frontend_tests.cpp"
+      - "tests/content_tests.cpp"
       - "tests/iso_image.hpp"
-      - "tests/make_fixture.cpp"
-      - "tools/ps2n-boot.cpp"
+      - "tools/**"
       - "cmake/**"
       - "CMakeLists.txt"
+      - "deps.lock.json"
       - "docs/assets/ps2-native-banner.webp"
       - ".github/workflows/launcher.yml"
   pull_request:
@@ -62,6 +61,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+          submodules: true
 
       - name: Install Qt 6 (Ubuntu packages)
         if: runner.os == 'Linux'
@@ -141,7 +141,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build launcher and its tools
-        run: cmake --build out/build --config Release --parallel 2 --target ps2-native ps2n-boot ps2n-frontend-tests ps2n-experimental-tests ps2n-launcher-fixtures
+        run: cmake --build out/build --config Release --parallel 2 --target ps2-native ps2n-launcher-fixtures
 
       - name: Test launcher core and UI
         run: ctest --test-dir out/build -C Release -R "^launcher-" --output-on-failure

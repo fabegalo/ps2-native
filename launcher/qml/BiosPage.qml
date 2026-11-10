@@ -11,10 +11,6 @@ Item {
     signal requestImportBios()
     signal requestScanBios()
 
-    function showDiagnostic() {
-        if (selectedId.length === 0) selectedId = Launcher.activeBiosId
-        details.tab = "diagnostic"
-    }
     Connections {
         target: Launcher
         function onActiveBiosChanged() { if (page.selectedId.length === 0) page.selectedId = Launcher.activeBiosId }

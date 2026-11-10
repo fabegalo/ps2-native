@@ -1,7 +1,7 @@
 #pragma once
 // Scripted runs of the real window for tests and visual validation: import
 // files, wait for identification, visit every page (optionally capturing each
-// to PNG), optionally run the boot diagnostic, then check what was persisted.
+// to PNG), then check what was persisted.
 // Used by CTest with the offscreen platform and by developers with a real one.
 #include <QObject>
 #include <QStringList>
@@ -22,8 +22,6 @@ struct AutomationOptions {
     QString screenshot_dir;       // empty: no captures
     int expect_entries{-1};       // library entries expected after the run (-1: not checked)
     int expect_valid{-1};         // valid entries expected (-1: not checked)
-    bool run_diagnostic{};        // start ps2n-boot on the active BIOS and wait for its result
-    bool expect_diagnostic_result{};
 };
 
 class Automation : public QObject {

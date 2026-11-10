@@ -61,18 +61,14 @@ GitHub Actions builds and tests **Windows x86-64/ARM64, Linux x86-64/ARM64 (incl
 
 ### Developer tools
 
+Execution uses [PS2Recomp](https://github.com/ran-j/PS2Recomp) unmodified, from the `external/ps2recomp` submodule (`git submodule update --init`).
+
 ```sh
-# Generate native C++ from a supported, legally obtained MIPS ELF.
-./out/build/ps2n-aot input.elf out/build/generated/program.cpp
-
-# Inspect a user-supplied ROM0 boot. Choose the matching console profile.
-./out/build/ps2n-boot bios/your-rom0.bin --console=MODEL:MAINBOARD --trace=events
-
-# If available, provide the NVM dumped from the matching console.
-./out/build/ps2n-boot bios/your-rom0.bin --console=MODEL:MAINBOARD --nvm=bios/your-console.nvm --trace=events
+# Extract a legally obtained disc, recompile it with PS2Recomp, build and run it.
+./out/build/ps2n play your-disc.cue
 ```
 
-`ps2n-aot` produces C++ that must be linked into a compatible host; it does not produce a standalone, playable game. `ps2n-boot` is a diagnostic runner and may stop on unsupported hardware. The current boot runner does not represent a successful BIOS startup merely because its process exits.
+`ps2n play` keeps each prepared game under `out/build/games/<id>` and recompiles automatically when the runtime reports a missing entry point. The first preparation takes several minutes; compatibility depends on PS2Recomp and on the game.
 
 The user's original ROM0, ROM1/ROM2, NVM, games and generated proprietary translations are **not provided**. Keep them local and do not commit or redistribute them. A BIOS/NVM match must be verified, not inferred from filenames.
 

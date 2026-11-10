@@ -77,8 +77,5 @@ struct Rom1Image {
 [[nodiscard]] Rom1Image load_bios_rom1(std::span<const std::uint8_t> bytes,
     const BiosImage& bios, const ConsoleHardware& hardware, const Rom1Identity& identity);
 
-// ROM0 as an executable image at its reset-vector address (KSEG1 0xBFC00000),
-// so the AOT can translate statically reachable firmware code.
-[[nodiscard]] ElfImage bios_code_image(const BiosImage& bios);
 inline constexpr std::uint32_t kEeResetVector = 0xBFC00000u;
 } // namespace ps2native

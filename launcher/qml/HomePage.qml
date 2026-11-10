@@ -8,7 +8,6 @@ Flickable {
     id: page
     signal navigate(int index)
     signal showGame(string id)
-    signal requestDiagnostic()
     signal requestImportDiscs()
     signal requestImportBios()
 
@@ -107,7 +106,7 @@ Flickable {
                         }
                         Text {
                             Layout.fillWidth: true
-                            text: page.biosReady ? qsTr("System ready for diagnostics") : qsTr("Set up your system")
+                            text: page.biosReady ? qsTr("System ready") : qsTr("Set up your system")
                             color: Theme.text
                             font.pixelSize: Theme.subtitleSize + 2
                             font.weight: Font.Bold
@@ -117,9 +116,9 @@ Flickable {
                     Text {
                         Layout.fillWidth: true
                         text: page.biosReady
-                              ? qsTr("BIOS %1 (%2, %3). Run the boot diagnostic to see how far the original firmware gets. The Browser and games cannot be opened from the launcher yet.")
+                              ? qsTr("BIOS %1 (%2, %3). Games run through PS2Recomp: open the library and press Play.")
                                   .arg(page.bios.info.version).arg(page.bios.info.region).arg(page.bios.info.romver)
-                              : qsTr("Import the BIOS dumped from your own console to run the boot diagnostic. ps2-native never bundles or downloads firmware.")
+                              : qsTr("Import your discs and press Play: PS2Recomp recompiles and runs them. A BIOS dumped from your own console identifies the system; ps2-native never bundles or downloads firmware.")
                         color: Theme.textMuted
                         font.pixelSize: Theme.bodySize
                         lineHeight: 1.15
@@ -133,16 +132,15 @@ Flickable {
                         text: qsTr("Enter PS2 Browser")
                         iconName: "globe"
                         available: false
-                        reason: qsTr("The original firmware does not reach the Browser yet. Run the boot diagnostic to see where it stops.")
+                        reason: qsTr("PS2Recomp runs games directly; the original firmware Browser is not executed.")
                         visible: page.wide
                     }
                     AppButton {
-                        text: page.biosReady ? qsTr("Run boot diagnostic") : qsTr("Import BIOS")
-                        iconName: page.biosReady ? "terminal" : "chip"
-                        variant: page.biosReady ? "secondary" : "primary"
-                        available: !page.biosReady || Launcher.bootToolAvailable
-                        reason: qsTr("ps2n-boot was not found next to the launcher. Set its location in Settings.")
-                        onClicked: page.biosReady ? page.requestDiagnostic() : page.requestImportBios()
+                        visible: !page.biosReady
+                        text: qsTr("Import BIOS")
+                        iconName: "chip"
+                        variant: "secondary"
+                        onClicked: page.requestImportBios()
                     }
                     AppButton {
                         text: qsTr("Open library")

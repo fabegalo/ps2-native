@@ -141,8 +141,8 @@ Rectangle {
                 AppButton {
                     Layout.fillWidth: true
                     text: qsTr("Prepare")
-                    available: !Experimental.active
-                    reason: qsTr("Stop the current session before preparing content.")
+                    available: !Launcher.gameRunning
+                    reason: qsTr("Wait for the running game or preparation to finish.")
                     onClicked: Launcher.prepareGame(panel.entryId)
                 }
                 AppButton {
@@ -150,8 +150,8 @@ Rectangle {
                     text: qsTr("Play")
                     iconName: "play"
                     variant: "primary"
-                    available: !Experimental.active
-                    reason: qsTr("Stop the current session before starting another game.")
+                    available: !Launcher.gameRunning
+                    reason: qsTr("Wait for the running game or preparation to finish.")
                     onClicked: Launcher.startGame(panel.entryId)
                 }
                 RowLayout {

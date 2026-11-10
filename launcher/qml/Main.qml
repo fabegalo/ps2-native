@@ -22,12 +22,6 @@ ApplicationWindow {
 
     function navigate(index) { currentPage = index }
     function showGame(id) { currentPage = 1; libraryPage.select(id) }
-    ExperimentalWindow { id: experimentalWindow }
-    Connections {
-        target: Launcher
-        function onGameStarted() { experimentalWindow.show(); experimentalWindow.raise(); experimentalWindow.requestActivate() }
-    }
-    onClosing: Experimental.stop()
 
     // Automation hook (tests and screenshots): shows a page, or a page in a given state.
     function automationShow(name) {
@@ -43,7 +37,6 @@ ApplicationWindow {
         }
         case "bios": currentPage = 2; biosPage.detailsTab = "overview"; return true
         case "bios-detail": currentPage = 2; biosPage.detailsTab = "console"; return true
-        case "bios-diagnostic": currentPage = 2; biosPage.selectedId = Launcher.diagnostic.biosId; biosPage.detailsTab = "diagnostic"; return true
         case "settings": currentPage = 3; return true
         case "about": currentPage = 4; return true
         }
@@ -118,7 +111,6 @@ ApplicationWindow {
             HomePage {
                 onNavigate: index => window.navigate(index)
                 onShowGame: id => window.showGame(id)
-                onRequestDiagnostic: { window.currentPage = 2; biosPage.showDiagnostic() }
                 onRequestImportDiscs: discDialog.open()
                 onRequestImportBios: biosDialog.open()
             }

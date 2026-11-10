@@ -1,5 +1,12 @@
 # Decisão de licença — 2026-11-03
 
+## PS2Recomp como camada de execução — 10/11/2026
+
+Cada `ps2n-game-<id>` liga o `ps2_runtime`/`ps2xIOP` do PS2Recomp (GPL-3.0)
+sem modificação e é uma obra combinada sob a GPL-3.0; o código gerado é
+local ao usuário e nunca é publicado. `ps2n`, a biblioteca de conteúdo e o
+launcher não ligam o runtime. Os patches em `patches/ps2recomp` foram removidos.
+
 ## Incorporação HLE do PS2Recomp — decisão de 07/11/2026
 
 O mantenedor autorizou incorporar o código e validou a adaptação do kernel HLE

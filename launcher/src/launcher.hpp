@@ -3,11 +3,11 @@
 // (loading, identification, folder scans, saving) runs on worker threads; the
 // UI thread only applies results. The library and settings live in the data
 // directory; user files stay where they are.
-#include "diagnostic_runner.hpp"
 #include "entry_model.hpp"
 #include "ps2native/frontend/library.hpp"
 
 #include <QObject>
+#include <QProcess>
 #include <QSet>
 #include <QThreadPool>
 #include <QTimer>
@@ -24,7 +24,7 @@ class Launcher : public QObject {
     Q_PROPERTY(ps2launcher::EntryFilterModel* games READ games CONSTANT)
     Q_PROPERTY(ps2launcher::EntryFilterModel* recentGames READ recentGames CONSTANT)
     Q_PROPERTY(ps2launcher::EntryListModel* bioses READ bioses CONSTANT)
-    Q_PROPERTY(ps2launcher::DiagnosticRunner* diagnostic READ diagnostic CONSTANT)
+    Q_PROPERTY(bool gameRunning READ gameRunning NOTIFY gameRunningChanged)
     Q_PROPERTY(bool loaded READ loaded NOTIFY loadedChanged)
     Q_PROPERTY(int pendingTasks READ pendingTasks NOTIFY activityChanged)
     Q_PROPERTY(QString activityText READ activityText NOTIFY activityChanged)
@@ -37,11 +37,8 @@ class Launcher : public QObject {
     Q_PROPERTY(int validBiosCount READ validBiosCount NOTIFY statsChanged)
     Q_PROPERTY(QStringList gameFolders READ gameFolders NOTIFY settingsChanged)
     Q_PROPERTY(QString coversFolder READ coversFolder NOTIFY settingsChanged)
-    Q_PROPERTY(QString bootToolOverride READ bootToolOverride NOTIFY settingsChanged)
-    Q_PROPERTY(QString bootTool READ bootTool NOTIFY settingsChanged)
-    Q_PROPERTY(bool bootToolAvailable READ bootToolAvailable NOTIFY settingsChanged)
-    Q_PROPERTY(int diagnosticBudget READ diagnosticBudget WRITE setDiagnosticBudget NOTIFY settingsChanged)
-    Q_PROPERTY(bool diagnosticFullTrace READ diagnosticFullTrace WRITE setDiagnosticFullTrace NOTIFY settingsChanged)
+    Q_PROPERTY(QString gameTool READ gameTool CONSTANT)
+    Q_PROPERTY(bool gameToolAvailable READ gameToolAvailable CONSTANT)
     Q_PROPERTY(QString renderer READ renderer WRITE setRenderer NOTIFY settingsChanged)
     Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY settingsChanged)
     Q_PROPERTY(bool scanOnStart READ scanOnStart WRITE setScanOnStart NOTIFY settingsChanged)
@@ -65,7 +62,7 @@ public:
     EntryFilterModel* games() { return games_.get(); }
     EntryFilterModel* recentGames() { return recent_.get(); }
     EntryListModel* bioses() { return bios_model_.get(); }
-    DiagnosticRunner* diagnostic() { return diagnostic_.get(); }
+    [[nodiscard]] bool gameRunning() const { return game_.state() != QProcess::NotRunning; }
     [[nodiscard]] bool loaded() const { return loaded_; }
     [[nodiscard]] int pendingTasks() const { return pending_tasks_; }
     [[nodiscard]] QString activityText() const;
@@ -78,13 +75,9 @@ public:
     [[nodiscard]] int validBiosCount() const;
     [[nodiscard]] QStringList gameFolders() const;
     [[nodiscard]] QString coversFolder() const;
-    [[nodiscard]] QString bootToolOverride() const;
-    [[nodiscard]] QString bootTool() const;
-    [[nodiscard]] bool bootToolAvailable() const;
-    [[nodiscard]] int diagnosticBudget() const;
-    void setDiagnosticBudget(int value);
-    [[nodiscard]] bool diagnosticFullTrace() const;
-    void setDiagnosticFullTrace(bool value);
+    // ps2n, next to the launcher: prepares discs with PS2Recomp and runs them.
+    [[nodiscard]] QString gameTool() const;
+    [[nodiscard]] bool gameToolAvailable() const;
     [[nodiscard]] QString renderer() const;
     void setRenderer(const QString& value);
     [[nodiscard]] bool reduceMotion() const;
@@ -119,14 +112,11 @@ public:
     Q_INVOKABLE void setConsoleProfile(const QString& biosId, const QString& profile);
     Q_INVOKABLE void attachNvm(const QString& biosId, const QUrl& file);
     Q_INVOKABLE void detachNvm(const QString& biosId);
-    Q_INVOKABLE bool startDiagnostic(const QString& biosId);
-    void setRuntimeSession(ps2native::frontend::RuntimeSession* session) { session_ = session; }
     Q_INVOKABLE bool startGame(const QString& id);
     Q_INVOKABLE bool prepareGame(const QString& id);
     Q_INVOKABLE void setCoversFolder(const QUrl& folder);
     Q_INVOKABLE void clearCoversFolder();
-    Q_INVOKABLE void setBootToolOverride(const QUrl& file);
-    Q_INVOKABLE void clearBootToolOverride();
+    Q_INVOKABLE void stopGame();
     Q_INVOKABLE void openFolder(const QString& path) const;
     Q_INVOKABLE void openUrl(const QString& url) const;
     Q_INVOKABLE void copyText(const QString& text) const;
@@ -134,7 +124,7 @@ public:
     Q_INVOKABLE QString formatCount(double value) const;
 
 signals:
-    void gameStarted();
+    void gameRunningChanged();
     void loadedChanged();
     void activityChanged();
     void activeBiosChanged();
@@ -166,15 +156,15 @@ private:
     [[nodiscard]] ps2native::frontend::ProbeContext probe_context() const;
 
     QString data_dir_;
-    bool launchGame(const QString& id,bool prepare_only);
-    ps2native::frontend::RuntimeSession* session_{};
+    bool launchGame(const QString& id, bool prepare_only);
+    QProcess game_;
+    QString game_title_;
     ps2native::frontend::Library library_;
     ps2native::frontend::LauncherSettings settings_;
     std::unique_ptr<EntryListModel> game_model_;
     std::unique_ptr<EntryListModel> bios_model_;
     std::unique_ptr<EntryFilterModel> games_;
     std::unique_ptr<EntryFilterModel> recent_;
-    std::unique_ptr<DiagnosticRunner> diagnostic_;
     QThreadPool pool_;
     QThreadPool writer_;
     QTimer save_timer_;

@@ -1,68 +1,86 @@
-# One SDK checkout and one incremental build; never fetch another runtime.
-set(PS2N_LOCK_FILE "${CMAKE_CURRENT_LIST_DIR}/../deps.lock.json")
-set(_sdk_default "${CMAKE_CURRENT_SOURCE_DIR}/out/ps2recomp-reference")
-set(PS2N_PS2RECOMP_SOURCE_DIR "${_sdk_default}" CACHE PATH "Checkout of the PS2Recomp revision in deps.lock.json, with listed patches applied")
-include("${CMAKE_CURRENT_LIST_DIR}/VerifyPS2Recomp.cmake")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS2N_LOCK_FILE}")
-
+# PS2Recomp is the execution layer, consumed unmodified at the commit pinned in
+# deps.lock.json (as x360-native consumes ReXGlue):
+#   ps2xRecomp/ps2xAnalyzer  built as their own top-level project (README flow)
+#   ps2xRuntime/ps2xIOP      added here; each prepared game links ps2_runtime
+include(ExternalProject)
 include(FetchContent)
-set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
-set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
-set(BUILD_DWARFDUMP OFF)
-set(BUILD_DWARFEXAMPLE OFF)
-set(BUILD_DWARFGEN OFF)
-set(BUILD_SHARED OFF)
-set(BUILD_NON_SHARED ON)
-# First declaration wins over the upstream tags; verify each tag's resolved
-# commit before its CMake code is executed. Shallow clones bound disk usage.
-file(READ "${PS2N_LOCK_FILE}" _lock)
 
-# Runtime-only SDK patches change discovery/runtime identity, not emitted game code.
-string(JSON _codegen_lock REMOVE "${_lock}" ps2recomp_sdk patches)
-string(JSON _patch_count LENGTH "${_lock}" ps2recomp_sdk patches)
-if(_patch_count GREATER 0)
-    math(EXPR _patch_last "${_patch_count}-1")
-    foreach(_patch_index RANGE ${_patch_last})
-        string(JSON _patch GET "${_lock}" ps2recomp_sdk patches ${_patch_index})
-        string(JSON _patch_files GET "${_patch}" files)
-        if(_patch_files MATCHES "ps2xRecomp/|ps2xAnalyzer/")
-            string(APPEND _codegen_lock "\n${_patch}")
-        endif()
-    endforeach()
+set(PS2N_LOCK_FILE "${CMAKE_CURRENT_LIST_DIR}/../deps.lock.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PS2N_LOCK_FILE}")
+file(READ "${PS2N_LOCK_FILE}" _ps2n_lock)
+string(JSON PS2N_PS2RECOMP_URL GET "${_ps2n_lock}" ps2recomp url)
+string(JSON PS2N_PS2RECOMP_COMMIT GET "${_ps2n_lock}" ps2recomp commit)
+
+set(_ps2n_submodule "${CMAKE_CURRENT_LIST_DIR}/../external/ps2recomp")
+if(EXISTS "${_ps2n_submodule}/ps2xRuntime/CMakeLists.txt")
+    set(_ps2n_default_source "${_ps2n_submodule}")
+else()
+    set(_ps2n_default_source "")
 endif()
-string(SHA256 PS2N_PS2RECOMP_CODEGEN_LOCK_SHA256 "${_codegen_lock}")
+set(PS2N_PS2RECOMP_SOURCE_DIR "${_ps2n_default_source}" CACHE PATH
+    "PS2Recomp checkout at the pinned commit (default: the external/ps2recomp submodule; empty: fetch it)")
+if(PS2N_PS2RECOMP_SOURCE_DIR)
+    set(_ps2recomp "${PS2N_PS2RECOMP_SOURCE_DIR}")
+else()
+    FetchContent_Declare(ps2recomp GIT_REPOSITORY "${PS2N_PS2RECOMP_URL}" GIT_TAG "${PS2N_PS2RECOMP_COMMIT}"
+        GIT_PROGRESS FALSE SOURCE_SUBDIR ps2n-no-configure)
+    FetchContent_MakeAvailable(ps2recomp)
+    set(_ps2recomp "${ps2recomp_SOURCE_DIR}")
+endif()
 
-foreach(name IN ITEMS elfio toml11 fmt libdwarf rabbitizer nlohmann_json)
-    string(JSON repo GET "${_lock}" dependencies ${name} repository)
-    string(JSON tag GET "${_lock}" dependencies ${name} tag)
-    string(JSON expected GET "${_lock}" dependencies ${name} commit)
-    FetchContent_Declare(${name} GIT_REPOSITORY "https://github.com/${repo}.git"
-        GIT_TAG "${tag}" GIT_SHALLOW TRUE GIT_PROGRESS FALSE
-        SOURCE_SUBDIR ps2n-verify-before-configure)
-    FetchContent_GetProperties(${name})
-    if(NOT ${name}_POPULATED)
-        FetchContent_MakeAvailable(${name})
-    endif()
-    execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${${name}_SOURCE_DIR}" rev-parse HEAD
-        OUTPUT_VARIABLE actual OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE result)
-    if(NOT result EQUAL 0 OR NOT actual STREQUAL expected)
-        message(FATAL_ERROR "PS2Recomp dependency ${name}: expected ${expected}, got ${actual}")
-    endif()
-    list(APPEND _sdk_verify_args "-DPS2N_SDK_${name}_DIR=${${name}_SOURCE_DIR}")
-    if(EXISTS "${${name}_SOURCE_DIR}/CMakeLists.txt")
-        add_subdirectory("${${name}_SOURCE_DIR}" "${${name}_BINARY_DIR}" EXCLUDE_FROM_ALL)
-    endif()
-endforeach()
-add_custom_target(ps2n-verify-sdk
-    COMMAND "${CMAKE_COMMAND}" "-DPS2N_LOCK_FILE=${PS2N_LOCK_FILE}"
-        "-DPS2N_PS2RECOMP_SOURCE_DIR=${PS2N_PS2RECOMP_SOURCE_DIR}" ${_sdk_verify_args}
-        -P "${CMAKE_CURRENT_LIST_DIR}/VerifyPS2Recomp.cmake" VERBATIM)
+find_package(Git REQUIRED)
+execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${_ps2recomp}" rev-parse HEAD
+    OUTPUT_VARIABLE _actual OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _result)
+if(NOT _result EQUAL 0 OR NOT _actual STREQUAL PS2N_PS2RECOMP_COMMIT)
+    message(FATAL_ERROR "PS2Recomp at ${_ps2recomp} is ${_actual}; deps.lock.json pins ${PS2N_PS2RECOMP_COMMIT}")
+endif()
+execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${_ps2recomp}" status --porcelain --untracked-files=no
+    OUTPUT_VARIABLE _changes OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(_changes)
+    message(FATAL_ERROR "PS2Recomp checkout ${_ps2recomp} has local changes; it is used unmodified:\n${_changes}")
+endif()
+set(PS2N_PS2RECOMP_DIR "${_ps2recomp}")
 
-# Preserve the host's floating-point/security/ISA policy; do not apply the
-# SDK's global AVX2, fast-math or disabled security checks.
-set(PS2N_PS2RECOMP_INTEGRATION ON)
-enable_language(C)
-add_subdirectory("${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xRecomp" ps2recomp/recomp EXCLUDE_FROM_ALL)
-add_subdirectory("${PS2N_PS2RECOMP_SOURCE_DIR}/ps2xAnalyzer" ps2recomp/analyzer EXCLUDE_FROM_ALL)
-add_dependencies(ps2_recomp_lib ps2n-verify-sdk)
-add_dependencies(ps2_analyzer_lib ps2n-verify-sdk)
+# Recompiler and analyzer: the upstream top-level build, tools only.
+set(PS2N_PS2RECOMP_TOOLS_DIR "${CMAKE_BINARY_DIR}/ps2recomp-tools")
+ExternalProject_Add(ps2recomp_tools
+    SOURCE_DIR "${_ps2recomp}"
+    BINARY_DIR "${PS2N_PS2RECOMP_TOOLS_DIR}"
+    CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DPS2X_BUILD_RUNTIME=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF
+        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+    BUILD_COMMAND "${CMAKE_COMMAND}" --build "${PS2N_PS2RECOMP_TOOLS_DIR}" --config Release --target ps2_recomp ps2_analyzer
+    INSTALL_COMMAND ""
+    BUILD_ALWAYS OFF
+    BUILD_BYPRODUCTS "${PS2N_PS2RECOMP_TOOLS_DIR}/ps2xRecomp/ps2_recomp${CMAKE_EXECUTABLE_SUFFIX}"
+        "${PS2N_PS2RECOMP_TOOLS_DIR}/ps2xAnalyzer/ps2_analyzer${CMAKE_EXECUTABLE_SUFFIX}")
+set(PS2N_RECOMP_EXE "${PS2N_PS2RECOMP_TOOLS_DIR}/ps2xRecomp/ps2_recomp${CMAKE_EXECUTABLE_SUFFIX}")
+set(PS2N_ANALYZER_EXE "${PS2N_PS2RECOMP_TOOLS_DIR}/ps2xAnalyzer/ps2_analyzer${CMAKE_EXECUTABLE_SUFFIX}")
+
+# Runtime: the debug UI and verbose logs are upstream developer options.
+set(PS2X_ENABLE_DEBUG_UI OFF CACHE BOOL "" FORCE)
+set(PS2X_ENABLE_SCCACHE OFF CACHE BOOL "" FORCE)
+set(PS2X_ENABLE_AGRESSIVE_LOGS OFF CACHE BOOL "" FORCE)
+add_subdirectory("${_ps2recomp}/ps2xIOP" ps2recomp/iop EXCLUDE_FROM_ALL)
+add_subdirectory("${_ps2recomp}/ps2xRuntime" ps2recomp/runtime EXCLUDE_FROM_ALL)
+
+# One executable per prepared game: the generated PS2Recomp sources, the
+# ps2-native host entry point and the unchanged ps2_runtime library.
+function(ps2n_add_game id generated)
+    file(GLOB _sources CONFIGURE_DEPENDS "${generated}/*.cpp")
+    add_executable(ps2n-game-${id} EXCLUDE_FROM_ALL ${_sources} "${PROJECT_SOURCE_DIR}/tools/ps2n_game_main.cpp")
+    target_include_directories(ps2n-game-${id} PRIVATE "${generated}")
+    target_link_libraries(ps2n-game-${id} PRIVATE ps2_runtime)
+    set_target_properties(ps2n-game-${id} PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 32)
+    set_source_files_properties("${PROJECT_SOURCE_DIR}/tools/ps2n_game_main.cpp" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+    if(MSVC)
+        target_compile_options(ps2n-game-${id} PRIVATE /FS /bigobj)
+        # Same workaround as ps2EntryRunner: WinAPI and raylib both define CloseWindow.
+        target_link_options(ps2n-game-${id} PRIVATE /FORCE:MULTIPLE)
+    endif()
+    if(COMMAND ps2x_stage_ffmpeg_runtime_dlls)
+        ps2x_stage_ffmpeg_runtime_dlls(ps2n-game-${id})
+    endif()
+    if(COMMAND EnableFastReleaseMode AND CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo)$")
+        EnableFastReleaseMode(ps2n-game-${id})
+    endif()
+endfunction()

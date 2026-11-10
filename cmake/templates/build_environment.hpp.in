@@ -1,0 +1,14 @@
+// Generated at configure time: the compiler environment of this build tree,
+// restored by ps2n before it rebuilds a game (MSVC needs INCLUDE/LIB/PATH).
+#pragma once
+#include <array>
+#include <string_view>
+#include <utility>
+namespace ps2n_build {
+inline constexpr std::array<std::pair<std::string_view, std::string_view>, 4> kEnvironment{{
+    {"INCLUDE", R"ps2n(@PS2N_ENV_INCLUDE@)ps2n"},
+    {"LIB", R"ps2n(@PS2N_ENV_LIB@)ps2n"},
+    {"LIBPATH", R"ps2n(@PS2N_ENV_LIBPATH@)ps2n"},
+    {"PATH", R"ps2n(@PS2N_ENV_PATH@)ps2n"},
+}};
+}

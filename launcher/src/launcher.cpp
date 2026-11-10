@@ -48,7 +48,6 @@ namespace {
 std::int64_t now_unix() { return QDateTime::currentSecsSinceEpoch(); }
 QString capability_key(fe::Capability capability) {
     switch (capability) {
-    case fe::Capability::BootDiagnostic: return QStringLiteral("boot-diagnostic");
     case fe::Capability::FirmwareBrowser: return QStringLiteral("browser");
     case fe::Capability::DiscBoot: return QStringLiteral("disc-boot");
     case fe::Capability::Controller: return QStringLiteral("controller");
@@ -77,8 +76,17 @@ Launcher::Launcher(const QString& data_dir, QObject* parent)
       game_model_(std::make_unique<EntryListModel>(ContentKind::Disc)),
       bios_model_(std::make_unique<EntryListModel>(ContentKind::Bios)),
       games_(std::make_unique<EntryFilterModel>(game_model_.get())),
-      recent_(std::make_unique<EntryFilterModel>(game_model_.get())),
-      diagnostic_(std::make_unique<DiagnosticRunner>()) {
+      recent_(std::make_unique<EntryFilterModel>(game_model_.get())) {
+    game_.setProcessChannelMode(QProcess::MergedChannels);
+    game_.setStandardOutputFile(QDir(data_dir).filePath(QStringLiteral("ps2n.log")));
+    connect(&game_, &QProcess::stateChanged, this, &Launcher::gameRunningChanged);
+    connect(&game_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
+        if (status == QProcess::NormalExit && code == 0)
+            emit notify(QStringLiteral("info"), game_title_, tr("Finished."));
+        else
+            emit notify(QStringLiteral("error"), game_title_,
+                        tr("ps2n stopped (exit code %1). See %2 and the logs in the game folder.").arg(code).arg(QDir(data_dir_).filePath(QStringLiteral("ps2n.log"))));
+    });
     recent_->setSortMode(QStringLiteral("recent"));
     pool_.setMaxThreadCount(std::clamp(QThread::idealThreadCount(), 2, 4));
     writer_.setMaxThreadCount(1);
@@ -687,7 +695,7 @@ bool Launcher::startGame(const QString& id) {
 bool Launcher::prepareGame(const QString& id) {
     return launchGame(id,true);
 }
-bool Launcher::launchGame(const QString& id,bool prepare_only) {
+bool Launcher::launchGame(const QString& id, bool prepare_only) {
     const auto fail = [&](const QString& reason) {
         emit notify(QStringLiteral("error"), tr("Game not started"), reason);
         return false;
@@ -695,57 +703,18 @@ bool Launcher::launchGame(const QString& id,bool prepare_only) {
     const auto* game = library_.find(utf8(id));
     if (!game || game->kind != ContentKind::Disc || game->status != ProbeStatus::Valid || game->value("platform") != "PlayStation 2")
         return fail(tr("Select an identified PlayStation 2 disc."));
-    const auto* bios = library_.find(settings_.active_bios);
-    if (!bios || bios->kind != ContentKind::Bios || bios->status != ProbeStatus::Valid)
-        return fail(tr("Select a valid BIOS in the BIOS page first."));
-    if (!bios->nvm_path.empty() && bios->nvm_status != ProbeStatus::Valid)
-        return fail(tr("The attached NVM is not valid for this console profile. Detach it or choose its console."));
-    if (!session_) return fail(tr("Game session is unavailable."));
-    const auto state = session_->state();
-    if (state == fe::SessionState::Starting || state == fe::SessionState::Running ||
-        state == fe::SessionState::Paused || state == fe::SessionState::Stopping)
-        return fail(tr("Stop the current session before starting another game."));
-    fe::SessionRequest request;
-    request.native_cache=fspath(QDir(data_dir_).filePath(QStringLiteral("native-cache")));
-    request.prepare_only=prepare_only;
-    request.rom0 = bios->path;
-    request.expected_rom0_sha256 = bios->value("sha256");
-    request.console_profile = bios->console_profile;
-    request.nvm = bios->nvm_path;
-    const auto nvmHash = bios->nvm_info.find("sha256");
-    if (nvmHash != bios->nvm_info.end()) request.expected_nvm_sha256 = nvmHash->second;
-    request.disc = game->path;
-    request.expected_disc_boot = game->value("boot");
-    request.renderer = settings_.renderer == "native" ? fe::RendererMode::Native : fe::RendererMode::GsFaithful;
-    session_->start(request);
-    emit gameStarted();
+    if (gameRunning()) return fail(tr("Another game is running or being prepared."));
+    if (!gameToolAvailable()) return fail(tr("ps2n was not found next to the launcher: %1").arg(gameTool()));
+    // ps2n prepares (PS2Recomp analysis, recompilation, build) and runs the game in its own window.
+    game_title_ = qstr(game->title);
+    game_.start(gameTool(), {prepare_only ? QStringLiteral("prepare") : QStringLiteral("play"), qpath(game->path)});
+    emit notify(QStringLiteral("info"), game_title_,
+                prepare_only ? tr("Preparing with PS2Recomp. The first time takes several minutes.")
+                             : tr("Starting. The first time PS2Recomp prepares the game, which takes several minutes."));
     return true;
 }
-
-bool Launcher::startDiagnostic(const QString& biosId) {
-    const auto* e = library_.find(utf8(biosId));
-    if (e == nullptr || e->kind != ContentKind::Bios) return false;
-    if (e->status != ProbeStatus::Valid) {
-        emit notify(QStringLiteral("error"), tr("Diagnostic unavailable"), tr("This BIOS was not identified: %1").arg(qstr(e->error)));
-        return false;
-    }
-    if (!e->nvm_path.empty() && e->nvm_status != ProbeStatus::Valid) {
-        emit notify(QStringLiteral("error"), tr("NVM not valid"),
-                    tr("The attached NVM is not valid for this console profile. Detach it or choose its console."));
-        return false;
-    }
-    fe::DiagnosticRequest request;
-    request.rom0 = e->path;
-    request.expected_sha256 = e->value("sha256");
-    request.console_profile = e->console_profile;
-    request.nvm = e->nvm_path;
-    request.max_instructions = settings_.diagnostic_budget;
-    request.full_trace = settings_.diagnostic_trace == "full";
-    if (!diagnostic_->start(bootTool(), request, biosId, qstr(e->title), data_dir_)) {
-        emit notify(QStringLiteral("error"), tr("Diagnostic not started"), diagnostic_->errorText());
-        return false;
-    }
-    return true;
+void Launcher::stopGame() {
+    if (gameRunning()) game_.kill();
 }
 
 int Launcher::gameCount() const { return game_model_->count(); }
@@ -785,41 +754,10 @@ void Launcher::clearCoversFolder() {
     for (const auto& e : library_.entries())
         if (e.kind == ContentKind::Disc) queue_probe(e.id);
 }
-QString Launcher::bootToolOverride() const { return qpath(settings_.boot_tool); }
-QString Launcher::bootTool() const {
-    if (!settings_.boot_tool.empty()) return qpath(settings_.boot_tool);
-    const QString dir = QCoreApplication::applicationDirPath();
-    const QStringList candidates{dir + QLatin1Char('/') + exe_name(QStringLiteral("ps2n-native")),
-                                 // macOS: next to the .app bundle (build tree layout).
-                                 dir + QStringLiteral("/../../../") + exe_name(QStringLiteral("ps2n-native"))};
-    for (const auto& candidate : candidates)
-        if (QFileInfo(candidate).isFile()) return QDir::toNativeSeparators(QFileInfo(candidate).canonicalFilePath());
-    return QDir::toNativeSeparators(candidates.front());
+QString Launcher::gameTool() const {
+    return QDir::toNativeSeparators(QCoreApplication::applicationDirPath() + QLatin1Char('/') + exe_name(QStringLiteral("ps2n")));
 }
-bool Launcher::bootToolAvailable() const { return QFileInfo(bootTool()).isFile(); }
-void Launcher::setBootToolOverride(const QUrl& file) {
-    const QString path = local_path(file);
-    if (path.isEmpty()) return;
-    settings_.boot_tool = fe::normalize_library_path(fspath(path));
-    save_settings();
-}
-void Launcher::clearBootToolOverride() {
-    settings_.boot_tool.clear();
-    save_settings();
-}
-int Launcher::diagnosticBudget() const {
-    return static_cast<int>(std::min<std::uint64_t>(settings_.diagnostic_budget, 2'000'000'000ull));
-}
-void Launcher::setDiagnosticBudget(int value) {
-    if (value <= 0 || static_cast<std::uint64_t>(value) == settings_.diagnostic_budget) return;
-    settings_.diagnostic_budget = static_cast<std::uint64_t>(value);
-    save_settings();
-}
-bool Launcher::diagnosticFullTrace() const { return settings_.diagnostic_trace == "full"; }
-void Launcher::setDiagnosticFullTrace(bool value) {
-    settings_.diagnostic_trace = value ? "full" : "events";
-    save_settings();
-}
+bool Launcher::gameToolAvailable() const { return QFileInfo(gameTool()).isFile(); }
 QString Launcher::renderer() const { return qstr(settings_.renderer); }
 void Launcher::setRenderer(const QString& value) {
     if (value != QLatin1String("gs-faithful") && value != QLatin1String("native")) return;

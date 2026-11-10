@@ -1,4 +1,4 @@
-name: Core - Build and AOT tests (six native targets)
+name: Core - PS2Recomp build and content tests (six native targets)
 
 on:
   push:
@@ -36,50 +36,33 @@ jobs:
             arch: ARM64
     runs-on: ${{ matrix.os }}
     steps:
-      # actions/checkout v4.2.2 pinned by commit SHA.
+      # actions/checkout v4.2.2 pinned by commit SHA. PS2Recomp is the
+      # external/ps2recomp submodule, pinned in deps.lock.json.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+          submodules: true
 
-      - name: Install optional Vulkan headers and software GPU (Linux)
+      - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libvulkan-dev mesa-vulkan-drivers
+          sudo apt-get install -y --no-install-recommends ninja-build libgl-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxi-dev libasound2-dev
 
-      - name: Install optional Vulkan headers (macOS)
+      - name: Install build dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install vulkan-headers
+        run: brew install ninja
 
-      - name: Configure (Unix / Ninja)
+      - name: Configure and build (Unix / Ninja)
         if: runner.os != 'Windows'
-        run: cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_REQUIRE_NINJA_PATH_TEST=ON -DPS2N_ENABLE_PROFILING=${{ matrix.name == 'Linux x86-64' && 'ON' || 'OFF' }}
+        run: |
+          cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_LAUNCHER=OFF
+          cmake --build out/build --parallel 2 --target ps2n ps2n-content-tests ps2_runtime
 
-      - name: Configure (Windows / MSVC)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: cmake -S . -B out/build -G "Visual Studio 18 2026" -A "${{ matrix.arch }}" -DPS2N_REQUIRE_NINJA_PATH_TEST=ON
-
-      - name: Build
-        run: cmake --build out/build --config Release --parallel 2
-
-      - name: Test long paths and Unicode (260, 500, 1000)
-        run: ctest --test-dir out/build -C Release -R "^io-long-paths$" --verbose
-
-      - name: Test AOT end-to-end
-        env:
-          PS2N_REQUIRE_GS_GPU: ${{ runner.os == 'Linux' && '1' || '0' }}
-          PS2N_GS_GPU_DIAGNOSTICS: ${{ runner.os == 'Windows' && '1' || '0' }}
-        run: ctest --test-dir out/build -C Release -E "^(io-long-paths|aot-long-path-build|native-aot-partitions|native-gs-directx)$" --output-on-failure
-
-      - name: Test Direct3D 12 availability and rasterization
-        run: ctest --test-dir out/build -C Release -R "^native-gs-directx$" --verbose
-
-      - name: Test Ninja AOT compilation at long paths (Unix)
-        if: runner.os != 'Windows'
-        run: ctest --test-dir out/build -C Release -R "^(aot-long-path-build|native-aot-partitions)$" --verbose
-
-      - name: Test Ninja AOT compilation at long paths (Windows)
+      # Ninja inside the MSVC developer shell: ps2n builds prepared games with
+      # the same toolchain and records its environment at configure time.
+      - name: Configure and build (Windows / MSVC + Ninja)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -90,7 +73,12 @@ jobs:
           $hostArch = if ($env:RUNNER_ARCH -eq "ARM64") { "arm64" } else { "x64" }
           $targetArch = "${{ matrix.arch }}".ToLowerInvariant()
           Enter-VsDevShell -VsInstallPath $installation -SkipAutomaticLocation -DevCmdArguments "-arch=$targetArch -host_arch=$hostArch"
-          $env:VSLANG = "1033"
-          ctest --test-dir out/build -C Release -R "^(aot-long-path-build|native-aot-partitions)$" --verbose
+          cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_LAUNCHER=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build out/build --parallel 2 --target ps2n ps2n-content-tests ps2_runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test disc access and process supervision
+        run: ctest --test-dir out/build -R "^content$" --output-on-failure
 
 # Developer-only proof of concept. No publishing or release automation.

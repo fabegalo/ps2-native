@@ -1,5 +1,6 @@
 #include "ps2native/bios.hpp"
-#include "ps2native/memory.hpp"
+// 4 MiB ROM0.
+namespace { constexpr std::size_t kBiosRomBytes = 4u * 1024u * 1024u; }
 #include "ps2native/sha256.hpp"
 #include "ps2native/console.hpp"
 
@@ -153,7 +154,7 @@ const BiosModule* BiosImage::find(std::string_view name) const noexcept {
 }
 
 static BiosImage load_rom_directory(std::span<const std::uint8_t> rom, const BiosLoadOptions& options, bool primary,bool reboot=false) {
-    if (primary && rom.size() != Memory::kBiosRomBytes)
+    if (primary && rom.size() != kBiosRomBytes)
         reject("size is " + std::to_string(rom.size()) + " bytes; ROM0 is exactly 4194304 bytes "
                "(partial dumps and concatenated ROM0+ROM1/ROM2/EROM files are not accepted)");
     BiosImage bios;
@@ -266,12 +267,4 @@ Rom1Image load_bios_rom1(std::span<const std::uint8_t> bytes, const BiosImage& b
     return {{bytes.begin(),bytes.end()},identity};
 }
 
-ElfImage bios_code_image(const BiosImage& bios) {
-    ElfImage image;
-    image.entry = kEeResetVector;
-    image.bytes = bios.rom0;
-    const auto size = static_cast<std::uint32_t>(bios.rom0.size());
-    image.segments.push_back({kEeResetVector, 0u, size, size, 5u /* PF_R | PF_X */});
-    return image;
-}
 } // namespace ps2native
