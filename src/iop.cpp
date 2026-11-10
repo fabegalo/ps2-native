@@ -180,6 +180,9 @@ bool is_spu2_voice_routing(std::uint32_t address) {
     const auto reg=(address-0x1F900000u)&0x3FFu;
     return reg>=0x180u && reg<=0x198u && !(reg&1u);
 }
+bool is_spu2_transfer_address(std::uint32_t address) {
+    return address==0x1F9001A8u || address==0x1F9001AAu || address==0x1F9005A8u || address==0x1F9005AAu;
+}
 bool is_spu2_effect_address(std::uint32_t address) {
     if(address<0x1F900000u || address>=0x1F900800u)return false;
     const auto reg=(address-0x1F900000u)&0x3FFu;
@@ -2718,7 +2721,7 @@ void Iop::store(std::uint32_t address, std::size_t bytes, std::optional<std::uin
     if((a.physical==0x1F90019Au || a.physical==0x1F90059Au) && bytes==2u && observed) {
         write_spu2_control(a.physical,*observed);return;
     }
-    if((is_spu2_voice_start(a.physical) || is_spu2_effect_address(a.physical)) && bytes==2u && observed) {
+    if((is_spu2_voice_start(a.physical) || is_spu2_effect_address(a.physical) || is_spu2_transfer_address(a.physical)) && bytes==2u && observed) {
         const auto mask=is_spu2_voice_start(a.physical) ? (((a.physical&0x3FFu)-0x1C0u)%4u ? 0xFFF8u : 0xFu) : (a.physical&2u) ? 0xFFFFu : 0xFu;
         if(observed->unknown&mask)throw IopStop{"SPU2 address configuration consumes unknown address bits"};
         io_write(a.physical,bytes,observed->value&mask,what);return;
@@ -2817,7 +2820,7 @@ std::uint32_t Iop::io_read(std::uint32_t physical, std::size_t bytes, const char
         return iop_sif1_read(physical);
     }
     const auto name = std::string("load ") + what + " of IOP register " + hex(physical);
-    if(physical==0x1F9001A8u || physical==0x1F9001AAu || physical==0x1F9005A8u || physical==0x1F9005AAu) {
+    if(is_spu2_transfer_address(physical)) {
         if(bytes!=2u)throw IopStop{"SPU2 transfer address requires halfword reads"};
         const auto& transfer=spu2_transfer_[(physical-0x1F9001A8u)/0x400u];
         const auto half=(physical&2u) ? transfer.low : transfer.high;
@@ -3339,7 +3342,7 @@ void Iop::io_write(std::uint32_t physical, std::size_t bytes, std::optional<std:
         state.control_written=true;return;
     }
 
-    if(physical==0x1F9001A8u || physical==0x1F9001AAu || physical==0x1F9005A8u || physical==0x1F9005AAu) {
+    if(is_spu2_transfer_address(physical)) {
         if(bytes!=2u || !value)throw IopStop{"SPU2 transfer address requires a known halfword write"};
         auto& transfer=spu2_transfer_[(physical-0x1F9001A8u)/0x400u];
         if(transfer.next)throw IopStop{"SPU2 transfer address change while PIO is busy is not modeled"};

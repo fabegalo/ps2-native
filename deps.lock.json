@@ -242,6 +242,18 @@
           "ps2xRecomp/src/lib/special_translator.cpp": "ebfd5a9b14b4ad4ef48e18ca4efebde75ae429bf479173ae02f748388dac168a",
           "ps2xRuntime/include/ps2_runtime_macros.h": "13b49e51f7eb228ab8489d180d8247acd2f7e5146538fb3178c07bbc2c042500"
         }
+      },
+      {
+        "file": "patches/ps2recomp/0015-iop-libc-argument-contracts.patch",
+        "sha256": "85ff3f0441ee872dcb864fc718e1633ad6a0b2e57a360e2c621e444738242c7f",
+        "base_files": {
+          "ps2xIOP/src/emulator/imports/iop_stdio.cpp": "89bc5d2ef9196aadafe7c4728e2fdc6814a9169e25b282631a53976735c86f47",
+          "ps2xIOP/src/emulator/imports/iop_sysclib.cpp": "f1888fadffdf2ef90913c9b5fc079b812fc4ef9123c566de1d1eb2a808caf974"
+        },
+        "files": {
+          "ps2xIOP/src/emulator/imports/iop_stdio.cpp": "be6d440811153e9bb94ca4fbb59a0f233f9ee666e89addc9d83d160513025345",
+          "ps2xIOP/src/emulator/imports/iop_sysclib.cpp": "c4953b1ccc3a3095fbd1914c2a58bd2665cef2536f9c23128c86716f55fde5f0"
+        }
       }
     ],
     "path": "out/ps2recomp-reference"

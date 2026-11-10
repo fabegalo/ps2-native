@@ -26,6 +26,22 @@ template<auto Words> auto entries() {
             [](Iop& iop){iop.execute_native<Words[N]>();}}...};
     }(std::make_index_sequence<Words.size()>{});
 }
+template<unsigned Core,bool UnknownAddress> void transfer_address() {
+    constexpr auto words=[] {
+        const auto offset=0x1A8u+Core*0x400u;
+        return std::array{0x3C08BF90u,0x34090003u,0xA5090000u|offset,0x95090000u|offset,0u,
+            UnknownAddress?0x00094902u:0u,0xA5090000u|offset,0x95020000u|offset,0u,0x1000FFFFu,0u};
+    }();
+    const auto native=entries<words>();std::vector<std::uint8_t> rom(4u*1024u*1024u);
+    for(unsigned n=0;n<words.size();++n)for(unsigned b=0;b<4;++b)rom[n*4+b]=static_cast<std::uint8_t>(words[n]>>(b*8));
+    const auto source=sha256_hex(rom),identity=iop_aot_identity(source,native);
+    const IopAotModule module{source,identity,native};const IopAotRegistration registration(module);
+    Iop iop;iop.reset(rom,nullptr,nullptr,false,std::nullopt,{},false,true);iop.run_until(30);
+    if constexpr(UnknownAddress)require(iop.stopped() && iop.stop_reason()->find("unknown address bits")!=std::string::npos,
+        "TSA writes must refuse unknown consumed address bits");
+    else require(!iop.stopped() && iop.diagnostic_gpr(2).value==3u && iop.diagnostic_gpr(2).unknown==0xFFF0u,
+        "TSA read-modify-write ignores reserved write bits without inventing their readback");
+}
 struct SeededIop : Iop {
     void seed() { spu2_ram_.resize(0x100000);spu2_ram_written_.resize(0x100000);spu2_ram_[0x40000]=0x1234;spu2_ram_written_[0x40000]=1; }
     void enable_input() { spu2_adma_[1].enabled=true; }
@@ -187,6 +203,7 @@ void checkpoint_roundtrip(const std::filesystem::path& file) {
 }
 int main(int argc,char** argv) try {
     require(argc==2,"Expected owned checkpoint fixture path");
+    transfer_address<0,false>();transfer_address<1,false>();transfer_address<0,true>();transfer_address<1,true>();
     timing<false>();timing<true>();timing<true,true>();timing<true,false,true>();timing<false,true>();timing<false,false,true>();timing<false,false,false,true>();
     for(unsigned filter=0;filter<5;++filter){Device device;device.synthesis(filter,true,filter==4);}
     Device unknown;unknown.synthesis(0,false,false);

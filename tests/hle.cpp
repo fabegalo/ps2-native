@@ -14,6 +14,8 @@
 #include "emulator/services/iop_module_loader.h"
 #include "emulator/imports/iop_ioman.h"
 #include "emulator/imports/iop_imports.h"
+#include "emulator/imports/iop_sysclib.h"
+#include "emulator/imports/iop_stdio.h"
 #include "emulator/services/iop_rpc.h"
 #include "emulator/core/iop_kernel.h"
 #include "ps2x/iop/ps2_path.h"
@@ -78,6 +80,45 @@ std::vector<std::uint8_t> reboot_fixture(std::vector<std::uint8_t> server=std::v
 template<class C> int run(int argc,C** argv)try {
     std::cout.setf(std::ios::unitbuf);
     require(argc==3,"ELF and scratch directory required");
+    {
+        PS2Runtime owner;auto& iop=const_cast<Iop&>(owner.memory().iop());
+        Ps2RecompIopServices host(owner.memory(),owner.cpu());
+        ps2x::iop::detail::IopMemory bus(iop);
+        ps2x::iop::detail::IopSysclib libc(bus);
+        ps2x::iop::detail::IopCpuState cpu;
+        cpu.gpr[4]=0x10000u;cpu.gpr[5].value=0x1FFFF1u;cpu.gpr[5].unknown=0xFFE00000u;cpu.gpr[6]=64u;
+        require(libc.dispatchImport(14,cpu) && cpu.gpr[2].value==0x10000u && bus.read8(0x10000u)==0xF1u &&
+            bus.read8(0x1003Fu)==0xF1u,"SDK memset consumes only the known low byte of its fill argument");
+        cpu.gpr[5].unknown|=1u;
+        rejects([&]{(void)libc.dispatchImport(14,cpu);},"byte argument");
+        require(bus.read8(0x10000u)==0xF1u,"Unknown memset fill bits stop before changing shared RAM");
+        cpu.gpr[5]=0x10010u;cpu.gpr[6].unknown=~0u;
+        rejects([&]{(void)libc.dispatchImport(12,cpu);},"unknown register bits");
+        cpu.gpr[4]=0x10000u;cpu.gpr[5].unknown=~0u;
+        bus.write8(0x10000u,0);
+        require(libc.dispatchImport(27,cpu) && cpu.gpr[2].value==0,
+            "SDK strlen must not consume unused argument registers");
+        ps2x::iop::detail::IopStdio console(host,bus);
+        const char format[]="value=%x\n";
+        require(bus.writeRam(0x10100u,format,sizeof format),"Write original printf fixture");
+        cpu.gpr[4]=0x10100u;cpu.gpr[5]=0xFFFFFFFFu;
+        require(console.dispatchImport(4,cpu) && cpu.gpr[2].value==15u && !cpu.gpr[2].unknown &&
+            iop.events().back().text=="[IOP printf] value=ffffffff\n","SDK printf formats known hexadecimal arguments and returns actual length");
+        cpu.gpr[5].value=0x1FFFF1u;cpu.gpr[5].unknown=0xFFE00000u;
+        require(console.dispatchImport(4,cpu) && iop.events().back().text.find("symbolic")!=std::string::npos &&
+            ((13u^cpu.gpr[2].value)&~cpu.gpr[2].unknown)==0u &&
+            ((15u^cpu.gpr[2].value)&~cpu.gpr[2].unknown)==0u && cpu.gpr[5].unknown==0xFFE00000u,
+            "Symbolic printf labels diagnostic data and preserves every possible guest return length");
+        cpu.gpr[4].unknown=1u;
+        rejects([&]{(void)console.dispatchImport(4,cpu);},"unknown register bits");
+        const char mixed[]="%s %d %s %%";
+        require(bus.writeRam(0x10100u,mixed,sizeof mixed),"Write mixed printf fixture");
+        cpu.gpr[4]=0x10100u;cpu.gpr[5]=0;cpu.gpr[6]=0x80000000u;cpu.gpr[7]=0;
+        require(console.dispatchImport(4,cpu) && cpu.gpr[2].value==27u && !cpu.gpr[2].unknown &&
+            iop.events().back().text=="[IOP printf] (null) -2147483648 (null) %",
+            "SDK printf handles strings, signed IOP integers, nulls and escaped percent with the actual return length");
+        std::cout<<"SDK libc argument widths and unused-register controls passed\n";
+    }
     {
         cli::DiagnosticDvdOptions options;
         require(!options.geometry(false),"diagnostic DVD geometry is absent by default");
