@@ -28,6 +28,85 @@
           "ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp": "25bcd64e958a99534f59ecc627884a78c8cad767137fb0dd282ccd52fd933bcf"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0003-hle-memory-in-kernel-ram.patch",
+        "sha256": "394296f4ea24a6d5e9a2ae38a6590c664870cdb1bdf0da544dc7e0a20c190bab",
+        "base_files": {
+          "ps2xRuntime/include/ps2_runtime.h": "30f8614adb393d34a2cbc9dc5a2f701b1d2b468e7c4878c9e494fd8341aa2a67",
+          "ps2xRuntime/src/lib/Kernel/Stubs/Font.cpp": "1671bddd97f2d0b2627c99435f2e5cdba48126d7c2e23ab4cac3fabfda288c1c",
+          "ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp": "773bc18b47be1698cc84ffd6b3129894eac3ac5cda2fcc4ca0b268f71a51c9d4",
+          "ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp": "add74172d55a5c00ec4a5bdd1a45e0768fb8b72588f2fce853b6081ca5c3bd9f",
+          "ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp": "35244dec8738ab81bcd6eadd8212f39c940881750a140260c8004b017005f505",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h": "88a8a4b4991b87fe052a4d3555facbb355207dd8572eaa1ff978c1fc712bf6c4",
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "77cd184f2e70eacfd5ea584ec95829553e3deeead0a19c04e4b0970dd7c6c9ee"
+        },
+        "files": {
+          "ps2xRuntime/include/ps2_runtime.h": "62a9cb7243a9cb05078a548163eb888ab6f55443686a38430ba501edacc5292e",
+          "ps2xRuntime/src/lib/Kernel/Stubs/Font.cpp": "0c69087d2a8045152a5603cf0a1d4a19bb5d5b70a3462607d8e7d77f7fcccb70",
+          "ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp": "6fa0689c7fb147402491add7a13aca5e1571249a08c078d3cab6f20ca2d6dfdc",
+          "ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp": "a6d3233c05a8a1bb27d5e481c60b7212fb36e04167b17c9cfb3a10abb1187971",
+          "ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp": "aad2acbfea1dcbf08272b97893a8394c2dfd1b27a31cf0905281a8f93aaadff3",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h": "8268771471bd44eab0a593b4c7ec0685c8eae73485b6f435d98580b5813912b0",
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "4446d9f76b2ebb7ac29395fb8f8c345cc01d37ff7aa5cefa1d019339a144abc8"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0004-recomp-movz-movn-64bit.patch",
+        "sha256": "e5addea96429928ce5e9fba81b1df594e0dd4f2a058330ff1daedbdfc25d6ed4",
+        "base_files": {
+          "ps2xRecomp/src/lib/special_translator.cpp": "98adc0305effdd57ca34ea029070f117379bd7e78c9f8944a8e9276c8c7bd3cd"
+        },
+        "files": {
+          "ps2xRecomp/src/lib/special_translator.cpp": "c2f11b3b35fb5d55ca50ca46587ba2b3d3ff997b2076fd3ae2fd697a3f3d1a48"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0005-cd-read-dvd-dual-info.patch",
+        "sha256": "1a61802a96ee33e947dea8914961bc509cc5c047aa4e2b75038d6f79f2a0975e",
+        "base_files": {
+          "ps2xRuntime/include/ps2_call_list.h": "b7a95efc0395d3a6da5b80e92f3ff008c14c36717c31bf033965712eacb1ded7",
+          "ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp": "dec5ced2dda5ff4eb2fd1e9581043cf37fa2f268b4b6f03a1f563defa6744c37",
+          "ps2xRuntime/src/lib/Kernel/Stubs/CD.h": "89768bce0e010f8477ce97afef99021be1589cf0e579a55e1791efebf1b6d405"
+        },
+        "files": {
+          "ps2xRuntime/include/ps2_call_list.h": "ff348ab64b7bd81ad9dc7ae40000e0905dc94cde56f8d8ebaec09d1c613b946b",
+          "ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp": "d25885eec1d810662edd24ce1ac943c96b17b06056bed77b130ac228d51d9533",
+          "ps2xRuntime/src/lib/Kernel/Stubs/CD.h": "f7998f3e9500f4b5e1ab02721eeff5009465d03d16a7b49bb7ee8c3e15693c1b"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0006-kernel-boot-argv.patch",
+        "sha256": "621cbcdde6a0de1043bac3f7f4da035bfd22511e95310c37ae34b34e9936cc0a",
+        "base_files": {
+          "ps2xRuntime/include/ps2_runtime.h": "62a9cb7243a9cb05078a548163eb888ab6f55443686a38430ba501edacc5292e",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp": "9d30538bd6d34577bd55946b537ec0d57524c20e660e8f1e7edb1f2eca1f3034"
+        },
+        "files": {
+          "ps2xRuntime/include/ps2_runtime.h": "8b42a12375bdce87c5f4d064cd21e0a206629cee1772c66a8901cf7a894fcd48",
+          "ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp": "4363dc69bbb92cb5e0e93c9129abfae875281e0f9d4e6c21ac2485269dac8703"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0007-iop-shared-sysmem-module-buffer.patch",
+        "sha256": "2a454676620f03d5a4876047004654645af5b05646f51cbc73462feddd4fef4a",
+        "base_files": {
+          "ps2xIOP/src/emulator/core/iop_memory.h": "5a5b73ab69c4b58531111cad2743847ef00f3a8dd73004eea01ec8de4053135c",
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "01deb410d04f441be12adc68638846061f19759e007c36cdfcbe987796199d36",
+          "ps2xIOP/src/emulator/services/iop_module_loader.cpp": "1506c9ed61743aee46c74483d23ed1717f3a1c4952d87b8fe9dc57695e17883e",
+          "ps2xIOP/src/emulator/services/iop_module_loader.h": "42f3d8f292bd7fd08b97151478c4bfb8472022735ff6885d24bc000c6997ad9d"
+        },
+        "files": {
+          "ps2xIOP/src/emulator/core/iop_memory.h": "58e6d819d1f4cd003c17fb0a429c77f6b61d8aa91e08a563e39c7145072d0179",
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "246390db6077f93fac63069ee41361d91e19cbcba3d775f3c65cd86277931b12",
+          "ps2xIOP/src/emulator/services/iop_module_loader.cpp": "6ae8ed7bc01527c00830b6c23b9efb23f231a97d61908063205cdbf35438d52b",
+          "ps2xIOP/src/emulator/services/iop_module_loader.h": "6508cc6c0d9b7b1690bfbfd93ba27d36f2f3c8ad637e89298f2630da490baa0c"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   }

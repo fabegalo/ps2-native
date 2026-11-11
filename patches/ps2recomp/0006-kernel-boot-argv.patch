@@ -1,0 +1,37 @@
+Kernel boot arguments: SetupThread fills crt0 argc/argv with the disc boot path, as the BIOS does.
+Motivation: gow-native-pc 5b1a25a (God of War builds its IRX paths from argv[0]).
+
+--- a/ps2xRuntime/include/ps2_runtime.h
++++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -383,6 +383,7 @@ public:
+     // Guest memory owned by HLE kernel/library stubs (GS, font, SIF, MPEG packets). It comes from
+     // EE kernel RAM, which games do not allocate, never from the heap a game declares with SetupHeap.
+     uint32_t kernelMalloc(uint32_t size, uint32_t alignment = 16u);
++    std::string bootElfName() const { return m_loadedModules.empty() ? std::string() : m_loadedModules.front().name; }
+     void kernelFree(uint32_t guestAddr);
+     uint32_t guestHeapBase() const;
+     uint32_t guestHeapEnd() const;
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+@@ -530,6 +530,21 @@ namespace ps2_syscalls
+             initialStack = stack;
+         }
+ 
++        // The kernel fills crt0's args block { argc; argv[16]; payload[256] } with the boot path.
++        const uint32_t argsAddr = getRegU32(ctx, 7);
++        const std::string bootName = runtime->bootElfName();
++        uint8_t *args = argsAddr != 0u ? getMemPtr(rdram, argsAddr) : nullptr;
++        if (args && !bootName.empty())
++        {
++            std::string path = "cdrom0:\\" + bootName + ";1";
++            path.resize(std::min<size_t>(path.size(), 255u));
++            const uint32_t argc = 1u;
++            const uint32_t argv0 = argsAddr + 0x44u;
++            std::memcpy(args, &argc, 4);
++            std::memcpy(args + 4, &argv0, 4);
++            std::memcpy(args + 0x44, path.c_str(), path.size() + 1);
++        }
++
+         scheduler.setupCurrentThread(initialStack, stackSize, getRegU32(ctx, 28));
+         setReturnU32(ctx, sp);
+     }

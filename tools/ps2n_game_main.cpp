@@ -5,12 +5,14 @@
 // The working directory is the extracted disc (cdrom0:); <cd-image> holds the
 // 2048-byte user sectors for raw LBN reads.
 #include "ps2_runtime.h"
+#include "runtime/ee_scheduler.h"
 #include "runtime/gs/gs_cpu_backend.h"
 
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -150,8 +152,31 @@ void trace_gs(PS2Runtime& runtime) {
         }
         std::cout << "[ps2n-gs] events=" << history.size() << " gif=" << kinds[0] << " reg=" << kinds[1]
                   << " draw=" << kinds[2] << " textured=" << textured << " xfer=" << kinds[3]
-                  << " present=" << kinds[4] << " uploads=" << runtime.gs().nativeImageUploadCount() << std::hex
-                  << " pc=" << runtime.cpu().pc << " ra=" << getRegU32(&runtime.cpu(), 31) << std::dec << "\n";
+                  << " present=" << kinds[4] << " uploads=" << runtime.gs().nativeImageUploadCount() << "\n";
+        // Guest threads: status (0 running .. 5 dormant), wait reason (1 sleep,
+        // 2 sema, 3 event flag, 4 vsync, 5 external) and where each one is.
+        const auto kernel = runtime.eeScheduler().snapshot();
+        std::cout << "[ps2n-ee] cycle=" << kernel.eeCycle << " vsync=" << runtime.eeScheduler().currentVSyncTick()
+                  << " running=" << kernel.runningThreadId << std::hex << " cpu.pc=" << runtime.cpu().pc;
+        for (const auto& t : kernel.threads)
+            std::cout << " t" << t.id << ":s" << +static_cast<int>(t.status) << "w" << +static_cast<int>(t.waitReason)
+                      << "/" << t.waitId << "p" << std::dec << t.currentPriority << std::hex << "@" << t.pc << "<" << t.ra << "^" << t.sp;
+        std::cout << std::dec << "\n";
+        // PS2N_EE_WORDS=addr[,addr...]: guest RAM words, for following game data structures.
+        if (const char* words = std::getenv("PS2N_EE_WORDS")) {
+            const uint8_t* ram = runtime.memory().getRDRAM();
+            std::cout << "[ps2n-ram]" << std::hex;
+            for (const char* p = words; *p;) {
+                char* end = nullptr;
+                const unsigned long addr = std::strtoul(p, &end, 16) & 0x1FFFFFCu;
+                if (end == p) break;
+                uint32_t value = 0;
+                std::memcpy(&value, ram + addr, sizeof value);
+                std::cout << " " << addr << "=" << value;
+                p = *end == ',' ? end + 1 : end;
+            }
+            std::cout << std::dec << "\n";
+        }
         for (const auto& [line, count] : detail) std::cout << "[ps2n-gs]   " << count << "x " << line << "\n";
         // First textured draw: its TEX0, a row of texels and its CLUT block from VRAM.
         for (const auto& e : history) {

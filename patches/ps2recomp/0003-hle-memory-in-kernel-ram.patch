@@ -1,0 +1,320 @@
+HLE-owned guest memory in EE kernel RAM instead of the game heap.
+GS/font/SIF/MPEG stubs built their packets with guestMalloc, which after SetupHeap
+allocates from the range the game declared; games with their own allocator there
+(God of War: heap header at the end of BSS) were overwritten. The RPC/TLS/boot-mode
+pools at 0x01F00000 sat inside the same heaps. Both now use 0x20000-0x71000,
+kernel RAM that games do not allocate (the HLE syscall table ends near 0x12780).
+
+diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
+index 4b9242c..20e86c2 100644
+--- a/ps2xRuntime/include/ps2_runtime.h
++++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -380,6 +380,10 @@ public:
+     uint32_t guestCalloc(uint32_t count, uint32_t size, uint32_t alignment = 16u);
+     uint32_t guestRealloc(uint32_t guestAddr, uint32_t newSize, uint32_t alignment = 16u);
+     void guestFree(uint32_t guestAddr);
++    // Guest memory owned by HLE kernel/library stubs (GS, font, SIF, MPEG packets). It comes from
++    // EE kernel RAM, which games do not allocate, never from the heap a game declares with SetupHeap.
++    uint32_t kernelMalloc(uint32_t size, uint32_t alignment = 16u);
++    void kernelFree(uint32_t guestAddr);
+     uint32_t guestHeapBase() const;
+     uint32_t guestHeapEnd() const;
+     uint32_t guestHeapLimit() const;
+@@ -508,6 +512,8 @@ private:
+     mutable std::mutex m_guestHeapMutex;
+     mutable std::mutex m_asyncCallbackStackMutex;
+     std::vector<GuestHeapBlock> m_guestHeapBlocks;
++    std::mutex m_kernelArenaMutex;
++    std::vector<std::pair<uint32_t, uint32_t>> m_kernelArenaBlocks; // sorted {address, size}
+     uint32_t m_guestHeapBase = 0x00100000u;
+     uint32_t m_guestHeapEnd = 0x00100000u;
+     uint32_t m_guestHeapLimit = PS2_RAM_SIZE;
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Font.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Font.cpp
+index 41e4387..95f8e36 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Font.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Font.cpp
+@@ -41,7 +41,7 @@ namespace ps2_stubs
+                 constexpr uint32_t kClutQwc = 4u;
+                 constexpr uint32_t kHeaderQwc = 6u;
+                 constexpr uint32_t kTotalQwc = kHeaderQwc + kClutQwc;
+-                uint32_t pktAddr = runtime->guestMalloc(kTotalQwc * 16u, 16u);
++                uint32_t pktAddr = runtime->kernelMalloc(kTotalQwc * 16u, 16u);
+                 if (pktAddr != 0u)
+                 {
+                     uint8_t *pkt = getMemPtr(rdram, pktAddr);
+@@ -122,7 +122,7 @@ namespace ps2_stubs
+         int qwc = (fontDataSz >= 0) ? (fontDataSz >> 4) : ((fontDataSz + 0xf) >> 4);
+ 
+         uint32_t glyphSrc = fontDataAddr + static_cast<uint32_t>(fontDataSz) + 0x10u;
+-        uint32_t glyphAlloc = runtime->guestMalloc(0x2010u, 0x40u);
++        uint32_t glyphAlloc = runtime->kernelMalloc(0x2010u, 0x40u);
+         if (uint8_t *p = getMemPtr(rdram, kFontBase + fontOff))
+             *reinterpret_cast<uint32_t *>(p) = glyphAlloc;
+ 
+@@ -140,7 +140,7 @@ namespace ps2_stubs
+         if (isDoubleByte == 0u)
+         {
+             uint32_t kernSrc = glyphSrc + 0x2010u;
+-            uint32_t kernAlloc = runtime->guestMalloc(0xc400u, 0x40u);
++            uint32_t kernAlloc = runtime->kernelMalloc(0xc400u, 0x40u);
+             if (glyphAlloc != 0u)
+                 *reinterpret_cast<uint32_t *>(getMemPtr(rdram, glyphAlloc + 0x2000u)) = kernAlloc;
+             if (kernAlloc != 0u)
+@@ -180,7 +180,7 @@ namespace ps2_stubs
+             const uint32_t headerQwc = 12u;
+             const uint32_t imageQwc = static_cast<uint32_t>(qwc);
+             const uint32_t totalQwc = headerQwc + imageQwc;
+-            uint32_t pktAddr = runtime->guestMalloc(totalQwc * 16u, 16u);
++            uint32_t pktAddr = runtime->kernelMalloc(totalQwc * 16u, 16u);
+             if (pktAddr != 0u)
+             {
+                 uint8_t *pkt = getMemPtr(rdram, pktAddr);
+@@ -623,8 +623,8 @@ namespace ps2_stubs
+                 if (const uint8_t *kp = getConstMemPtr(rdram, glyphPtr + 0x2000u))
+                     kernPtr = *reinterpret_cast<const uint32_t *>(kp);
+                 if (kernPtr != 0u)
+-                    runtime->guestFree(kernPtr);
+-                runtime->guestFree(glyphPtr);
++                    runtime->kernelFree(kernPtr);
++                runtime->kernelFree(glyphPtr);
+             }
+             if (uint8_t *p = getMemPtr(rdram, kFontBase + fontOff))
+                 *reinterpret_cast<uint32_t *>(p) = 0u;
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+index aed4cb5..cce9275 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+@@ -615,7 +615,7 @@ namespace ps2_stubs
+         const uint32_t imageQwc = (totalImageBytes + 15u) / 16u;
+         const uint32_t totalQwc = headerQwc + imageQwc;
+ 
+-        uint32_t pktAddr = runtime->guestMalloc(totalQwc * 16u, 16u);
++        uint32_t pktAddr = runtime->kernelMalloc(totalQwc * 16u, 16u);
+         if (pktAddr == 0)
+         {
+             setReturnS32(ctx, -1);
+@@ -626,7 +626,7 @@ namespace ps2_stubs
+         const uint8_t *src = getConstMemPtr(rdram, srcAddr);
+         if (!pkt || !src)
+         {
+-            runtime->guestFree(pktAddr);
++            runtime->kernelFree(pktAddr);
+             setReturnS32(ctx, -1);
+             return;
+         }
+@@ -662,7 +662,7 @@ namespace ps2_stubs
+         mem.writeIORegister(GIF_CHANNEL + 0x20u, totalQwc & 0xFFFFu);
+         mem.writeIORegister(GIF_CHANNEL + 0x00u, CHCR_STR_MODE0);
+         mem.processPendingTransfers();
+-        runtime->guestFree(pktAddr);
++        runtime->kernelFree(pktAddr);
+ 
+         setReturnS32(ctx, 0);
+     }
+@@ -709,7 +709,7 @@ namespace ps2_stubs
+                           (static_cast<uint64_t>(0u) << 48);
+         uint64_t trxreg = static_cast<uint64_t>(img.height) << 32 | static_cast<uint64_t>(img.width);
+ 
+-        uint32_t pktAddr = runtime->guestMalloc(80u, 16u);
++        uint32_t pktAddr = runtime->kernelMalloc(80u, 16u);
+         if (pktAddr == 0)
+         {
+             setReturnS32(ctx, -1);
+@@ -719,7 +719,7 @@ namespace ps2_stubs
+         uint8_t *pkt = getMemPtr(rdram, pktAddr);
+         if (!pkt)
+         {
+-            runtime->guestFree(pktAddr);
++            runtime->kernelFree(pktAddr);
+             setReturnS32(ctx, -1);
+             return;
+         }
+@@ -746,7 +746,7 @@ namespace ps2_stubs
+ 
+         ps2TraceGuestRangeWrite(rdram, dstAddr, totalImageBytes, "sceGsExecStoreImage", ctx);
+         runtime->gs().consumeLocalToHostBytes(dst, totalImageBytes);
+-        runtime->guestFree(pktAddr);
++        runtime->kernelFree(pktAddr);
+ 
+         setReturnS32(ctx, 0);
+     }
+@@ -810,7 +810,7 @@ namespace ps2_stubs
+ 
+             if (runtime)
+             {
+-                uint32_t pktAddr = runtime->guestMalloc(128u, 16u);
++                uint32_t pktAddr = runtime->kernelMalloc(128u, 16u);
+                 if (pktAddr != 0u)
+                 {
+                     uint8_t *pkt = getMemPtr(rdram, pktAddr);
+@@ -840,11 +840,11 @@ namespace ps2_stubs
+                         mem.writeIORegister(GIF_CHANNEL + 0x20u, 8u);
+                         mem.writeIORegister(GIF_CHANNEL + 0x00u, CHCR_STR_MODE0);
+                         mem.processPendingTransfers();
+-                        runtime->guestFree(pktAddr);
++                        runtime->kernelFree(pktAddr);
+                     }
+                     else
+                     {
+-                        runtime->guestFree(pktAddr);
++                        runtime->kernelFree(pktAddr);
+                     }
+                 }
+             }
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
+index 44eaef4..5448167 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
+@@ -1590,14 +1590,14 @@ namespace ps2_stubs
+                 return;
+             }
+ 
+-            const uint32_t cbDataAddr = runtime->guestMalloc(kMpegCallbackDataSize, 16u);
++            const uint32_t cbDataAddr = runtime->kernelMalloc(kMpegCallbackDataSize, 16u);
+             if (cbDataAddr == 0u)
+             {
+                 return;
+             }
+             if (!writeMpegCallbackData(rdram, cbDataAddr, event))
+             {
+-                runtime->guestFree(cbDataAddr);
++                runtime->kernelFree(cbDataAddr);
+                 return;
+             }
+ 
+@@ -1615,7 +1615,7 @@ namespace ps2_stubs
+             invocation.context = callbackCtx;
+             invocation.onComplete = [runtime, cbDataAddr](const R5900Context &, R5900Context &)
+             {
+-                runtime->guestFree(cbDataAddr);
++                runtime->kernelFree(cbDataAddr);
+             };
+             runtime->eeScheduler().queueInvocation(std::move(invocation));
+         }
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
+index dc975ed..0cf54e3 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
+@@ -247,7 +247,7 @@ namespace ps2_stubs
+         if (!runtime->hasFunction(registered.function))
+             return false;
+ 
+-        const uint32_t packetAddress = runtime->guestMalloc(static_cast<uint32_t>(packetSize), 16u);
++        const uint32_t packetAddress = runtime->kernelMalloc(static_cast<uint32_t>(packetSize), 16u);
+         if (packetAddress == 0u)
+             return false;
+ 
+@@ -255,7 +255,7 @@ namespace ps2_stubs
+         uint8_t *const last = getMemPtr(rdram, packetAddress + static_cast<uint32_t>(packetSize - 1u));
+         if (!first || !last || last < first || static_cast<size_t>(last - first) != packetSize - 1u)
+         {
+-            runtime->guestFree(packetAddress);
++            runtime->kernelFree(packetAddress);
+             return false;
+         }
+ 
+@@ -277,14 +277,14 @@ namespace ps2_stubs
+             SET_GPR_U32(&invocation.context, 31, 0u);
+             invocation.onComplete = [runtime, packetAddress](const R5900Context &, R5900Context &)
+             {
+-                runtime->guestFree(packetAddress);
++                runtime->kernelFree(packetAddress);
+             };
+             runtime->eeScheduler().queueInvocation(std::move(invocation));
+             return true;
+         }
+         catch (...)
+         {
+-            runtime->guestFree(packetAddress);
++            runtime->kernelFree(packetAddress);
+             return false;
+         }
+     }
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h b/ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h
+index d6b7549..7d83fb1 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Helpers/State.h
+@@ -243,20 +243,20 @@ inline std::filesystem::path g_cdrom_cwd;
+ inline std::string g_ps2_cwd_device = "host0";
+ 
+ static constexpr uint32_t kRpcPacketSize = 64;
+-static constexpr uint32_t kRpcPacketPoolBase = 0x01F00000;
++static constexpr uint32_t kRpcPacketPoolBase = 0x00040000; // EE kernel RAM, outside every game heap
+ static constexpr uint32_t kRpcPacketPoolBytes = 0x00010000;
+ static constexpr uint32_t kRpcPacketPoolCount = kRpcPacketPoolBytes / kRpcPacketSize;
+-static constexpr uint32_t kRpcServerPoolBase = 0x01F10000;
++static constexpr uint32_t kRpcServerPoolBase = 0x00050000;
+ static constexpr uint32_t kRpcServerPoolBytes = 0x00010000;
+ static constexpr uint32_t kRpcServerStride = 0x80;
+ static constexpr uint32_t kRpcServerPoolCount = kRpcServerPoolBytes / kRpcServerStride;
+ 
+-static constexpr uint32_t kTlsPoolBase = 0x01F20000;
++static constexpr uint32_t kTlsPoolBase = 0x00060000;
+ static constexpr uint32_t kTlsPoolBytes = 0x00010000;
+ static constexpr uint32_t kTlsBlockSize = 0x100;
+ static constexpr uint32_t kTlsPoolCount = kTlsPoolBytes / kTlsBlockSize;
+ 
+-static constexpr uint32_t kBootModePoolBase = 0x01F30000;
++static constexpr uint32_t kBootModePoolBase = 0x00070000;
+ static constexpr uint32_t kBootModePoolBytes = 0x00001000;
+ 
+ static constexpr uint32_t kSifRpcModeNowait = 0x01;
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 45cb9d2..6459d47 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1823,6 +1823,54 @@ uint32_t PS2Runtime::guestMalloc(uint32_t size, uint32_t alignment)
+     return allocateGuestBlockLocked(size, alignment);
+ }
+ 
++uint32_t PS2Runtime::kernelMalloc(uint32_t size, uint32_t alignment)
++{
++    // Between the HLE syscall table (0x11F80) and the RPC/TLS pools (0x40000).
++    constexpr uint32_t kArenaBase = 0x00020000u;
++    constexpr uint32_t kArenaLimit = 0x00040000u;
++    if (size == 0u || size > kArenaLimit - kArenaBase)
++    {
++        return 0u;
++    }
++    if (alignment < 16u || (alignment & (alignment - 1u)) != 0u)
++    {
++        alignment = 16u;
++    }
++    size = (size + 15u) & ~15u;
++
++    std::lock_guard<std::mutex> lock(m_kernelArenaMutex);
++    uint32_t candidate = kArenaBase;
++    for (auto it = m_kernelArenaBlocks.begin();; ++it)
++    {
++        candidate = (candidate + alignment - 1u) & ~(alignment - 1u);
++        const uint32_t gapEnd = (it == m_kernelArenaBlocks.end()) ? kArenaLimit : it->first;
++        if (candidate <= gapEnd && gapEnd - candidate >= size)
++        {
++            m_kernelArenaBlocks.insert(it, {candidate, size});
++            return candidate;
++        }
++        if (it == m_kernelArenaBlocks.end())
++        {
++            return 0u;
++        }
++        candidate = it->first + it->second;
++    }
++}
++
++void PS2Runtime::kernelFree(uint32_t guestAddr)
++{
++    const uint32_t physAddr = guestAddr & PS2_RAM_MASK;
++    std::lock_guard<std::mutex> lock(m_kernelArenaMutex);
++    for (auto it = m_kernelArenaBlocks.begin(); it != m_kernelArenaBlocks.end(); ++it)
++    {
++        if (it->first == physAddr)
++        {
++            m_kernelArenaBlocks.erase(it);
++            return;
++        }
++    }
++}
++
+ uint32_t PS2Runtime::guestCalloc(uint32_t count, uint32_t size, uint32_t alignment)
+ {
+     if (count == 0u || size == 0u)

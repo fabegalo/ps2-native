@@ -1,0 +1,73 @@
+HLE sceCdReadDvdDualInfo: detect a dual-layer image by the second ISO volume
+descriptor at the first volume size; layer 1 starts 16 sectors before it.
+Without a handler the analyzer kept the guest version, which waits forever to
+bind the CDVD S-command server (0x80000593) that only the BIOS provides.
+
+diff --git a/ps2xRuntime/include/ps2_call_list.h b/ps2xRuntime/include/ps2_call_list.h
+index 94a6fa1..0070180 100644
+--- a/ps2xRuntime/include/ps2_call_list.h
++++ b/ps2xRuntime/include/ps2_call_list.h
+@@ -305,6 +305,7 @@
+     X(sceCdRead)                              \
+     X(sceCdReadChain)                         \
+     X(sceCdReadClock)                         \
++    X(sceCdReadDvdDualInfo)                   \
+     X(sceCdReadIOPm)                          \
+     X(sceCdSearchFile)                        \
+     X(sceCdSeek)                              \
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
+index 56a978e..38cc1f9 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
+@@ -507,6 +507,39 @@ namespace ps2_stubs
+         setReturnS32(ctx, ok ? 1 : 0);
+     }
+ 
++    void sceCdReadDvdDualInfo(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        // int sceCdReadDvdDualInfo(int *on_dual, u_int *layer1_start). A dual-layer
++        // image holds a second ISO volume at the first volume's size; layer 1
++        // starts 16 sectors before that volume descriptor.
++        int32_t onDual = 0;
++        uint32_t layer1Start = 0u;
++        uint8_t sector[kCdSectorSize];
++        if (readCdSectors(16u, 1u, sector, sizeof(sector)) && std::memcmp(sector + 1, "CD001", 5) == 0)
++        {
++            uint32_t volumeSectors = 0u;
++            std::memcpy(&volumeSectors, sector + 80, sizeof(volumeSectors));
++            uint64_t totalSectors = 0u;
++            if (volumeSectors > 16u && tryGetCdImageTotalSectors(totalSectors) && totalSectors > volumeSectors &&
++                readCdSectors(volumeSectors, 1u, sector, sizeof(sector)) && sector[0] == 1u &&
++                std::memcmp(sector + 1, "CD001", 5) == 0)
++            {
++                onDual = 1;
++                layer1Start = volumeSectors - 16u;
++            }
++        }
++        g_lastCdError = 0;
++        if (uint8_t *dual = getMemPtr(rdram, getRegU32(ctx, 4)))
++        {
++            std::memcpy(dual, &onDual, sizeof(onDual));
++        }
++        if (uint8_t *start = getMemPtr(rdram, getRegU32(ctx, 5)))
++        {
++            std::memcpy(start, &layer1Start, sizeof(layer1Start));
++        }
++        setReturnS32(ctx, 1);
++    }
++
+     void sceCdReadClock(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         uint32_t clockAddr = getRegU32(ctx, 4);
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/CD.h b/ps2xRuntime/src/lib/Kernel/Stubs/CD.h
+index dd5bae9..b35fc80 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/CD.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/CD.h
+@@ -63,6 +63,7 @@ namespace ps2_stubs
+     void sceCdPosToInt(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceCdReadChain(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceCdReadClock(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
++    void sceCdReadDvdDualInfo(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceCdReadIOPm(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceCdSearchFile(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceCdSeek(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
