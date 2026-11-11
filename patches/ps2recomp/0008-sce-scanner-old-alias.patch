@@ -1,0 +1,21 @@
+SCE symbol scanner: a NAME_old alias with the same bytes as NAME is not an ambiguity,
+so older SDK copies of NAME (for example libcdvd sceCdDiskReady) are named and stubbed.
+
+--- a/ps2xAnalyzer/src/sce_symbol_scanner.cpp
++++ b/ps2xAnalyzer/src/sce_symbol_scanner.cpp
+@@ -733,6 +733,15 @@ namespace ps2recomp
+                 {
+                     identities.insert(candidate->symbol->library + '\n' + candidate->symbol->name);
+                 }
++                // Later SDKs keep a superseded implementation as NAME_old; the same bytes in an
++                // older SDK are NAME itself, so the alias alone is not an ambiguity.
++                const auto isShadowedAlias = [&](const std::string &identity)
++                {
++                    return identity.ends_with("_old") && identities.contains(identity.substr(0, identity.size() - 4));
++                };
++                std::erase_if(viable, [&](const Candidate *candidate)
++                              { return isShadowedAlias(candidate->symbol->library + '\n' + candidate->symbol->name); });
++                std::erase_if(identities, isShadowedAlias);
+                 if (identities.size() != 1)
+                 {
+                     continue;

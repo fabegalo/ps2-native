@@ -1,0 +1,84 @@
+Incremental output: PS2Recomp rewrites only generated files whose content changed and
+removes stale .cpp/.h it did not produce, so a rebuild compiles only what changed.
+Motivation: gow-native-pc 55-iop-native-part-files (parallel, incremental generated units).
+
+--- a/ps2xRecomp/include/ps2recomp/ps2_recompiler.h
++++ b/ps2xRecomp/include/ps2recomp/ps2_recompiler.h
+@@ -11,6 +11,7 @@
+ #include <filesystem>
+ #include <memory>
+ #include <map>
++#include <mutex>
+ 
+ namespace ps2recomp
+ {
+@@ -75,6 +76,8 @@ namespace ps2recomp
+         std::map<uint32_t, std::string> m_generatedStubs;
+         std::unordered_map<uint32_t, std::string> m_functionRenames;
+         std::unordered_map<uint32_t, std::vector<uint32_t>> m_resumeEntryTargetsByOwner;
++        std::mutex m_writtenFilesMutex;
++        std::unordered_set<std::string> m_writtenFiles;
+         CodeGenerator::BootstrapInfo m_bootstrapInfo;
+ 
+         bool decodeFunction(Function &function);
+@@ -87,6 +90,7 @@ namespace ps2recomp
+         bool generateFunctionHeader();
+         bool generateStubHeader();
+         bool writeToFile(const std::string &path, const std::string &content);
++        void removeStaleOutputs();
+         std::filesystem::path getOutputPath(const Function &function) const;
+         static std::string clampFilenameLength(const std::string& baseName, const std::string& extension, std::size_t maxLength);
+         std::string sanitizeFunctionName(const std::string &name) const;       
+--- a/ps2xRecomp/src/lib/ps2_recompiler.cpp
++++ b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+@@ -1786,6 +1786,10 @@ namespace ps2recomp
+             {
+                 throw std::runtime_error("Failed to generate stub header");
+             }
++            if (!m_config.singleFileOutput)
++            {
++                removeStaleOutputs();
++            }
+         }
+         catch (const std::exception &e)
+         {
+@@ -2293,6 +2297,18 @@ namespace ps2recomp
+ 
+     bool PS2Recompiler::writeToFile(const std::string &path, const std::string &content)
+     {
++        {
++            std::lock_guard lock(m_writtenFilesMutex);
++            m_writtenFiles.insert(fs::absolute(path).lexically_normal().string());
++        }
++        // Unchanged outputs keep their timestamps, so a rebuild compiles only what changed.
++        if (std::ifstream existing{path})
++        {
++            const std::string previous{std::istreambuf_iterator<char>(existing), std::istreambuf_iterator<char>()};
++            if (previous == content)
++                return true;
++        }
++
+         std::ofstream file(path);
+         if (!file)
+         {
+@@ -2306,6 +2322,20 @@ namespace ps2recomp
+         return true;
+     }
+ 
++    // Sources of functions that no longer exist would still be compiled; remove what this run did not write.
++    void PS2Recompiler::removeStaleOutputs()
++    {
++        std::error_code error;
++        for (const auto &entry : fs::directory_iterator(m_config.outputPath, error))
++        {
++            const auto extension = entry.path().extension();
++            if (!entry.is_regular_file() || (extension != ".cpp" && extension != ".h"))
++                continue;
++            if (!m_writtenFiles.contains(fs::absolute(entry.path()).lexically_normal().string()))
++                fs::remove(entry.path(), error);
++        }
++    }
++
+     std::filesystem::path PS2Recompiler::getOutputPath(const Function &function) const
+     {
+         std::string safeName;

@@ -107,6 +107,30 @@
           "ps2xIOP/src/emulator/services/iop_module_loader.h": "6508cc6c0d9b7b1690bfbfd93ba27d36f2f3c8ad637e89298f2630da490baa0c"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0008-sce-scanner-old-alias.patch",
+        "sha256": "144031f94cbe46dee46be4db81d8d2e00843211653e07a2ae2438c2a0e47b491",
+        "base_files": {
+          "ps2xAnalyzer/src/sce_symbol_scanner.cpp": "01396c14abfb7ba3311a2f97c385b230916ee6cfb01e682c8a39e68b90058e59"
+        },
+        "files": {
+          "ps2xAnalyzer/src/sce_symbol_scanner.cpp": "b7111f5c867f443af7817968a64f0414df0bc38dea8a2d1acd4f738dad4b714d"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0009-recomp-incremental-output.patch",
+        "sha256": "9e2fd714ce0d9cec9a9c6124294baf013994ea1f541d5a5c0477564832d4f3df",
+        "base_files": {
+          "ps2xRecomp/include/ps2recomp/ps2_recompiler.h": "a89ac276a0f4853dc8212affa401d3083f7a8c32566b27a656a1f679c31afb65",
+          "ps2xRecomp/src/lib/ps2_recompiler.cpp": "96fdb6b3b8aad6f52134ab0be977fdb9b9637492dac0dab9944a987d901d8bad"
+        },
+        "files": {
+          "ps2xRecomp/include/ps2recomp/ps2_recompiler.h": "8b59f18b930a69403300ec2d3c6e3276d3d2303c709f6797ddc54cae006d2652",
+          "ps2xRecomp/src/lib/ps2_recompiler.cpp": "590218de80d32732f420247bb3fd488d2ad1987228d83c057677fd492ad3e838"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   }

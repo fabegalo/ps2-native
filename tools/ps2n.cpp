@@ -129,10 +129,10 @@ void run_tool(const fs::path& exe, const std::vector<std::string>& args, const f
 }
 
 // Generated headers sit beside the sources; the per-game CMake target adds
-// that directory to its include path.
+// that directory to its include path. PS2Recomp rewrites only changed files and
+// removes stale ones, so the directory is kept for incremental rebuilds.
 void recompile(const Game& game) {
     const auto generated = game.dir / "generated";
-    if (fs::exists(generated)) remove_directory_tree(generated);
     ps2native::create_directories(generated);
     run_tool(PS2N_RECOMP_EXE, {"config.toml"}, game.dir, game.dir / "recomp.log");
 }
