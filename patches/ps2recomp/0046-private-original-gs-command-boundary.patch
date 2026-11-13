@@ -1,0 +1,74 @@
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -1,3 +1,4 @@
++#include "gs_command_backend.h"
+ #include "runtime/gs/gs_frontend.h"
+ #include "runtime/gs/gs_cpu_backend.h"
+ #include "ps2_log.h"
+@@ -644,6 +645,8 @@
+     if (!data || sizeBytes < 16 || !m_backend)
+         return;
+ 
++    GSCommandPacketScope original(m_backend.get(), data, sizeBytes);
++
+     if (tryProcessNativeImageUploadPacket(data, sizeBytes))
+         return;
+ 
+@@ -745,6 +748,8 @@
+ 
+     if (!validatePackedGifPacket(data, sizeBytes))
+         return false;
++
++    GSCommandPacketScope original(m_backend.get(), data, sizeBytes);
+ 
+     const bool processed = visitPackedGifPacket(data, sizeBytes, [&](const PackedGifPacketTag &tag)
+                                                 {
+@@ -1068,6 +1073,9 @@
+ 
+ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
+ {
++    if (auto* commands = dynamic_cast<GSCommandBackend*>(m_backend.get()))
++        commands->notifyGsRegister(regAddr, value);
++
+     const bool interestingReg =
+         regAddr == GS_REG_PRIM ||
+         regAddr == GS_REG_RGBAQ ||
+--- /dev/null
++++ b/ps2xRuntime/src/lib/gs/gs_command_backend.h
+@@ -0,0 +1,36 @@
++#pragma once
++#include "runtime/gs/gs_backend.h"
++
++// Optional command device: preserve original packets instead of rebuilding them
++// from raster batches. The public runtime and generated EE ABI stay unchanged.
++class GSCommandBackend
++{
++public:
++    virtual ~GSCommandBackend() = default;
++    virtual void submitGsPacket(const uint8_t* data, uint32_t size) = 0;
++    virtual void writeGsRegister(uint8_t address, uint64_t value) = 0;
++    void notifyGsRegister(uint8_t address, uint64_t value) {
++        if (!m_mirrorDepth) writeGsRegister(address, value);
++    }
++    bool mirroringGsPacket() const { return m_mirrorDepth != 0; }
++private:
++    friend class GSCommandPacketScope;
++    unsigned m_mirrorDepth = 0;
++};
++
++class GSCommandPacketScope
++{
++public:
++    GSCommandPacketScope(GSRasterBackend* raster, const uint8_t* data, uint32_t size)
++        : m_commands(dynamic_cast<GSCommandBackend*>(raster)) {
++        if (m_commands) {
++            m_commands->submitGsPacket(data, size);
++            ++m_commands->m_mirrorDepth;
++        }
++    }
++    ~GSCommandPacketScope() { if (m_commands) --m_commands->m_mirrorDepth; }
++    GSCommandPacketScope(const GSCommandPacketScope&) = delete;
++    GSCommandPacketScope& operator=(const GSCommandPacketScope&) = delete;
++private:
++    GSCommandBackend* m_commands;
++};

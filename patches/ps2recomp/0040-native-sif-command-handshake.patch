@@ -1,0 +1,414 @@
+--- a/ps2xIOP/src/emulator/services/iop_rpc.h
++++ b/ps2xIOP/src/emulator/services/iop_rpc.h
+@@ -4,6 +4,8 @@
+ 
+ #include <cstddef>
+ #include <cstdint>
++#include <deque>
++#include <vector>
+ #include <unordered_map>
+ 
+ namespace ps2x::iop
+@@ -50,6 +52,9 @@
+         [[nodiscard]] bool dispatchSifCmdImport(uint16_t ordinal, IopCpuState &cpu);
+         [[nodiscard]] RpcResult handleRpc(const RpcRequest &request, IopGuestExecutor &executor);
+         void onSifTransfer(const SifTransfer &transfer);
++        void flushSifCommands();
++        uint32_t readSifRegister(uint32_t reg);
++        uint32_t writeSifRegister(uint32_t reg, uint32_t value);
+         void removeServersInRange(uint32_t base, uint32_t size);
+ 
+         [[nodiscard]] bool hasServer(uint32_t sid) const noexcept;
+@@ -74,5 +79,9 @@
+         std::unordered_map<uint32_t, RpcServer> m_servers;
+         uint32_t m_nextDmaId = 1u;
+         bool m_sifInitialized = false;
++        uint32_t m_commandBuffer = 0;
++        uint32_t m_eeCommandBuffer = 0;
++        std::unordered_map<uint32_t, uint32_t> m_sifRegisters;
++        std::deque<std::vector<uint8_t>> m_pendingCommands;
+     };
+ }
+--- a/ps2xIOP/src/emulator/services/iop_rpc.cpp
++++ b/ps2xIOP/src/emulator/services/iop_rpc.cpp
+@@ -8,7 +8,10 @@
+ #include <algorithm>
+ #include <array>
+ #include <cstring>
++#include <cstdlib>
++#include <sstream>
+ #include <limits>
++#include <stdexcept>
+ #include <vector>
+ 
+ namespace ps2x::iop::detail
+@@ -23,6 +26,10 @@
+         m_servers.clear();
+         m_nextDmaId = 1u;
+         m_sifInitialized = false;
++        m_commandBuffer = 0;
++        m_eeCommandBuffer = 0;
++        m_sifRegisters.clear();
++        m_pendingCommands.clear();
+     }
+ 
+     bool IopRpcBridge::dispatchSifManImport(uint16_t ordinal, IopCpuState &cpu)
+@@ -197,10 +204,10 @@
+             std::memcpy(packet.data() + 4u, &extraDestination, sizeof(extraDestination));
+             std::memcpy(packet.data() + 8u, &commandId, sizeof(commandId));
+ 
+-            if (!m_host.sendSifCommand(commandId, packet.data(), packetSize))
+-            {
+-                // A command without an EE handler is still a completed DMA on  real hardware. Only malformed packets fail above.
+-            }
++            if (m_pendingCommands.size() >= 64)
++                throw std::runtime_error("IOP SIF command queue exhausted");
++            m_pendingCommands.emplace_back(packet.begin(), packet.begin() + packetSize);
++            flushSifCommands();
+ 
+             const uint32_t dmaId = m_nextDmaId++;
+             if (m_nextDmaId == 0u || m_nextDmaId > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()))
+@@ -322,11 +329,86 @@
+ 
+     void IopRpcBridge::onSifTransfer(const SifTransfer &transfer)
+     {
+-        // The EE SIF transport owns the actual directional memory movement.
+-        // Services still receive both phases through IopSubsystem, but mirroring
+-        // IOP bytes through an equal-numbered EE address would alias two distinct
+-        // PS2 address spaces and can overwrite live game data.
+-        (void)transfer;
++        // Decode only packets delivered to the allocated IOP SIF mailbox.
++        // Other DMA remains directional memory movement, never an EE alias.
++        if (transfer.kind != SifTransferKind::SetDma || transfer.phase != SifTransferPhase::AfterCopy ||
++            !m_commandBuffer || IopMemory::physicalAddress(transfer.destinationAddress) != m_commandBuffer ||
++            transfer.size < 16 || transfer.size > 112)
++            return;
++        std::array<uint32_t, 28> packet{};
++        if (!m_memory.readRam(transfer.destinationAddress, packet.data(), transfer.size)) return;
++        const uint32_t bytes = packet[0] & 0xffu;
++        if (bytes < 16 || bytes > transfer.size || (packet[0] >> 8) != 0) return;
++        const uint32_t command = packet[2], option = packet[3];
++        if (const char* trace = std::getenv("PS2N_DEVICE_TRACE"); trace && trace[0] && trace[0] != '0')
++        {
++            std::ostringstream message;
++            message << "[SIF-CMD] id=0x" << std::hex << command << " opt=0x" << option
++                    << " bytes=" << std::dec << bytes;
++            if (command == 0x80000003u && bytes >= 24)
++            {
++                const auto count = std::min<uint32_t>(packet[4], bytes - 24);
++                message << " reset-mode=" << packet[5] << " arg=";
++                message.write(reinterpret_cast<const char*>(packet.data()) + 24, count);
++            }
++            m_host.log(LogLevel::Debug, message.str());
++        }
++        if ((command == 0x80000002u && option == 0) || command == 0x80000000u)
++        {
++            if (bytes < 20 || !packet[4]) return;
++            std::array<uint8_t, 112> receive{};
++            if (!m_host.readGuest(packet[4], receive.data(), receive.size())) return;
++            m_eeCommandBuffer = packet[4];
++            m_sifInitialized = true;
++            return;
++        }
++        if (command == 0x80000002u && option == 1 && m_eeCommandBuffer)
++        {
++            // RPC is supplied by this same kernel/service bridge. Acknowledge
++            // through the EE command interrupt; the original handler sets SREG.
++            const uint32_t response[] = {24u, 0u, 0x80000001u, 0u, 0u, 1u};
++            if (m_pendingCommands.size() >= 64)
++                throw std::runtime_error("IOP SIF command queue exhausted");
++            const auto* begin = reinterpret_cast<const uint8_t*>(response);
++            m_pendingCommands.emplace_back(begin, begin + sizeof(response));
++            flushSifCommands();
++        }
++    }
++
++    void IopRpcBridge::flushSifCommands()
++    {
++        while (!m_pendingCommands.empty())
++        {
++            const auto& packet = m_pendingCommands.front();
++            uint32_t command = 0;
++            std::memcpy(&command, packet.data() + 8, 4);
++            if (!m_host.sendSifCommand(command, packet.data(), packet.size())) return;
++            m_pendingCommands.pop_front();
++        }
++    }
++
++    uint32_t IopRpcBridge::readSifRegister(uint32_t reg)
++    {
++        // Hardware SMCOM/SMFLAG advertise the HLE command endpoint only once
++        // it has real storage in the one physical IOP allocator.
++        if (reg == 2u || reg == 4u)
++        {
++            if (!m_commandBuffer) m_commandBuffer = m_memory.allocate(128u, 64u);
++            if (!m_commandBuffer) return 0;
++            if (reg == 2u) return m_commandBuffer;
++            const auto found = m_sifRegisters.find(reg);
++            return found == m_sifRegisters.end() ? 0x00020000u : found->second;
++        }
++        const auto found = m_sifRegisters.find(reg);
++        return found == m_sifRegisters.end() ? 0u : found->second;
++    }
++
++    uint32_t IopRpcBridge::writeSifRegister(uint32_t reg, uint32_t value)
++    {
++        const auto found = m_sifRegisters.find(reg);
++        const uint32_t previous = found == m_sifRegisters.end() ? 0u : found->second;
++        m_sifRegisters.insert_or_assign(reg, value);
++        return previous;
+     }
+ 
+     void IopRpcBridge::removeServersInRange(uint32_t base, uint32_t size)
+--- a/ps2xIOP/src/emulator/iop_emulator.h
++++ b/ps2xIOP/src/emulator/iop_emulator.h
+@@ -29,6 +29,8 @@
+         [[nodiscard]] RpcResult handleRpc(const RpcRequest &request);
+         [[nodiscard]] bool hasRpcServer(uint32_t sid) const noexcept;
+         void onSifTransfer(const SifTransfer &transfer);
++        uint32_t readSifRegister(uint32_t reg);
++        uint32_t writeSifRegister(uint32_t reg, uint32_t value);
+ 
+         [[nodiscard]] uint32_t allocateMemory(uint32_t size, uint32_t alignment = 16u);
+         [[nodiscard]] bool freeMemory(uint32_t address);
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -606,6 +606,7 @@
+                 const uint64_t target = totalCycles + cycles;
+                 while (totalCycles < target)
+                 {
++                    rpc.flushSifCommands();
+                     serviceSpu2();
+                     servicePendingDmaInterrupts();
+                     servicePendingGuestCallbacks();
+@@ -840,6 +841,16 @@
+         return m_impl->rpc.hasServer(sid);
+     }
+ 
++    uint32_t IopEmulator::readSifRegister(uint32_t reg)
++    {
++        return m_impl->rpc.readSifRegister(reg);
++    }
++
++    uint32_t IopEmulator::writeSifRegister(uint32_t reg, uint32_t value)
++    {
++        return m_impl->rpc.writeSifRegister(reg, value);
++    }
++
+     void IopEmulator::onSifTransfer(const SifTransfer &transfer)
+     {
+         m_impl->rpc.onSifTransfer(transfer);
+--- a/ps2xIOP/include/ps2x/iop/iop_subsystem.h
++++ b/ps2xIOP/include/ps2x/iop/iop_subsystem.h
+@@ -32,6 +32,8 @@
+         [[nodiscard]] bool canBindRpc(uint32_t sid) const noexcept;
+         [[nodiscard]] RpcResult handleRpc(const RpcRequest &request);
+         void onSifTransfer(const SifTransfer &transfer);
++        uint32_t readSifRegister(uint32_t reg);
++        uint32_t writeSifRegister(uint32_t reg, uint32_t value);
+ 
+         // Physical IOP RAM access shared by the emulator, SIF DMA, and HLE services. Addresses are IOP addresses.
+         [[nodiscard]] uint32_t allocateMemory(uint32_t size, uint32_t alignment = 16u);
+--- a/ps2xIOP/src/iop_subsystem.cpp
++++ b/ps2xIOP/src/iop_subsystem.cpp
+@@ -231,6 +231,16 @@
+         return hle ? hle->handleRpc(request) : emulated;
+     }
+ 
++    uint32_t IopSubsystem::readSifRegister(uint32_t reg)
++    {
++        return m_impl->emulator.readSifRegister(reg);
++    }
++
++    uint32_t IopSubsystem::writeSifRegister(uint32_t reg, uint32_t value)
++    {
++        return m_impl->emulator.writeSifRegister(reg, value);
++    }
++
+     void IopSubsystem::onSifTransfer(const SifTransfer &transfer)
+     {
+         for (auto &service : m_impl->coreServices)
+--- a/ps2xRuntime/src/lib/ps2_iop_transport.h
++++ b/ps2xRuntime/src/lib/ps2_iop_transport.h
+@@ -33,6 +33,16 @@
+         return !runtime || runtime->canBindIopRpc(sid);
+     }
+ 
++    static uint32_t readSifRegister(PS2Runtime* runtime, uint32_t reg)
++    {
++        return runtime ? runtime->m_iopSubsystem->readSifRegister(reg) : 0u;
++    }
++
++    static uint32_t writeSifRegister(PS2Runtime* runtime, uint32_t reg, uint32_t value)
++    {
++        return runtime ? runtime->m_iopSubsystem->writeSifRegister(reg, value) : 0u;
++    }
++
+     static void notifyTransfer(
+         PS2Runtime *runtime,
+         uint8_t *rdram,
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
+@@ -65,7 +65,6 @@
+         std::mutex g_sifDmaTransferMutex;
+         uint32_t g_nextSifDmaTransferId = 1u;
+         std::mutex g_sifCmdStateMutex;
+-        std::unordered_map<uint32_t, uint32_t> g_sifRegs;
+         std::unordered_map<uint32_t, uint32_t> g_sifSregs;
+         struct SifCmdHandler
+         {
+@@ -80,15 +79,8 @@
+         uint32_t g_sifGetRegLogCount = 0u;
+         uint32_t g_sifSetRegLogCount = 0u;
+ 
+-        constexpr uint32_t kSifRegBootStatus = 0x4u;
+-        constexpr uint32_t kSifRegMainAddr = 0x80000000u;
+-        constexpr uint32_t kSifRegSubAddr = 0x80000001u;
+-        constexpr uint32_t kSifRegMsCom = 0x80000002u;
+-        constexpr uint32_t kSifBootReadyMask = 0x00020000u;
+-
+         void seedDefaultSifRegsLocked()
+         {
+-            g_sifRegs.clear();
+             g_sifSregs.clear();
+             g_sifCmdHandlers.clear();
+             g_sifCmdBuffer = 0u;
+@@ -97,10 +89,6 @@
+             g_sifGetRegLogCount = 0u;
+             g_sifSetRegLogCount = 0u;
+ 
+-            g_sifRegs[kSifRegBootStatus] = kSifBootReadyMask;
+-            g_sifRegs[kSifRegMainAddr] = 0u;
+-            g_sifRegs[kSifRegSubAddr] = 0u;
+-            g_sifRegs[kSifRegMsCom] = 0u;
+         }
+ 
+         bool shouldTraceSifReg(uint32_t reg)
+@@ -234,6 +222,24 @@
+     {
+         if (!rdram || !runtime || !packet || packetSize < 16u || packetSize > 112u)
+             return false;
++
++        // SYSREG_MAINADDR is the EE library's ABI-compatible cmd_data pointer.
++        // Preserve the original SIF0 interrupt dispatcher when it is registered.
++        const uint32_t commandData = PS2IopTransport::readSifRegister(runtime, 0x80000001u);
++        if (commandData)
++        {
++            const auto chcr = runtime->memory().readIORegister(0x1000c000u);
++            if (!(chcr & 0x100u) || !(runtime->memory().readIORegister(0x1000e000u) & 1u) ||
++                (runtime->memory().readIORegister(0x1000f590u) & 0x10000u)) return false;
++            uint32_t receiveAddress = 0, unread = 0;
++            if (!readEeRange(rdram, commandData, &receiveAddress, 4) || !receiveAddress ||
++                !readEeRange(rdram, receiveAddress, &unread, 4) || (unread & 0xffu) ||
++                !writeEeRange(rdram, receiveAddress, packet, static_cast<uint32_t>(packetSize)))
++                return false;
++            runtime->memory().writeIORegister(0x1000c000u, chcr & ~0x100u);
++            ps2_syscalls::dispatchDmacHandlersForCause(rdram, runtime, 5u);
++            return true;
++        }
+ 
+         SifCmdHandler registered{};
+         {
+@@ -464,15 +470,10 @@
+     void sceSifGetReg(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         const uint32_t reg = getRegU32(ctx, 4);
+-        uint32_t value = 0u;
++        const uint32_t value = PS2IopTransport::readSifRegister(runtime, reg);
+         bool shouldLog = false;
+         {
+             std::lock_guard<std::mutex> lock(g_sifCmdStateMutex);
+-            auto it = g_sifRegs.find(reg);
+-            if (it != g_sifRegs.end())
+-            {
+-                value = it->second;
+-            }
+             shouldLog = shouldTraceSifReg(reg) && g_sifGetRegLogCount < 128u;
+             if (shouldLog)
+             {
+@@ -622,7 +623,9 @@
+     void sceSifSetDChain(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         (void)rdram;
+-        (void)runtime;
++        // SIF0 receives a chain with tag interrupts. The IOP transport completes
++        // packets and clears STR; the original EE handler re-arms after copying.
++        if (runtime) runtime->memory().writeIORegister(0x1000c000u, (1u << 8) | (1u << 7) | (1u << 2));
+         setReturnS32(ctx, 0);
+     }
+ 
+@@ -750,7 +753,7 @@
+             return;
+         }
+ 
+-        ps2_syscalls::dispatchDmacHandlersForCause(rdram, runtime, 5u);
++        ps2_syscalls::dispatchDmacHandlersForCause(rdram, runtime, 6u);
+ 
+         setReturnS32(ctx, static_cast<int32_t>(allocateSifDmaTransferId()));
+     }
+@@ -764,16 +767,10 @@
+     {
+         const uint32_t reg = getRegU32(ctx, 4);
+         const uint32_t value = getRegU32(ctx, 5);
+-        uint32_t prev = 0u;
++        const uint32_t prev = PS2IopTransport::writeSifRegister(runtime, reg, value);
+         bool shouldLog = false;
+         {
+             std::lock_guard<std::mutex> lock(g_sifCmdStateMutex);
+-            auto it = g_sifRegs.find(reg);
+-            if (it != g_sifRegs.end())
+-            {
+-                prev = it->second;
+-            }
+-            g_sifRegs[reg] = value;
+             shouldLog = shouldTraceSifReg(reg) && g_sifSetRegLogCount < 128u;
+             if (shouldLog)
+             {
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -1,5 +1,6 @@
+ #include "runtime/ee_scheduler.h"
+ #include "runtime/guest_executable_request.h"
++#include "../ps2_iop_transport.h"
+ 
+ #include "ps2_log.h"
+ #include "ps2_runtime_macros.h"
+@@ -380,6 +381,8 @@
+     bindAotModule(*module, module->linkedBase, m_rdram);
+     setExecutableArguments(std::move(arguments));
+     m_runtime.configureGuestHeap(static_cast<uint32_t>(end));
++    PS2IopTransport::writeSifRegister(&m_runtime, 0x80000001u, 0u);
++    PS2IopTransport::writeSifRegister(&m_runtime, 0x80000002u, 0u);
+     m_runtime.gs().reset();
+     m_runtime.vu0().reset();
+     m_runtime.vu1().reset();
+@@ -1537,9 +1540,15 @@
+     for (const auto &[id, handler] : handlers)
+     {
+         (void)id;
+-        if (handler.enabled && handler.cause == cause && handler.handler != 0u &&
+-            m_runtime.hasFunction(handler.handler))
+-        {
++        if (handler.enabled && handler.cause == cause && handler.handler != 0u)
++        {
++            if (!m_runtime.hasFunction(handler.handler))
++            {
++                R5900Context context = currentContext() ? *currentContext() : m_runtime.cpu();
++                m_runtime.reportMissingFunction(m_rdram, &context, handler.handler, context.pc,
++                    PS2Runtime::GuestBranchKind::DirectCall, "EE interrupt handler");
++                continue;
++            }
+             matching.push_back(handler);
+         }
+     }
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -2436,6 +2436,8 @@
+         {
+             if ((address & 0xFF) == 0x00)
+             {
++                // SIF0 completes on packet arrival, not on a guest status read.
++                if (address == 0x1000c000u) return m_ioRegisters[address];
+                 const auto control = m_ioRegisters.find(0x1000E000u);
+                 const uint32_t mode = control == m_ioRegisters.end() ? 0u : (control->second >> 2u) & 3u;
+                 const auto disabled = m_ioRegisters.find(0x1000F590u);

@@ -1,0 +1,223 @@
+Bind prepared IOP instructions by exact content and module-relative offsets.
+Keep memory, interrupts, DMA and scheduling in the existing executor.
+
+--- /dev/null
++++ b/ps2xIOP/include/ps2x/iop/iop_aot.h
+@@ -0,0 +1,24 @@
++#pragma once
++#include <cstdint>
++#include <span>
++#include <vector>
++
++namespace ps2x::iop {
++namespace detail { struct IopCpuState; class IopMemory; }
++
++// One emitted instruction, including its R3000A load/branch-delay semantics.
++// The existing executor still owns interrupts, cycles, DMA and scheduling.
++using IopAotInstruction = bool (*)(detail::IopCpuState&, detail::IopMemory&, uint32_t moduleBase);
++struct IopAotEntry {
++    uint32_t offset;
++    IopAotInstruction execute;
++};
++struct IopAotModule {
++    // Exact original bytes: neither a filename nor a load address identifies code.
++    std::vector<uint8_t> image;
++    std::vector<IopAotEntry> entries;
++};
++// Register before starting a console. Catalog data is immutable and shared;
++// loaded addresses, instruction validation and lifetime belong to each console.
++void registerIopAotModule(IopAotModule module);
++}
+--- /dev/null
++++ b/ps2xIOP/src/emulator/services/iop_aot_registry.h
+@@ -0,0 +1,23 @@
++#pragma once
++#include "ps2x/iop/iop_aot.h"
++#include <map>
++#include <optional>
++#include <span>
++#include <vector>
++
++namespace ps2x::iop::detail {
++class IopAotRegistry {
++public:
++    size_t bind(std::span<const uint8_t> image, uint32_t base, uint32_t size,
++                bool relocationsComplete, const IopMemory& memory);
++    std::optional<bool> execute(IopCpuState& cpu, IopMemory& memory) const;
++    void eraseRange(uint32_t base, uint32_t size);
++    void clear() { entries.clear(); }
++private:
++    struct BoundEntry {
++        uint32_t base, instruction;
++        IopAotInstruction execute;
++    };
++    std::map<uint32_t, BoundEntry> entries;
++};
++}
+--- /dev/null
++++ b/ps2xIOP/src/emulator/services/iop_aot_registry.cpp
+@@ -0,0 +1,81 @@
++#include "iop_aot_registry.h"
++#include "../core/iop_cpu.h"
++#include "../core/iop_memory.h"
++#include <algorithm>
++#include <memory>
++#include <mutex>
++#include <stdexcept>
++
++namespace ps2x::iop {
++namespace {
++struct Catalog {
++    std::mutex mutex;
++    std::vector<std::shared_ptr<const IopAotModule>> modules;
++};
++Catalog& catalog() { static Catalog value; return value; }
++}
++void registerIopAotModule(IopAotModule module) {
++    if (module.image.empty() || module.entries.empty())
++        throw std::invalid_argument("IOP AOT requires content and emitted instructions");
++    std::sort(module.entries.begin(), module.entries.end(),
++              [](const auto& a, const auto& b) { return a.offset < b.offset; });
++    for (size_t i = 0; i < module.entries.size(); ++i) {
++        const auto& e = module.entries[i];
++        if ((e.offset & 3u) || !e.execute ||
++            (i && e.offset == module.entries[i - 1].offset))
++            throw std::invalid_argument("Invalid or duplicate IOP AOT entry");
++    }
++    auto prepared = std::make_shared<const IopAotModule>(std::move(module));
++    auto& c = catalog();
++    std::lock_guard lock(c.mutex);
++    for (const auto& existing : c.modules)
++        if (existing->image == prepared->image)
++            throw std::invalid_argument("IOP AOT content already registered");
++    c.modules.push_back(std::move(prepared));
++}
++
++namespace detail {
++size_t IopAotRegistry::bind(std::span<const uint8_t> image, uint32_t base,
++                          uint32_t size, bool relocationsComplete, const IopMemory& memory) {
++    std::shared_ptr<const IopAotModule> module;
++    {
++        auto& c = catalog();
++        std::lock_guard lock(c.mutex);
++        for (const auto& candidate : c.modules)
++            if (std::equal(image.begin(), image.end(), candidate->image.begin(), candidate->image.end())) {
++                module = candidate;
++                break;
++            }
++    }
++    if (!module) return 0;
++    if (!relocationsComplete || (base & 3u) ||
++        base >= IopMemory::RamSize || size > IopMemory::RamSize - base)
++        throw std::runtime_error("IOP AOT cannot bind an incomplete or invalid relocation");
++    // Validate every entry before publishing any of them.
++    for (const auto& e : module->entries)
++        if (size < 4u || e.offset > size - 4u || entries.contains(base + e.offset))
++            throw std::runtime_error("IOP AOT entry outside image or overlapping loaded code");
++    for (const auto& e : module->entries) {
++        const auto address = base + e.offset;
++        entries.emplace(address, BoundEntry{base, memory.read32(address), e.execute});
++    }
++    return module->entries.size();
++}
++
++std::optional<bool> IopAotRegistry::execute(IopCpuState& cpu, IopMemory& memory) const {
++    if (entries.empty()) return std::nullopt;
++    const auto address = IopMemory::physicalAddress(cpu.pc);
++    const auto it = entries.find(address);
++    if (it == entries.end()) return std::nullopt;
++    if (memory.read32(address) != it->second.instruction)
++        throw std::runtime_error("IOP AOT code changed; offline preparation required");
++    return it->second.execute(cpu, memory, it->second.base);
++}
++
++void IopAotRegistry::eraseRange(uint32_t base, uint32_t size) {
++    auto it = entries.lower_bound(base);
++    while (it != entries.end() && uint64_t(it->first) < uint64_t(base) + size)
++        it = entries.erase(it);
++}
++}
++}
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -9,6 +9,7 @@
+ #include "imports/iop_loadcore.h"
+ #include "core/iop_memory.h"
+ #include "services/iop_module_loader.h"
++#include "services/iop_aot_registry.h"
+ #include "services/iop_rpc.h"
+ #include "imports/iop_stdio.h"
+ #include "imports/iop_sysclib.h"
+@@ -121,6 +122,7 @@
+             memory.reset();
+             kernel.reset();
+             modules.clear();
++            aot.clear();
+             imports.reset();
+             rpc.reset();
+             cdvd.reset();
+@@ -405,7 +407,15 @@
+                 return !cpu.stopped;
+             }
+ 
+-            const bool running = cpuCore.executeInstruction(cpu);
++            std::optional<bool> native;
++            try { native = aot.execute(cpu, memory); }
++            catch (const std::exception& error) {
++                cpu.stopped = true;
++                lastError = error.what();
++                log(LogLevel::Error, lastError);
++                throw;
++            }
++            const bool running = native ? *native : cpuCore.executeInstruction(cpu);
+             schedulePendingDma();
+             ++totalInstructions;
+             ++totalCycles;
+@@ -650,6 +660,21 @@
+             module.entry = loaded.entry;
+             module.gp = loaded.gp;
+ 
++            size_t nativeEntries = 0;
++            try {
++                nativeEntries = aot.bind(image, loaded.base, loaded.size,
++                                         loaded.relocationsComplete, memory);
++            } catch (...) {
++                aot.eraseRange(loaded.base, loaded.size);
++                memory.freeAllocation(loaded.base);
++                throw;
++            }
++            if (nativeEntries) {
++                std::ostringstream nativeLog;
++                nativeLog << "[IOP-AOT] bound instructions=" << nativeEntries
++                          << " base=0x" << std::hex << loaded.base;
++                log(LogLevel::Info, nativeLog.str());
++            }
+             uint32_t args = 0u;
+             if (arguments && argumentSize)
+             {
+@@ -713,6 +738,7 @@
+             kernel.terminateThreadsInRange(it->second.base, it->second.size);
+             rpc.removeServersInRange(it->second.base, it->second.size);
+             imports.eraseRange(it->second.base, it->second.size);
++            aot.eraseRange(it->second.base, it->second.size);
+             memory.freeAllocation(it->second.base);
+             modules.erase(it);
+             kernel.cleanupDeadThreads();
+@@ -723,6 +749,7 @@
+ 
+         IopHost &host;
+         IopMemory memory;
++        IopAotRegistry aot;
+         IopSysmem sysmem;
+         IopKernel kernel;
+         IopCdvd cdvd;
+--- a/ps2xIOP/CMakeLists.txt
++++ b/ps2xIOP/CMakeLists.txt
+@@ -13,6 +13,7 @@
+     src/emulator/core/iop_kernel.cpp
+     src/emulator/core/iop_memory.cpp
+     src/emulator/services/iop_module_loader.cpp
++    src/emulator/services/iop_aot_registry.cpp
+     src/emulator/services/iop_rpc.cpp
+     src/emulator/imports/iop_cdvd.cpp
+     src/emulator/imports/iop_heaplib.cpp

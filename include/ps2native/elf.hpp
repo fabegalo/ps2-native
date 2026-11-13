@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <span>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,4 +27,14 @@ public:
     [[nodiscard]] const LoadSegment& code_segment_at(std::uint32_t address) const;
 };
 [[nodiscard]] ElfImage parse_ee_elf(std::span<const std::uint8_t> data);
+
+struct UnpackedEeImage {
+    std::uint32_t load_address{};
+    std::vector<std::uint8_t> bytes;
+};
+// Recognizes the Expand loader metadata and its actual argument setup. No fixed ROM offsets.
+[[nodiscard]] std::optional<UnpackedEeImage> unpack_ee_payload(const ElfImage& loader);
+// Called after the producer stopped, before accepting its executable image.
+void verify_ee_payload(const UnpackedEeImage& image, std::uint32_t entry,
+                       std::span<const std::uint8_t> ram);
 } // namespace ps2native

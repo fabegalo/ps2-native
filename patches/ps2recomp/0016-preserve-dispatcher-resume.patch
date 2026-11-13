@@ -1,0 +1,66 @@
+Preserve callee resumptions after checkpoints and tail jumps, including recursive PC aliases.
+Adapted control-transfer tracking from Waffle565/God-Of-War-Native-Port runtime, GPL-3.0;
+Waffle565 and contributors retain their credit. No game overrides or generated game code.
+https://github.com/Waffle565/God-Of-War-Native-Port/blob/runtime/ps2xRuntime/src/lib/ps2_runtime.cpp
+
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -280,6 +280,8 @@
+     void postEvent(EeEvent event);
+     [[nodiscard]] bool checkpointDue(uint32_t cycles = kGeneratedCheckpointCycles) noexcept;
+     void accountCycles(uint32_t cycles) noexcept;
++    uint64_t controlTransferSerial() const noexcept { return m_controlTransferSerial; }
++    void noteControlTransfer() noexcept { ++m_controlTransferSerial; }
+     uint32_t readCop0Count() const noexcept;
+     void writeCop0Count(uint32_t value) noexcept;
+     [[nodiscard]] bool isExecutingGuest() const noexcept;
+@@ -436,6 +438,7 @@
+     std::atomic<bool> m_stopRequested{false};
+     std::atomic<bool> m_checkpointPending{false};
+     uint32_t m_debugPublishCountdown = 0u;
++    uint64_t m_controlTransferSerial = 0u;
+ 
+     mutable std::mutex m_eventMutex;
+     std::condition_variable m_eventCv;
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1356,13 +1356,14 @@
+     // Every inter-function transfer is also a deterministic EE safe point.
+     // Backward edges inside generated functions use eeCheckpointDue(), while
+     // this charge bounds straight-line call chains that have no local loop.
+-    if (m_eeScheduler && m_eeScheduler->checkpointDue(EeScheduler::kGuestDispatchCycles))
++    if (m_eeScheduler && eeCheckpointDue(EeScheduler::kGuestDispatchCycles))
+     {
+         return false;
+     }
+ 
+     if (!isCall)
+     {
++        m_eeScheduler->noteControlTransfer();
+         if (!hasFunction(targetPc))
+         {
+             reportMissingFunction(rdram, ctx, targetPc, sourcePc, kind, debugName);
+@@ -1396,7 +1397,12 @@
+ 
+     RecompiledFunction targetFn = lookupFunction(targetPc);
+     const uint32_t entryPc = ctx->pc;
++    const uint64_t controlSerial = m_eeScheduler->controlTransferSerial();
+     targetFn(rdram, ctx, this);
++
++    // A deeper recursive frame may yield at the caller's numeric return PC.
++    if (controlSerial != m_eeScheduler->controlTransferSerial())
++        return false;
+ 
+     if (isStopRequested() || ctx->pc == 0u)
+     {
+@@ -2269,7 +2275,9 @@
+ 
+ bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
+ {
+-    return m_eeScheduler->checkpointDue(cycles);
++    const bool due = m_eeScheduler->checkpointDue(cycles);
++    if (due) m_eeScheduler->noteControlTransfer();
++    return due;
+ }
+ 
+ [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)

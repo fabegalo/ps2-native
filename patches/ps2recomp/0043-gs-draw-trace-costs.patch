@@ -1,0 +1,48 @@
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -9,6 +9,8 @@
+ #include <atomic>
+ #include <algorithm>
+ #include <cmath>
++#include <chrono>
++#include <cstdlib>
+ #include <cstdio>
+ #include <cstring>
+ #include <fstream>
+@@ -545,10 +547,35 @@
+ 
+ void GSCpuBackend::Submit(const GSPrimitiveBatch &batch)
+ {
+-    std::lock_guard<std::mutex> lock(m_mutex);
++    static const bool trace = std::getenv("PS2N_GS_TRACE") != nullptr;
++    const auto start = trace ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
++    std::unique_lock<std::mutex> lock(m_mutex);
+     if (!m_vram || batch.vertexCount == 0u)
+         return;
++    const auto acquired = trace ? std::chrono::steady_clock::now() : start;
+     DrawPrimitive(batch);
++    if (trace)
++    {
++        const auto done = std::chrono::steady_clock::now();
++        lock.unlock();
++        thread_local uint64_t waitUs = 0;
++        thread_local std::array<uint64_t, 8> drawUs{}, draws{};
++        thread_local auto next = start + std::chrono::seconds(2);
++        const auto type = std::min<size_t>(static_cast<size_t>(batch.state.prim.type), drawUs.size() - 1);
++        waitUs += std::chrono::duration_cast<std::chrono::microseconds>(acquired - start).count();
++        drawUs[type] += std::chrono::duration_cast<std::chrono::microseconds>(done - acquired).count();
++        ++draws[type];
++        if (done >= next)
++        {
++            std::fprintf(stderr, "[ps2n-gs-cpu] wait_us=%llu", static_cast<unsigned long long>(waitUs));
++            for (size_t i = 0; i < drawUs.size(); ++i)
++                if (draws[i]) std::fprintf(stderr, " type%zu=%llu/%llu", i,
++                    static_cast<unsigned long long>(draws[i]), static_cast<unsigned long long>(drawUs[i]));
++            std::fputc('\n', stderr);
++            waitUs = 0; drawUs.fill(0); draws.fill(0);
++            next = done + std::chrono::seconds(2);
++        }
++    }
+ }
+ 
+ void GSCpuBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)

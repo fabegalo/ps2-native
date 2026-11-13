@@ -1,0 +1,21 @@
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp
+@@ -1290,15 +1290,10 @@
+             else
+             {
+                 const size_t bytesWritten = std::fwrite(src, 1u, static_cast<size_t>(size), it->second.file);
+-                result = std::ferror(it->second.file) ? kMcResultDeniedPermit : static_cast<int32_t>(bytesWritten);
+-                if (!std::ferror(it->second.file))
+-                {
+-                    std::fflush(it->second.file);
+-                }
+-                else
+-                {
++                const bool failed = std::ferror(it->second.file) || std::fflush(it->second.file) != 0;
++                result = failed ? kMcResultDeniedPermit : static_cast<int32_t>(bytesWritten);
++                if (std::ferror(it->second.file))
+                     std::clearerr(it->second.file);
+-                }
+             }
+ 
+             setMcCommandResultLocked(kMcCmdWrite, result);

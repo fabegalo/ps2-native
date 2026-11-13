@@ -1,0 +1,36 @@
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -559,6 +559,11 @@
+     EnableFastReleaseMode(ps2_runtime)
+     EnableFastReleaseMode(ps2EntryRunner)
+ 
++    # Inline the scalar pixel pipeline without changing arithmetic or ISA requirements.
++    if(MSVC)
++        set_property(SOURCE src/lib/gs/gs_cpu_backend.cpp APPEND PROPERTY COMPILE_OPTIONS /Ob3)
++    endif()
++
+     if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
+         if(MSVC)
+             target_link_options(ps2EntryRunner PRIVATE
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -873,6 +873,9 @@
+     }
+ }
+ 
++#if defined(_MSC_VER)
++__forceinline
++#endif
+ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog)
+ {
+     const auto &ctx = state.context;
+@@ -1082,6 +1085,9 @@
+     return 0xFFFF00FFu;
+ }
+ 
++#if defined(_MSC_VER)
++__forceinline
++#endif
+ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t, float q, uint16_t u, uint16_t v)
+ {
+     const auto &ctx = state.context;

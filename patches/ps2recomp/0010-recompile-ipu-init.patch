@@ -1,0 +1,16 @@
+Recompile sceIpuInit instead of calling the title-specific upstream HLE.
+Applies to new analyzer output and existing recompiler stub selectors, including aliases.
+
+--- a/ps2xRuntime/include/ps2_runtime_calls.h
++++ b/ps2xRuntime/include/ps2_runtime_calls.h
+@@ -71,7 +71,9 @@
+ 
+     inline std::string_view resolveStubName(std::string_view name)
+     {
+-        return detail::resolveNameWithOptionalLeadingUnderscoreAlias(name, kStubNames);
++        const auto resolved = detail::resolveNameWithOptionalLeadingUnderscoreAlias(name, kStubNames);
++        // The IPU init HLE calls title-specific addresses; recompile the guest routine instead.
++        return resolved == "sceIpuInit" ? std::string_view{} : resolved;
+     }
+ 
+     inline bool isSyscallName(std::string_view name)

@@ -1,0 +1,72 @@
+Preserve synchronous IOP service execution until its real return; reject exhausted, interrupted or faulting calls before publishing RPC completion.
+
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -24,6 +24,7 @@
+ #include <optional>
+ #include <span>
+ #include <sstream>
++#include <stdexcept>
+ #include <utility>
+ 
+ namespace ps2x::iop::detail
+@@ -403,14 +404,14 @@
+             return running;
+         }
+ 
+-        uint32_t runCpu(CpuState &cpu, uint32_t instructionBudget)
++        uint32_t runCpu(CpuState &cpu, uint32_t instructionBudget, bool stopOnException = false)
+         {
+             CpuState *previous = activeCpu;
+             activeCpu = &cpu;
+             const uint64_t start = totalInstructions;
+             while (!cpu.stopped && !cpu.yielded && totalInstructions - start < instructionBudget)
+             {
+-                if (!step(cpu))
++                if (!step(cpu) || (stopOnException && cpu.exception))
+                     break;
+                 if (!servicingDmaInterrupts && !pendingDmaInterrupts.empty())
+                     servicePendingDmaInterrupts();
+@@ -427,7 +428,8 @@
+                               uint32_t a2,
+                               uint32_t a3,
+                               uint32_t gp,
+-                              uint32_t budget = kMaxCallInstructions)
++                              uint32_t budget = kMaxCallInstructions,
++                              bool requireReturn = false)
+         {
+             struct CallDepthGuard
+             {
+@@ -461,7 +463,18 @@
+                 cpu.gpr[29] = kCallStackBase - 32u;
+             }
+             cpu.gpr[31] = kCallReturnSentinel;
+-            runCpu(cpu, budget);
++            runCpu(cpu, budget, requireReturn);
++            if (requireReturn && cpu.pc != kCallReturnSentinel)
++            {
++                std::ostringstream out;
++                out << "[IOP] guest function did not return: entry=0x" << std::hex << address
++                    << " pc=0x" << cpu.pc << " epc=0x" << cpu.cop0[14]
++                    << " cause=0x" << cpu.cop0[13] << " badaddr=0x" << cpu.cop0[8]
++                    << " instruction=0x" << memory.read32(cpu.cop0[14])
++                    << " budget=" << std::dec << budget
++                    << " yielded=" << cpu.yielded << " stopped=" << cpu.stopped;
++                throw std::runtime_error(out.str());
++            }
+             return cpu.gpr[2];
+         }
+ 
+@@ -472,7 +485,11 @@
+                                       uint32_t a3,
+                                       uint32_t gp) override
+         {
+-            return callFunction(address, a0, a1, a2, a3, gp);
++            // Synchronous service calls must finish before their reply is published.
++            // Disc-index initialization can exceed the short callback budget. Keep a
++            // one-IOP-second instruction limit and reject incomplete calls explicitly.
++            return callFunction(address, a0, a1, a2, a3, gp,
++                                static_cast<uint32_t>(kIopClockHz), true);
+         }
+ 
+         uint32_t executeGuestFunctionWithBudget(uint32_t address,

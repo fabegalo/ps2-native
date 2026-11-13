@@ -1,0 +1,58 @@
+Own generic native IOP preparation and compilation inside the pinned PS2Recomp SDK.
+Clients retain catalog/session policy; preserve target identities, object paths and GPL-3.0 terms.
+
+--- /dev/null
++++ b/ps2xIOP/cmake/PS2IOPAot.cmake
+@@ -0,0 +1,33 @@
++# Offline native IOP modules. Clients supply content and link the returned target;
++# discovery, catalog/session policy and UI stay outside the SDK.
++function(ps2x_add_iop_aot_module target image cache_root)
++    file(SHA256 "${image}" _identity)
++    if(TARGET ${target})
++        get_target_property(_existing ${target} PS2X_IOP_AOT_IDENTITY)
++        if(NOT _existing STREQUAL _identity)
++            message(FATAL_ERROR "IOP AOT target already belongs to different content: ${target}")
++        endif()
++        return()
++    endif()
++    find_package(Python3 COMPONENTS Interpreter REQUIRED)
++    get_filename_component(_iop_root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." ABSOLUTE)
++    set(_output "${cache_root}/${_identity}")
++    set(_sources "${_output}/module.cpp")
++    foreach(_bucket RANGE 0 15)
++        if(_bucket LESS 10)
++            set(_bucket "0${_bucket}")
++        endif()
++        list(APPEND _sources "${_output}/ops_${_bucket}.cpp")
++    endforeach()
++    add_custom_command(OUTPUT ${_sources}
++        COMMAND "${Python3_EXECUTABLE}" "${_iop_root}/tools/iop_aot.py" "${image}" "${_output}"
++        DEPENDS "${image}" "${_iop_root}/tools/iop_aot.py"
++        VERBATIM)
++    add_library(${target} STATIC EXCLUDE_FROM_ALL ${_sources})
++    target_include_directories(${target} PRIVATE "${_iop_root}/src")
++    target_link_libraries(${target} PRIVATE ps2_iop)
++    set_property(TARGET ${target} PROPERTY PS2X_IOP_AOT_IDENTITY "${_identity}")
++    if(MSVC)
++        target_compile_options(${target} PRIVATE /bigobj /FS)
++    endif()
++endfunction()
+--- a/ps2xIOP/CMakeLists.txt
++++ b/ps2xIOP/CMakeLists.txt
+@@ -43,6 +43,7 @@
+ )
+ 
+ add_library(ps2x::iop ALIAS ps2_iop)
++include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/PS2IOPAot.cmake")
+ 
+ if(PS2X_IOP_BUILD_TESTS)
+     enable_testing()
+--- a/ps2xIOP/tools/iop_aot.py
++++ b/ps2xIOP/tools/iop_aot.py
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env python3
+-"""Offline R3000A -> C++ for the pinned PS2Recomp IOP loader. GPL-3.0-or-later.
++"""Offline R3000A -> C++ for the pinned PS2Recomp IOP loader. GPL-3.0.
+ Instruction semantics derive from ps2xIOP's iop_cpu.cpp; no guest decoding is
+ performed by the emitted functions. Originals are only read.
+ """

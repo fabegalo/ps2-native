@@ -1,0 +1,297 @@
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -19,6 +19,8 @@
+ 
+ // This exception is the EE equivalent of a longjmp to the dispatcher.  It is
+ // not an error and must only be caught at EeScheduler::run().
++struct GuestExecutableRequest;
++
+ struct EeDispatcherTransfer final
+ {
+ };
+@@ -295,6 +297,7 @@
+     void setExecutableArguments(std::vector<std::string> arguments);
+     void writeExecutableArguments(uint8_t* ram, uint32_t address, const std::string& defaultPath) const;
+ 
++    int mainThreadId() const noexcept { return m_mainThreadId; }
+     void reset(uint8_t *rdram, const R5900Context &mainContext);
+     void run();
+     void requestStop();
+@@ -394,6 +397,8 @@
+         uint64_t sequence = 0;
+     };
+ 
++    void resetKernelObjects(uint8_t* ram, const R5900Context& context, bool preserveTime);
++    bool transferExecutable(const GuestExecutableRequest& request);
+     void assertExecutor() const;
+     [[nodiscard]] int allocateThreadId();
+     GuestThread &acquireInvocationThread();
+@@ -449,6 +454,7 @@
+     int m_dmacTailOrder = 1000;
+     uint32_t m_enabledIntcMask = 0xFFFFFFFFu;
+     uint32_t m_enabledDmacMask = 0xFFFFFFFFu;
++    int m_mainThreadId = kMainThreadId;
+     int m_currentThreadId = 0;
+     bool m_rescheduleRequested = false;
+     bool m_timeSliceExpired = false;
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -1,4 +1,5 @@
+ #include "runtime/ee_scheduler.h"
++#include "runtime/guest_executable_request.h"
+ 
+ #include "ps2_log.h"
+ #include "ps2_runtime_macros.h"
+@@ -226,6 +227,12 @@
+ 
+ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+ {
++    m_mainThreadId = kMainThreadId;
++    resetKernelObjects(rdram, mainContext, false);
++}
++
++void EeScheduler::resetKernelObjects(uint8_t *rdram, const R5900Context &mainContext, bool preserveTime)
++{
+     m_executorThread = std::this_thread::get_id();
+     m_rdram = rdram;
+     m_readyQueues = {};
+@@ -253,31 +260,53 @@
+     m_timeSliceExpired = false;
+     m_insideInterrupt = false;
+     m_pendingEeTimerInterrupts = 0u;
+-    m_eeCycle = 0u;
+-    m_cop0CountOffset = mainContext.cop0_count;
+-    m_sliceEndCycle = kDefaultTimeSliceCycles;
+-    m_stopRequested.store(false, std::memory_order_release);
++    if (!preserveTime)
++    {
++        m_eeCycle = 0u;
++        m_cop0CountOffset = mainContext.cop0_count;
++        m_stopRequested.store(false, std::memory_order_release);
++    }
++    m_sliceEndCycle = m_eeCycle + kDefaultTimeSliceCycles;
+     m_checkpointPending.store(false, std::memory_order_release);
+     m_debugPublishCountdown = 0u;
+     {
+         std::lock_guard lock(m_eventMutex);
+-        m_events.clear();
+-        m_deadlines.clear();
++        const auto physicalEvent = [](const EeEvent& event) {
++            return event.type == EeEventType::VBlankStart || event.type == EeEventType::VBlankEnd;
++        };
++        if (preserveTime)
++        {
++            std::erase_if(m_events, [&](const EeEvent& event) { return !physicalEvent(event); });
++            std::erase_if(m_deadlines, [&](const ScheduledEvent& event) { return !physicalEvent(event.event); });
++        }
++        else
++        {
++            m_events.clear();
++            m_deadlines.clear();
++        }
+         m_pendingInvocations.clear();
+-    }
+-    m_eventSequence = 0;
+-    m_invocationSequence = 0;
+-    m_vsyncTick = 0;
++        uint64_t next = std::numeric_limits<uint64_t>::max();
++        for (const auto& event : m_deadlines) next = std::min(next, event.deadlineCycle);
++        m_nextDeadlineCycle.store(next, std::memory_order_release);
++        m_checkpointPending.store(!m_events.empty(), std::memory_order_release);
++    }
++    m_invocationStackTops.clear();
++    if (!preserveTime)
++    {
++        m_eventSequence = 0;
++        m_invocationSequence = 0;
++        m_vsyncTick = 0;
++    }
+     m_vsyncFlagAddress = 0;
+     m_vsyncTickAddress = 0;
+     m_gsVSyncCallback = 0;
+     m_gsVSyncCallbackGp = 0;
+     m_gsVSyncCallbackSp = 0;
+-    m_runtime.memory().gs().vsyncTick.store(0u, std::memory_order_release);
++    if (!preserveTime) m_runtime.memory().gs().vsyncTick.store(0u, std::memory_order_release);
+     m_runtime.memory().resetEeTimers();
+ 
+     GuestThread main{};
+-    main.id = kMainThreadId;
++    main.id = m_mainThreadId;
+     main.context = mainContext;
+     main.entry = mainContext.pc;
+     // $sp is live execution state, not the stable initial stack descriptor
+@@ -288,11 +317,83 @@
+     main.currentPriority = 0;
+     main.status = EeThreadStatus::Ready;
+     m_threads.emplace(main.id, std::move(main));
+-    m_readyQueues[0].push_back(kMainThreadId);
+-    scheduleEvent(m_eeCycle + kVBlankPeriodCycles,
+-                  std::chrono::steady_clock::now() + kVBlankPeriod,
+-                  EeEvent{EeEventType::VBlankStart, 0, 0});
+-    publishSnapshot();
++    m_readyQueues[0].push_back(m_mainThreadId);
++    if (!preserveTime)
++        scheduleEvent(m_eeCycle + kVBlankPeriodCycles,
++                      std::chrono::steady_clock::now() + kVBlankPeriod,
++                      EeEvent{EeEventType::VBlankStart, 0, 0});
++    publishSnapshot();
++}
++
++bool EeScheduler::transferExecutable(const GuestExecutableRequest& request)
++{
++    if (request.syscall != 7) return false;
++    const auto* module = executableModule(request.arguments[0], m_rdram);
++    if (!module) return false;
++    const auto* caller = currentThread();
++    if (!caller || caller->id <= 0 || !caller->invocations.empty())
++        throw std::runtime_error("ExecPS2 requires an ordinary EE thread");
++    const uint32_t argc = request.arguments[2], argv = request.arguments[3];
++    if (argc > 16) throw std::runtime_error("ExecPS2 argument count exceeds the CRT contract");
++    const uint32_t table = argv & 0x1fffffffu;
++    if (argc && (!argv || table > PS2_RAM_SIZE - argc * 4u))
++        throw std::runtime_error("ExecPS2 argv table is outside EE RAM");
++    std::vector<std::string> arguments;
++    size_t remaining = 256;
++    for (uint32_t i = 0; i < argc; ++i)
++    {
++        uint32_t pointer = 0;
++        std::memcpy(&pointer, m_rdram + table + i * 4u, 4);
++        const uint32_t physical = pointer & 0x1fffffffu;
++        if (!pointer || physical >= PS2_RAM_SIZE)
++            throw std::runtime_error("ExecPS2 argument is outside EE RAM");
++        std::string argument;
++        size_t offset = 0;
++        while (offset < remaining && offset < PS2_RAM_SIZE - physical && m_rdram[physical + offset])
++            argument += static_cast<char>(m_rdram[physical + offset++]);
++        if (offset >= remaining || offset >= PS2_RAM_SIZE - physical)
++            throw std::runtime_error("ExecPS2 argument is unterminated or exceeds the CRT payload");
++        remaining -= offset + 1;
++        arguments.push_back(std::move(argument));
++    }
++    validateExecutableArguments(arguments);
++    // Pending device ownership cannot be transferred by this HLE path yet.
++    static constexpr uint32_t channels[] = {0x10008000, 0x10009000, 0x1000a000, 0x1000b000,
++        0x1000b400, 0x1000c000, 0x1000c400, 0x1000c800, 0x1000d000, 0x1000d400};
++    for (uint32_t channel : channels)
++        if (m_runtime.memory().readIORegister(channel) & 0x100u)
++            throw std::runtime_error("[guest-exec:unsupported] active EE DMA at ExecPS2");
++    if (m_runtime.memory().isPath3Masked() || !m_runtime.gifArbiter().empty())
++        throw std::runtime_error("[guest-exec:unsupported] queued GIF ownership at ExecPS2");
++    const uint64_t end = uint64_t(module->linkedBase) + module->imageSize;
++    if (end > PS2_RAM_SIZE - 0x1000u)
++        throw std::runtime_error("[guest-exec:unsupported] executable leaves no default EE stack space");
++    R5900Context next;
++    next.pc = request.arguments[0];
++    next.cop0_count = readCop0Count();
++    next.fcr31 = 0x01000001u;
++    SET_GPR_U32(&next, 28, request.arguments[1]);
++    SET_GPR_U32(&next, 29, PS2_RAM_SIZE - 0x10u);
++    SET_GPR_U32(&next, 4, argc);
++    SET_GPR_U32(&next, 5, argv);
++    const int retainedThread = caller->id;
++    bindAotModule(*module, module->linkedBase, m_rdram);
++    setExecutableArguments(std::move(arguments));
++    m_runtime.configureGuestHeap(static_cast<uint32_t>(end));
++    m_runtime.gs().reset();
++    m_runtime.vu0().reset();
++    m_runtime.vu1().reset();
++    m_runtime.memory().writeIORegister(0x10003810u, 1u);
++    m_runtime.memory().writeIORegister(0x10003c10u, 1u);
++    std::memset(m_runtime.memory().getScratchpad(), 0, PS2_SCRATCHPAD_SIZE);
++    m_mainThreadId = retainedThread;
++    resetKernelObjects(m_rdram, next, true);
++    noteControlTransfer();
++    copyMainContextToRuntime();
++    std::cerr << "[guest-exec:handoff] module=" << module->identity << " entry=0x" << std::hex
++              << next.pc << std::dec << " argc=" << argc << " thread=" << retainedThread
++              << " ee_cycle=" << m_eeCycle << '\n';
++    return true;
+ }
+ 
+ void EeScheduler::run()
+@@ -448,6 +549,24 @@
+             m_guestExecuting.store(false, std::memory_order_release);
+             m_insideInterrupt = false;
+         }
++        catch (const GuestExecutableRequest& request)
++        {
++            m_guestExecuting.store(false, std::memory_order_release);
++            m_insideInterrupt = false;
++            try
++            {
++                if (transferExecutable(request)) continue;
++            }
++            catch (...)
++            {
++                m_running.store(false, std::memory_order_release);
++                publishSnapshot();
++                throw;
++            }
++            m_running.store(false, std::memory_order_release);
++            publishSnapshot();
++            throw;
++        }
+         catch (...)
+         {
+             m_guestExecuting.store(false, std::memory_order_release);
+@@ -607,7 +726,7 @@
+ {
+     assertExecutor();
+     ownedStack = 0;
+-    if (id <= kMainThreadId)
++    if (id <= kMainThreadId || id == m_mainThreadId)
+     {
+         return KE_ILLEGAL_THID;
+     }
+@@ -670,7 +789,7 @@
+     const uint32_t ownedStack = deleteThreadRecord && exiting->ownsStack ? exiting->stack : 0u;
+     makeDormant(*exiting);
+     m_currentThreadId = 0;
+-    if (deleteThreadRecord && id != kMainThreadId)
++    if (deleteThreadRecord && id != m_mainThreadId)
+     {
+         m_threads.erase(id);
+     }
+@@ -1621,7 +1740,7 @@
+     m_rdram = rdram;
+     if (m_currentThreadId == 0)
+     {
+-        GuestThread *main = thread(kMainThreadId);
++        GuestThread *main = thread(m_mainThreadId);
+         assert(main != nullptr);
+         assert(main->status == EeThreadStatus::Ready);
+         removeReady(*main);
+@@ -2259,7 +2378,7 @@
+ 
+ void EeScheduler::copyMainContextToRuntime()
+ {
+-    const GuestThread *main = thread(kMainThreadId);
++    const GuestThread *main = thread(m_mainThreadId);
+     if (main)
+     {
+         m_runtime.m_cpuContext = main->context;
+@@ -2279,7 +2398,7 @@
+     // Temporary IRQ/RPC/alarm invocations deliberately return to PC=0. Once
+     // the scheduler is idle, show a real EE thread context instead of leaving
+     // the debugger pinned to that completed dispatcher frame.
+-    const GuestThread *selected = thread(kMainThreadId);
++    const GuestThread *selected = thread(m_mainThreadId);
+     if (!selected)
+     {
+         for (const auto &[id, candidate] : m_threads)
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
+@@ -180,9 +180,9 @@
+         setReturnS32(ctx, KE_OK);
+     }
+ 
+-    void InitThread(uint8_t *, R5900Context *ctx, PS2Runtime *)
+-    {
+-        setReturnS32(ctx, EeScheduler::kMainThreadId);
++    void InitThread(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        setReturnS32(ctx, runtime->eeScheduler().mainThreadId());
+     }
+ 
+     void CreateThread(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

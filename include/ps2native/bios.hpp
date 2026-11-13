@@ -1,5 +1,6 @@
 #pragma once
 #include "ps2native/elf.hpp"
+#include "ps2native/nvm.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -52,6 +53,18 @@ struct BiosLoadOptions {
 // optional expected hash. Any inconsistency is an explicit error.
 [[nodiscard]] BiosImage load_bios_rom0(std::span<const std::uint8_t> bytes,
                                        const BiosLoadOptions& options = {});
+
+struct BrowserFirmware {
+    BiosImage bios;
+    NvmImage nvm;
+    ElfImage program;
+    std::string console_profile;
+    std::optional<UnpackedEeImage> unpacked;
+};
+// The original OSDSYS ELF, including its original loader/decompressor when packed.
+[[nodiscard]] BrowserFirmware load_browser_firmware(std::span<const std::uint8_t> rom0,
+    std::string_view console_profile, std::span<const std::uint8_t> nvm,
+    const BiosLoadOptions& bios_options = {}, const NvmLoadOptions& nvm_options = {});
 
 // Read-only IOP reboot container; metadata does not imply execution of its IRX files.
 struct IopRebootImage {

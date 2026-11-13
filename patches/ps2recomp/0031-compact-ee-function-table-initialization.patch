@@ -1,0 +1,65 @@
+Initialize the same dense EE dispatch table from compact immutable binding ranges.
+Preserve every slot and null hole without compiling a giant unrolled constructor.
+No runtime ABI, instruction semantics or lookup changes.
+
+--- a/ps2xRecomp/include/ps2recomp/Emitters/function_table_emitter.h
++++ b/ps2xRecomp/include/ps2recomp/Emitters/function_table_emitter.h
+@@ -5,6 +5,7 @@
+ #include <map>
+ #include <string>
+ #include <vector>
++#include <utility>
+ 
+ namespace ps2recomp
+ {
+@@ -17,6 +18,22 @@
+         explicit FunctionTableEmitter(CodeGenerator &codeGenerator);
+ 
+         std::string emit(const std::vector<Function> &functions, const std::map<uint32_t, std::string> &stubs);
++        struct Range { uint32_t first, count; std::string name; };
++        // Entries are sorted, unique guest addresses. Holes remain null.
++        static std::vector<Range> compact(const std::vector<std::pair<uint32_t, std::string>>& entries,
++                                          uint32_t base) {
++            std::vector<Range> ranges;
++            for (const auto& [address, name] : entries) {
++                const uint32_t slot = (address - base) >> 2;
++                if (!ranges.empty() && ranges.back().first + ranges.back().count == slot &&
++                    ranges.back().name == name)
++                    ++ranges.back().count;
++                else
++                    ranges.push_back({slot, 1u, name});
++            }
++            return ranges;
++        }
++
+ 
+     private:
+         CodeGenerator &m_codeGenerator;
+--- a/ps2xRecomp/src/lib/function_table_emitter.cpp
++++ b/ps2xRecomp/src/lib/function_table_emitter.cpp
+@@ -158,13 +158,21 @@
+         ss << "PS2Runtime::RecompiledFunction g_ps2RecompiledFunctionTable[" << std::dec << (slotCount == 0u ? 1u : slotCount) << "u] = {};\n\n";
+ 
+         ss << "namespace {\n";
++        if (!entries.empty())
++        {
++            ss << "struct GeneratedFunctionBinding { uint32_t first, count; PS2Runtime::RecompiledFunction function; };\n";
++            ss << "static const GeneratedFunctionBinding g_generatedBindings[] = {\n";
++            for (const auto &range : compact(entries, tableBase))
++                ss << "    {" << std::dec << range.first << "u, " << range.count << "u, " << range.name << "},\n";
++            ss << "};\n";
++        }
+         ss << "struct GeneratedFunctionTableInitializer {\n";
+         ss << "    GeneratedFunctionTableInitializer() {\n";
+-        for (const auto &[address, name] : entries)
++        if (!entries.empty())
+         {
+-            const uint32_t slot = (address - tableBase) >> 2;
+-            ss << "        g_ps2RecompiledFunctionTable[" << std::dec << slot << "] = " << name
+-               << "; // 0x" << std::hex << address << std::dec << "\n";
++            ss << "        for (const auto& binding : g_generatedBindings)\n";
++            ss << "            for (uint32_t i = 0; i < binding.count; ++i)\n";
++            ss << "                g_ps2RecompiledFunctionTable[binding.first + i] = binding.function;\n";
+         }
+         ss << "    }\n";
+         ss << "};\n";

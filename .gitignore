@@ -1,6 +1,9 @@
 # Build and local IDE output
 /build/
 /out/
+/external/pcsx2/
+/external/pcsx2-components/
+/external/parallel-gs/
 cmake-build-*/
 .cache/
 .vs/
@@ -47,3 +50,4 @@ boot-trace*.txt
 vu1_*.entries
 /dev-local/
 ps2n-dev/
+__pycache__/

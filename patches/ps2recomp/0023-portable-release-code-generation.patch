@@ -1,0 +1,17 @@
+Keep Release code generation portable; ISA variants belong to runtime-dispatched device components.
+Preserve normal floating-point and compiler safety semantics.
+
+--- a/ps2xRuntime/cmake/ReleaseMode.cmake
++++ b/ps2xRuntime/cmake/ReleaseMode.cmake
+@@ -16,11 +16,7 @@
+                 /Gw # global data in COMDAT
+                 /GF # string pooling
+                 /Zc:inline # remove unreferenced inline
+-                /fp:fast # fast math (graphics friendly)
+                 /DNDEBUG
+-                /arch:AVX2 # Advanced Vector Extensions 2
+-                /GS- # Disable Buffer Security Check (faster)
+-                /Qspectre- # Disable Spectre mitigations (faster)
+             >
+         )
+ 

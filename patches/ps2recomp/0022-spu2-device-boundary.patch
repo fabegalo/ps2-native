@@ -1,0 +1,298 @@
+Connect SPU2 registers, DMA and interrupts to the console-owned audio device on the existing IOP clock.
+Preserve AOT-visible layouts and generated headers.
+
+--- a/ps2xIOP/include/ps2x/iop/iop_host.h
++++ b/ps2xIOP/include/ps2x/iop/iop_host.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "ps2x/iop/iop_types.h"
++#include "ps2x/iop/iop_spu2.h"
+ 
+ #include <array>
+ #include <cstddef>
+@@ -57,6 +58,7 @@
+     {
+     public:
+         virtual ~IopHost() = default;
++        virtual IopSpu2Backend* spu2Backend() const { return nullptr; }
+ 
+         virtual bool readGuest(uint32_t address, void *destination, size_t size) const = 0;
+         virtual bool writeGuest(uint32_t address, const void *source, size_t size) = 0;
+--- /dev/null
++++ b/ps2xIOP/include/ps2x/iop/iop_spu2.h
+@@ -0,0 +1,17 @@
++#pragma once
++#include <cstdint>
++namespace ps2x::iop {
++class IopSpu2Backend {
++public:
++ virtual ~IopSpu2Backend() = default;
++ virtual void reset(uint8_t* ram, uint32_t size, uint64_t cycle) = 0;
++ virtual uint16_t read16(uint32_t address, uint64_t cycle) = 0;
++ virtual void write16(uint32_t address, uint16_t value, uint64_t cycle) = 0;
++ virtual void dma(int core, uint16_t* ram, uint32_t halfwords, uint32_t madr, bool write, uint64_t cycle) = 0;
++ virtual uint32_t madr(int core) = 0;
++ virtual void advance(uint64_t cycle) = 0;
++ virtual uint64_t nextEvent() = 0;
++ // bit 0: INTC9, bits 1/2: DMA4/7. Deliver after leaving device callbacks.
++ virtual uint32_t takeEvents() = 0;
++};
++}
+--- a/ps2xIOP/src/emulator/core/iop_memory.cpp
++++ b/ps2xIOP/src/emulator/core/iop_memory.cpp
+@@ -2,6 +2,8 @@
+ 
+ #include <algorithm>
+ #include <cstring>
++#include <stdexcept>
++#include <limits>
+ 
+ namespace ps2x::iop::detail
+ {
+@@ -37,6 +39,31 @@
+         m_interruptMask = 0;
+         m_interruptControl = 1;
+         m_dmaStart.reset();
++        if (m_spu2) m_spu2->reset(m_ram.data(), RamSize, 0);
++    }
++
++    void IopMemory::attachSpu2(IopSpu2Backend* backend, const uint64_t* cycle)
++    {
++        if (backend == m_spu2) return;
++        m_spu2 = backend; m_spu2Cycle = cycle;
++        if (m_spu2) m_spu2->reset(m_ram.data(), RamSize, *cycle);
++    }
++    uint64_t IopMemory::nextSpu2Event() const
++    {
++        return m_spu2 ? m_spu2->nextEvent() : std::numeric_limits<uint64_t>::max();
++    }
++    uint32_t IopMemory::advanceSpu2()
++    {
++        if (!m_spu2) return 0;
++        m_spu2->advance(*m_spu2Cycle);
++        const auto events = m_spu2->takeEvents();
++        for (int core = 0; core < 2; ++core) {
++            if (!(events & (2u << core))) continue;
++            const auto chcr = core ? kDmaSpu1Chcr : kDmaSpu0Chcr;
++            m_hardware[chcr] &= ~kDmaStart;
++            m_hardware[chcr - 8u] = m_spu2->madr(core);
++        }
++        return events;
+     }
+ 
+     uint32_t IopMemory::physicalAddress(uint32_t address) noexcept
+@@ -47,6 +74,8 @@
+     uint8_t IopMemory::read8(uint32_t address) const
+     {
+         const uint32_t phys = physicalAddress(address);
++        if (m_spu2 && phys >= Spu2Base && phys < Spu2Base + 0x800u)
++            return static_cast<uint8_t>(m_spu2->read16(phys & ~1u, *m_spu2Cycle) >> ((phys & 1u) * 8u));
+         if (phys < RamSize)
+             return m_ram[phys];
+         if (phys >= ScratchBase && phys < ScratchBase + ScratchSize)
+@@ -58,6 +87,8 @@
+     uint16_t IopMemory::read16(uint32_t address) const
+     {
+         const uint32_t phys = physicalAddress(address);
++        if (m_spu2 && phys >= Spu2Base && phys < Spu2Base + 0x800u)
++            return m_spu2->read16(phys, *m_spu2Cycle);
+         if (phys + 1u < RamSize)
+         {
+             uint16_t value;
+@@ -94,6 +125,12 @@
+     void IopMemory::write8(uint32_t address, uint8_t value)
+     {
+         const uint32_t phys = physicalAddress(address);
++        if (m_spu2 && phys >= Spu2Base && phys < Spu2Base + 0x800u) {
++            const auto shift = (phys & 1u) * 8u;
++            const auto current = m_spu2->read16(phys & ~1u, *m_spu2Cycle);
++            m_spu2->write16(phys & ~1u, static_cast<uint16_t>((current & ~(0xffu << shift)) | (uint32_t(value) << shift)), *m_spu2Cycle);
++            return;
++        }
+         if (phys < RamSize)
+         {
+             m_ram[phys] = value;
+@@ -115,6 +152,9 @@
+     void IopMemory::write16(uint32_t address, uint16_t value)
+     {
+         const uint32_t phys = physicalAddress(address);
++        if (m_spu2 && phys >= Spu2Base && phys < Spu2Base + 0x800u) {
++            m_spu2->write16(phys, value, *m_spu2Cycle); return;
++        }
+         if (phys + 1u < RamSize)
+         {
+             std::memcpy(m_ram.data() + phys, &value, sizeof(value));
+@@ -213,6 +253,15 @@
+ 
+     uint32_t IopMemory::readHardware32(uint32_t address) const
+     {
++        if (m_spu2 && address >= Spu2Base && address < Spu2Base + 0x800u)
++            return uint32_t(m_spu2->read16(address, *m_spu2Cycle)) |
++                   (uint32_t(m_spu2->read16(address + 2u, *m_spu2Cycle)) << 16u);
++        if (m_spu2 && (address == kDmaSpu0Chcr - 8u || address == kDmaSpu1Chcr - 8u)) {
++            const int core = address == kDmaSpu1Chcr - 8u;
++            const auto chcr = core ? kDmaSpu1Chcr : kDmaSpu0Chcr;
++            const auto it = m_hardware.find(chcr);
++            if (it != m_hardware.end() && (it->second & kDmaStart)) return m_spu2->madr(core);
++        }
+         const auto value = m_hardware.find(address);
+         if (value != m_hardware.end())
+             return value->second;
+@@ -231,6 +280,11 @@
+ 
+     void IopMemory::writeHardware32(uint32_t address, uint32_t value)
+     {
++        if (m_spu2 && address >= Spu2Base && address < Spu2Base + 0x800u) {
++            m_spu2->write16(address, static_cast<uint16_t>(value), *m_spu2Cycle);
++            m_spu2->write16(address + 2u, static_cast<uint16_t>(value >> 16u), *m_spu2Cycle);
++            return;
++        }
+         switch (address)
+         {
+         case 0x1F801070u:
+@@ -251,6 +305,16 @@
+             return;
+ 
+         const bool secondCore = address == kDmaSpu1Chcr;
++        if (m_spu2) {
++            const auto madr = m_hardware[address - 8u] & 0x1fffffu;
++            const auto bcr = m_hardware[address - 4u];
++            const uint64_t words = uint64_t(bcr & 0xffffu) * (bcr >> 16u);
++            if (words > (RamSize - madr) / 4u || (madr & 1u))
++                throw std::runtime_error("SPU2 DMA exceeds physical IOP RAM");
++            m_spu2->dma(secondCore, reinterpret_cast<uint16_t*>(m_ram.data() + madr),
++                        static_cast<uint32_t>(words * 2u), madr, (value & 1u) != 0u, *m_spu2Cycle);
++            return;
++        }
+         m_hardware[address] = value & ~kDmaStart;
+ 
+         const uint32_t statusAddress = 0x1F900344u + (secondCore ? 0x400u : 0u);
+--- a/ps2xIOP/src/emulator/core/iop_memory.h
++++ b/ps2xIOP/src/emulator/core/iop_memory.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include "ps2x/iop/iop_spu2.h"
+ #include <cstddef>
+ #include <cstdint>
+ #include <optional>
+@@ -40,6 +41,9 @@
+         IopMemory();
+ 
+         void reset();
++        void attachSpu2(IopSpu2Backend* backend, const uint64_t* cycle);
++        uint32_t advanceSpu2();
++        uint64_t nextSpu2Event() const;
+ 
+ 
+         [[nodiscard]] uint8_t read8(uint32_t address) const;
+@@ -78,6 +82,8 @@
+         void writeHardware32(uint32_t address, uint32_t value);
+         void markOwned(uint32_t address, size_t size);
+ 
++        IopSpu2Backend* m_spu2 = nullptr;
++        const uint64_t* m_spu2Cycle = nullptr;
+         std::vector<uint8_t> m_ram;
+         std::vector<uint8_t> m_owned;
+         std::vector<uint8_t> m_scratch;
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -178,6 +178,14 @@
+             schedulePendingDma();
+         }
+ 
++        void serviceSpu2()
++        {
++            const auto events = memory.advanceSpu2();
++            if (events & 1u) pendingDmaInterrupts[9] = totalCycles;
++            if (events & 2u) pendingDmaInterrupts[0x24] = totalCycles;
++            if (events & 4u) pendingDmaInterrupts[0x28] = totalCycles;
++        }
++
+         void schedulePendingDma()
+         {
+             if (const auto dma = memory.takeDmaStart())
+@@ -406,6 +414,7 @@
+ 
+         uint32_t runCpu(CpuState &cpu, uint32_t instructionBudget, bool stopOnException = false)
+         {
++            memory.attachSpu2(host.spu2Backend(), &totalCycles);
+             CpuState *previous = activeCpu;
+             activeCpu = &cpu;
+             const uint64_t start = totalInstructions;
+@@ -413,6 +422,7 @@
+             {
+                 if (!step(cpu) || (stopOnException && cpu.exception))
+                     break;
++                serviceSpu2();
+                 if (!servicingDmaInterrupts && !pendingDmaInterrupts.empty())
+                     servicePendingDmaInterrupts();
+                 if (!servicingGuestCallbacks && !pendingGuestCallbacks.empty())
+@@ -580,9 +590,11 @@
+         {
+             try
+             {
++                memory.attachSpu2(host.spu2Backend(), &totalCycles);
+                 const uint64_t target = totalCycles + cycles;
+                 while (totalCycles < target)
+                 {
++                    serviceSpu2();
+                     servicePendingDmaInterrupts();
+                     servicePendingGuestCallbacks();
+                     timrman.serviceDue(totalCycles, *this);
+@@ -595,6 +607,7 @@
+                         if (!pendingGuestCallbacks.empty())
+                             nextWake = std::min(nextWake, pendingGuestCallbacks.begin()->first);
+                         nextWake = timrman.nextEventCycle(nextWake);
++                        nextWake = std::min(nextWake, memory.nextSpu2Event());
+                         totalCycles = std::max(totalCycles + 1u, std::min(target, nextWake));
+                         continue;
+                     }
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/host_devices.h
+@@ -0,0 +1,21 @@
++#pragma once
++#include "ps2x/iop/iop_spu2.h"
++#include <mutex>
++#include <unordered_map>
++#include <stdexcept>
++// Registration precedes guest execution; removal follows the joined guest thread.
++// Kept outside the AOT-visible console layout to preserve existing objects.
++struct PS2HostDevices { ps2x::iop::IopSpu2Backend* spu2 = nullptr; };
++inline std::mutex ps2HostDevicesMutex;
++inline std::unordered_map<const void*, PS2HostDevices*> ps2HostDevicesMap;
++inline void ps2SetHostDevices(const void* owner, PS2HostDevices* devices) {
++ std::lock_guard lock(ps2HostDevicesMutex);
++ if (!devices) ps2HostDevicesMap.erase(owner);
++ else if (!ps2HostDevicesMap.emplace(owner, devices).second)
++  throw std::logic_error("Console devices already attached");
++}
++inline PS2HostDevices* ps2GetHostDevices(const void* owner) {
++ std::lock_guard lock(ps2HostDevicesMutex);
++ const auto it = ps2HostDevicesMap.find(owner);
++ return it == ps2HostDevicesMap.end() ? nullptr : it->second;
++}
+--- a/ps2xRuntime/src/lib/ps2_iop_host.cpp
++++ b/ps2xRuntime/src/lib/ps2_iop_host.cpp
+@@ -1,4 +1,10 @@
+ #include "ps2_iop_host.h"
++#include "runtime/host_devices.h"
++ps2x::iop::IopSpu2Backend* PS2IopHostAdapter::spu2Backend() const {
++    const auto* devices = ps2GetHostDevices(&m_runtime);
++    return devices ? devices->spu2 : nullptr;
++}
++
+ 
+ #include "ps2_runtime.h"
+ #include "ps2_stubs.h"
+--- a/ps2xRuntime/src/lib/ps2_iop_host.h
++++ b/ps2xRuntime/src/lib/ps2_iop_host.h
+@@ -44,6 +44,7 @@
+     [[nodiscard]] CallScope enterCall(R5900Context *context,
+                                       uint8_t *rdram = nullptr);
+ 
++    ps2x::iop::IopSpu2Backend* spu2Backend() const override;
+     bool readGuest(uint32_t address, void *destination, size_t size) const override;
+     bool writeGuest(uint32_t address, const void *source, size_t size) override;
+     bool zeroGuest(uint32_t address, size_t size) override;

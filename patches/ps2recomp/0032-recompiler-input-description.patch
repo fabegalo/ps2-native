@@ -1,0 +1,56 @@
+Describe the parsed recompiler input closure and output location through the SDK.
+Hex-encode path bytes to preserve Unicode and delimiters without a second TOML parser.
+
+--- a/ps2xRecomp/src/runner/main.cpp
++++ b/ps2xRecomp/src/runner/main.cpp
+@@ -1,6 +1,9 @@
+ #include "ps2recomp/ps2_recompiler.h"
+ #include <iostream>
+ #include <string>
++#include <fstream>
++#include <filesystem>
++#include <sstream>
+ 
+ using namespace ps2recomp;
+ 
+@@ -9,6 +12,7 @@
+     std::cout << "PS2Recomp - A static recompiler for PlayStation 2 ELF files\n";
+     std::cout << "Usage: ps2recomp <config.toml>\n";
+     std::cout << "  config.toml: Configuration file for the recompiler\n";
++    std::cout << "  --describe-inputs <file>: describe actual input dependencies without translating\n";
+ }
+ 
+ int main(int argc, char *argv[])
+@@ -23,6 +27,32 @@
+ 
+     try
+     {
++        if (argc == 4 && std::string(argv[2]) == "--describe-inputs")
++        {
++            const auto config = ConfigManager(configPath).loadConfig();
++            std::ostringstream description;
++            description << "ps2x-inputs-v1\n";
++            const auto field = [&](const char* role, const std::string& path) {
++                static constexpr char hex[] = "0123456789abcdef";
++                description << role << ' ';
++                for (unsigned char c : path) description << hex[c >> 4] << hex[c & 15];
++                description << '\n';
++            };
++            field("elf", config.inputPath);
++            const auto output = std::filesystem::path(config.outputPath);
++            field("output", config.singleFileOutput ? output.parent_path().string() : config.outputPath);
++            if (!config.ghidraMapPath.empty()) field("extra", config.ghidraMapPath);
++            std::ofstream file(argv[3], std::ios::binary | std::ios::trunc);
++            file << description.str();
++            file.flush();
++            if (!file) throw std::runtime_error("Cannot write recompiler input description");
++            return 0;
++        }
++        if (argc != 2)
++        {
++            printUsage();
++            return 1;
++        }
+         PS2Recompiler recompiler(configPath);
+ 
+         if (!recompiler.initialize())

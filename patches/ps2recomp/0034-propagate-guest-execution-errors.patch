@@ -1,0 +1,40 @@
+Propagate guest failures after joining its worker and releasing presentation resources.
+
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -16,6 +16,7 @@
+ 
+ #include <iostream>
+ #include <stdexcept>
++#include <exception>
+ #include <fstream>
+ #include <algorithm>
+ #include <array>
+@@ -2429,6 +2430,7 @@
+     UnloadImage(blank);
+ 
+     std::atomic<bool> gameThreadFinished{false};
++    std::exception_ptr executionError;
+ 
+     std::thread gameThread([&]()
+                            {
+@@ -2443,10 +2445,12 @@
+         }
+         catch (const std::exception &e)
+         {
++            executionError = std::current_exception();
+             std::cerr << "Error during program execution: " << e.what() << std::endl;
+         }
+         catch (...)
+         {
++            executionError = std::current_exception();
+             std::cerr << "Error during program execution: unknown exception" << std::endl;
+         }
+         gameThreadFinished.store(true, std::memory_order_release); });
+@@ -2535,4 +2539,5 @@
+     CloseWindow();
+ 
+     RUNTIME_LOG("[run] exiting loop");
+-}
++    if (executionError) std::rethrow_exception(executionError);
++}

@@ -1,0 +1,28 @@
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -1918,7 +1918,15 @@
+         return true;
+     };
+ 
+-    if (valid1 && valid2)
++    // Identical circuits blend to the same RGB for every PMODE alpha factor.
++    // Keep dual-circuit source selection (no preferred-source substitution).
++    const bool identicalCircuits = valid1 && valid2 && !pmode.slbg &&
++        displayFrame1.fbp == displayFrame2.fbp && displayFrame1.fbw == displayFrame2.fbw &&
++        displayFrame1.psm == displayFrame2.psm && origin1.x == origin2.x && origin1.y == origin2.y &&
++        width1 == width2 && height1 == height2 &&
++        (displayFrame1.psm == GS_PSM_CT32 || displayFrame1.psm == GS_PSM_CT24 ||
++         displayFrame1.psm == GS_PSM_CT16 || displayFrame1.psm == GS_PSM_CT16S);
++    if (valid1 && valid2 && !identicalCircuits)
+     {
+         GSFrameReg selected1{}, selected2{};
+         std::vector<uint8_t> crt1, crt2;
+@@ -1969,7 +1977,7 @@
+     result.width = valid1 ? width1 : width2;
+     result.height = valid1 ? height1 : height2;
+     GSFrameReg selected = displayFrame;
+-    if (!copySource(displayFrame, origin, result.width, result.height, true, false, selected, result.pixels, result.usedPreferred))
++    if (!copySource(displayFrame, origin, result.width, result.height, !identicalCircuits, false, selected, result.pixels, result.usedPreferred))
+         return {};
+     if (fieldMode)
+         applyFieldPresentation(result.pixels, result.width, result.height, oddField);

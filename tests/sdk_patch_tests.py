@@ -32,18 +32,21 @@ with tempfile.TemporaryDirectory(dir=sys.argv[1] if len(sys.argv) > 1 else None)
     patch = root / 'change.patch'
     patch.write_bytes(''.join(difflib.unified_diff(
         base.decode().splitlines(True), final.decode().splitlines(True),
-        fromfile='a/source.txt', tofile='b/source.txt')).encode())
+        fromfile='a/source.txt', tofile='b/source.txt')).encode() +
+        b'--- /dev/null\n+++ b/added.txt\n@@ -0,0 +1 @@\n+new source\n')
     sha = lambda data: hashlib.sha256(data).hexdigest()
     lock = root / 'deps.lock.json'
     lock.write_text(json.dumps({'ps2recomp': {'commit': pin, 'patches': [{
         'file': patch.name, 'sha256': sha(patch.read_bytes()),
-        'base_files': {'source.txt': sha(base)}, 'files': {'source.txt': sha(final)}
+        'base_files': {'source.txt': sha(base), 'added.txt': ''},
+        'files': {'source.txt': sha(final), 'added.txt': sha(b'new source\n')}
     }]}}))
     command = ('powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
                str(script), '-SourceDir', str(sdk), '-LockFile', str(lock))
     run(*command, '-Check', ok=False)
     run(*command)
     assert source.read_bytes() == final
+    assert (sdk / 'added.txt').read_bytes() == b'new source\n'
     run(*command)  # idempotent
     run(*command, '-Check')
     source.write_bytes(b'unexpected\n')
@@ -53,6 +56,7 @@ with tempfile.TemporaryDirectory(dir=sys.argv[1] if len(sys.argv) > 1 else None)
     source.write_bytes(final)
     run(*command, '-Revert')
     assert source.read_bytes() == base
+    assert not (sdk / 'added.txt').exists()
     patch.write_bytes(patch.read_bytes() + b'corrupt\n')
     run(*command, ok=False)
     assert source.read_bytes() == base

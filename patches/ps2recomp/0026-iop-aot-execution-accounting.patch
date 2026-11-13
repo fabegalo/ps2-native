@@ -1,0 +1,108 @@
+Keep full-word text relocations as explicit unsupported execution boundaries, not guessed opcodes.
+Account native/decoded IRX initialization and keep large prepared descriptors off the host stack.
+
+--- a/ps2xIOP/tools/iop_aot.py
++++ b/ps2xIOP/tools/iop_aot.py
+@@ -10,6 +10,8 @@
+ import struct
+ 
+ def operation(word, relocation=0):
++    if relocation == 0xffffffff:
++        return 'throw std::runtime_error("IOP full-word code relocation requires offline specialization");'
+     op, rs, rt, rd, sa, fn = word >> 26, (word >> 21) & 31, (word >> 16) & 31, (word >> 11) & 31, (word >> 6) & 31, word & 63
+     r, t = f'cpu.gpr[{rs}]', f'cpu.gpr[{rt}]'
+     imm = '(memory.read32(cpu.pc) & 0xffffu)' if relocation & 0xffff else f'{word & 65535}u'
+@@ -123,8 +125,8 @@
+             address -= base
+             if address not in code: continue
+             kind = info & 255
+-            mask = {0: 0, 1: 0xffff, 4: 0x03ffffff, 5: 0xffff, 6: 0xffff}.get(kind)
+-            if mask is None: raise ValueError('full-word relocation in executable section is unsupported')
++            mask = {0: 0, 1: 0xffff, 2: 0xffffffff, 3: 0xffffffff, 4: 0x03ffffff, 5: 0xffff, 6: 0xffff}.get(kind)
++            if mask is None: raise ValueError('unsupported instruction relocation type')
+             word, previous = code[address]
+             if previous: raise ValueError('overlapping instruction relocations')
+             code[address] = word, mask
+@@ -144,18 +146,24 @@
+     output.mkdir(parents=True, exist_ok=True)
+     instructions = sorted(set(code.values()))
+     names = {(w, m): f'iop_{identity}_{w:08x}_{m:08x}' for w, m in instructions}
+-    prefix = '#include "emulator/services/iop_aot_frame.h"\nusing namespace ps2x::iop::detail;\n'
++    prefix = '#include <iterator>\n#include <utility>\n#include "emulator/services/iop_aot_frame.h"\nusing namespace ps2x::iop::detail;\n'
+     for bucket in range(16):
+         functions = []
+         for word, mask in instructions:
+             if ((word >> 8) ^ word) % 16 != bucket: continue
+-            functions.append(f'bool {names[word, mask]}(IopCpuState& cpu, IopMemory& memory, uint32_t) {{\nIopAotFrame f(cpu, memory);\n' + operation(word, mask) + '\nreturn f.finish();\n}\n')
++            body = operation(word, mask)
++            if mask != 0xffffffff:
++                body = 'IopAotFrame f(cpu, memory);\n' + body + '\nreturn f.finish();'
++            functions.append(f'bool {names[word, mask]}(IopCpuState& cpu, IopMemory& memory, uint32_t) {{\n' + body + '\n}\n')
+         changed(output / f'ops_{bucket:02d}.cpp', prefix + ''.join(functions))
+     declarations = ''.join(f'extern bool {name}(IopCpuState&, IopMemory&, uint32_t);\n' for name in names.values())
+     image = ','.join(str(x) for x in data)
+     entries = ',\n'.join(f'{{{off}u, {names[word, mask]}, 0x{word:08x}u, 0x{mask:08x}u}}' for off, (word, mask) in sorted(code.items()))
+     descriptor = prefix + '#include "ps2x/iop/iop_aot.h"\n' + declarations
+-    descriptor += f'void register_iop_{identity}() {{ ps2x::iop::registerIopAotModule({{{{{image}}}, {{\n{entries}\n}}}}); }}\n'
++    descriptor += f'void register_iop_{identity}() {{\nstatic constexpr uint8_t image[] = {{{image}}};\n'
++    descriptor += f'static constexpr ps2x::iop::IopAotEntry entries[] = {{\n{entries}\n}};\n'
++    descriptor += 'ps2x::iop::IopAotModule module;\nmodule.image.assign(std::begin(image), std::end(image));\n'
++    descriptor += 'module.entries.assign(std::begin(entries), std::end(entries));\nps2x::iop::registerIopAotModule(std::move(module));\n}\n'
+     changed(output / 'module.cpp', descriptor)
+     return {'identity': identity, 'instructions': len(code), 'functions': len(instructions)}
+ 
+--- a/ps2xIOP/src/emulator/services/iop_aot_frame.h
++++ b/ps2xIOP/src/emulator/services/iop_aot_frame.h
+@@ -3,6 +3,7 @@
+ #include "../core/iop_cpu.h"
+ #include "../core/iop_memory.h"
+ #include <limits>
++#include <stdexcept>
+ 
+ namespace ps2x::iop::detail {
+ struct IopAotFrame {
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -136,6 +136,7 @@
+             moduleCursor = kModuleLoadBase;
+             totalCycles = 0;
+             totalInstructions = 0;
++            totalNativeInstructions = totalDecodedInstructions = 0;
+             eeCycleCarry = 0;
+             activeCpu = nullptr;
+             lastError.clear();
+@@ -416,6 +417,7 @@
+                 throw;
+             }
+             const bool running = native ? *native : cpuCore.executeInstruction(cpu);
++            if (native) ++totalNativeInstructions; else ++totalDecodedInstructions;
+             schedulePendingDma();
+             ++totalInstructions;
+             ++totalCycles;
+@@ -685,6 +687,7 @@
+                     write8(args + argumentSize, 0u);
+                 }
+             }
++            const auto nativeStart = totalNativeInstructions, decodedStart = totalDecodedInstructions;
+             const uint32_t startResult = callFunction(module.entry, argumentSize, args, 0u, 0u, module.gp);
+             if (args)
+                 freeAllocation(args);
+@@ -697,7 +700,9 @@
+             out << "[IOP] loaded IRX id=" << result.moduleId
+                 << " entry=0x" << std::hex << modules[result.moduleId].entry
+                 << " base=0x" << modules[result.moduleId].base
+-                << " start=" << std::dec << result.startResult;
++                << " start=" << std::dec << result.startResult
++                << " aot=" << totalNativeInstructions - nativeStart
++                << " decoded=" << totalDecodedInstructions - decodedStart;
+             log(LogLevel::Info, out.str());
+             return result;
+         }
+@@ -772,6 +777,7 @@
+         uint32_t moduleCursor = kModuleLoadBase;
+         uint64_t totalCycles = 0;
+         uint64_t totalInstructions = 0;
++        uint64_t totalNativeInstructions = 0, totalDecodedInstructions = 0;
+         uint64_t eeCycleCarry = 0;
+         CpuState *activeCpu = nullptr;
+         std::string lastError;

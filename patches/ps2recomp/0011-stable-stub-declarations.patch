@@ -1,0 +1,15 @@
+Preserve shared header declarations when an existing configured HLE stub is recompiled.
+Only the implementation changes; unrelated native objects remain reusable.
+
+--- a/ps2xRecomp/src/lib/ps2_recompiler.cpp
++++ b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+@@ -1815,7 +1815,8 @@
+             std::unordered_set<std::string> stubNames;
+             for (const auto &function : m_functions)
+             {
+-                if (!function.isStub && !function.isSkipped)
++                // Keep declarations stable when a configured HLE handler falls back to guest code.
++                if (!function.isStub && !function.isSkipped && !isStubFunction(function))
+                 {
+                     continue;
+                 }

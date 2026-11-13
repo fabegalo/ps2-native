@@ -1,0 +1,133 @@
+Adapted ISO lookup from KillzoneRecomp patch 0003; malformed record bounds tightened.
+https://github.com/drakolordx7/KillzoneRecomp/blob/master/patches/ps2recomp/0003-iop-cdvd-image-search-and-trayreq.patch
+
+MIT License
+
+Copyright (c) 2026 drakolordx7
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--- a/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
+@@ -594,12 +594,105 @@
+             return &nodes[current];
+         }
+ 
++        // Adapted from KillzoneRecomp, Copyright (c) 2026 drakolordx7, MIT.
++        // When a real disc image is configured, sector reads come from it, so file lookups must use its ISO9660
++        // directory as well (the virtual layout built from the host folder has different LSNs).
++        struct ImageEntry
++        {
++            uint32_t lsn = 0u;
++            uint32_t size = 0u;
++            bool directory = false;
++            std::string identifier;
++        };
++
++        bool readImageBytes(uint64_t offset, void *destination, size_t size)
++        {
++            const std::string imagePath = host.hostPath(HostPathKind::CdImage);
++            if (imagePath.empty())
++                return false;
++            if (imageHandle == 0u)
++                imageHandle = host.openHostFile(imagePath);
++            size_t bytesRead = 0u;
++            return imageHandle != 0u && host.readHostFile(imageHandle, offset, destination, size, bytesRead) && bytesRead == size;
++        }
++
++        bool findImageEntry(std::string_view guestPath, ImageEntry &out)
++        {
++            const ParsedPs2Path parsed = parsePs2Path(guestPath);
++            if (!parsed || parsed.device != Ps2PathDevice::Cdrom)
++                return false;
++            std::array<uint8_t, kSectorSize> pvd{};
++            if (!readImageBytes(16ull * kSectorSize, pvd.data(), pvd.size()) || pvd[0] != 1u ||
++                std::memcmp(pvd.data() + 1, "CD001", 5) != 0 || pvd[6] != 1u || pvd[156] < 34u)
++                return false;
++            auto le32 = [](const uint8_t *p) { return static_cast<uint32_t>(p[0] | (p[1] << 8) | (p[2] << 16) | (static_cast<uint32_t>(p[3]) << 24)); };
++            ImageEntry current{le32(pvd.data() + 156 + 2), le32(pvd.data() + 156 + 10), true, {}};
++            size_t begin = 0u;
++            while (begin <= parsed.path.size())
++            {
++                const size_t end = parsed.path.find('/', begin);
++                const size_t length = (end == std::string::npos) ? parsed.path.size() - begin : end - begin;
++                const std::string_view component(parsed.path.data() + begin, length);
++                begin = (end == std::string::npos) ? parsed.path.size() + 1u : end + 1u;
++                if (component.empty() || component == ".")
++                    continue;
++                if (!current.directory || current.size == 0u || current.size > (1u << 20))
++                    return false;
++                std::vector<uint8_t> dir(current.size);
++                if (!readImageBytes(static_cast<uint64_t>(current.lsn) * kSectorSize, dir.data(), dir.size()))
++                    return false;
++                const std::string wanted = normalizedIsoComponent(component);
++                bool found = false;
++                for (size_t off = 0u; off < dir.size();)
++                {
++                    const uint8_t recordLength = dir[off];
++                    if (recordLength == 0u)
++                    {
++                        off = (off / kSectorSize + 1u) * kSectorSize;
++                        continue;
++                    }
++                    if (recordLength < 33u || recordLength > dir.size() - off ||
++                        recordLength > kSectorSize - off % kSectorSize)
++                        return false;
++                    const uint8_t nameLength = dir[off + 32u];
++                    if (nameLength == 0u || nameLength > recordLength - 33u)
++                        return false;
++                    const std::string identifier(reinterpret_cast<const char *>(&dir[off + 33u]),
++                                                 std::min<size_t>(nameLength, dir.size() - off - 33u));
++                    if (normalizedIsoComponent(identifier) == wanted)
++                    {
++                        current = ImageEntry{le32(&dir[off + 2u]), le32(&dir[off + 10u]), (dir[off + 25u] & 2u) != 0u, identifier};
++                        found = true;
++                        break;
++                    }
++                    off += recordLength;
++                }
++                if (!found)
++                    return false;
++            }
++            out = current;
++            return true;
++        }
++
+         bool searchFile(uint32_t resultAddress, uint32_t nameAddress)
+         {
+             if (resultAddress == 0u || nameAddress == 0u)
+                 return false;
+ 
+             const std::string guestPath = memory.readString(nameAddress, 1024u);
++            if (!host.hostPath(HostPathKind::CdImage).empty())
++            {
++                ImageEntry entry;
++                if (!findImageEntry(guestPath, entry))
++                    return false;
++                std::array<uint8_t, 32u> result{};
++                writeLe32(result.data(), entry.lsn);
++                writeLe32(result.data() + 4u, entry.size);
++                const std::string leaf = normalizedIsoComponent(entry.identifier);
++                std::memcpy(result.data() + 8u, leaf.data(), std::min<size_t>(16u, leaf.size()));
++                result[24u] = entry.directory ? 2u : 0u;
++                return memory.writeRam(resultAddress, result.data(), result.size());
++            }
+             IsoNode *node = findVirtualIsoNode(guestPath);
+             if (!node)
+                 return false;

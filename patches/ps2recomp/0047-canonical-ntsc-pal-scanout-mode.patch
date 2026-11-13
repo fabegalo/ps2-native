@@ -1,0 +1,43 @@
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+@@ -6,7 +6,7 @@
+     void GsSetCrt(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         int interlaced = getRegU32(ctx, 4); // $a0 - 0=non-interlaced, 1=interlaced
+-        int videoMode = getRegU32(ctx, 5);  // $a1 - 0=NTSC, 1=PAL, 2=VESA, 3=HiVision
++        int videoMode = getRegU32(ctx, 5);  // $a1 - 2=NTSC, 3=PAL; other CRT modes retain existing handling
+         int frameMode = getRegU32(ctx, 6);  // $a2 - 0=field, 1=frame
+ 
+         if (runtime)
+@@ -17,6 +17,14 @@
+                 ((static_cast<uint64_t>(frameMode) & 0x1ull) << 1);
+ 
+             gs.smode2 = smode2;
++            // NTSC/PAL scanout fields, documented by ps2sdk graph_mode.c and
++            // gs_privileged.h. PLL programming and full sync timings remain unmodeled.
++            if (videoMode == 2 || videoMode == 3)
++            {
++                constexpr uint64_t scanoutMask = (0x7full << 3) | (3ull << 13) | (0xfull << 21);
++                gs.smode1 = (gs.smode1 & ~scanoutMask) | (32ull << 3) |
++                            (static_cast<uint64_t>(videoMode) << 13) | (4ull << 21);
++            }
+ 
+             // Keep CRT1 enabled after the BIOS syscall selects a display mode.
+             if ((gs.pmode & 0x3ull) == 0ull)
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+@@ -798,6 +798,14 @@
+                 return;
+             }
+ 
++            if (runtime)
++            {
++                R5900Context crt = *ctx;
++                SET_GPR_U32(&crt, 4, interlace);
++                SET_GPR_U32(&crt, 5, omode);
++                SET_GPR_U32(&crt, 6, ffmode);
++                ps2_syscalls::SetGsCrt(rdram, &crt, runtime);
++            }
+             g_gparam.interlace = static_cast<uint8_t>(interlace & 0x1);
+             g_gparam.omode = static_cast<uint8_t>(omode & 0xFF);
+             g_gparam.ffmode = static_cast<uint8_t>(ffmode & 0x1);

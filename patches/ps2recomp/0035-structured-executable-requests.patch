@@ -1,0 +1,38 @@
+Expose executable handoffs as immutable requests without changing public runtime layout.
+
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp
+@@ -1,5 +1,6 @@
+ #include "Common.h"
+ #include "Dispatcher.h"
++#include "runtime/guest_executable_request.h"
+ #include "System.h"
+ #include <sstream>
+ #include <stdexcept>
+@@ -32,7 +33,8 @@
+                   << " a0=0x" << getRegU32(ctx, 4) << " a1=0x" << getRegU32(ctx, 5)
+                   << " a2=0x" << getRegU32(ctx, 6) << " a3=0x" << getRegU32(ctx, 7)
+                   << "; native executable handoff is not implemented";
+-            throw std::runtime_error(error.str());
++            throw GuestExecutableRequest(syscallNumber, ctx->pc,
++                {getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6), getRegU32(ctx, 7)}, error.str());
+         }
+         case 0x10:
+             AddIntcHandler(rdram, ctx, runtime);
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/guest_executable_request.h
+@@ -0,0 +1,14 @@
++#pragma once
++#include <array>
++#include <cstdint>
++#include <stdexcept>
++#include <string>
++#include <utility>
++
++// Leaves guest state intact; the session supervisor receives the request after worker join.
++struct GuestExecutableRequest final : std::runtime_error {
++    const uint32_t syscall, sourcePc;
++    const std::array<uint32_t, 4> arguments;
++    GuestExecutableRequest(uint32_t number, uint32_t pc, std::array<uint32_t, 4> values, std::string detail)
++        : std::runtime_error(std::move(detail)), syscall(number), sourcePc(pc), arguments(values) {}
++};

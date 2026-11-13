@@ -1,0 +1,217 @@
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "ps2_runtime.h"
++#include "runtime/ee_aot.h"
+ 
+ #include <array>
+ #include <atomic>
+@@ -281,9 +282,18 @@
+     }
+     std::optional<PS2Runtime::RecompiledFunction> functionOverride(uint32_t address) const {
+         const auto found = m_functionOverrides.find(address);
+-        if (found == m_functionOverrides.end()) return std::nullopt;
+-        return found->second;
++        if (found != m_functionOverrides.end()) return found->second;
++        for (const auto* module : m_activeAotModules)
++            if (address >= module->linkedBase && uint64_t(address) < uint64_t(module->linkedBase) + module->imageSize)
++                return PS2Runtime::RecompiledFunction(nullptr);
++        return std::nullopt;
+     }
++
++    void registerAotModule(const EeAotModule& module);
++    const EeAotModule* executableModule(uint32_t entry, const uint8_t* ram) const;
++    void bindAotModule(const EeAotModule& module, uint32_t base, const uint8_t* ram);
++    void setExecutableArguments(std::vector<std::string> arguments);
++    void writeExecutableArguments(uint8_t* ram, uint32_t address, const std::string& defaultPath) const;
+ 
+     void reset(uint8_t *rdram, const R5900Context &mainContext);
+     void run();
+@@ -415,6 +425,9 @@
+ 
+     PS2Runtime &m_runtime;
+     std::unordered_map<uint32_t, PS2Runtime::RecompiledFunction> m_functionOverrides;
++    std::vector<const EeAotModule*> m_aotModules;
++    std::vector<const EeAotModule*> m_activeAotModules;
++    std::optional<std::vector<std::string>> m_executableArguments;
+     uint8_t *m_rdram = nullptr;
+     std::array<std::deque<int>, kPriorityCount> m_readyQueues{};
+     std::unordered_map<int, GuestThread> m_threads;
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -70,6 +70,148 @@
+         } while (candidate != first);
+         return 0;
+     }
++}
++
++namespace
++{
++    bool moduleContainsBinding(const EeAotModule& module, uint32_t entry)
++    {
++        if ((entry & 3u) || entry < module.linkedBase) return false;
++        const uint64_t offset = uint64_t(entry) - module.linkedBase;
++        for (size_t i = 0; i < module.bindingCount; ++i)
++            if (offset >= module.bindings[i].offset &&
++                offset < uint64_t(module.bindings[i].offset) + uint64_t(module.bindings[i].count) * 4)
++                return true;
++        return false;
++    }
++
++    void validateAotModule(const EeAotModule& module)
++    {
++        if (!module.identity || !module.image || !module.bindings || !module.bindingCount ||
++            module.imageSize < 4 || module.imageSize > PS2_RAM_SIZE || (module.imageSize & 3u) ||
++            (module.linkedBase & 3u) || module.linkedBase > PS2_RAM_SIZE - module.imageSize ||
++            module.entryOffset >= module.imageSize || (module.entryOffset & 3u))
++            throw std::runtime_error("Invalid EE AOT module image or entry");
++        for (size_t i = 0; i < 64; ++i)
++            if (!module.identity[i] || (module.identity[i] < '0' || module.identity[i] > '9') &&
++                (module.identity[i] < 'a' || module.identity[i] > 'f'))
++                throw std::runtime_error("Invalid EE AOT module identity");
++        if (module.identity[64]) throw std::runtime_error("Invalid EE AOT module identity length");
++        uint64_t end = 0;
++        for (size_t i = 0; i < module.bindingCount; ++i)
++        {
++            const auto& binding = module.bindings[i];
++            if (!binding.function || !binding.count || (binding.offset & 3u) || binding.offset < end)
++                throw std::runtime_error("Invalid or overlapping EE AOT bindings");
++            end = uint64_t(binding.offset) + uint64_t(binding.count) * 4;
++            if (end > module.imageSize) throw std::runtime_error("EE AOT binding outside its image");
++        }
++        if (!moduleContainsBinding(module, module.linkedBase + module.entryOffset))
++            throw std::runtime_error("EE AOT module entry has no native binding");
++    }
++
++    void validateExecutableArguments(const std::vector<std::string>& arguments)
++    {
++        if (arguments.size() > 16) throw std::runtime_error("EE executable has more than 16 arguments");
++        size_t bytes = 0;
++        for (const auto& argument : arguments)
++        {
++            if (argument.size() > 255 || argument.find('\0') != std::string::npos)
++                throw std::runtime_error("Invalid EE executable argument");
++            bytes += argument.size() + 1;
++        }
++        if (bytes > 256) throw std::runtime_error("EE executable arguments exceed the CRT payload");
++    }
++}
++
++void EeScheduler::registerAotModule(const EeAotModule& module)
++{
++    validateAotModule(module);
++    for (const auto* existing : m_aotModules)
++    {
++        if (existing == &module) return;
++        if (std::strcmp(existing->identity, module.identity) == 0)
++            throw std::runtime_error("Conflicting EE AOT module identity");
++    }
++    m_aotModules.push_back(&module);
++}
++
++const EeAotModule* EeScheduler::executableModule(uint32_t entry, const uint8_t* ram) const
++{
++    const EeAotModule* result = nullptr;
++    if (!ram) return nullptr;
++    for (const auto* module : m_aotModules)
++        if (moduleContainsBinding(*module, entry) &&
++            std::memcmp(ram + module->linkedBase, module->image, module->imageSize) == 0)
++        {
++            if (result) throw std::runtime_error("Ambiguous EE AOT executable in RAM");
++            result = module;
++        }
++    return result;
++}
++
++void EeScheduler::bindAotModule(const EeAotModule& module, uint32_t base, const uint8_t* ram)
++{
++    if (std::find(m_aotModules.begin(), m_aotModules.end(), &module) == m_aotModules.end())
++        throw std::runtime_error("EE AOT module is not registered in this console");
++    validateAotModule(module);
++    if (base != module.linkedBase)
++        throw std::runtime_error("Flat EE AOT module has no relocation records for the requested base");
++    if (!ram || std::memcmp(ram + base, module.image, module.imageSize) != 0)
++        throw std::runtime_error("EE AOT module differs from live RAM");
++    auto overrides = m_functionOverrides;
++    auto active = m_activeAotModules;
++    const auto overlaps = [&](const EeAotModule* previous) {
++        return uint64_t(previous->linkedBase) < uint64_t(base) + module.imageSize &&
++               uint64_t(base) < uint64_t(previous->linkedBase) + previous->imageSize;
++    };
++    for (const auto* previous : active)
++        if (overlaps(previous))
++            std::erase_if(overrides, [&](const auto& binding) {
++                return binding.first >= previous->linkedBase &&
++                       uint64_t(binding.first) < uint64_t(previous->linkedBase) + previous->imageSize;
++            });
++    std::erase_if(active, overlaps);
++    // Holes in the new image must not resolve to another executable's dense table.
++    std::erase_if(overrides, [&](const auto& binding) {
++        return binding.first >= base && uint64_t(binding.first) < uint64_t(base) + module.imageSize;
++    });
++    for (size_t i = 0; i < module.bindingCount; ++i)
++        for (uint32_t word = 0; word < module.bindings[i].count; ++word)
++            overrides.insert_or_assign(base + module.bindings[i].offset + word * 4u, module.bindings[i].function);
++    active.push_back(&module);
++    m_runtime.memory().registerCodeRegion(base, base + static_cast<uint32_t>(module.imageSize));
++    m_functionOverrides.swap(overrides);
++    m_activeAotModules.swap(active);
++}
++
++void EeScheduler::setExecutableArguments(std::vector<std::string> arguments)
++{
++    validateExecutableArguments(arguments);
++    m_executableArguments = std::move(arguments);
++}
++
++void EeScheduler::writeExecutableArguments(uint8_t* ram, uint32_t address, const std::string& defaultPath) const
++{
++    if (!address) return;
++    const auto arguments = m_executableArguments.value_or(defaultPath.empty() ?
++        std::vector<std::string>{} : std::vector<std::string>{defaultPath});
++    validateExecutableArguments(arguments);
++    const uint32_t physical = address & 0x1fffffffu;
++    if (!ram || physical > PS2_RAM_SIZE - 0x144u)
++        throw std::runtime_error("EE CRT argument block is outside RAM");
++    std::array<uint8_t, 0x144> block{};
++    const uint32_t count = static_cast<uint32_t>(arguments.size());
++    std::memcpy(block.data(), &count, 4);
++    uint32_t payload = 0x44;
++    for (uint32_t i = 0; i < count; ++i)
++    {
++        const uint32_t pointer = address + payload;
++        std::memcpy(block.data() + 4 + i * 4, &pointer, 4);
++        std::memcpy(block.data() + payload, arguments[i].c_str(), arguments[i].size() + 1);
++        payload += static_cast<uint32_t>(arguments[i].size() + 1);
++    }
++    std::memcpy(ram + physical, block.data(), block.size());
+ }
+ 
+ EeScheduler::EeScheduler(PS2Runtime &runtime)
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+@@ -530,20 +530,10 @@
+             initialStack = stack;
+         }
+ 
+-        // The kernel fills crt0's args block { argc; argv[16]; payload[256] } with the boot path.
+         const uint32_t argsAddr = getRegU32(ctx, 7);
+         const std::string bootName = runtime->bootElfName();
+-        uint8_t *args = argsAddr != 0u ? getMemPtr(rdram, argsAddr) : nullptr;
+-        if (args && !bootName.empty())
+-        {
+-            std::string path = "cdrom0:\\" + bootName + ";1";
+-            path.resize(std::min<size_t>(path.size(), 255u));
+-            const uint32_t argc = 1u;
+-            const uint32_t argv0 = argsAddr + 0x44u;
+-            std::memcpy(args, &argc, 4);
+-            std::memcpy(args + 4, &argv0, 4);
+-            std::memcpy(args + 0x44, path.c_str(), path.size() + 1);
+-        }
++        scheduler.writeExecutableArguments(rdram, argsAddr,
++            bootName.empty() ? std::string{} : "cdrom0:\\" + bootName + ";1");
+ 
+         scheduler.setupCurrentThread(initialStack, stackSize, getRegU32(ctx, 28));
+         setReturnU32(ctx, sp);

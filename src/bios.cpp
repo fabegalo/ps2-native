@@ -234,6 +234,21 @@ static BiosImage load_rom_directory(std::span<const std::uint8_t> rom, const Bio
 BiosImage load_bios_rom0(std::span<const std::uint8_t> rom, const BiosLoadOptions& options) {
     auto bios=load_rom_directory(rom,options,true);bios.rom0.assign(rom.begin(),rom.end());return bios;
 }
+BrowserFirmware load_browser_firmware(std::span<const std::uint8_t> rom0,
+    std::string_view console_profile, std::span<const std::uint8_t> nvm,
+    const BiosLoadOptions& bios_options, const NvmLoadOptions& nvm_options) {
+    auto bios = load_bios_rom0(rom0, bios_options);
+    const auto* hardware = find_console_hardware(console_profile);
+    if (!hardware || hardware->romver != bios.version.romver)
+        throw std::runtime_error("Browser firmware: console profile does not match this ROM0 revision");
+    auto state = load_nvm_image(nvm, *hardware, nvm_options);
+    const auto* osdsys = bios.find("OSDSYS");
+    if (!osdsys || !osdsys->size)
+        throw std::runtime_error("Browser firmware: original OSDSYS module is absent");
+    auto program = parse_ee_elf(rom0.subspan(osdsys->offset, osdsys->size));
+    auto unpacked = unpack_ee_payload(program);
+    return {std::move(bios), std::move(state), std::move(program), std::string(console_profile), std::move(unpacked)};
+}
 const BiosModule* IopRebootImage::find(std::string_view name) const noexcept {
     const auto it=std::find_if(modules.begin(),modules.end(),[&](const auto& module){return module.name==name;});
     return it==modules.end()?nullptr:&*it;

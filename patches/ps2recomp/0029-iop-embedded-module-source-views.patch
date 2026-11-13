@@ -1,0 +1,170 @@
+Discover structurally validated IOP ELF objects inside file-backed EE load segments.
+Prepare hash-verified source views directly; reuse the same native module cache without copying originals.
+
+--- a/ps2xIOP/tools/iop_aot.py
++++ b/ps2xIOP/tools/iop_aot.py
+@@ -139,8 +139,93 @@
+     temporary.write_bytes(data)
+     temporary.replace(path)
+ 
+-def generate(source, output):
+-    data = source.read_bytes()
++
++def elf_extent(data, offset=0, boundary=None):
++    """Logical byte extent used by IopModuleLoader::readElf, relative to offset."""
++    boundary = len(data) if boundary is None else min(boundary, len(data))
++    if offset < 0 or offset + 52 > boundary:
++        raise ValueError('truncated embedded ELF header')
++    h = unpack('<16sHHIIIIIHHHHHH', data, offset)
++    if h[0][:7] != b'\x7fELF\x01\x01\x01' or h[2] != 8 or h[3] != 1 or h[8] < 52:
++        raise ValueError('invalid embedded MIPS ELF32 header')
++    if h[10] and h[9] < 32 or h[12] and h[11] < 40:
++        raise ValueError('invalid embedded ELF table stride')
++    required = max(52, h[5] + h[9] * h[10], h[6] + h[11] * h[12])
++    if required > 16 * 1024 * 1024 or offset + required > boundary:
++        raise ValueError('embedded ELF tables outside source view')
++    for i in range(h[12]):
++        section = unpack('<10I', data, offset + h[6] + i * h[11])
++        if section[1] != 8:
++            required = max(required, section[4] + section[5])
++    for i in range(h[10]):
++        program = unpack('<8I', data, offset + h[5] + i * h[9])
++        required = max(required, program[1] + program[4])
++    if required > 16 * 1024 * 1024 or offset + required > boundary:
++        raise ValueError('embedded ELF contents outside source view')
++    return required
++
++def embedded_modules(source):
++    """Discover validated IOP objects inside file-backed EE PT_LOAD ranges."""
++    import mmap
++    result, seen = [], set()
++    with source.open('rb') as stream:
++        if source.stat().st_size < 52:
++            raise ValueError('truncated EE ELF')
++        with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
++            h = unpack('<16sHHIIIIIHHHHHH', data, 0)
++            if h[0][:7] != b'\x7fELF\x01\x01\x01' or h[1] != 2 or h[2] != 8 or h[3] != 1 or h[8] < 52:
++                raise ValueError('embedded IOP discovery requires an EE MIPS ELF32 executable')
++            if not h[10] or h[9] < 32 or h[5] + h[9] * h[10] > len(data):
++                raise ValueError('invalid EE program table')
++            for i in range(h[10]):
++                p = unpack('<8I', data, h[5] + i * h[9])
++                if p[0] != 1 or not p[4]:
++                    continue
++                start, end = p[1], p[1] + p[4]
++                if p[4] > p[5] or end > len(data):
++                    raise ValueError('EE load segment outside source')
++                at = start
++                while True:
++                    at = data.find(b'\x7fELF\x01\x01\x01', at, end)
++                    if at < 0:
++                        break
++                    candidate = at
++                    at += 7
++                    if candidate + 20 > end:
++                        continue
++                    kind, machine, version = unpack('<HHI', data, candidate + 16)
++                    if kind not in (1, 0xff80, 0xff81) or machine != 8 or version != 1:
++                        continue
++                    try:
++                        size = elf_extent(data, candidate, end)
++                        image = data[candidate:candidate + size]
++                        parse(image)  # executable sections and relocation metadata must be usable
++                    except ValueError as error:
++                        raise ValueError(f'embedded IOP object at {candidate:#x}: {error}') from error
++                    identity = hashlib.sha256(image).hexdigest()
++                    if identity not in seen:
++                        seen.add(identity)
++                        result.append({'identity': identity, 'offset': candidate, 'size': size})
++    return result
++
++def read_image(source, offset=0, size=None, expected_identity=None):
++    if offset < 0 or size is not None and size <= 0:
++        raise ValueError('invalid source view')
++    with source.open('rb') as stream:
++        available = source.stat().st_size
++        length = available if size is None else size
++        if offset > available or length > available - offset or length > 16 * 1024 * 1024:
++            raise ValueError('IOP source view outside file or preparation limit')
++        stream.seek(offset)
++        data = stream.read(length)
++    if len(data) != length:
++        raise ValueError('IOP source changed during preparation')
++    if expected_identity is not None and hashlib.sha256(data).hexdigest() != expected_identity:
++        raise ValueError('IOP source view identity changed; rediscovery required')
++    return data
++
++def generate(source, output, offset=0, size=None, expected_identity=None):
++    data = read_image(source, offset, size, expected_identity)
+     code = parse(data)
+     identity = hashlib.sha256(data).hexdigest()
+     output.mkdir(parents=True, exist_ok=True)
+@@ -170,9 +255,20 @@
+ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument('source', type=Path)
+-    parser.add_argument('output', type=Path)
++    parser.add_argument('output', type=Path, nargs='?')
++    parser.add_argument('--scan-ee', action='store_true')
++    parser.add_argument('--offset', type=int, default=0)
++    parser.add_argument('--size', type=int)
++    parser.add_argument('--identity')
+     args = parser.parse_args()
+-    print(json.dumps(generate(args.source, args.output)))
++    if args.scan_ee:
++        if args.output is not None or args.offset or args.size is not None or args.identity is not None:
++            parser.error('--scan-ee accepts only a source executable')
++        print(json.dumps(embedded_modules(args.source)))
++    else:
++        if args.output is None:
++            parser.error('native output directory required')
++        print(json.dumps(generate(args.source, args.output, args.offset, args.size, args.identity)))
+ 
+ if __name__ == '__main__':
+     main()
+--- a/ps2xIOP/cmake/PS2IOPAot.cmake
++++ b/ps2xIOP/cmake/PS2IOPAot.cmake
+@@ -1,7 +1,33 @@
+ # Offline native IOP modules. Clients supply content and link the returned target;
+ # discovery, catalog/session policy and UI stay outside the SDK.
++function(ps2x_find_embedded_iop_modules image output)
++    find_package(Python3 COMPONENTS Interpreter REQUIRED)
++    get_filename_component(_iop_root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/.." ABSOLUTE)
++    execute_process(COMMAND "${Python3_EXECUTABLE}" "${_iop_root}/tools/iop_aot.py" --scan-ee "${image}"
++        RESULT_VARIABLE _result OUTPUT_VARIABLE _modules ERROR_VARIABLE _error OUTPUT_STRIP_TRAILING_WHITESPACE)
++    if(NOT _result EQUAL 0)
++        message(FATAL_ERROR "IOP module discovery failed: ${_error}")
++    endif()
++    set(${output} "${_modules}" PARENT_SCOPE)
++endfunction()
++
+ function(ps2x_add_iop_aot_module target image cache_root)
+-    file(SHA256 "${image}" _identity)
++    cmake_parse_arguments(_view "" "OFFSET;SIZE;IDENTITY" "" ${ARGN})
++    if(_view_UNPARSED_ARGUMENTS OR _view_KEYWORDS_MISSING_VALUES)
++        message(FATAL_ERROR "Invalid IOP AOT module arguments")
++    endif()
++    set(_view_args "")
++    if(DEFINED _view_OFFSET OR DEFINED _view_SIZE OR DEFINED _view_IDENTITY)
++        string(LENGTH "${_view_IDENTITY}" _identity_length)
++        if(NOT _view_OFFSET MATCHES "^[0-9]+$" OR NOT _view_SIZE MATCHES "^[0-9]+$"
++           OR _view_SIZE LESS 1 OR NOT _identity_length EQUAL 64 OR NOT _view_IDENTITY MATCHES "^[0-9a-f]+$")
++            message(FATAL_ERROR "IOP AOT source view requires offset, size and SHA-256")
++        endif()
++        set(_identity "${_view_IDENTITY}")
++        set(_view_args --offset "${_view_OFFSET}" --size "${_view_SIZE}" --identity "${_identity}")
++    else()
++        file(SHA256 "${image}" _identity)
++    endif()
+     if(TARGET ${target})
+         get_target_property(_existing ${target} PS2X_IOP_AOT_IDENTITY)
+         if(NOT _existing STREQUAL _identity)
+@@ -20,7 +46,7 @@
+         list(APPEND _sources "${_output}/ops_${_bucket}.cpp")
+     endforeach()
+     add_custom_command(OUTPUT ${_sources}
+-        COMMAND "${Python3_EXECUTABLE}" "${_iop_root}/tools/iop_aot.py" "${image}" "${_output}"
++        COMMAND "${Python3_EXECUTABLE}" "${_iop_root}/tools/iop_aot.py" "${image}" "${_output}" ${_view_args}
+         DEPENDS "${image}" "${_iop_root}/tools/iop_aot.py"
+         VERBATIM)
+     add_library(${target} STATIC EXCLUDE_FROM_ALL ${_sources})

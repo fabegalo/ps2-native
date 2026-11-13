@@ -1,0 +1,229 @@
+Maintainer-approved IOP USB HLE: disconnected bus, guest LDD registration, explicit missing-device/pipe errors.
+No original driver or OHCI code copied; public API/ABI reference:
+https://github.com/ps2dev/ps2sdk/blob/master/iop/usb/usbd/include/usbd.h
+
+--- a/ps2xIOP/CMakeLists.txt
++++ b/ps2xIOP/CMakeLists.txt
+@@ -24,6 +24,7 @@
+     src/emulator/imports/iop_sysclib.cpp
+     src/emulator/imports/iop_sysmem.cpp
+     src/emulator/imports/iop_timrman.cpp
++    src/emulator/imports/iop_usbd.cpp
+     src/emulator/imports/iop_vblank.cpp
+     src/modules/dbcman.cpp
+     src/modules/libsd.cpp
+--- a/ps2xIOP/src/iop_subsystem.cpp
++++ b/ps2xIOP/src/iop_subsystem.cpp
+@@ -45,6 +45,8 @@
+ 
+         void rebuildRoutes()
+         {
++            constexpr std::string_view usbAliases[] = {"usbd"};
++            emulator.setUsbDisconnectedMode(moduleManager.isLoaded(usbAliases));
+             routes.clear();
+             lastError.clear();
+             for (const auto &service : coreServices)
+@@ -75,6 +77,8 @@
+             message += hle ? "' physical IRX unavailable; using registered HLE provider"
+                            : "' no HLE provider accepted the module; physical IRX was not loaded";
+             loadOutcomes.push_back(message);
++            if (hle && ps2PathLeafKey(path) == "usbd")
++                message = "[IOP:HLE] usbd: disconnected USB bus; guest device-driver RPC remains original";
+             host.log(hle ? LogLevel::Info : LogLevel::Warning, message);
+         }
+ 
+@@ -120,7 +124,8 @@
+         if (!parsed)
+             return {true, -1, -1};
+ 
+-        if (parsed.device != Ps2PathDevice::Rom0)
++        // Maintainer-approved USB HLE exposes an empty bus; device drivers remain original IRX.
++        if (parsed.device != Ps2PathDevice::Rom0 && ps2PathLeafKey(path) != "usbd")
+         {
+             ModuleLoadResult physical = m_impl->emulator.loadModule(path, arguments, argumentSize);
+             if (physical.moduleId > 0)
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -15,6 +15,7 @@
+ #include "imports/iop_sysmem.h"
+ #include "imports/iop_timrman.h"
+ #include "imports/iop_vblank.h"
++#include "imports/iop_usbd.h"
+ #include "iop_emulator_const.h"
+ 
+ #include <algorithm>
+@@ -106,6 +107,7 @@
+               intrman(memory),
+               timrman(),
+               ioman(memory),
++              usbd(memory),
+               cpuCore(memory),
+               imports(memory),
+               loadcore(memory, imports)
+@@ -124,6 +126,7 @@
+             intrman.reset();
+             timrman.reset();
+             ioman.reset();
++            usbd.setActive(false);
+             pendingDmaInterrupts.clear();
+             pendingGuestCallbacks.clear();
+             nextModuleId = 1;
+@@ -244,6 +247,9 @@
+             {
+                 cpu.gpr[2] = value;
+             };
++
++            if (iequals(call.library, "usbd") && usbd.dispatchImport(call.ordinal, cpu))
++                return ImportDisposition::Handled;
+ 
+             if (iequals(call.library, "sysmem") && sysmem.dispatchImport(call.ordinal, cpu))
+                 return ImportDisposition::Handled;
+@@ -698,6 +704,7 @@
+         IopIntrman intrman;
+         IopTimrman timrman;
+         IopIoman ioman;
++        IopUsbd usbd;
+         IopCpuCore cpuCore;
+         IopImportRegistry imports;
+         IopLoadcore loadcore;
+@@ -726,6 +733,11 @@
+ 
+     IopEmulator::~IopEmulator() = default;
+ 
++    void IopEmulator::setUsbDisconnectedMode(bool active)
++    {
++        m_impl->usbd.setActive(active);
++    }
++
+     void IopEmulator::reset()
+     {
+         m_impl->reset();
+--- a/ps2xIOP/src/emulator/iop_emulator.h
++++ b/ps2xIOP/src/emulator/iop_emulator.h
+@@ -21,6 +21,7 @@
+         IopEmulator &operator=(const IopEmulator &) = delete;
+ 
+         void reset();
++        void setUsbDisconnectedMode(bool active);
+         [[nodiscard]] ModuleLoadResult loadModule(std::string_view path, const void *arguments, uint32_t argumentSize);
+         [[nodiscard]] ModuleLoadResult loadModuleBuffer(uint32_t guestAddress, const void *arguments, uint32_t argumentSize);
+         [[nodiscard]] bool stopModule(int32_t moduleId, int32_t *result);
+--- /dev/null
++++ b/ps2xIOP/src/emulator/imports/iop_usbd.cpp
+@@ -0,0 +1,89 @@
++#include "iop_usbd.h"
++#include "emulator/core/iop_cpu.h"
++#include "emulator/core/iop_memory.h"
++
++#include <algorithm>
++#include <array>
++
++namespace ps2x::iop::detail
++{
++    void IopUsbd::setActive(bool active)
++    {
++        if (!active) m_drivers.clear();
++        m_active = active;
++    }
++
++    bool IopUsbd::dispatchImport(uint16_t ordinal, IopCpuState &cpu)
++    {
++        if (!m_active) return false;
++        constexpr uint32_t badDevice = 0x101u, badPipe = 0x102u;
++        constexpr uint32_t badDriver = 0x104u, busy = 0x121u, unsupported = 0x131u;
++        const uint32_t address = IopMemory::physicalAddress(cpu.gpr[4]);
++        switch (ordinal)
++        {
++        case 4: // RegisterLdd: maintain the guest's driver list and GP, with no probe callbacks on an empty bus.
++        {
++            std::array<uint32_t, 12> driver{};
++            uint8_t name = 0;
++            if (!address || (address & 3u) || !m_memory.readRam(address, driver.data(), sizeof(driver)) ||
++                driver[0] || driver[1] || !driver[2] || driver[6] || driver[7] ||
++                !m_memory.readRam(driver[2], &name, 1u))
++            {
++                cpu.gpr[2] = badDriver;
++                return true;
++            }
++            if (std::find(m_drivers.begin(), m_drivers.end(), address) != m_drivers.end())
++            {
++                cpu.gpr[2] = busy;
++                return true;
++            }
++            const uint32_t previous = m_drivers.empty() ? 0u : m_drivers.back();
++            m_drivers.push_back(address);
++            m_memory.write32(address, 0u);
++            m_memory.write32(address + 4u, previous);
++            m_memory.write32(address + 44u, cpu.gpr[28]);
++            if (previous) m_memory.write32(previous, address);
++            cpu.gpr[2] = 0u;
++            return true;
++        }
++        case 5: // UnregisterLdd
++        {
++            const auto found = std::find(m_drivers.begin(), m_drivers.end(), address);
++            if (found == m_drivers.end()) { cpu.gpr[2] = badDriver; return true; }
++            const size_t index = static_cast<size_t>(found - m_drivers.begin());
++            const uint32_t previous = index ? m_drivers[index - 1u] : 0u;
++            const uint32_t next = index + 1u < m_drivers.size() ? m_drivers[index + 1u] : 0u;
++            if (previous) m_memory.write32(previous, next);
++            if (next) m_memory.write32(next + 4u, previous);
++            m_drivers.erase(found);
++            cpu.gpr[2] = 0u;
++            return true;
++        }
++        case 6: // ScanStaticDescriptor
++        case 8: // GetPrivateData
++            cpu.gpr[2] = 0u;
++            return true;
++        case 7: // SetPrivateData
++        case 13: // GetDeviceLocation
++        case 17: // GetReportDescriptor
++            cpu.gpr[2] = badDevice;
++            return true;
++        case 9: // OpenPipe
++        case 12: // OpenPipeAligned
++            cpu.gpr[2] = 0xFFFFFFFFu;
++            return true;
++        case 10: // ClosePipe
++        case 11: // TransferPipe: reject immediately; no transfer was queued and no callback is due.
++        case 18: // MultiIsochronousTransfer
++            cpu.gpr[2] = badPipe;
++            return true;
++        case 14: // Autoload and callback-thread configuration are outside the disconnected-bus contract.
++        case 15:
++        case 16:
++            cpu.gpr[2] = unsupported;
++            return true;
++        default:
++            return false;
++        }
++    }
++}
+--- /dev/null
++++ b/ps2xIOP/src/emulator/imports/iop_usbd.h
+@@ -0,0 +1,24 @@
++#pragma once
++
++#include <cstdint>
++#include <vector>
++
++namespace ps2x::iop::detail
++{
++    class IopMemory;
++    struct IopCpuState;
++
++    // A USB bus without attached peripherals; registered guest drivers still own their RPC services.
++    class IopUsbd
++    {
++    public:
++        explicit IopUsbd(IopMemory &memory) : m_memory(memory) {}
++        void setActive(bool active);
++        bool dispatchImport(uint16_t ordinal, IopCpuState &cpu);
++
++    private:
++        IopMemory &m_memory;
++        bool m_active = false;
++        std::vector<uint32_t> m_drivers;
++    };
++}

@@ -1,0 +1,25 @@
+Preserve original stores instead of replacing heuristic self-modifying candidates with NOPs.
+Potential code writes remain explicit diagnostics requiring review; no automatic behavior changes.
+--- a/ps2xAnalyzer/src/elf_analyzer.cpp
++++ b/ps2xAnalyzer/src/elf_analyzer.cpp
+@@ -571,14 +571,14 @@
+             return false;
+         }
+ 
+-        std::cout << "Potential self-modifying code at " << formatAddress(storeInst.address)
++        std::cout << "[analysis:potential-self-modifying] store at " << formatAddress(storeInst.address)
+                   << " writing to " << formatAddress(targetAddr)
+                   << " then jumping to " << formatAddress(jumpTarget)
+-                  << " in function " << func.name << std::endl;
+-
+-        m_patches[storeInst.address] = 0x00000000;
+-        m_patchReasons[storeInst.address] = "Potential self-modifying code";
+-        return true;
++                  << " in function " << func.name
++                  << "; original instruction preserved, review required" << std::endl;
++
++        // A possible code write is not proof that removing the store preserves guest behavior.
++        return false;
+     }
+ 
+     bool ElfAnalyzer::tryResolveBasePlusOffset(

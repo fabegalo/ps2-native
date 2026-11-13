@@ -1,0 +1,69 @@
+Keep native function overrides in the existing per-console EE executor.
+
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -273,6 +273,17 @@
+ 
+     EeScheduler(const EeScheduler &) = delete;
+     EeScheduler &operator=(const EeScheduler &) = delete;
++
++    // Native bindings survive kernel-object reset and belong to this console instance.
++    // Mutation occurs during preparation or on the EE executor.
++    void setFunctionOverride(uint32_t address, PS2Runtime::RecompiledFunction function) {
++        m_functionOverrides.insert_or_assign(address, function);
++    }
++    std::optional<PS2Runtime::RecompiledFunction> functionOverride(uint32_t address) const {
++        const auto found = m_functionOverrides.find(address);
++        if (found == m_functionOverrides.end()) return std::nullopt;
++        return found->second;
++    }
+ 
+     void reset(uint8_t *rdram, const R5900Context &mainContext);
+     void run();
+@@ -403,6 +414,7 @@
+     void publishIdleDebugContext();
+ 
+     PS2Runtime &m_runtime;
++    std::unordered_map<uint32_t, PS2Runtime::RecompiledFunction> m_functionOverrides;
+     uint8_t *m_rdram = nullptr;
+     std::array<std::deque<int>, kPriorityCount> m_readyQueues{};
+     std::unordered_map<int, GuestThread> m_threads;
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1101,7 +1101,7 @@
+         return false;
+     }
+ 
+-    g_ps2RecompiledFunctionTable[slot] = func;
++    m_eeScheduler->setFunctionOverride(address, func);
+     return true;
+ }
+ 
+@@ -1112,6 +1112,8 @@
+ 
+ bool PS2Runtime::hasFunction(uint32_t address) const
+ {
++    if (const auto override = m_eeScheduler->functionOverride(address))
++        return *override != nullptr;
+     uint32_t slot = 0u;
+     return generatedFunctionTableSlot(address, slot) && g_ps2RecompiledFunctionTable[slot] != nullptr;
+ }
+@@ -1140,14 +1142,10 @@
+     pushDispatchPc(address);
+ 
+     uint32_t slot = 0u;
+-    if (generatedFunctionTableSlot(address, slot))
+-    {
+-        RecompiledFunction fn = g_ps2RecompiledFunctionTable[slot];
+-        if (fn != nullptr)
+-        {
+-            return fn;
+-        }
+-    }
++    const auto override = m_eeScheduler->functionOverride(address);
++    const RecompiledFunction fn = override ? *override :
++        (generatedFunctionTableSlot(address, slot) ? g_ps2RecompiledFunctionTable[slot] : nullptr);
++    if (fn != nullptr) return fn;
+ 
+     std::cerr << "Error: No exact recompiled function for guest PC 0x" << std::hex << address
+               << " tableBase=0x" << g_ps2RecompiledFunctionTableBase

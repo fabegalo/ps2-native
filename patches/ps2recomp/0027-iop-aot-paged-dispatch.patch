@@ -1,0 +1,110 @@
+Use direct paged IOP AOT lookup; preserve byte validation and console-local lifetime.
+Avoid tree traversal for each instruction and allocate only populated code pages.
+
+--- a/ps2xIOP/src/emulator/services/iop_aot_registry.h
++++ b/ps2xIOP/src/emulator/services/iop_aot_registry.h
+@@ -1,9 +1,9 @@
+ #pragma once
+ #include "ps2x/iop/iop_aot.h"
+-#include <map>
++#include <array>
++#include <memory>
+ #include <optional>
+ #include <span>
+-#include <vector>
+ 
+ namespace ps2x::iop::detail {
+ class IopAotRegistry {
+@@ -12,12 +12,20 @@
+                 bool relocationsComplete, const IopMemory& memory);
+     std::optional<bool> execute(IopCpuState& cpu, IopMemory& memory) const;
+     void eraseRange(uint32_t base, uint32_t size);
+-    void clear() { entries.clear(); }
++    void clear() { for (auto& page : pages) page.reset(); count = 0; }
++    bool empty() const { return count == 0; }
+ private:
+     struct BoundEntry {
+-        uint32_t base, instruction;
+-        IopAotInstruction execute;
++        uint32_t base = 0, instruction = 0;
++        IopAotInstruction execute = nullptr;
+     };
+-    std::map<uint32_t, BoundEntry> entries;
++    // IOP RAM is 2 MiB. Allocate only the 4 KiB code pages actually prepared.
++    std::array<std::unique_ptr<BoundEntry[]>, 512> pages;
++    size_t count = 0;
++    const BoundEntry* find(uint32_t address) const {
++        if ((address & 3u) || address >= 0x200000u) return nullptr;
++        const auto& page = pages[address >> 12];
++        return page ? &page[(address & 0xfffu) >> 2] : nullptr;
++    }
+ };
+ }
+--- a/ps2xIOP/src/emulator/services/iop_aot_registry.cpp
++++ b/ps2xIOP/src/emulator/services/iop_aot_registry.cpp
+@@ -53,33 +53,44 @@
+         throw std::runtime_error("IOP AOT cannot bind an incomplete or invalid relocation");
+     // Validate every entry before publishing any of them.
+     for (const auto& e : module->entries) {
+-        if (size < 4u || e.offset > size - 4u || entries.contains(base + e.offset))
++        const auto* existing = find(base + e.offset);
++        if (size < 4u || e.offset > size - 4u || (existing && existing->execute))
+             throw std::runtime_error("IOP AOT entry outside image or overlapping loaded code");
+         const auto word = memory.read32(base + e.offset);
+         if ((word & ~e.relocationMask) != (e.instruction & ~e.relocationMask))
+             throw std::runtime_error("IOP AOT loaded instruction does not match prepared content");
+     }
+     for (const auto& e : module->entries) {
++        const auto index = (base + e.offset) >> 12;
++        if (!pages[index]) pages[index] = std::make_unique<BoundEntry[]>(1024);
++    }
++    for (const auto& e : module->entries) {
+         const auto address = base + e.offset;
+-        entries.emplace(address, BoundEntry{base, memory.read32(address), e.execute});
++        pages[address >> 12][(address & 0xfffu) >> 2] = BoundEntry{base, memory.read32(address), e.execute};
++        ++count;
+     }
+     return module->entries.size();
+ }
+ 
+ std::optional<bool> IopAotRegistry::execute(IopCpuState& cpu, IopMemory& memory) const {
+-    if (entries.empty()) return std::nullopt;
++    if (!count) return std::nullopt;
+     const auto address = IopMemory::physicalAddress(cpu.pc);
+-    const auto it = entries.find(address);
+-    if (it == entries.end()) return std::nullopt;
+-    if (memory.read32(address) != it->second.instruction)
++    const auto* entry = find(address);
++    if (!entry || !entry->execute) return std::nullopt;
++    if (memory.read32(address) != entry->instruction)
+         throw std::runtime_error("IOP AOT code changed; offline preparation required");
+-    return it->second.execute(cpu, memory, it->second.base);
++    return entry->execute(cpu, memory, entry->base);
+ }
+ 
+ void IopAotRegistry::eraseRange(uint32_t base, uint32_t size) {
+-    auto it = entries.lower_bound(base);
+-    while (it != entries.end() && uint64_t(it->first) < uint64_t(base) + size)
+-        it = entries.erase(it);
++    const uint64_t end = std::min<uint64_t>(uint64_t(base) + size, IopMemory::RamSize);
++    for (uint64_t address = (uint64_t(base) + 3u) & ~uint64_t(3u); address < end; address += 4u) {
++        auto& page = pages[address >> 12];
++        if (page && page[(address & 0xfffu) >> 2].execute) {
++            page[(address & 0xfffu) >> 2] = {};
++            --count;
++        }
++    }
+ }
+ }
+ }
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -409,7 +409,7 @@
+             }
+ 
+             std::optional<bool> native;
+-            try { native = aot.execute(cpu, memory); }
++            try { if (!aot.empty()) native = aot.execute(cpu, memory); }
+             catch (const std::exception& error) {
+                 cpu.stopped = true;
+                 lastError = error.what();

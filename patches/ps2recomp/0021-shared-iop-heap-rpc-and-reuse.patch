@@ -1,0 +1,107 @@
+Use the same IOP sysmem allocator for original heap RPC clients and direct HLE calls; reuse freed space.
+Original heap initialization binds the client, preserving its compiled FreeIopHeap routine.
+API reference only: https://github.com/ps2dev/ps2sdk/blob/master/ee/kernel/src/iopheap.c (no source copied).
+
+--- a/ps2xRuntime/include/ps2_runtime_calls.h
++++ b/ps2xRuntime/include/ps2_runtime_calls.h
+@@ -73,7 +73,9 @@
+     {
+         const auto resolved = detail::resolveNameWithOptionalLeadingUnderscoreAlias(name, kStubNames);
+         // The IPU init HLE calls title-specific addresses; recompile the guest routine instead.
+-        return resolved == "sceIpuInit" ? std::string_view{} : resolved;
++        // Heap init must bind its original RPC client; a no-op leaves FreeIopHeap unbound.
++        return resolved == "sceIpuInit" || resolved == "sceSifInitIopHeap"
++                   ? std::string_view{} : resolved;
+     }
+ 
+     inline bool isSyscallName(std::string_view name)
+--- a/ps2xIOP/src/iop_subsystem.cpp
++++ b/ps2xIOP/src/iop_subsystem.cpp
+@@ -7,6 +7,7 @@
+ #include "ps2x/iop/ps2_path.h"
+ 
+ #include <sstream>
++#include <stdexcept>
+ #include <unordered_map>
+ #include <unordered_set>
+ #include <utility>
+@@ -192,7 +193,7 @@
+ 
+     bool IopSubsystem::canBindRpc(uint32_t sid) const noexcept
+     {
+-        if (m_impl->routes.find(sid) != m_impl->routes.end())
++        if (sid == 0x80000003u || m_impl->routes.find(sid) != m_impl->routes.end())
+         {
+             return true;
+         }
+@@ -205,11 +206,29 @@
+         detail::IopService *hle = route != m_impl->routes.end() ? route->second : nullptr;
+ 
+         RpcResult emulated = m_impl->emulator.handleRpc(request);
+-        if (emulated.handled || !hle)
+-        {
+-            return emulated;
+-        }
+-        return hle->handleRpc(request);
++        if (emulated.handled) return emulated;
++        if (request.sid == 0x80000003u)
++        {
++            uint32_t argument = 0u;
++            if (request.send.size != sizeof(argument) || request.receive.size < sizeof(argument) ||
++                !m_impl->host.readGuest(request.send.address, &argument, sizeof(argument)))
++                throw std::runtime_error("Invalid IOP heap RPC buffers");
++            uint32_t previous = 0u;
++            if (!m_impl->host.readGuest(request.receive.address, &previous, sizeof(previous)))
++                throw std::runtime_error("Invalid IOP heap RPC reply destination");
++            uint32_t reply;
++            if (request.function == 1u) reply = m_impl->emulator.allocateMemory(argument, 64u);
++            else if (request.function == 2u) reply = m_impl->emulator.freeMemory(argument) ? 0u : 0xFFFFFFFFu;
++            else throw std::runtime_error("Unsupported IOP heap RPC function");
++            if (!m_impl->host.writeGuest(request.receive.address, &reply, sizeof(reply)))
++                throw std::runtime_error("Failed IOP heap RPC reply");
++            RpcResult result{};
++            result.handled = result.signalCompletion = result.signalNowaitCompletion = true;
++            result.resultAddress = request.receive.address;
++            result.serverDispatchPolicy = ServerDispatchPolicy::Suppress;
++            return result;
++        }
++        return hle ? hle->handleRpc(request) : emulated;
+     }
+ 
+     void IopSubsystem::onSifTransfer(const SifTransfer &transfer)
+--- a/ps2xIOP/src/emulator/core/iop_memory.cpp
++++ b/ps2xIOP/src/emulator/core/iop_memory.cpp
+@@ -284,6 +284,7 @@
+ 
+     uint32_t IopMemory::allocate(uint32_t size, uint32_t alignment, std::optional<uint32_t> fixed)
+     {
++        if (size > HeapLimit - HeapBase) return 0u;
+         size = alignUp(std::max(size, 1u), 16u);
+         alignment = std::max<uint32_t>(alignment, 4u);
+         if (fixed)
+@@ -299,7 +300,7 @@
+             return address;
+         }
+ 
+-        uint32_t candidate = alignUp(m_heapCursor, alignment);
++        uint32_t candidate = alignUp(HeapBase, alignment);
+         for (;;)
+         {
+             bool overlap = false;
+@@ -339,7 +340,15 @@
+ 
+     uint32_t IopMemory::maxFreeMemory() const
+     {
+-        return m_heapCursor < HeapLimit ? HeapLimit - m_heapCursor : 0u;
++        auto blocks = m_allocations;
++        std::sort(blocks.begin(), blocks.end(), [](const Allocation &a, const Allocation &b) { return a.address < b.address; });
++        uint32_t cursor = HeapBase, largest = 0u;
++        for (const auto &block : blocks)
++        {
++            if (block.address > cursor) largest = std::max(largest, block.address - cursor);
++            cursor = std::max(cursor, block.address + block.size);
++        }
++        return std::max(largest, HeapLimit - cursor);
+     }
+ 
+     std::optional<IopMemory::Allocation> IopMemory::allocationContaining(uint32_t address) const

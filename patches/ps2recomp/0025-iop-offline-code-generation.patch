@@ -1,0 +1,327 @@
+Emit R3000A native operations offline from executable IRX sections.
+Preserve the existing console state and scheduler; validate non-relocated opcode bits.
+Fix branch delay exceptions, zero-link JALR and paired unaligned load forwarding.
+Instruction semantics derive from the pinned ps2xIOP core (GPL-3.0).
+
+--- /dev/null
++++ b/ps2xIOP/src/emulator/services/iop_aot_frame.h
+@@ -0,0 +1,54 @@
++#pragma once
++// R3000A pipeline helpers for emitted operations. No instruction fetch or decoder.
++#include "../core/iop_cpu.h"
++#include "../core/iop_memory.h"
++#include <limits>
++
++namespace ps2x::iop::detail {
++struct IopAotFrame {
++    IopCpuState& cpu;
++    IopMemory& memory;
++    const uint32_t pc, nextPc, priorBranchTarget;
++    const bool wasDelaySlot;
++    uint32_t writtenReg = 0, scheduledReg = 0, scheduledValue = 0, newBranchTarget = 0;
++    bool scheduledLoad = false, newBranch = false;
++    IopAotFrame(IopCpuState& c, IopMemory& m)
++        : cpu(c), memory(m), pc(c.pc), nextPc(c.pc + 4),
++          priorBranchTarget(c.branchTarget), wasDelaySlot(c.branchPending) {
++        cpu.branchPending = false; cpu.exception = false; cpu.yielded = false;
++    }
++    void write(uint32_t r, uint32_t value) {
++        if (r) { cpu.gpr[r] = value; writtenReg = r; }
++    }
++    void load(uint32_t r, uint32_t value) {
++        if (r) { scheduledLoad = true; scheduledReg = r; scheduledValue = value; }
++    }
++    void jump(uint32_t target) { newBranch = true; newBranchTarget = target; }
++    void branch(bool condition, int32_t displacement) {
++        jump(condition ? nextPc + (uint32_t(displacement) << 2) : pc + 8);
++    }
++    void trap(uint32_t code, std::optional<uint32_t> badAddress = std::nullopt) {
++        IopCpuCore(memory).raiseException(cpu, code, pc, wasDelaySlot, badAddress);
++    }
++    void overflow(int64_t value, uint32_t r) {
++        if (value < std::numeric_limits<int32_t>::min() ||
++            value > std::numeric_limits<int32_t>::max()) trap(12);
++        else write(r, uint32_t(value));
++    }
++    uint32_t mergeValue(uint32_t r) const {
++        return cpu.pendingLoad && cpu.pendingLoadReg == r ? cpu.pendingLoadValue : cpu.gpr[r];
++    }
++    bool finish() {
++        cpu.gpr[0] = 0;
++        if (cpu.exception) return !cpu.stopped;
++        if (cpu.pendingLoad && cpu.pendingLoadReg && cpu.pendingLoadReg != writtenReg)
++            cpu.gpr[cpu.pendingLoadReg] = cpu.pendingLoadValue;
++        cpu.pendingLoad = scheduledLoad;
++        if (scheduledLoad) { cpu.pendingLoadReg = scheduledReg; cpu.pendingLoadValue = scheduledValue; }
++        cpu.gpr[0] = 0;
++        if (wasDelaySlot) { cpu.pc = priorBranchTarget; cpu.branchPending = false; }
++        else { cpu.pc = nextPc; cpu.branchPending = newBranch; cpu.branchTarget = newBranchTarget; }
++        return !cpu.stopped;
++    }
++};
++}
+--- /dev/null
++++ b/ps2xIOP/tools/iop_aot.py
+@@ -0,0 +1,170 @@
++#!/usr/bin/env python3
++"""Offline R3000A -> C++ for the pinned PS2Recomp IOP loader. GPL-3.0-or-later.
++Instruction semantics derive from ps2xIOP's iop_cpu.cpp; no guest decoding is
++performed by the emitted functions. Originals are only read.
++"""
++import argparse
++import hashlib
++import json
++from pathlib import Path
++import struct
++
++def operation(word, relocation=0):
++    op, rs, rt, rd, sa, fn = word >> 26, (word >> 21) & 31, (word >> 16) & 31, (word >> 11) & 31, (word >> 6) & 31, word & 63
++    r, t = f'cpu.gpr[{rs}]', f'cpu.gpr[{rt}]'
++    imm = '(memory.read32(cpu.pc) & 0xffffu)' if relocation & 0xffff else f'{word & 65535}u'
++    simm = f'int32_t(int16_t({imm}))'
++    write = lambda reg, value: f'f.write({reg}, {value});'
++    branch = lambda cond: f'f.branch({cond}, {simm});'
++    if op == 0:
++        values = {
++            0: f'{t} << {sa}', 2: f'{t} >> {sa}', 3: f'uint32_t(int32_t({t}) >> {sa})',
++            4: f'{t} << ({r} & 31)', 6: f'{t} >> ({r} & 31)', 7: f'uint32_t(int32_t({t}) >> ({r} & 31))',
++            16: 'cpu.hi', 18: 'cpu.lo', 33: f'{r} + {t}', 35: f'{r} - {t}',
++            36: f'{r} & {t}', 37: f'{r} | {t}', 38: f'{r} ^ {t}', 39: f'~({r} | {t})',
++            42: f'int32_t({r}) < int32_t({t})', 43: f'{r} < {t}',
++        }
++        if fn in values: return write(rd, values[fn])
++        if fn == 8: return f'f.jump({r});'
++        if fn == 9: return f'const uint32_t target = {r}; ' + write(rd, 'f.pc + 8') + ' f.jump(target);'
++        if fn in (12, 13): return f'f.trap({8 if fn == 12 else 9});'
++        if fn in (17, 19): return f'cpu.{"hi" if fn == 17 else "lo"} = {r};'
++        if fn in (24, 25):
++            value = f'int64_t(int32_t({r})) * int64_t(int32_t({t}))' if fn == 24 else f'uint64_t({r}) * {t}'
++            return f'const uint64_t value = uint64_t({value}); cpu.lo = uint32_t(value); cpu.hi = uint32_t(value >> 32);'
++        if fn == 26:
++            return f'''const int32_t a = int32_t({r}), b = int32_t({t});
++if (!b) {{ cpu.lo = a >= 0 ? 0xffffffffu : 1; cpu.hi = uint32_t(a); }}
++else if (a == std::numeric_limits<int32_t>::min() && b == -1) {{ cpu.lo = uint32_t(a); cpu.hi = 0; }}
++else {{ cpu.lo = uint32_t(a / b); cpu.hi = uint32_t(a % b); }}'''
++        if fn == 27: return f'if (!{t}) {{ cpu.lo = 0xffffffffu; cpu.hi = {r}; }} else {{ cpu.lo = {r} / {t}; cpu.hi = {r} % {t}; }}'
++        if fn in (32, 34): return f'f.overflow(int64_t(int32_t({r})) {"+" if fn == 32 else "-"} int64_t(int32_t({t})), {rd});'
++    elif op == 1:
++        if rt in (0, 1, 16, 17):
++            return f'const bool take = int32_t({r}) {"<" if not rt & 1 else ">="} 0; ' + (write(31, 'f.pc + 8') if rt & 16 else '') + branch('take')
++    elif op in (2, 3):
++        target = '(memory.read32(cpu.pc) & 0x03ffffffu)' if relocation else f'{word & 0x03ffffff}u'
++        return (write(31, 'f.pc + 8') if op == 3 else '') + f'f.jump((f.nextPc & 0xf0000000u) | ({target} << 2));'
++    elif op in (4, 5): return branch(f'{r} {"==" if op == 4 else "!="} {t}')
++    elif op in (6, 7): return branch(f'int32_t({r}) {"<=" if op == 6 else ">"} 0')
++    elif op == 8: return f'f.overflow(int64_t(int32_t({r})) + {simm}, {rt});'
++    elif op in (9, 10, 11, 12, 13, 14, 15):
++        value = {9: f'{r} + uint32_t({simm})', 10: f'int32_t({r}) < {simm}', 11: f'{r} < uint32_t({simm})',
++                 12: f'{r} & {imm}', 13: f'{r} | {imm}', 14: f'{r} ^ {imm}', 15: f'{imm} << 16'}[op]
++        return write(rt, value)
++    elif op == 16:
++        if rs == 0: return f'f.load({rt}, cpu.cop0[{rd}]);'
++        if rs == 4: return f'cpu.cop0[{rd}] = {t};'
++        if rs == 16 and fn == 16: return 'cpu.cop0[12] = (cpu.cop0[12] & ~0x0fu) | ((cpu.cop0[12] >> 2) & 0x0fu);'
++    elif op in (32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 46):
++        begin = f'const uint32_t address = {r} + uint32_t({simm});\n'
++        alignment = 1 if op in (33, 37, 41) else 3 if op in (35, 43) else 0
++        if alignment: begin += f'if (address & {alignment}) {{ f.trap({5 if op >= 40 else 4}, address); }} else '
++        if op in (32, 33, 35, 36, 37):
++            width = {32: 8, 33: 16, 35: 32, 36: 8, 37: 16}[op]
++            value = f'memory.read{width}(address)'
++            if op in (32, 33): value = f'uint32_t(int32_t(int{width}_t({value})))'
++            body = f'f.load({rt}, {value});'
++        elif op in (40, 41, 43):
++            width = {40: 8, 41: 16, 43: 32}[op]
++            body = f'memory.write{width}(address, uint{width}_t({t}));'
++        elif op in (34, 38):
++            left = op == 34
++            masks = '0x00ffffffu,0x0000ffffu,0x000000ffu,0u' if left else '0u,0xff000000u,0xffff0000u,0xffffff00u'
++            shifts = '24,16,8,0' if left else '0,8,16,24'
++            body = f'''constexpr uint32_t masks[] = {{{masks}}}, shifts[] = {{{shifts}}};
++const uint32_t lane = address & 3;
++f.load({rt}, (f.mergeValue({rt}) & masks[lane]) | (memory.read32(address & ~3u) {"<<" if left else ">>"} shifts[lane]));'''
++        else:
++            masks = '0xffffff00u,0xffff0000u,0xff000000u,0u' if op == 42 else '0u,0x000000ffu,0x0000ffffu,0x00ffffffu'
++            shifts = '24,16,8,0' if op == 42 else '0,8,16,24'
++            body = f'''constexpr uint32_t masks[] = {{{masks}}}, shifts[] = {{{shifts}}};
++const uint32_t lane = address & 3, aligned = address & ~3u;
++memory.write32(aligned, (memory.read32(aligned) & masks[lane]) | ({t} {">>" if op == 42 else "<<"} shifts[lane]));'''
++        return begin + '{ ' + body + ' }'
++    return 'f.trap(10);'
++
++def unpack(fmt, data, offset):
++    if offset < 0 or offset + struct.calcsize(fmt) > len(data):
++        raise ValueError('truncated ELF')
++    return struct.unpack_from(fmt, data, offset)
++
++def parse(data):
++    h = unpack('<16sHHIIIIIHHHHHH', data, 0)
++    if h[0][:7] != b'\x7fELF\x01\x01\x01' or h[2] != 8 or len(data) > 16 * 1024 * 1024:
++        raise ValueError('not a little-endian MIPS ELF32')
++    if h[12] and h[11] < 40 or h[10] and h[9] < 32:
++        raise ValueError('invalid ELF tables')
++    sections = [unpack('<10I', data, h[6] + i * h[11]) for i in range(h[12])]
++    programs = [unpack('<8I', data, h[5] + i * h[9]) for i in range(h[10])]
++    allocated = [s for s in sections if s[2] & 2 and s[5]]
++    segments = [p for p in programs if p[0] == 1 and p[5]]
++    addresses = [p[2] for p in segments] + [s[3] for s in allocated]
++    base = min(addresses, default=0)
++    code = {}
++    for s in sections:
++        if s[1] != 1 or not s[2] & 4: continue
++        if not s[2] & 2 or s[3] & 3 or s[5] & 3 or s[4] + s[5] > len(data):
++            raise ValueError('invalid executable section')
++        for off in range(0, s[5], 4):
++            address = s[3] - base + off
++            if address in code: raise ValueError('overlapping code sections')
++            code[address] = (unpack('<I', data, s[4] + off)[0], 0)
++    if not code: raise ValueError('no executable sections; code boundaries required')
++    for s in sections:
++        if s[1] not in (4, 9): continue
++        if s[7] >= len(sections): raise ValueError('invalid relocation target section')
++        target = sections[s[7]]
++        stride = max(s[9], 12 if s[1] == 4 else 8)
++        if s[5] % stride: raise ValueError('truncated relocations')
++        for off in range(0, s[5], stride):
++            address, info = unpack('<II', data, s[4] + off)
++            if h[1] not in (0xff80, 0xff81): address += target[3]
++            address -= base
++            if address not in code: continue
++            kind = info & 255
++            mask = {0: 0, 1: 0xffff, 4: 0x03ffffff, 5: 0xffff, 6: 0xffff}.get(kind)
++            if mask is None: raise ValueError('full-word relocation in executable section is unsupported')
++            word, previous = code[address]
++            if previous: raise ValueError('overlapping instruction relocations')
++            code[address] = word, mask
++    return code
++
++def changed(path, data):
++    data = data.encode()
++    if path.exists() and path.read_bytes() == data: return
++    temporary = path.with_suffix(path.suffix + '.tmp')
++    temporary.write_bytes(data)
++    temporary.replace(path)
++
++def generate(source, output):
++    data = source.read_bytes()
++    code = parse(data)
++    identity = hashlib.sha256(data).hexdigest()
++    output.mkdir(parents=True, exist_ok=True)
++    instructions = sorted(set(code.values()))
++    names = {(w, m): f'iop_{identity}_{w:08x}_{m:08x}' for w, m in instructions}
++    prefix = '#include "emulator/services/iop_aot_frame.h"\nusing namespace ps2x::iop::detail;\n'
++    for bucket in range(16):
++        functions = []
++        for word, mask in instructions:
++            if ((word >> 8) ^ word) % 16 != bucket: continue
++            functions.append(f'bool {names[word, mask]}(IopCpuState& cpu, IopMemory& memory, uint32_t) {{\nIopAotFrame f(cpu, memory);\n' + operation(word, mask) + '\nreturn f.finish();\n}\n')
++        changed(output / f'ops_{bucket:02d}.cpp', prefix + ''.join(functions))
++    declarations = ''.join(f'extern bool {name}(IopCpuState&, IopMemory&, uint32_t);\n' for name in names.values())
++    image = ','.join(str(x) for x in data)
++    entries = ',\n'.join(f'{{{off}u, {names[word, mask]}, 0x{word:08x}u, 0x{mask:08x}u}}' for off, (word, mask) in sorted(code.items()))
++    descriptor = prefix + '#include "ps2x/iop/iop_aot.h"\n' + declarations
++    descriptor += f'void register_iop_{identity}() {{ ps2x::iop::registerIopAotModule({{{{{image}}}, {{\n{entries}\n}}}}); }}\n'
++    changed(output / 'module.cpp', descriptor)
++    return {'identity': identity, 'instructions': len(code), 'functions': len(instructions)}
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument('source', type=Path)
++    parser.add_argument('output', type=Path)
++    args = parser.parse_args()
++    print(json.dumps(generate(args.source, args.output)))
++
++if __name__ == '__main__':
++    main()
+--- a/ps2xIOP/include/ps2x/iop/iop_aot.h
++++ b/ps2xIOP/include/ps2x/iop/iop_aot.h
+@@ -12,6 +12,8 @@
+ struct IopAotEntry {
+     uint32_t offset;
+     IopAotInstruction execute;
++    uint32_t instruction = 0;
++    uint32_t relocationMask = 0;
+ };
+ struct IopAotModule {
+     // Exact original bytes: neither a filename nor a load address identifies code.
+--- a/ps2xIOP/src/emulator/services/iop_aot_registry.cpp
++++ b/ps2xIOP/src/emulator/services/iop_aot_registry.cpp
+@@ -52,9 +52,13 @@
+         base >= IopMemory::RamSize || size > IopMemory::RamSize - base)
+         throw std::runtime_error("IOP AOT cannot bind an incomplete or invalid relocation");
+     // Validate every entry before publishing any of them.
+-    for (const auto& e : module->entries)
++    for (const auto& e : module->entries) {
+         if (size < 4u || e.offset > size - 4u || entries.contains(base + e.offset))
+             throw std::runtime_error("IOP AOT entry outside image or overlapping loaded code");
++        const auto word = memory.read32(base + e.offset);
++        if ((word & ~e.relocationMask) != (e.instruction & ~e.relocationMask))
++            throw std::runtime_error("IOP AOT loaded instruction does not match prepared content");
++    }
+     for (const auto& e : module->entries) {
+         const auto address = base + e.offset;
+         entries.emplace(address, BoundEntry{base, memory.read32(address), e.execute});
+--- a/ps2xIOP/src/emulator/core/iop_cpu.cpp
++++ b/ps2xIOP/src/emulator/core/iop_cpu.cpp
+@@ -82,11 +82,9 @@
+ 
+         auto branch = [&](bool condition)
+         {
+-            if (condition)
+-            {
+-                newBranch = true;
+-                newBranchTarget = nextPc + (static_cast<uint32_t>(simm) << 2u);
+-            }
++            newBranch = true;
++            newBranchTarget = condition
++                ? nextPc + (static_cast<uint32_t>(simm) << 2u) : pc + 8u;
+         };
+         auto write = [&](uint32_t reg, uint32_t value)
+         {
+@@ -142,9 +140,9 @@
+                 newBranchTarget = cpu.gpr[rs];
+                 break;
+             case 0x09:
+-                write(rd ? rd : 31u, pc + 8u);
++                newBranchTarget = cpu.gpr[rs];
++                write(rd, pc + 8u);
+                 newBranch = true;
+-                newBranchTarget = cpu.gpr[rs];
+                 break;
+             case 0x0C:
+                 raiseException(cpu, 8u, pc, wasDelaySlot);
+@@ -256,12 +254,12 @@
+                 branch(static_cast<int32_t>(cpu.gpr[rs]) >= 0);
+                 break;
+             case 0x10:
++                branch(static_cast<int32_t>(cpu.gpr[rs]) < 0);
+                 write(31u, pc + 8u);
+-                branch(static_cast<int32_t>(cpu.gpr[rs]) < 0);
+                 break;
+             case 0x11:
++                branch(static_cast<int32_t>(cpu.gpr[rs]) >= 0);
+                 write(31u, pc + 8u);
+-                branch(static_cast<int32_t>(cpu.gpr[rs]) >= 0);
+                 break;
+             default:
+                 raiseException(cpu, 10u, pc, wasDelaySlot);
+@@ -356,7 +354,8 @@
+         {
+             const uint32_t address = cpu.gpr[rs] + static_cast<uint32_t>(simm);
+             const uint32_t memory = m_memory.read32(address & ~3u);
+-            const uint32_t old = cpu.gpr[rt];
++            const uint32_t old = cpu.pendingLoad && cpu.pendingLoadReg == rt
++                ? cpu.pendingLoadValue : cpu.gpr[rt];
+             static constexpr uint32_t masks[4] = {0x00FFFFFFu, 0x0000FFFFu, 0x000000FFu, 0x00000000u};
+             static constexpr uint32_t shifts[4] = {24u, 16u, 8u, 0u};
+             load(rt, (old & masks[address & 3u]) | (memory << shifts[address & 3u]));
+@@ -377,7 +376,8 @@
+         {
+             const uint32_t address = cpu.gpr[rs] + static_cast<uint32_t>(simm);
+             const uint32_t memory = m_memory.read32(address & ~3u);
+-            const uint32_t old = cpu.gpr[rt];
++            const uint32_t old = cpu.pendingLoad && cpu.pendingLoadReg == rt
++                ? cpu.pendingLoadValue : cpu.gpr[rt];
+             static constexpr uint32_t masks[4] = {0x00000000u, 0xFF000000u, 0xFFFF0000u, 0xFFFFFF00u};
+             static constexpr uint32_t shifts[4] = {0u, 8u, 16u, 24u};
+             load(rt, (old & masks[address & 3u]) | (memory >> shifts[address & 3u]));

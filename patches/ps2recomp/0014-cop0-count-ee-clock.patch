@@ -1,0 +1,100 @@
+Advance COP0 Count from the existing shared EE cycle clock; guest writes retain a global offset.
+Count is an EE processor-cycle counter, not per-thread saved state.
+Reference behavior: https://github.com/PCSX2/pcsx2/blob/master/pcsx2/R5900.cpp
+
+--- a/ps2xRuntime/include/ps2_runtime.h
++++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -399,6 +399,8 @@
+     const EeScheduler &eeScheduler() const;
+     void postEeEvent(EeEvent event);
+     bool eeCheckpointDue(uint32_t cycles = 32u) noexcept;
++    uint32_t readCop0Count() const noexcept;
++    void writeCop0Count(uint32_t value) noexcept;
+     [[noreturn]] void eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc);
+ 
+     struct EeExitHandlerRegistration
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2257,6 +2257,16 @@
+     m_eeScheduler->postEvent(event);
+ }
+ 
++uint32_t PS2Runtime::readCop0Count() const noexcept
++{
++    return m_eeScheduler->readCop0Count();
++}
++
++void PS2Runtime::writeCop0Count(uint32_t value) noexcept
++{
++    m_eeScheduler->writeCop0Count(value);
++}
++
+ bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
+ {
+     return m_eeScheduler->checkpointDue(cycles);
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -280,6 +280,8 @@
+     void postEvent(EeEvent event);
+     [[nodiscard]] bool checkpointDue(uint32_t cycles = kGeneratedCheckpointCycles) noexcept;
+     void accountCycles(uint32_t cycles) noexcept;
++    uint32_t readCop0Count() const noexcept;
++    void writeCop0Count(uint32_t value) noexcept;
+     [[nodiscard]] bool isExecutingGuest() const noexcept;
+ 
+     // Kernel object API. All calls except postEvent/requestStop execute on the
+@@ -426,6 +428,7 @@
+     bool m_insideInterrupt = false;
+     uint32_t m_pendingEeTimerInterrupts = 0;
+     uint64_t m_eeCycle = 0;
++    uint32_t m_cop0CountOffset = 0;
+     uint64_t m_sliceEndCycle = kDefaultTimeSliceCycles;
+     std::thread::id m_executorThread{};
+     std::atomic<bool> m_running{false};
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -112,6 +112,7 @@
+     m_insideInterrupt = false;
+     m_pendingEeTimerInterrupts = 0u;
+     m_eeCycle = 0u;
++    m_cop0CountOffset = mainContext.cop0_count;
+     m_sliceEndCycle = kDefaultTimeSliceCycles;
+     m_stopRequested.store(false, std::memory_order_release);
+     m_checkpointPending.store(false, std::memory_order_release);
+@@ -388,6 +389,16 @@
+     return false;
+ }
+ 
++uint32_t EeScheduler::readCop0Count() const noexcept
++{
++    return m_cop0CountOffset + static_cast<uint32_t>(m_eeCycle);
++}
++
++void EeScheduler::writeCop0Count(uint32_t value) noexcept
++{
++    m_cop0CountOffset = value - static_cast<uint32_t>(m_eeCycle);
++}
++
+ void EeScheduler::accountCycles(uint32_t cycles) noexcept
+ {
+     const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
+--- a/ps2xRecomp/src/lib/cop0_translator.cpp
++++ b/ps2xRecomp/src/lib/cop0_translator.cpp
+@@ -44,7 +44,7 @@
+             case COP0_REG_BADVADDR:
+                 return fmt::format("SET_GPR_S32(ctx, {}, (int32_t)ctx->cop0_badvaddr);", rt);
+             case COP0_REG_COUNT:
+-                return fmt::format("SET_GPR_S32(ctx, {}, (int32_t)ctx->cop0_count);", rt);
++                return fmt::format("SET_GPR_S32(ctx, {}, (int32_t)runtime->readCop0Count());", rt);
+             case COP0_REG_ENTRYHI:
+                 return fmt::format("SET_GPR_S32(ctx, {}, (int32_t)ctx->cop0_entryhi);", rt);
+             case COP0_REG_COMPARE:
+@@ -94,7 +94,7 @@
+             case COP0_REG_BADVADDR:
+                 return "// MTC0 to BADVADDR register ignored (read-only)";
+             case COP0_REG_COUNT:
+-                return fmt::format("ctx->cop0_count = GPR_U32(ctx, {});", rt);
++                return fmt::format("runtime->writeCop0Count(GPR_U32(ctx, {}));", rt);
+             case COP0_REG_ENTRYHI:
+                 return fmt::format("ctx->cop0_entryhi = GPR_U32(ctx, {}) & 0xC00000FF;", rt);
+             case COP0_REG_COMPARE:

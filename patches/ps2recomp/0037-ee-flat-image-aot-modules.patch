@@ -1,0 +1,489 @@
+--- a/ps2xRecomp/include/ps2recomp/types.h
++++ b/ps2xRecomp/include/ps2recomp/types.h
+@@ -178,6 +178,10 @@
+         std::string inputPath;
+         std::string outputPath;
+         std::string ghidraMapPath;
++        // A caller-verified content identity; flat images retain their linked base.
++        std::string moduleIdentity;
++        uint32_t rawBase = 0;
++        uint32_t rawEntry = 0;
+         bool singleFileOutput = false;
+         bool lowMemoryMode = false;
+         uint32_t outputWorkerThreads = 0;
+--- a/ps2xRecomp/src/lib/config_manager.cpp
++++ b/ps2xRecomp/src/lib/config_manager.cpp
+@@ -40,6 +40,22 @@
+             config.inputPath = toml::find<std::string>(general, "input");
+             config.ghidraMapPath = toml::find_or<std::string>(general, "ghidra_output", "");
+             config.outputPath = toml::find<std::string>(general, "output");
++            config.moduleIdentity = toml::find_or<std::string>(general, "module_id", "");
++            if (data.contains("raw_image"))
++            {
++                const auto& image = toml::find(data, "raw_image");
++                const auto base = toml::find<int64_t>(image, "load_address");
++                const auto entry = toml::find<int64_t>(image, "entry");
++                if (base < 0 || base >= 0x02000000 || entry < 0 || entry >= 0x02000000)
++                    throw std::runtime_error("Raw EE image addresses must be in physical EE RAM");
++                config.rawBase = static_cast<uint32_t>(base);
++                config.rawEntry = static_cast<uint32_t>(entry);
++                if (config.moduleIdentity.size() != 64 ||
++                    config.moduleIdentity.find_first_not_of("0123456789abcdef") != std::string::npos)
++                    throw std::runtime_error("Raw EE images require a lowercase SHA-256 module_id");
++            }
++            else if (!config.moduleIdentity.empty())
++                throw std::runtime_error("module_id requires a raw_image description");
+             config.singleFileOutput = toml::find_or<bool>(general, "single_file_output", false);
+             config.lowMemoryMode = toml::find_or<bool>(general, "low_memory_mode", config.lowMemoryMode);
+             const int64_t configuredOutputWorkers = toml::find_or<int64_t>(
+@@ -298,6 +314,14 @@
+         general["skip"] = config.skipFunctions;
+         general["stubs"] = config.stubImplementations;
+         general["entry_points"] = config.entryPointHints;
++        if (!config.moduleIdentity.empty())
++        {
++            general["module_id"] = config.moduleIdentity;
++            toml::table image;
++            image["load_address"] = static_cast<int64_t>(config.rawBase);
++            image["entry"] = static_cast<int64_t>(config.rawEntry);
++            data["raw_image"] = image;
++        }
+         data["general"] = general;
+ 
+         if (!config.mmioByInstructionAddress.empty())
+--- a/ps2xRecomp/include/ps2recomp/elf_parser.h
++++ b/ps2xRecomp/include/ps2recomp/elf_parser.h
+@@ -23,6 +23,11 @@
+                 ~ElfParser();
+ 
+                 bool parse();
++                bool parseRaw(uint32_t base, uint32_t entry, const std::unordered_set<uint32_t>& extraEntries);
++                bool rawInstructionReachable(uint32_t address) const {
++                    return m_rawReachable.empty() || (address >= m_rawBase &&
++                        (address - m_rawBase) / 4 < m_rawReachable.size() && m_rawReachable[(address - m_rawBase) / 4]);
++                }
+ 
+                 bool loadGhidraFunctionMap(const std::string &mapPath);
+                 std::vector<Function> extractFunctions() const;
+@@ -42,6 +47,8 @@
+                 void debugAddress(uint32_t address) const;
+ 
+         private:
++                uint32_t m_rawBase = 0;
++                std::vector<uint8_t> m_rawReachable;
+                 std::string m_filePath;
+                 std::unique_ptr<ELFIO::elfio> m_elf;
+ 
+--- a/ps2xRecomp/src/lib/elf_parser.cpp
++++ b/ps2xRecomp/src/lib/elf_parser.cpp
+@@ -1,4 +1,5 @@
+ #include "ps2recomp/elf_parser.h"
++#include "ps2recomp/r5900_decoder.h"
+ #include "ps2recomp/instructions.h"
+ #include "ps2recomp/recompiler_reporter.h"
+ #include "ps2recomp/types.h"
+@@ -2278,6 +2279,107 @@
+ 
+     ElfParser::~ElfParser() = default;
+ 
++    bool ElfParser::parseRaw(uint32_t base, uint32_t entry, const std::unordered_set<uint32_t>& extraEntries)
++    {
++        std::ifstream input(m_filePath, std::ios::binary | std::ios::ate);
++        const auto size = input ? input.tellg() : std::streampos(-1);
++        if (size < 4 || size > 0x02000000 || (static_cast<uint64_t>(size) & 3u) ||
++            (base & 3u) || (entry & 3u) || base > 0x02000000u - static_cast<uint64_t>(size) ||
++            entry < base || static_cast<uint64_t>(entry) + 4u > base + static_cast<uint64_t>(size))
++            throw std::runtime_error("Invalid raw EE image size, base or entry");
++        std::string bytes(static_cast<size_t>(size), '\0');
++        input.seekg(0);
++        if (!input.read(bytes.data(), static_cast<std::streamsize>(bytes.size())))
++            throw std::runtime_error("Cannot read raw EE image: " + m_filePath);
++        // Reuse the existing section/function analyzer without writing a synthetic ELF.
++        m_elf->create(ELFIO::ELFCLASS32, ELFIO::ELFDATA2LSB);
++        m_elf->set_type(ELFIO::ET_EXEC);
++        m_elf->set_machine(ELFIO::EM_MIPS);
++        m_elf->set_entry(entry);
++        auto* section = m_elf->sections.add(".text.raw");
++        section->set_type(ELFIO::SHT_PROGBITS);
++        section->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_EXECINSTR | ELFIO::SHF_WRITE);
++        section->set_address(base);
++        section->set_addr_align(4);
++        section->set_data(bytes);
++        loadSections();
++        loadSymbols();
++        loadRelocations();
++        m_rawBase = base;
++        m_rawReachable.assign(bytes.size() / 4, 0);
++        std::vector<uint8_t> traversed(m_rawReachable.size(), 0);
++        std::vector<uint32_t> pending{entry};
++        pending.insert(pending.end(), extraEntries.begin(), extraEntries.end());
++        std::unordered_set<uint32_t> starts{entry};
++        starts.insert(extraEntries.begin(), extraEntries.end());
++        const auto valid = [&](uint32_t pc) {
++            return !(pc & 3u) && pc >= base && uint64_t(pc) + 4 <= uint64_t(base) + bytes.size();
++        };
++        const auto enqueue = [&](uint32_t pc, bool entryPoint) {
++            if (valid(pc)) {
++                pending.push_back(pc);
++                if (entryPoint) starts.insert(pc);
++            }
++        };
++        R5900Decoder decoder;
++        while (!pending.empty())
++        {
++            uint32_t pc = pending.back(); pending.pop_back();
++            while (valid(pc) && !traversed[(pc - base) / 4])
++            {
++                traversed[(pc - base) / 4] = 1;
++                m_rawReachable[(pc - base) / 4] = 1;
++                const auto inst = decoder.decodeInstruction(pc, readWord(pc), false);
++                if (inst.hasDelaySlot)
++                {
++                    if (!valid(pc + 4)) throw std::runtime_error("Raw EE branch lacks its delay slot");
++                    m_rawReachable[(pc + 4 - base) / 4] = 1;
++                    if (inst.isBranch)
++                    {
++                        bool taken = true, fallthrough = true;
++                        if ((inst.opcode == OPCODE_BEQ || inst.opcode == OPCODE_BEQL) && inst.rs == inst.rt)
++                            fallthrough = false;
++                        if ((inst.opcode == OPCODE_BNE || inst.opcode == OPCODE_BNEL) && inst.rs == inst.rt)
++                            taken = false;
++                        if (taken) enqueue(decoder.getBranchTarget(inst), true);
++                        if (fallthrough || inst.isCall) enqueue(pc + 8, false);
++                    }
++                    else
++                    {
++                        if (inst.opcode == OPCODE_J || inst.opcode == OPCODE_JAL)
++                            enqueue(decoder.getJumpTarget(inst), true);
++                        if (inst.opcode == OPCODE_JAL ||
++                            (inst.opcode == OPCODE_SPECIAL && inst.function == SPECIAL_JALR && inst.rd))
++                            enqueue(pc + 8, false);
++                    }
++                    break;
++                }
++                if (inst.raw == 0x42000018u ||
++                    (inst.opcode == OPCODE_SPECIAL && inst.function == SPECIAL_BREAK)) break;
++                pc += 4;
++            }
++        }
++        // No section metadata exists in a flat image. Translate only reachable code;
++        // indirect entries are supplied by the existing entry-point learning path.
++        std::vector<uint32_t> ordered;
++        for (uint32_t start : starts)
++            if (valid(start) && m_rawReachable[(start - base) / 4]) ordered.push_back(start);
++        std::sort(ordered.begin(), ordered.end());
++        m_extraFunctions.clear();
++        for (size_t i = 0; i < ordered.size(); ++i)
++        {
++            const uint32_t begin = ordered[i];
++            uint32_t end = i + 1 < ordered.size() ? ordered[i + 1] : base + static_cast<uint32_t>(bytes.size());
++            while (end > begin && !m_rawReachable[(end - base) / 4 - 1]) end -= 4;
++            Function function{};
++            function.name = MakeAutoFunctionName(begin);
++            function.start = begin;
++            function.end = end;
++            m_extraFunctions.push_back(std::move(function));
++        }
++        return true;
++    }
++
+     bool ElfParser::parse()
+     {
+         if (!m_elf->load(m_filePath))
+--- a/ps2xRecomp/include/ps2recomp/code_generator.h
++++ b/ps2xRecomp/include/ps2recomp/code_generator.h
+@@ -68,6 +68,9 @@
+         std::unordered_map<uint32_t, std::vector<uint32_t>> m_resumeEntryTargetsByOwner;
+         const std::vector<Section>& m_sections;
+         BootstrapInfo m_bootstrapInfo;
++        std::string m_moduleIdentity;
++        uint32_t m_moduleBase = 0;
++        std::string instructionGuard(const Instruction& instruction) const;
+         bool m_emitInstructionComments = true;
+         RecompilerReporter *m_reporter = nullptr;
+         std::string m_currentFunctionName;
+--- a/ps2xRecomp/src/lib/code_generator.cpp
++++ b/ps2xRecomp/src/lib/code_generator.cpp
+@@ -32,6 +32,25 @@
+ 
+ namespace ps2recomp
+ {
++    std::string CodeGenerator::instructionGuard(const Instruction& instruction) const
++    {
++        if (m_moduleIdentity.empty()) return {};
++        // The original image is authoritative even when decoding applied a configured patch.
++        for (const auto& section : m_sections)
++            if (section.data && instruction.address >= section.address &&
++                uint64_t(instruction.address) + 4u <= uint64_t(section.address) + section.size)
++            {
++                const auto* p = section.data + instruction.address - section.address;
++                const uint32_t word = uint32_t(p[0]) | uint32_t(p[1]) << 8 |
++                                      uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
++                std::ostringstream code;
++                code << "ps2CheckEeAotInstruction(rdram, 0x" << std::hex << instruction.address
++                     << "u, 0x" << word << "u);\n";
++                return code.str();
++            }
++        throw std::runtime_error("EE module instruction is outside its image");
++    }
++
+     const std::unordered_set<std::string> kKeywords = {
+         "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool",
+         "break", "case", "catch", "char", "char8_t", "char16_t", "char32_t", "class",
+@@ -267,7 +286,16 @@
+         const Function &function, const std::vector<Instruction> &instructions, const std::vector<Function> *allFunctions)
+     {
+         ControlFlowAnalyzer analyzer(m_sections, m_configJumpTableTargetsByAddress, m_reporter);
+-        return analyzer.analyze(function, instructions, allFunctions);
++        auto result = analyzer.analyze(function, instructions, allFunctions);
++        if (!m_moduleIdentity.empty())
++        {
++            std::unordered_set<uint32_t> decoded;
++            for (const auto& inst : instructions) decoded.insert(inst.address);
++            for (auto it = result.entryPoints.begin(); it != result.entryPoints.end();)
++                if (!decoded.contains(*it)) it = result.entryPoints.erase(it);
++                else ++it;
++        }
++        return result;
+     }
+ 
+     std::string ps2recomp::CodeGenerator::generateFunction(
+--- a/ps2xRecomp/src/lib/ps2_recompiler.cpp
++++ b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+@@ -903,7 +903,8 @@
+             m_reporter.progress("parsing ELF");
+             m_elfParser = std::make_unique<ElfParser>(m_config.inputPath);
+             m_elfParser->setReporter(&m_reporter);
+-            if (!m_elfParser->parse())
++            if (!(m_config.moduleIdentity.empty() ? m_elfParser->parse() :
++                  m_elfParser->parseRaw(m_config.rawBase, m_config.rawEntry, m_entryPointHintStarts)))
+             {
+                 m_reporter.error("elf", "Failed to parse ELF file: " + m_config.inputPath);
+                 return false;
+@@ -1000,6 +1001,8 @@
+             m_decoder = std::make_unique<R5900Decoder>();
+             m_codeGenerator = std::make_unique<CodeGenerator>(m_symbols, m_sections);
+             m_codeGenerator->setReporter(&m_reporter);
++            m_codeGenerator->m_moduleIdentity = m_config.moduleIdentity;
++            m_codeGenerator->m_moduleBase = m_config.rawBase;
+             std::unordered_map<uint32_t, std::string> relocationCallNames;
+             relocationCallNames.reserve(m_relocations.size());
+             for (const auto &reloc : m_relocations)
+@@ -1190,6 +1193,14 @@
+     {
+         try
+         {
++            if (!m_config.moduleIdentity.empty())
++            {
++                if (m_config.singleFileOutput)
++                    throw std::runtime_error("EE modules require incremental per-function output");
++                for (const auto& function : m_functions)
++                    if (function.isStub || function.isSkipped)
++                        throw std::runtime_error("Raw EE modules require native functions; stub/skip is unsupported");
++            }
+             m_functionRenames.clear();
+ 
+             auto makeName = [&](const Function &function) -> std::string
+@@ -1222,7 +1233,8 @@
+                 if (!shouldGenerateCodeForFunction(function))
+                     continue;
+ 
+-                m_functionRenames[function.start] = makeName(function);
++                m_functionRenames[function.start] = m_config.moduleIdentity.empty() ? makeName(function) :
++                    "ee_" + m_config.moduleIdentity + "_" + makeName(function);
+             }
+ 
+             if (m_codeGenerator)
+@@ -1768,6 +1780,8 @@
+ 
+             m_decodedFunctions.clear();
+ 
++            if (!m_config.moduleIdentity.empty() && (m_reporter.hasErrors() || m_reporter.counters().decodeFailures))
++                throw std::runtime_error("EE module has unsupported instructions or decode failures; no module descriptor published");
+             std::string registerFunctions = m_codeGenerator->generateFunctionRegistration(m_functions, m_generatedStubs);
+             m_generatedStubs.clear();
+ 
+@@ -2125,8 +2139,11 @@
+         uint32_t start = function.start;
+         uint32_t end = function.end;
+ 
+-        for (uint32_t address = start; address < end; address += 4)
+-        {
++        for (uint32_t address = start; address < end ||
++             (!m_config.moduleIdentity.empty() && !instructions.empty() && instructions.back().hasDelaySlot &&
++              address == instructions.back().address + 4u); address += 4)
++        {
++            if (!m_elfParser->rawInstructionReachable(address)) continue;
+             try
+             {
+                 if (!m_elfParser->isValidAddress(address))
+--- a/ps2xRecomp/src/lib/function_emitter.cpp
++++ b/ps2xRecomp/src/lib/function_emitter.cpp
+@@ -43,9 +43,10 @@
+         if (useHeaders)
+         {
+             ss << "#include <stdexcept>\n";
++            if (!cg.m_moduleIdentity.empty()) ss << "#include \"runtime/ee_aot.h\"\n";
+             ss << "#include \"ps2_runtime_macros.h\"\n";
+             ss << "#include \"ps2_runtime.h\"\n";
+-            ss << "#include <ps2_recompiled_functions.h>\n";
++            if (cg.m_moduleIdentity.empty()) ss << "#include <ps2_recompiled_functions.h>\n";
+             ss << "#include <ps2_recompiled_stubs.h>\n\n";
+             ss << "#include \"ps2_syscalls.h\"\n";
+             ss << "#include \"ps2_stubs.h\"\n\n";
+@@ -129,6 +130,7 @@
+ 
+             try
+             {
++                if (!cg.m_moduleIdentity.empty()) ss << "    " << cg.instructionGuard(inst);
+                 if (inst.hasDelaySlot)
+                 {
+                     const bool hasDecodedDelaySlot =
+@@ -178,7 +180,7 @@
+                 }
+                 else
+                 {
+-                    if (!gifDmaKickPlan.valid)
++                    if (!gifDmaKickPlan.valid && cg.m_moduleIdentity.empty())
+                     {
+                         gifDmaKickPlan = tryBuildGifDmaKickPlan(instructions, i, constantRegisters, internalTargets);
+                     }
+--- a/ps2xRecomp/src/lib/control_flow_emitter.cpp
++++ b/ps2xRecomp/src/lib/control_flow_emitter.cpp
+@@ -44,7 +44,7 @@
+ 
+     bool ControlFlowEmitter::hasRealDelaySlot() const
+     {
+-        return !m_delaySlotOverride.empty() || !isGuestNop(m_delaySlot);
++        return !m_gen.m_moduleIdentity.empty() || !m_delaySlotOverride.empty() || !isGuestNop(m_delaySlot);
+     }
+ 
+     bool ControlFlowEmitter::isCallLikeEdge() const
+@@ -120,6 +120,7 @@
+             code += " (Delay Slot)\n";
+         }
+ 
++        code += m_gen.instructionGuard(m_delaySlot);
+         code += m_gen.translateInstruction(m_delaySlot);
+         return code;
+     }
+@@ -209,6 +210,7 @@
+ 
+     bool ControlFlowEmitter::emitDirectFunctionJumpIfAvailable(uint32_t target, StaticBranchKind kind, std::string_view indent)
+     {
++        if (!m_gen.m_moduleIdentity.empty()) return false;
+         if (kind != StaticBranchKind::Jump)
+         {
+             return false;
+--- a/ps2xRecomp/src/lib/function_table_emitter.cpp
++++ b/ps2xRecomp/src/lib/function_table_emitter.cpp
+@@ -135,6 +135,38 @@
+         std::sort(entries.begin(), entries.end(), [](const auto &a, const auto &b)
+                   { return a.first < b.first; });
+ 
++        if (!cg.m_moduleIdentity.empty())
++        {
++            if (cg.m_sections.empty()) throw std::runtime_error("Missing EE module image");
++            const Section* image = nullptr;
++            for (const auto& section : cg.m_sections)
++                if (section.address == cg.m_moduleBase && section.data && section.size)
++                {
++                    if (image) throw std::runtime_error("Ambiguous EE module image");
++                    image = &section;
++                }
++            if (!image || entries.empty()) throw std::runtime_error("Empty EE module image or bindings");
++            for (const auto& entry : entries)
++                if (entry.first < image->address || uint64_t(entry.first) + 4 > uint64_t(image->address) + image->size)
++                    throw std::runtime_error("EE module binding outside its image");
++            std::ostringstream module;
++            module << "#include \"runtime/ee_aot.h\"\n#include <ps2_recompiled_functions.h>\n";
++            module << "namespace {\nconst uint8_t image[] = {\n";
++            for (uint32_t i = 0; i < image->size; ++i)
++            {
++                module << unsigned(image->data[i]) << ',';
++                if ((i & 31u) == 31u) module << '\n';
++            }
++            module << "\n};\nconst EeAotBinding bindings[] = {\n";
++            for (const auto& range : compact(entries, image->address))
++                module << '{' << range.first * 4u << "u," << range.count << "u," << range.name << "},\n";
++            module << "};\n}\nextern const EeAotModule g_ps2EeAot_" << cg.m_moduleIdentity << " = {\n\""
++                   << cg.m_moduleIdentity << "\"," << image->address << "u,"
++                   << cg.m_bootstrapInfo.entry - image->address << "u,image,sizeof(image),bindings,"
++                   << "sizeof(bindings)/sizeof(bindings[0])};\n";
++            return module.str();
++        }
++
+         uint32_t tableBase = 0u;
+         uint32_t tableEnd = 0u;
+         uint32_t slotCount = 0u;
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ee_aot.h
+@@ -0,0 +1,39 @@
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++#include <stdexcept>
++#include <string>
++
++class PS2Runtime;
++struct R5900Context;
++
++struct EeAotBinding
++{
++    uint32_t offset;
++    uint32_t count;
++    void (*function)(uint8_t*, R5900Context*, PS2Runtime*);
++};
++
++// Flat images have no relocation records; offsets describe bindings at linkedBase only.
++struct EeAotModule
++{
++    const char* identity;
++    uint32_t linkedBase;
++    uint32_t entryOffset;
++    const uint8_t* image;
++    size_t imageSize;
++    const EeAotBinding* bindings;
++    size_t bindingCount;
++};
++
++inline void ps2CheckEeAotInstruction(const uint8_t* ram, uint32_t address, uint32_t expected)
++{
++    if (!ram || address > 0x02000000u - 4u || (address & 3u))
++        throw std::runtime_error("Invalid EE AOT instruction address");
++    const auto* p = ram + address;
++    const uint32_t actual = uint32_t(p[0]) | uint32_t(p[1]) << 8 |
++                            uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
++    if (actual != expected)
++        throw std::runtime_error("EE AOT code changed at " + std::to_string(address));
++}
+--- /dev/null
++++ b/ps2xRuntime/cmake/PS2EEAot.cmake
+@@ -0,0 +1,18 @@
++# Native EE modules prepared by the SDK recompiler. Content identity and
++# preparation receipts belong to the caller's content/preparation boundary.
++function(ps2x_add_ee_aot_module target generated)
++    file(GLOB _sources CONFIGURE_DEPENDS "${generated}/*.cpp")
++    if(NOT _sources OR NOT EXISTS "${generated}/register_functions.cpp")
++        message(FATAL_ERROR "EE module has no prepared native sources: ${generated}")
++    endif()
++    add_library(${target} STATIC EXCLUDE_FROM_ALL ${_sources})
++    target_include_directories(${target} PRIVATE "${generated}")
++    target_link_libraries(${target} PRIVATE ps2_runtime)
++    set_target_properties(${target} PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 32)
++    if(MSVC)
++        target_compile_options(${target} PRIVATE /bigobj /FS)
++    endif()
++    if(COMMAND EnableFastReleaseMode AND CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo)$")
++        EnableFastReleaseMode(${target})
++    endif()
++endfunction()
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -609,3 +609,5 @@
+ install(DIRECTORY include/
+     DESTINATION include
+ )
++
++include("${CMAKE_CURRENT_LIST_DIR}/cmake/PS2EEAot.cmake")

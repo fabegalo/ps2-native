@@ -1,0 +1,36 @@
+Combine repeated relocation masks and guard formats whose decoding fields can change.
+Preserve the existing loader relocation order; never execute a stale opcode or register selection.
+
+--- a/ps2xIOP/tools/iop_aot.py
++++ b/ps2xIOP/tools/iop_aot.py
+@@ -13,6 +13,11 @@
+     if relocation == 0xffffffff:
+         return 'throw std::runtime_error("IOP full-word code relocation requires offline specialization");'
+     op, rs, rt, rd, sa, fn = word >> 26, (word >> 21) & 31, (word >> 16) & 31, (word >> 11) & 31, (word >> 6) & 31, word & 63
++    immediate_ops = {1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
++                     32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 46}
++    if relocation and not ((op in (2, 3) and not relocation & ~0x03ffffff) or
++                           (op in immediate_ops and not relocation & ~0xffff)):
++        return 'throw std::runtime_error("IOP relocation changes instruction decoding; offline specialization required");'
+     r, t = f'cpu.gpr[{rs}]', f'cpu.gpr[{rt}]'
+     imm = '(memory.read32(cpu.pc) & 0xffffu)' if relocation & 0xffff else f'{word & 65535}u'
+     simm = f'int32_t(int16_t({imm}))'
+@@ -128,8 +133,7 @@
+             mask = {0: 0, 1: 0xffff, 2: 0xffffffff, 3: 0xffffffff, 4: 0x03ffffff, 5: 0xffff, 6: 0xffff}.get(kind)
+             if mask is None: raise ValueError('unsupported instruction relocation type')
+             word, previous = code[address]
+-            if previous: raise ValueError('overlapping instruction relocations')
+-            code[address] = word, mask
++            code[address] = word, previous | mask
+     return code
+ 
+ def changed(path, data):
+@@ -237,7 +241,7 @@
+         for word, mask in instructions:
+             if ((word >> 8) ^ word) % 16 != bucket: continue
+             body = operation(word, mask)
+-            if mask != 0xffffffff:
++            if not body.startswith('throw '):
+                 body = 'IopAotFrame f(cpu, memory);\n' + body + '\nreturn f.finish();'
+             functions.append(f'bool {names[word, mask]}(IopCpuState& cpu, IopMemory& memory, uint32_t) {{\n' + body + '\n}\n')
+         changed(output / f'ops_{bucket:02d}.cpp', prefix + ''.join(functions))

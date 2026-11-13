@@ -1,0 +1,18 @@
+# SPU2 only; video and EE/IOP execution remain in the pinned PS2Recomp.
+if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
+    message(FATAL_ERROR "PCSX2 device adapters currently require Windows x64/MSVC; other host adapters are not implemented")
+endif()
+set(_pcsx2 "${PROJECT_SOURCE_DIR}/external/pcsx2")
+set(_components "${PROJECT_SOURCE_DIR}/external/pcsx2-components")
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/fetch-pcsx2-components.py" --check
+    RESULT_VARIABLE _device_check)
+if(NOT _device_check EQUAL 0)
+    message(FATAL_ERROR "PCSX2 device sources are missing or modified; see verification output above")
+endif()
+set(KZSPU2_PCSX2_DIR "${_pcsx2}" CACHE PATH "" FORCE)
+set(KZ_ISA MULTI)
+set(KZSPU2_BUILD_TEST ON CACHE BOOL "" FORCE)
+add_subdirectory("${_components}/kzspu2" pcsx2/spu2 EXCLUDE_FROM_ALL)
+target_compile_options(kzspu2_flags INTERFACE /GS)
+target_link_libraries(kzspu2_test PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,kzspu2_sse4,kzspu2_avx,kzspu2_avx2>")

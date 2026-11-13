@@ -1,0 +1,30 @@
+Stop unsupported executable handoffs instead of reporting success.
+
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Dispatcher.cpp
+@@ -1,6 +1,8 @@
+ #include "Common.h"
+ #include "Dispatcher.h"
+ #include "System.h"
++#include <sstream>
++#include <stdexcept>
+ 
+ namespace ps2_syscalls
+ {
+@@ -22,6 +24,16 @@
+         case 0x04:
+             ExitThread(rdram, ctx, runtime);
+             return true;
++        case 0x06:
++        case 0x07:
++        {
++            std::ostringstream error;
++            error << "[guest-exec:unsupported] syscall=0x" << std::hex << syscallNumber
++                  << " a0=0x" << getRegU32(ctx, 4) << " a1=0x" << getRegU32(ctx, 5)
++                  << " a2=0x" << getRegU32(ctx, 6) << " a3=0x" << getRegU32(ctx, 7)
++                  << "; native executable handoff is not implemented";
++            throw std::runtime_error(error.str());
++        }
+         case 0x10:
+             AddIntcHandler(rdram, ctx, runtime);
+             return true;
