@@ -1,0 +1,42 @@
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -1983,6 +1983,24 @@
+     uint32_t width1 = 0u, height1 = 0u, width2 = 0u, height2 = 0u;
+     decodeDisplaySize(request.display1, width1, height1);
+     decodeDisplaySize(request.display2, width2, height2);
++    // Interlaced FFMD scanout reads half of DISPLAY.DH from memory and shows
++    // each line twice (PCSX2 GSState framebufferRect: (DH + 1) >> 1).
++    const bool halfRead = smode2.interlaced && smode2.frameMode;
++    const uint32_t outHeight = std::max(height1, height2);
++    if (halfRead)
++    {
++        height1 = (height1 + 1u) / 2u;
++        height2 = (height2 + 1u) / 2u;
++    }
++    const auto doubleLines = [&](PresentationFrame &frame)
++    {
++        if (!halfRead || frame.pixels.empty())
++            return;
++        frame.height = std::min<uint32_t>(frame.height * 2u, std::min<uint32_t>(outHeight, kHostFrameHeight));
++        for (uint32_t y = frame.height; y-- > 0u;)
++            std::memmove(frame.pixels.data() + y * kHostFrameWidth * 4u,
++                         frame.pixels.data() + (y / 2u) * kHostFrameWidth * 4u, frame.width * 4u);
++    };
+     const bool valid1 = pmode.enableCrt1 && hasDisplaySetup(request.display1, displayFrame1);
+     const bool valid2 = pmode.enableCrt2 && hasDisplaySetup(request.display2, displayFrame2);
+     if (!valid1 && !valid2)
+@@ -2080,6 +2098,7 @@
+                 applyFieldPresentation(result.pixels, result.width, result.height, oddField);
+             result.displayFbp = displayFrame1.fbp;
+             result.sourceFbp = selected1.fbp;
++            doubleLines(result);
+             return result;
+         }
+     }
+@@ -2096,5 +2115,6 @@
+     normalizePresentationAlpha(result.pixels, result.width, result.height);
+     result.displayFbp = displayFrame.fbp;
+     result.sourceFbp = selected.fbp;
++    doubleLines(result);
+     return result;
+ }

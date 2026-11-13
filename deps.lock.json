@@ -719,6 +719,17 @@
           "ps2xRuntime/src/lib/gs/gs_async_backend.cpp": "51b774e3e8b270fb29b2fcebbd4141a7f3fe169d8419e0ab3e941e63b9069262"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0050-half-height-interlaced-scanout.patch",
+        "sha256": "b48937aa8974812245d0f988ef39d0a6faba42dcab360b8022dbb77e2efb0cd1",
+        "base_files": {
+          "ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp": "5c920dc12e976904b782a975cabd83d0bc99e7c0a0f8479826b67a0edec53b62"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp": "0895f0eac25123c77010960c74541aa5a3622a208c39deb2f68a2c97e36a1230"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },

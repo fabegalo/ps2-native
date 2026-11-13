@@ -374,17 +374,36 @@ fs::path game_executable(const Game& game) {
     return fs::path(PS2N_BINARY_DIR) / from_utf8("ps2n-game-" + game.id + PS2N_EXE_SUFFIX);
 }
 
+// libgraph routines that only compute environments or write GS/DMA state run
+// as the game's own recompiled code, like reference ports; their HLE stubs
+// placed the Z buffer over the second display buffer.
+bool original_libgraph_stub(const std::string& line) {
+    static const std::array<std::string_view, 14> names = {
+        "sceGsResetGraph", "sceGsSetDefDBuff", "sceGsSwapDBuff", "sceGsSetDefLoadImage", "sceGsSetDefStoreImage",
+        "sceGsSetDefDBuffDc", "sceGsSwapDBuffDc", "sceGsSetDefDispEnv", "sceGsPutDispEnv", "sceGszbufaddr",
+        "sceGsSetDefDrawEnv", "sceGsSetDefClear", "sceGsPutDrawEnv", "sceGsSetDefDrawEnv2"};
+    const auto start = line.find('"');
+    const auto at = line.find('@', start);
+    if (start == std::string::npos || at == std::string::npos) return false;
+    const std::string_view name(line.data() + start + 1, at - start - 1);
+    return std::find(names.begin(), names.end(), name) != names.end();
+}
+
 void analyze(const Game& game) {
     const auto elf = game.dir / "cd" / from_utf8(game.elf);
     run_tool(PS2N_ANALYZER_EXE, {path_utf8(elf), "config.toml"}, game.dir, game.dir / "analyzer.log");
     std::istringstream original(read_text(game.dir / "config.toml"));
     std::string config;
+    bool in_stubs = false;
     for (std::string line; std::getline(original, line);) {
         if (line.starts_with("input = ")) {
             const auto generic = fs::absolute(elf).generic_u8string();
             line = "input = \"" + std::string(generic.begin(), generic.end()) + "\"";
         }
         else if (line.starts_with("output = ")) line = "output = \"generated/\"";
+        else if (line.starts_with("stubs = [")) in_stubs = true;
+        else if (line.starts_with("]")) in_stubs = false;
+        else if (in_stubs && original_libgraph_stub(line)) continue;
         config += line + "\n";
     }
     write_text(game.dir / "config.toml", config);
