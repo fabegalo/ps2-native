@@ -7,6 +7,7 @@
 #include "ps2_runtime.h"
 #include "pcsx2_audio.h"
 #include "parallel_gs.h"
+#include "pcsx2_gs_dump.h"
 #include "runtime/host_devices.h"
 #include "runtime/ee_scheduler.h"
 #include "runtime/guest_executable_request.h"
@@ -324,6 +325,13 @@ int run_game(int argc, char** argv) {
         if (parallel) runtime.gs().setRasterBackend(ps2n_parallel_gs(runtime.memory().gs(), enhanced));
         if (!parallel && (std::getenv("PS2N_GS_TRACE") || std::getenv("PS2N_GS_COMPARE")))
             runtime.gs().setRasterBackend(std::make_unique<TracingBackend>());
+        if (const char* dump = std::getenv("PS2N_GS_PCSX2_DUMP")) {
+            if (parallel) throw std::runtime_error("PS2N_GS_PCSX2_DUMP records the CPU backend stream");
+            const char* at = std::getenv("PS2N_GS_PCSX2_DUMP_AT");
+            const char* frames = std::getenv("PS2N_GS_PCSX2_DUMP_FRAMES");
+            runtime.gs().setRasterBackend(ps2n_pcsx2_gs_dump(runtime.memory().gs(), dump,
+                at ? std::strtoull(at, nullptr, 10) : 0, frames ? std::strtoull(frames, nullptr, 10) : 8));
+        }
         if (std::getenv("PS2N_GS_TRACE")) {
             diagnostics = std::jthread([&](std::stop_token stop) { trace_gs(runtime, stop); });
         }

@@ -1,5 +1,7 @@
 option(PS2N_PARALLEL_GS "Build the optional paraLLEl-GS Vulkan device" OFF)
-add_library(ps2n_parallel_gs STATIC "${PROJECT_SOURCE_DIR}/src/host/parallel_gs.cpp")
+add_library(ps2n_parallel_gs STATIC "${PROJECT_SOURCE_DIR}/src/host/parallel_gs.cpp"
+    "${PROJECT_SOURCE_DIR}/src/host/pcsx2_gs_dump.cpp")
+target_include_directories(ps2n_parallel_gs PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/gs")
 target_include_directories(ps2n_parallel_gs PUBLIC "${PROJECT_SOURCE_DIR}/src/host")
 target_link_libraries(ps2n_parallel_gs PRIVATE ps2_runtime)
 # LINK_ONLY belongs in the interface (also supported by CMake 3.21).
