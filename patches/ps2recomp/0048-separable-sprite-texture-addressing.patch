@@ -1,0 +1,128 @@
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -16,6 +16,7 @@
+ #include <fstream>
+ #include <iostream>
+ #include <stdexcept>
++#include <vector>
+ 
+ using namespace GSInternal;
+ 
+@@ -1267,27 +1268,105 @@
+         if (spriteH < 1.0f)
+             spriteH = 1.0f;
+ 
++        // Sprite texture coordinates are separable: resolve the exact per-pixel
++        // SampleTexture addressing once per column and row, then fetch texels.
++        struct TextureAxis
++        {
++            int i0;
++            int i1;
++            float f;
++        };
++        const uint64_t clamp = ctx.clamp;
++        auto resolveAxis = [&](float texF, int size, uint8_t wrap, uint16_t regionMin, uint16_t regionMax) -> TextureAxis
++        {
++            float coordinate;
++            if (state.prim.fst)
++            {
++                const int fixed = static_cast<int>((texF * 16.0f) + 0.5f);
++                coordinate = static_cast<float>(static_cast<uint16_t>(clampInt(fixed, 0, 0xFFFF))) / 16.0f;
++            }
++            else
++            {
++                const float normalized = texF / static_cast<float>(size);
++                const float invQ = 1.0f / fabsQ(1.0f);
++                coordinate = normalized * invQ * static_cast<float>(size);
++            }
++            if (!state.linearFilter)
++            {
++                const int i = wrapTextureCoordinate(static_cast<int>(coordinate), size, wrap, regionMin, regionMax);
++                return {i, i, 0.0f};
++            }
++            const float sample = coordinate - 0.5f;
++            const int i0 = static_cast<int>(std::floor(sample));
++            return {wrapTextureCoordinate(i0, size, wrap, regionMin, regionMax),
++                    wrapTextureCoordinate(i0 + 1, size, wrap, regionMin, regionMax),
++                    sample - static_cast<float>(i0)};
++        };
++
++        thread_local std::vector<TextureAxis> columns;
++        columns.resize(static_cast<size_t>(drawX1 - drawX0 + 1));
++        for (int x = drawX0; x <= drawX1; ++x)
++        {
++            const float tx = (static_cast<float>(x - unclippedX0) + 0.5f) / spriteW;
++            columns[static_cast<size_t>(x - drawX0)] = resolveAxis(u0f + (u1f - u0f) * tx, texW,
++                static_cast<uint8_t>(clamp & 0x3u), static_cast<uint16_t>((clamp >> 4) & 0x3FFu),
++                static_cast<uint16_t>((clamp >> 14) & 0x3FFu));
++        }
++
++        auto fetch = [&](int sampleU, int sampleV) -> uint32_t
++        {
++            const u32 out = ReadTextureVramUnlocked(tex.psm, tex.tbp0, tex.tbw, sampleU, sampleV);
++            switch (tex.psm)
++            {
++            case GS_PSM_CT32:
++            case GS_PSM_Z32:
++            case GS_PSM_CT24:
++            case GS_PSM_Z24:
++                return applyTexa(state.texa, tex.psm, out);
++            case GS_PSM_CT16:
++            case GS_PSM_CT16S:
++            case GS_PSM_Z16:
++            case GS_PSM_Z16S:
++                return applyTexa(state.texa, tex.psm, Rgba5551ToRgba8888(out));
++            case GS_PSM_T8:
++            case GS_PSM_T8H:
++            case GS_PSM_T4:
++            case GS_PSM_T4HL:
++            case GS_PSM_T4HH:
++                return LookupCLUT(state, static_cast<u8>(out), tex.cpsm, tex.csm, tex.csa, tex.psm);
++            }
++            return 0xFFFF00FFu;
++        };
++
+         for (int y = drawY0; y <= drawY1; ++y)
+         {
+-            float ty = (static_cast<float>(y - unclippedY0) + 0.5f) / spriteH;
+-            float texVf = v0f + (v1f - v0f) * ty;
++            const float ty = (static_cast<float>(y - unclippedY0) + 0.5f) / spriteH;
++            const TextureAxis row = resolveAxis(v0f + (v1f - v0f) * ty, texH,
++                static_cast<uint8_t>((clamp >> 2) & 0x3u), static_cast<uint16_t>((clamp >> 24) & 0x3FFu),
++                static_cast<uint16_t>((clamp >> 34) & 0x3FFu));
+ 
+             for (int x = drawX0; x <= drawX1; ++x)
+             {
+-                float tx = (static_cast<float>(x - unclippedX0) + 0.5f) / spriteW;
+-                float texUf = u0f + (u1f - u0f) * tx;
+-                uint32_t texel = 0xFFFF00FFu;
+-                if (state.prim.fst)
++                const TextureAxis &column = columns[static_cast<size_t>(x - drawX0)];
++                uint32_t texel;
++                if (!state.linearFilter)
+                 {
+-                    const int fixedU = static_cast<int>((texUf * 16.0f) + 0.5f);
+-                    const int fixedV = static_cast<int>((texVf * 16.0f) + 0.5f);
+-                    const uint16_t sampleU = static_cast<uint16_t>(clampInt(fixedU, 0, 0xFFFF));
+-                    const uint16_t sampleV = static_cast<uint16_t>(clampInt(fixedV, 0, 0xFFFF));
+-                    texel = SampleTexture(state, 0.0f, 0.0f, 1.0f, sampleU, sampleV);
++                    texel = fetch(column.i0, row.i0);
+                 }
+                 else
+                 {
+-                    texel = SampleTexture(state, texUf / static_cast<float>(texW), texVf / static_cast<float>(texH), 1.0f, 0u, 0u);
++                    const uint32_t c00 = fetch(column.i0, row.i0);
++                    const uint32_t c10 = fetch(column.i1, row.i0);
++                    const uint32_t c01 = fetch(column.i0, row.i1);
++                    const uint32_t c11 = fetch(column.i1, row.i1);
++                    texel = 0u;
++                    for (unsigned shift = 0; shift < 32u; shift += 8u)
++                        texel |= static_cast<uint32_t>(lerpChannel(static_cast<uint8_t>(c00 >> shift),
++                                                                   static_cast<uint8_t>(c10 >> shift),
++                                                                   static_cast<uint8_t>(c01 >> shift),
++                                                                   static_cast<uint8_t>(c11 >> shift),
++                                                                   column.f, row.f))
++                                 << shift;
+                 }
+ 
+                 uint8_t tr = static_cast<uint8_t>(texel & 0xFF);

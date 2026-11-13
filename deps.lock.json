@@ -691,6 +691,17 @@
           "ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp": "4e848cfa366428c97a0b6ed2d1b794fba81bae6099b9b8fb379fae6193958231"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0048-separable-sprite-texture-addressing.patch",
+        "sha256": "2e5487f9e59eb304e4926915487624bb770a98b1f55ed76b79cd270565ea58bc",
+        "base_files": {
+          "ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp": "05af37fea484d2952e3d0fb71c0c4f12b243f086201117d79a4e2809b280765a"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp": "5c920dc12e976904b782a975cabd83d0bc99e7c0a0f8479826b67a0edec53b62"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },
