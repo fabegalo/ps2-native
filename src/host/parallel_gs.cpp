@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <stdexcept>
+#include <string>
 #ifdef PS2N_PARALLEL_GS
 #include "gs_command_backend.h"
 #include "gs_interface.hpp"
@@ -240,6 +241,26 @@ void ps2n_trace_vram(const std::vector<uint8_t>& vram, uint64_t tick) {
 }
 
 void ps2n_trace_scanout(const PresentationFrame& frame, const GSPresentationRequest& request) {
+    // Optional bounded captures, shared by every backend for visual comparison.
+    static const char* shots = std::getenv("PS2N_GS_SHOT");
+    static unsigned shotCount = 0;
+    static uint64_t nextShot = 0;
+    const auto anyLit = [&] {
+        for (size_t i = 0; i + 3 < frame.pixels.size(); i += 4)
+            if (frame.pixels[i] | frame.pixels[i + 1] | frame.pixels[i + 2]) return true;
+        return false;
+    };
+    if (shots && frame && request.vsyncTick >= nextShot && shotCount < 12 && anyLit()) {
+        nextShot = request.vsyncTick + 90;
+        const auto path = std::string(shots) + "/shot-" + std::to_string(request.vsyncTick) + ".ppm";
+        if (auto* file = std::fopen(path.c_str(), "wb")) {
+            const size_t rows = frame.width ? frame.pixels.size() / 4 / frame.width : 0;
+            std::fprintf(file, "P6\n%u %zu\n255\n", frame.width, rows);
+            for (size_t i = 0; i + 3 < frame.pixels.size(); i += 4) std::fwrite(&frame.pixels[i], 1, 3, file);
+            std::fclose(file);
+            ++shotCount;
+        }
+    }
     static const bool trace = std::getenv("PS2N_GS_COMPARE") != nullptr;
     if (!trace) return;
     uint64_t hash = 14695981039346656037ull;

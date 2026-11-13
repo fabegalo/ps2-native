@@ -98,6 +98,10 @@ if(BUILD_TESTING)
     add_executable(ps2n-sdk-gs-presentation-tests tests/sdk_gs_presentation_tests.cpp)
     target_link_libraries(ps2n-sdk-gs-presentation-tests PRIVATE ps2_runtime)
     add_test(NAME sdk-gs-presentation COMMAND ps2n-sdk-gs-presentation-tests)
+    add_executable(ps2n-sdk-gs-thread-tests tests/sdk_gs_thread_tests.cpp)
+    target_link_libraries(ps2n-sdk-gs-thread-tests PRIVATE ps2_runtime)
+    target_include_directories(ps2n-sdk-gs-thread-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/gs")
+    add_test(NAME sdk-gs-thread COMMAND ps2n-sdk-gs-thread-tests)
     add_test(NAME sdk-ee-module-codegen COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/ee_module_codegen_tests.py" "${PS2N_RECOMP_EXE}"
         "${PROJECT_SOURCE_DIR}/out/game-functional" "${CMAKE_COMMAND}" "${PS2N_PS2RECOMP_DIR}")

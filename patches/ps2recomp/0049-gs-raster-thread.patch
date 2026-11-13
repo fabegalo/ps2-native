@@ -1,0 +1,319 @@
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -383,6 +383,7 @@
+     src/lib/gs/ps2_gs_memory.cpp
+     src/lib/gs/gs_frontend.cpp
+     src/lib/gs/gs_cpu_backend.cpp
++    src/lib/gs/gs_async_backend.cpp
+     src/lib/ps2_iop_host.cpp
+     src/lib/ps2_memory.cpp
+     src/lib/ps2_transfer.cpp
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -1,3 +1,4 @@
++#include "gs_async_backend.h"
+ #include "gs_command_backend.h"
+ #include "runtime/gs/gs_frontend.h"
+ #include "runtime/gs/gs_cpu_backend.h"
+@@ -7,6 +8,7 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <iostream>
+ #include <sstream>
+@@ -106,8 +108,22 @@
+ }
+ 
+ 
++namespace
++{
++    // Rasterize on a dedicated GS thread unless the backend is an original
++    // command device (it owns its own submission) or PS2N_GS_SYNC selects the
++    // synchronous control path.
++    std::unique_ptr<GSRasterBackend> onGsThread(std::unique_ptr<GSRasterBackend> backend)
++    {
++        static const bool synchronous = std::getenv("PS2N_GS_SYNC") != nullptr;
++        if (synchronous || dynamic_cast<GSCommandBackend *>(backend.get()))
++            return backend;
++        return std::make_unique<GSAsyncBackend>(std::move(backend));
++    }
++}
++
+ GS::GS()
+-    : m_backend(std::make_unique<GSCpuBackend>())
++    : m_backend(onGsThread(std::make_unique<GSCpuBackend>()))
+ {
+     reset();
+ }
+@@ -118,7 +134,7 @@
+     m_localMemorySize = vramSize;
+     m_privRegs = privRegs;
+     if (!m_backend)
+-        m_backend = std::make_unique<GSCpuBackend>();
++        m_backend = onGsThread(std::make_unique<GSCpuBackend>());
+     m_backend->Initialize(vram, vramSize);
+     reset();
+ }
+@@ -1643,8 +1659,7 @@
+ 
+ void GS::setRasterBackend(std::unique_ptr<GSRasterBackend> backend)
+ {
+-    if (!backend)
+-        backend = std::make_unique<GSCpuBackend>();
++    backend = onGsThread(backend ? std::move(backend) : std::make_unique<GSCpuBackend>());
+ 
+     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+     std::lock_guard<std::mutex> backendLock(m_backendLifetimeMutex);
+--- /dev/null
++++ b/ps2xRuntime/src/lib/gs/gs_async_backend.h
+@@ -0,0 +1,65 @@
++#pragma once
++#include "runtime/gs/gs_backend.h"
++#include <condition_variable>
++#include <cstddef>
++#include <cstdint>
++#include <deque>
++#include <exception>
++#include <functional>
++#include <memory>
++#include <mutex>
++#include <thread>
++
++// Runs a raster backend on its own GS thread, like PCSX2's MTGS. Calls without
++// a result are queued in submission order; every call that returns or exposes
++// GS state first waits until all earlier commands have executed. The inner
++// backend therefore sees the same call sequence as the synchronous path.
++class GSAsyncBackend final : public GSRasterBackend
++{
++public:
++    explicit GSAsyncBackend(std::unique_ptr<GSRasterBackend> inner);
++    ~GSAsyncBackend() override;
++    GSAsyncBackend(const GSAsyncBackend &) = delete;
++    GSAsyncBackend &operator=(const GSAsyncBackend &) = delete;
++
++    void Initialize(uint8_t *vram, uint32_t vramSize) override;
++    void Reset() override;
++    void Submit(const GSPrimitiveBatch &batch) override;
++    void LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut) override;
++    void BeginTransfer(const GSTransferCommand &command) override;
++    void UploadImage(const uint8_t *data, uint32_t sizeBytes) override;
++    void Flush() override;
++    void TextureFlush() override;
++    void Sync(GSSyncReason reason) override;
++    PresentationFrame Present(const GSPresentationRequest &request) override;
++    bool ClearFramebuffer(const GSContext &context, uint32_t rgba) override;
++    uint32_t ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes) override;
++    uint32_t ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const override;
++    void WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value) override;
++    void SnapshotVram(std::vector<uint8_t> &out) const override;
++    GSTransferSnapshot GetTransferSnapshot() const override;
++
++private:
++    struct Command
++    {
++        std::function<void()> run;
++        size_t bytes;
++    };
++
++    void post(std::function<void()> run, size_t bytes);
++    void drain() const;
++    void worker();
++
++    std::unique_ptr<GSRasterBackend> m_inner;
++    mutable std::mutex m_mutex;
++    mutable std::condition_variable m_pending;
++    mutable std::condition_variable m_completedChanged;
++    std::deque<Command> m_queue;
++    uint64_t m_posted = 0;
++    uint64_t m_completed = 0;
++    size_t m_queuedBytes = 0;
++    mutable std::exception_ptr m_error;
++    bool m_hasLocalMemory = false;
++    bool m_stop = false;
++    std::thread m_thread;
++};
+--- /dev/null
++++ b/ps2xRuntime/src/lib/gs/gs_async_backend.cpp
+@@ -0,0 +1,180 @@
++#include "gs_async_backend.h"
++#include <utility>
++#include <vector>
++
++namespace
++{
++    // Bound how far the EE may run ahead of rasterization.
++    constexpr size_t kMaxQueuedCommands = 65536u;
++    constexpr size_t kMaxQueuedBytes = 64u * 1024u * 1024u;
++}
++
++GSAsyncBackend::GSAsyncBackend(std::unique_ptr<GSRasterBackend> inner)
++    : m_inner(std::move(inner)), m_thread([this] { worker(); })
++{
++}
++
++GSAsyncBackend::~GSAsyncBackend()
++{
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_stop = true;
++    }
++    m_pending.notify_all();
++    m_thread.join();
++}
++
++void GSAsyncBackend::worker()
++{
++    std::unique_lock<std::mutex> lock(m_mutex);
++    for (;;)
++    {
++        m_pending.wait(lock, [this] { return m_stop || !m_queue.empty(); });
++        if (m_queue.empty())
++            return;
++        Command command = std::move(m_queue.front());
++        m_queue.pop_front();
++        const bool failed = static_cast<bool>(m_error);
++        lock.unlock();
++        std::exception_ptr error;
++        if (!failed)
++        {
++            try
++            {
++                command.run();
++            }
++            catch (...)
++            {
++                error = std::current_exception();
++            }
++        }
++        command.run = nullptr;
++        lock.lock();
++        if (error && !m_error)
++            m_error = error;
++        m_queuedBytes -= command.bytes;
++        ++m_completed;
++        m_completedChanged.notify_all();
++    }
++}
++
++void GSAsyncBackend::post(std::function<void()> run, size_t bytes)
++{
++    std::unique_lock<std::mutex> lock(m_mutex);
++    m_completedChanged.wait(lock, [this] {
++        return m_error || (m_queue.size() < kMaxQueuedCommands && m_queuedBytes < kMaxQueuedBytes);
++    });
++    if (m_error)
++        std::rethrow_exception(m_error);
++    m_queue.push_back({std::move(run), bytes});
++    m_queuedBytes += bytes;
++    ++m_posted;
++    lock.unlock();
++    m_pending.notify_one();
++}
++
++void GSAsyncBackend::drain() const
++{
++    std::unique_lock<std::mutex> lock(m_mutex);
++    const uint64_t target = m_posted;
++    m_completedChanged.wait(lock, [this, target] { return m_completed >= target; });
++    if (m_error)
++        std::rethrow_exception(m_error);
++}
++
++void GSAsyncBackend::Initialize(uint8_t *vram, uint32_t vramSize)
++{
++    drain();
++    m_inner->Initialize(vram, vramSize);
++    m_hasLocalMemory = vram != nullptr;
++}
++
++void GSAsyncBackend::Reset()
++{
++    drain();
++    m_inner->Reset();
++}
++
++void GSAsyncBackend::Submit(const GSPrimitiveBatch &batch)
++{
++    post([this, batch] { m_inner->Submit(batch); }, sizeof(batch));
++}
++
++void GSAsyncBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
++{
++    post([this, tex0, texclut] { m_inner->LoadClut(tex0, texclut); }, sizeof(tex0) + sizeof(texclut));
++}
++
++void GSAsyncBackend::BeginTransfer(const GSTransferCommand &command)
++{
++    post([this, command] { m_inner->BeginTransfer(command); }, sizeof(command));
++}
++
++void GSAsyncBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
++{
++    std::vector<uint8_t> bytes(data, data + sizeBytes);
++    post([this, bytes = std::move(bytes)] { m_inner->UploadImage(bytes.data(), static_cast<uint32_t>(bytes.size())); },
++         sizeBytes);
++}
++
++void GSAsyncBackend::Flush()
++{
++    post([this] { m_inner->Flush(); }, 0u);
++}
++
++void GSAsyncBackend::TextureFlush()
++{
++    post([this] { m_inner->TextureFlush(); }, 0u);
++}
++
++void GSAsyncBackend::Sync(GSSyncReason reason)
++{
++    drain();
++    m_inner->Sync(reason);
++}
++
++PresentationFrame GSAsyncBackend::Present(const GSPresentationRequest &request)
++{
++    drain();
++    return m_inner->Present(request);
++}
++
++bool GSAsyncBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
++{
++    // Queued like a draw: the EE clears every frame and must not wait for the
++    // previous frame. The result is the raster contract, which depends only on
++    // initialized local memory and the frame format, never on VRAM contents.
++    post([this, context, rgba] { m_inner->ClearFramebuffer(context, rgba); }, sizeof(context));
++    const uint32_t psm = context.frame.psm;
++    return m_hasLocalMemory && context.frame.fbw != 0u &&
++           (psm == GS_PSM_CT32 || psm == GS_PSM_CT24 || psm == GS_PSM_CT16 || psm == GS_PSM_CT16S);
++}
++
++uint32_t GSAsyncBackend::ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
++{
++    drain();
++    return m_inner->ConsumeLocalToHostBytes(dst, maxBytes);
++}
++
++uint32_t GSAsyncBackend::ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const
++{
++    drain();
++    return m_inner->ReadVram(psm, base, bw, x, y);
++}
++
++void GSAsyncBackend::WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value)
++{
++    post([this, psm, base, bw, x, y, value] { m_inner->WriteVram(psm, base, bw, x, y, value); }, 0u);
++}
++
++void GSAsyncBackend::SnapshotVram(std::vector<uint8_t> &out) const
++{
++    drain();
++    m_inner->SnapshotVram(out);
++}
++
++GSTransferSnapshot GSAsyncBackend::GetTransferSnapshot() const
++{
++    drain();
++    return m_inner->GetTransferSnapshot();
++}

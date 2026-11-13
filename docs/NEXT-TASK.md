@@ -5,9 +5,9 @@
 As seções abaixo descrevem o runtime próprio removido e são histórico.
 Contrato e estado vigentes: `docs/ARCHITECTURE.md`, seção Diretriz.
 
-1. Super Bust no caminho padrão (GS de CPU + SPU2 do PCSX2): validar menu,
-   partida, entrada e som contínuo, depois atacar a lentidão medida
-   (~2 s de host por 1 s IOP na cena seguinte ao menu).
+1. Imagem do Super: os dois GS erram (listras/entrelaçamento/metade da altura no
+   CPU, lixo no paraLLEl). Separar fluxo de comandos de rasterizador antes de
+   corrigir; o tempo já é real fora dos picos de carga (patch 0049).
 2. paraLLEl-GS opcional: localizar o primeiro comando/estado que faz a VRAM
    divergir do GS de CPU em vsync 127/239, sem raster duplicado nem scanout CPU.
 3. BIOS: completar o bootstrap IOP por HLE (RESET `rom0:UDNL rom0:OSDCNF`)

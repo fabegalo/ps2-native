@@ -11,6 +11,7 @@
 - **13/11/2026 — Browser.** Preparar e iniciar o OSDSYS original da ROM0 pelo AOT, com recursos da mesma revisão e perfil/NVM correspondentes, no único runtime. Bootstrap IOP por HLE lendo a configuração original; BOOTEND só após conclusão real. O supervisor atenderá transições para jogos; reset integral de hardware não é pré-requisito.
 - **13/11/2026 — áudio e vídeo.** SPU2: componente do PCSX2 (via `ext/kzspu2` do KillzoneRecomp) ligado ao mesmo IOP/relógio. Vídeo padrão: GS de CPU do PS2Recomp. O GS do PCSX2 foi aprovado e depois retirado pelo mantenedor após perdas repetidas de dispositivo; não repetir esse experimento como pré-requisito. paraLLEl-GS é um dispositivo Vulkan opcional (`PS2N_PARALLEL_GS`, OFF por padrão; `PS2N_GS_BACKEND=parallel`, `PS2N_GS_MODE=fidelity|enhanced`), sem troca silenciosa de renderer. Fidelidade/Enhanced são modos separados da API; D3D12 exige implementação própria no mesmo contrato.
 - **13/11/2026 — armazenamento.** Supervisor/launcher escolhem uma raiz persistente explícita por console, compartilhada entre Browser, jogos e modos GPU, com o HLE/formato atual. Diretórios existentes não são movidos, mesclados nem descartados automaticamente.
+- **13/11/2026 — estrutura de desempenho e vídeo.** Três fases aprovadas: (1) GS em thread própria, com fila ordenada e espera apenas onde estado do GS é lido ou exposto; (2) paraLLEl-GS como GS padrão depois de corrigir a imagem, mantendo o GS de CPU como referência de testes; (3) microprogramas VU1 por AOT com cache por hash, no lugar do interpretador.
 
 **Estado implementado — patches 0010–0047 (13/11/2026).**
 
@@ -21,8 +22,9 @@
 - paraLLEl-GS (0046–0047): testes Vulkan sintéticos passam na RTX 4070; no Super a VRAM ainda diverge do GS de CPU (11–12 de 16 blocos de 256 KiB iguais em vsync 127/239). Experimental.
 - SPU2 (0022): PCM não silencioso pelo RSPU2DRV original, sem descarte com backpressure na fila existente.
 - Memory card (0045): falha de `fflush` em `sceMcWrite` agora retorna erro.
+- GS (0048–0049): endereçamento de textura de sprite por coluna/linha (VRAM sintética idêntica) e GS em thread própria (`PS2N_GS_SYNC=1` mantém o controle síncrono). Na cena pesada do Super, 12,9 s → 8,0 s de host nos segundos IOP 27–33; do segundo 30 em diante, tempo real.
 
-**Lacunas abertas.** Gameplay e som contínuo do Super não foram validados neste build; a cena leva cerca de 2 s de host por 1 s IOP. God of War bloqueia no índice de recursos; Killzone teve a compilação interrompida. Raiz persistente compartilhada, VU AOT, overlays EE, D3D12, a origem da divergência do paraLLEl-GS e as demais plataformas continuam pendentes.
+**Lacunas abertas.** A imagem do Super está errada nos dois GS (listras, entrelaçamento e metade da altura no CPU; lixo no paraLLEl), o que aponta para o fluxo de comandos antes do rasterizador; gameplay e som contínuo não foram validados. God of War bloqueia no índice de recursos; Killzone teve a compilação interrompida. Raiz persistente compartilhada, VU AOT, overlays EE, D3D12, a origem da divergência do paraLLEl-GS e as demais plataformas continuam pendentes.
 
 Uma base C++20 compartilhada para Windows x64/ARM64, Linux x64/ARM64 (inclui Steam Deck) e macOS Intel/Apple Silicon. Em 07/11/2026, o mantenedor validou a migração gradual para os sete componentes do x360-native: launcher de gerenciamento; conteúdo/catálogo; preparação e execução nativa/AOT; runtime de compatibilidade com HLE explícita; GPU Original/Native; sistema original e jogos; supervisor de sessões e adaptadores de plataforma.
 

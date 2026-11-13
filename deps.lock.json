@@ -702,6 +702,23 @@
           "ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp": "5c920dc12e976904b782a975cabd83d0bc99e7c0a0f8479826b67a0edec53b62"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0049-gs-raster-thread.patch",
+        "sha256": "2afac41543c923df909955f1cdb0ace7655c42340492776194bc5d34102a6096",
+        "base_files": {
+          "ps2xRuntime/CMakeLists.txt": "74c9fe1fc93131aa44b6ab8ba483ca9baf86f9c6ac880dfa44fedbf25f185e89",
+          "ps2xRuntime/src/lib/gs/gs_frontend.cpp": "9196feb253eab609a45fa14a61182651c72d53292bc79e0dd73921f430ff8ca5",
+          "ps2xRuntime/src/lib/gs/gs_async_backend.h": "",
+          "ps2xRuntime/src/lib/gs/gs_async_backend.cpp": ""
+        },
+        "files": {
+          "ps2xRuntime/CMakeLists.txt": "dc7841f858089018b9ffb7f12352f35a1c77833ec9cbb87bc50cde353bfb559d",
+          "ps2xRuntime/src/lib/gs/gs_frontend.cpp": "2a5891185a7e6daa9187dfadf067d9b4e8c818a62d1bb7060e782d27f56dbbe8",
+          "ps2xRuntime/src/lib/gs/gs_async_backend.h": "ebbb930309be0d3cb52a5b3229d2d25418d2be9bf59838c733c3bce47a7c2a21",
+          "ps2xRuntime/src/lib/gs/gs_async_backend.cpp": "51b774e3e8b270fb29b2fcebbd4141a7f3fe169d8419e0ab3e941e63b9069262"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },
