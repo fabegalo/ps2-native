@@ -72,6 +72,8 @@ Execution uses the pinned [PS2Recomp](https://github.com/ran-j/PS2Recomp) submod
 
 `ps2n play` keeps each prepared game under `out/build/games/<id>` and recompiles automatically when the runtime reports a missing entry point. The first preparation takes several minutes; compatibility depends on PS2Recomp and on the game.
 
+Experimental firmware path: `ps2n prepare-bios <ROM0> <console-profile> <NVM>` prepares the original OSDSYS ELF with revision/profile/NVM checks; `ps2n bios` with the same arguments also starts it. For supported packed payloads, the first run captures and verifies the original loader output, prepares the decompressed OSDSYS module by content hash, and relaunches automatically; later runs reuse it. The verified revision enters its original main program in the same runtime and waits for IOP reboot completion; it still does **not** complete Browser boot. Originals remain read-only.
+
 The user's original ROM0, ROM1/ROM2, NVM, games and generated proprietary translations are **not provided**. Keep them local and do not commit or redistribute them. A BIOS/NVM match must be verified, not inferred from filenames.
 
 ## Roadmap

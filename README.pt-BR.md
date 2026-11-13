@@ -72,6 +72,8 @@ A execução usa o submódulo fixado do [PS2Recomp](https://github.com/ran-j/PS2
 
 `ps2n play` mantém cada jogo preparado em `out/build/games/<id>` e recompila automaticamente quando o runtime reporta um entry point ausente. A primeira preparação leva vários minutos; a compatibilidade depende do PS2Recomp e do jogo.
 
+Caminho experimental de firmware: `ps2n prepare-bios <ROM0> <perfil-do-console> <NVM>` prepara o ELF OSDSYS original, validando revisão/perfil/NVM; `ps2n bios` com os mesmos argumentos também o inicia. Para payloads compactados suportados, a primeira execução captura e verifica a saída do loader original, prepara o módulo OSDSYS descompactado por hash e o relança automaticamente; as seguintes o reutilizam. A revisão validada entra no programa principal original, no mesmo runtime, e aguarda a conclusão do reinício IOP; isso ainda **não** completa o boot do Browser. Os originais permanecem somente para leitura.
+
 ROM0, ROM1/ROM2, NVM, jogos e traduÃ§Ãµes proprietÃ¡rias geradas **nÃ£o sÃ£o fornecidos**. Mantenha esses arquivos localmente e nÃ£o os publique no repositÃ³rio. A correspondÃªncia BIOS/NVM deve ser validada, nÃ£o presumida pelo nome.
 
 ## Roadmap

@@ -1,11 +1,19 @@
 # Próxima execução — Simpsons, Shadow of the Colossus & Super Bust-A-Move
 
-## Atual — PS2Recomp sem modificação, 10/11/2026
+## Atual — Super Bust jogável no PS2Recomp fixado (13/11/2026)
 
 As seções abaixo descrevem o runtime próprio removido e são histórico.
-Próximo passo: `ps2n play <disco>` para Shadow, Simpsons e God of War;
-investigar por que o GS do PS2Recomp não mostra sprites texturizados no
-Super Bust e corrigir upstream ou mover o pin.
+Contrato e estado vigentes: `docs/ARCHITECTURE.md`, seção Diretriz.
+
+1. Super Bust no caminho padrão (GS de CPU + SPU2 do PCSX2): validar menu,
+   partida, entrada e som contínuo, depois atacar a lentidão medida
+   (~2 s de host por 1 s IOP na cena seguinte ao menu).
+2. paraLLEl-GS opcional: localizar o primeiro comando/estado que faz a VRAM
+   divergir do GS de CPU em vsync 127/239, sem raster duplicado nem scanout CPU.
+3. BIOS: completar o bootstrap IOP por HLE (RESET `rom0:UDNL rom0:OSDCNF`)
+   e sinalizar BOOTEND só após conclusão real.
+4. God of War bloqueia no índice de recursos; Killzone SCUS-97402 tem objetos
+   preservados de uma compilação interrompida. Reutilizar builds existentes.
 
 ## Pré-requisito após a remoção do interpretador — 08/11/2026
 

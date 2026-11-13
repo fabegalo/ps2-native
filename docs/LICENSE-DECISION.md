@@ -7,6 +7,14 @@ com patches reproduzíveis verificados em `deps.lock.json` e é uma obra combina
 local ao usuário e nunca é publicado. `ps2n`, a biblioteca de conteúdo e o
 launcher não ligam o runtime. O mantenedor reautorizou patches locais no modelo ReXGlue em 10/11/2026; o patch de LTCG preserva os termos e créditos do PS2Recomp.
 
+O patch `0016-preserve-dispatcher-resume.patch` adapta o rastreamento de transferências do [runtime de Waffle565/God-Of-War-Native-Port](https://github.com/Waffle565/God-Of-War-Native-Port/blob/runtime/ps2xRuntime/src/lib/ps2_runtime.cpp), sob GPL-3.0, preservando os créditos de Waffle565 e contribuidores. Corrige continuações no dispatcher compartilhado; não incorpora overrides nem traduções proprietárias de jogos.
+
+O patch `0019-iop-original-disc-lookup.patch` adapta a busca ISO do patch 0003 de [KillzoneRecomp](https://github.com/drakolordx7/KillzoneRecomp/tree/master/patches/ps2recomp), Copyright (c) 2026 drakolordx7, sob MIT. O aviso integral está no patch e os limites de registros foram reforçados. O patch 0020 usa o patch 0005 como referência comportamental para reorganizar o wrapping IMAGE já existente no SDK.
+
+**Integração revisada em 13/11/2026:** somente SPU2 usa PCSX2 `646df006a4688063e56c0826e7ea4b8bb0c112c4` e o componente `ext/kzspu2` de KillzoneRecomp `a81c3309c846e12e54883295a871a95fc020b6fe`, sob GPL-3.0-or-later, preservando os avisos dos autores. Fontes e licenças permanecem nas árvores verificadas por `scripts/fetch-pcsx2-components.py`; revisões e hashes estão em `deps.lock.json`. A integração mantém a obra combinada sob GPL-3.0 e suas obrigações de código correspondente e avisos. O experimento GS foi retirado após falhas de dispositivo, conforme orientação do mantenedor. GS/IPU/VU desse port não integram o executável atual. Não houve distribuição.
+
+O dispositivo gráfico opcional aprovado usa paraLLEl-GS `cc6184af7e0c03da603045ca371ffa5dae9b0655` (LGPL-3.0-or-later) e Granite `16e7395f6a4858c1783dbf6f521f90b9d5f82ac5` (MIT). Volk (MIT), Vulkan-Headers (Apache-2.0/MIT) e RapidJSON (MIT, com avisos próprios das dependências incluídas) têm revisões e árvores verificadas separadamente em `graphics_devices` de `deps.lock.json`. Os textos integrais e créditos permanecem nas fontes fixadas; eventual distribuição deve incluí-los e cumprir as obrigações de código correspondente da obra combinada GPL-3.0. O teste Vulkan local não constitui distribuição nem integração concluída ao jogo.
+
 ## Incorporação HLE do PS2Recomp — decisão de 07/11/2026
 
 O mantenedor autorizou incorporar o código e validou a adaptação do kernel HLE
