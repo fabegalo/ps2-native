@@ -730,6 +730,71 @@
           "ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp": "0895f0eac25123c77010960c74541aa5a3622a208c39deb2f68a2c97e36a1230"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0051-iop-import-trace.patch",
+        "sha256": "bd7f9f4fcd9e975345c9ca28b0b5d0d04c156d51722a17ed1c43eb01ff7adcbb",
+        "base_files": {
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "51b9798eb6095b4835eda5e7939f1a3407073793b771414fa52aa68d647d9145"
+        },
+        "files": {
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "8fef36035f697b2dd61858d185fe22c496a62478dce85b4c8421f2f27d44aa6e"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0052-iop-sysclib-formatting.patch",
+        "sha256": "c17b0168478cdf1d046358067b76d55b138c371591e3e844855aebb83bd344ef",
+        "base_files": {
+          "ps2xIOP/src/emulator/imports/iop_sysclib.cpp": "f1888fadffdf2ef90913c9b5fc079b812fc4ef9123c566de1d1eb2a808caf974",
+          "ps2xIOP/src/emulator/imports/iop_sysclib.h": "94e24bf7a999d9e5584a14d778ab07ddf5ce3449c8c67650ec0dc6b5b7352544",
+          "ps2xIOP/src/emulator/imports/iop_stdio.cpp": "89bc5d2ef9196aadafe7c4728e2fdc6814a9169e25b282631a53976735c86f47"
+        },
+        "files": {
+          "ps2xIOP/src/emulator/imports/iop_sysclib.cpp": "dfa92092fecaa2c792ce7c441ebd7ea62b95cca2e128b1e97c35b33749781041",
+          "ps2xIOP/src/emulator/imports/iop_sysclib.h": "05337a730dddd570ed33bcde9f5d8e16a5ffd57336dde4cb1acc1d75014d544c",
+          "ps2xIOP/src/emulator/imports/iop_stdio.cpp": "3911e35cfbc65f68f3261bf6f04eab3489ae3741c22fa3da96b2b23fc5c803dd"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0053-ee-thread-exit-trace.patch",
+        "sha256": "c40f3232fe5d088a834dba6f2810e2b40217863dda73098cd9723f060c434d8d",
+        "base_files": {
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp": "dc9f0abb11727c09294a7386673ad33b0be463aa9b6b5e0b1439babc058b9464",
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "d8063868b96f3090b4f11f935cce7fe723d56b2af4d1e2d403bab5aab2194138"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp": "ff85da54fc4c552f3a9bdd49d7727c0ecf9347196898d6f1511cc7ddf3927c2a",
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "d159fdd363a87d39f562aa05d36d987116a54e2239f78c4851133c7ea3920e8b"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0054-kernel-interrupt-state.patch",
+        "sha256": "ea0b49551404da7b8b7aea01cf5be3ca99a4c6faa2157ac48019337998a678df",
+        "base_files": {
+          "ps2xRuntime/include/runtime/ps2_memory.h": "5dc1b97effc7e85d79cb91254b581439ab0b8e592651a488f3a7d49f355ba741",
+          "ps2xRuntime/src/lib/ps2_memory.cpp": "bb6908bc37d6f65f123f2071e4ffbef3ac01313158c0f0543845aa415c9bc0a4",
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "d159fdd363a87d39f562aa05d36d987116a54e2239f78c4851133c7ea3920e8b"
+        },
+        "files": {
+          "ps2xRuntime/include/runtime/ps2_memory.h": "33b39bf5d6bee47382625437ac4205d7c288c14fe20497c9864f4455ec7c6ec2",
+          "ps2xRuntime/src/lib/ps2_memory.cpp": "2612db43acc20f5e0b53b5b2110e2e7ee230cf6c73105417f5bd93e7219dd17e",
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "7719713c37dd66c5614f564f316c4340bfda10869aa7397b3fa5a67e159b523e"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0055-empty-scissored-sprite.patch",
+        "sha256": "23411e71eeebcd8c976903dc67fad91b68eba3dc1dddf7fba69f377f018dbfd0",
+        "base_files": {
+          "ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp": "0895f0eac25123c77010960c74541aa5a3622a208c39deb2f68a2c97e36a1230"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp": "c192570fcce7a6be237ba7de44c18f823155ce8fcfd00f4099c25b9f4da9d9e2"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },

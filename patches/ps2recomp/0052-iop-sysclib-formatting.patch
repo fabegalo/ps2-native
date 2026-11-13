@@ -1,0 +1,176 @@
+--- a/ps2xIOP/src/emulator/imports/iop_sysclib.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_sysclib.cpp
+@@ -4,13 +4,93 @@
+ #include "../core/iop_memory.h"
+ 
+ #include <cctype>
++#include <cstdio>
+ #include <cstdlib>
++#include <cstring>
+ #include <optional>
+ #include <string>
+ #include <vector>
+ 
+ namespace ps2x::iop::detail
+ {
++    std::string formatGuestString(const IopMemory &memory, uint32_t format,
++                                  const std::function<uint32_t(uint32_t)> &argument)
++    {
++        const std::string spec = memory.readString(format, 4096u);
++        std::string out;
++        uint32_t next = 0;
++        for (size_t i = 0; i < spec.size(); ++i)
++        {
++            if (spec[i] != '%')
++            {
++                out += spec[i];
++                continue;
++            }
++            // %[flags][width][.precision][length]conversion; '*' takes an argument.
++            std::string piece = "%";
++            size_t j = i + 1;
++            while (j < spec.size() && std::strchr("-+ #0", spec[j]))
++                piece += spec[j++];
++            for (int part = 0; part < 2; ++part)
++            {
++                if (part == 1)
++                {
++                    if (j >= spec.size() || spec[j] != '.')
++                        break;
++                    piece += spec[j++];
++                }
++                if (j < spec.size() && spec[j] == '*')
++                {
++                    piece += std::to_string(static_cast<int32_t>(argument(next++)));
++                    ++j;
++                }
++                while (j < spec.size() && std::isdigit(static_cast<unsigned char>(spec[j])))
++                    piece += spec[j++];
++            }
++            while (j < spec.size() && std::strchr("hlLqjzt", spec[j]))
++                ++j;
++            if (j >= spec.size())
++                break;
++            const char conversion = spec[j];
++            i = j;
++            char buffer[512];
++            switch (conversion)
++            {
++            case '%':
++                out += '%';
++                continue;
++            case 's':
++            {
++                const uint32_t address = argument(next++);
++                const std::string text = address ? memory.readString(address, 4096u) : std::string("(null)");
++                std::snprintf(buffer, sizeof(buffer), (piece + 's').c_str(), text.c_str());
++                break;
++            }
++            case 'c':
++                std::snprintf(buffer, sizeof(buffer), (piece + 'c').c_str(), static_cast<int>(argument(next++) & 0xFFu));
++                break;
++            case 'd':
++            case 'i':
++                std::snprintf(buffer, sizeof(buffer), (piece + 'd').c_str(), static_cast<int32_t>(argument(next++)));
++                break;
++            case 'u':
++            case 'x':
++            case 'X':
++            case 'o':
++                std::snprintf(buffer, sizeof(buffer), (piece + conversion).c_str(), argument(next++));
++                break;
++            case 'p':
++                std::snprintf(buffer, sizeof(buffer), "%x", argument(next++));
++                break;
++            default: // Floating point does not reach IOP printf; keep the text visible.
++                out += piece + conversion;
++                continue;
++            }
++            out += buffer;
++        }
++        return out;
++    }
++
+     IopSysclib::IopSysclib(IopMemory &memory) noexcept
+         : m_memory(memory)
+     {
+@@ -124,15 +204,20 @@
+         case 18: // prnt
+             setV0(0);
+             return true;
+-        case 19: // sprintf: preserve useful literal formats even before full vararg formatting.
+-        case 42: // vsprintf fallback: copy format literal.
+-        {
+-            const std::string format = m_memory.readString(a1, 4096u);
+-            for (size_t i = 0; i <= format.size(); ++i)
+-            {
+-                m_memory.write8(a0 + static_cast<uint32_t>(i), i < format.size() ? static_cast<uint8_t>(format[i]) : 0u);
+-            }
+-            setV0(static_cast<uint32_t>(format.size()));
++        case 19: // sprintf(buffer, format, ...): o32 varargs start at a2.
++        case 42: // vsprintf(buffer, format, va_list)
++        {
++            const uint32_t sp = cpu.gpr[29];
++            const std::string text = formatGuestString(m_memory, a1, [&](uint32_t index) -> uint32_t
++            {
++                if (ordinal == 42)
++                    return m_memory.read32(a2 + 4u * index);
++                const uint32_t slot = index + 2u;
++                return slot < 4u ? cpu.gpr[4 + slot] : m_memory.read32(sp + 4u * slot);
++            });
++            for (size_t i = 0; i <= text.size(); ++i)
++                m_memory.write8(a0 + static_cast<uint32_t>(i), i < text.size() ? static_cast<uint8_t>(text[i]) : 0u);
++            setV0(static_cast<uint32_t>(text.size()));
+             return true;
+         }
+         case 20:
+--- a/ps2xIOP/src/emulator/imports/iop_sysclib.h
++++ b/ps2xIOP/src/emulator/imports/iop_sysclib.h
+@@ -1,11 +1,18 @@
+ #pragma once
+ 
+ #include <cstdint>
++#include <functional>
++#include <string>
+ 
+ namespace ps2x::iop::detail
+ {
+     struct IopCpuState;
+     class IopMemory;
++
++    // C printf formatting of a guest format string; argument(i) returns the
++    // i-th 32-bit variadic argument.
++    std::string formatGuestString(const IopMemory &memory, uint32_t format,
++                                  const std::function<uint32_t(uint32_t)> &argument);
+ 
+     class IopSysclib
+     {
+--- a/ps2xIOP/src/emulator/imports/iop_stdio.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_stdio.cpp
+@@ -1,4 +1,5 @@
+ #include "iop_stdio.h"
++#include "iop_sysclib.h"
+ 
+ #include "../core/iop_cpu.h"
+ #include "../core/iop_memory.h"
+@@ -30,9 +31,18 @@
+ 
+         switch (ordinal)
+         {
+-        case 4: // printf
+-            logString("[IOP printf] ", a0);
++        case 4: // printf(format, ...): o32 varargs start at a1.
++        {
++            const uint32_t sp = cpu.gpr[29];
++            const std::string text = formatGuestString(m_memory, a0, [&](uint32_t index) -> uint32_t
++            {
++                const uint32_t slot = index + 1u;
++                return slot < 4u ? cpu.gpr[4 + slot] : m_memory.read32(sp + 4u * slot);
++            });
++            m_host.log(LogLevel::Info, "[IOP printf] " + text);
++            setV0(static_cast<uint32_t>(text.size()));
+             return true;
++        }
+         case 5: // getchar
+         case 10:
+             setV0(0xFFFFFFFFu);

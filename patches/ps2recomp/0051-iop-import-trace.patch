@@ -1,0 +1,37 @@
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -21,6 +21,7 @@
+ 
+ #include <algorithm>
+ #include <cctype>
++#include <cstdlib>
+ #include <map>
+ #include <optional>
+ #include <span>
+@@ -252,7 +253,26 @@
+             Missing,
+         };
+ 
++        // PS2N_DEVICE_TRACE: one line per service import (library, ordinal, arguments, result).
+         ImportDisposition dispatchImport(const IopImportCall &call, CpuState &cpu)
++        {
++            static const bool trace = [] { const char *v = std::getenv("PS2N_DEVICE_TRACE"); return v && v[0] && v[0] != '0'; }();
++            const uint32_t a[4] = {cpu.gpr[4], cpu.gpr[5], cpu.gpr[6], cpu.gpr[7]};
++            const uint32_t ra = cpu.gpr[31];
++            const ImportDisposition disposition = dispatchServiceImport(call, cpu);
++            if (trace && !iequals(call.library, "sysclib") && !iequals(call.library, "intrman") &&
++                !iequals(call.library, "thsemap") && disposition != ImportDisposition::JumpToGuest)
++            {
++                std::ostringstream out;
++                out << "[IOP-IMPORT] " << call.library << ':' << std::dec << call.ordinal << std::hex << " ra=0x" << ra
++                    << " a=" << a[0] << ',' << a[1] << ',' << a[2] << ',' << a[3] << " v0=" << cpu.gpr[2]
++                    << (disposition == ImportDisposition::Missing ? " missing" : "");
++                log(LogLevel::Info, out.str());
++            }
++            return disposition;
++        }
++
++        ImportDisposition dispatchServiceImport(const IopImportCall &call, CpuState &cpu)
+         {
+             const uint32_t a0 = cpu.gpr[4];
+             auto setV0 = [&](uint32_t value)

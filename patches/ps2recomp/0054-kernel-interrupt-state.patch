@@ -1,0 +1,65 @@
+--- a/ps2xRuntime/include/runtime/ps2_memory.h
++++ b/ps2xRuntime/include/runtime/ps2_memory.h
+@@ -306,6 +306,9 @@
+     // Hardware register interface
+     bool writeIORegister(uint32_t address, uint32_t value);
+     uint32_t readIORegister(uint32_t address);
++    // INTC_STAT: the cause bit latches when the interrupt is raised; guests
++    // clear it by writing one, and polling code (sceGsSyncV) reads it.
++    void raiseIntcStatus(uint32_t cause);
+ 
+     // EE timers advance from the scheduler's emulated EE-cycle clock. The
+     // returned mask uses bits 0..3 for newly raised TIM0..TIM3 interrupts.
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -1208,6 +1208,12 @@
+         {
+             m_ioRegisters[address] = value;
+         }
++        return true;
++    }
++
++    if (address == 0x1000F000u) // INTC_STAT: write one to clear
++    {
++        m_ioRegisters[address] = (m_ioRegisters.count(address) ? m_ioRegisters[address] : 0u) & ~value;
+         return true;
+     }
+ 
+@@ -2316,6 +2322,12 @@
+     return progressed;
+ }
+ 
++void PS2Memory::raiseIntcStatus(uint32_t cause)
++{
++    if (cause < 15u)
++        m_ioRegisters[0x1000F000u] = (m_ioRegisters.count(0x1000F000u) ? m_ioRegisters[0x1000F000u] : 0u) | (1u << cause);
++}
++
+ uint32_t PS2Memory::readIORegister(uint32_t address)
+ {
+     if (address == 0x1000F520u)
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -1460,8 +1460,12 @@
+     {
+         return existing->second;
+     }
++    // Interrupt and callback invocations run on kernel stacks, as on the
++    // console; the top of user RAM is where games place their main stack.
+     constexpr uint32_t kInvocationStackSize = 0x4000u;
+-    const uint32_t top = m_runtime.reserveAsyncCallbackStack(kInvocationStackSize, 16u);
++    const uint32_t base = m_runtime.kernelMalloc(kInvocationStackSize, 16u);
++    const uint32_t top = base != 0u ? base + kInvocationStackSize
++                                    : m_runtime.reserveAsyncCallbackStack(kInvocationStackSize, 16u);
+     if (top == 0u)
+     {
+         throw std::runtime_error("EE invocation stack space exhausted");
+@@ -1545,6 +1549,8 @@
+ void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
+ {
+     assertExecutor();
++    if (!dmac)
++        m_runtime.memory().raiseIntcStatus(cause);
+     const uint32_t mask = dmac ? m_enabledDmacMask : m_enabledIntcMask;
+     if (cause < 32u && (mask & (1u << cause)) == 0u)
+     {

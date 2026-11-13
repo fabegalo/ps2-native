@@ -1,0 +1,11 @@
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -1230,6 +1230,8 @@
+     const int drawY0 = clampInt(unclippedY0, ctx.scissor.y0, ctx.scissor.y1);
+     const int drawX1 = clampInt(unclippedX1, ctx.scissor.x0, ctx.scissor.x1);
+     const int drawY1 = clampInt(unclippedY1, ctx.scissor.y0, ctx.scissor.y1);
++    if (drawX1 < drawX0 || drawY1 < drawY0)
++        return; // an inverted scissor covers nothing
+ 
+     const uint64_t alphaReg = ctx.alpha;
+     const uint8_t alphaMode = static_cast<uint8_t>(alphaReg & 0xFFu);

@@ -1,0 +1,51 @@
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
+@@ -73,6 +73,10 @@
+                                                  bool deleteThread)
+         {
+             EeScheduler &ee = runtime->eeScheduler();
++            static const bool trace = [] { const char *v = std::getenv("PS2N_DEVICE_TRACE"); return v && v[0] && v[0] != '0'; }();
++            if (trace)
++                std::cerr << "[EE-exit] tid=" << tid << std::hex << " pc=0x" << ctx->pc << " ra=0x" << getRegU32(ctx, 31)
++                          << " a0=0x" << getRegU32(ctx, 4) << " sp=0x" << getRegU32(ctx, 29) << std::dec << std::endl;
+             const auto handlers = runtime->takeEeExitHandlers(tid);
+             std::vector<GuestInvocation> invocations;
+             invocations.reserve(handlers.size());
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -10,6 +10,8 @@
+ #include <cstring>
+ #include <limits>
+ #include <stdexcept>
++
++namespace { thread_local uint32_t g_lastDispatchedPc = 0u; thread_local uint32_t g_recent[16][2] = {}; thread_local uint32_t g_recentAt = 0u; }
+ 
+ namespace
+ {
+@@ -493,6 +495,16 @@
+                 }
+                 continue;
+             }
++            static const bool trace = [] { const char *v = std::getenv("PS2N_DEVICE_TRACE"); return v && v[0] && v[0] != '0'; }();
++            if (trace && running->id > 0)
++                std::cerr << "[EE-return] tid=" << running->id << std::hex << " last=0x" << g_lastDispatchedPc
++                          << " v0=0x" << getRegU32(&context, 2) << " sp=0x" << getRegU32(&context, 29);
++            if (trace && running->id > 0)
++            {
++                for (uint32_t i = 0; i < 16u; ++i)
++                    std::cerr << " " << g_recent[(g_recentAt + i) & 15u][0] << "/" << g_recent[(g_recentAt + i) & 15u][1];
++                std::cerr << std::dec << std::endl;
++            }
+             makeDormant(*running);
+             m_currentThreadId = 0;
+             copyMainContextToRuntime();
+@@ -533,6 +545,9 @@
+             continue;
+         }
+         PS2Runtime::RecompiledFunction function = m_runtime.lookupFunction(context.pc);
++        g_lastDispatchedPc = context.pc;
++        g_recent[g_recentAt & 15u][0] = context.pc;
++        g_recent[g_recentAt++ & 15u][1] = getRegU32(&context, 29);
+ 
+         if (checkpointDue(kGuestDispatchCycles))
+         {

@@ -374,19 +374,29 @@ fs::path game_executable(const Game& game) {
     return fs::path(PS2N_BINARY_DIR) / from_utf8("ps2n-game-" + game.id + PS2N_EXE_SUFFIX);
 }
 
-// libgraph routines that only compute environments or write GS/DMA state run
-// as the game's own recompiled code, like reference ports; their HLE stubs
-// placed the Z buffer over the second display buffer.
-bool original_libgraph_stub(const std::string& line) {
-    static const std::array<std::string_view, 14> names = {
-        "sceGsResetGraph", "sceGsSetDefDBuff", "sceGsSwapDBuff", "sceGsSetDefLoadImage", "sceGsSetDefStoreImage",
-        "sceGsSetDefDBuffDc", "sceGsSwapDBuffDc", "sceGsSetDefDispEnv", "sceGsPutDispEnv", "sceGszbufaddr",
-        "sceGsSetDefDrawEnv", "sceGsSetDefClear", "sceGsPutDrawEnv", "sceGsSetDefDrawEnv2"};
+// Library code runs as the game's own recompiled code, like reference ports;
+// the runtime emulates the hardware and the kernel syscalls beneath it. Only
+// clients of IOP services keep runtime handlers until the IOP side speaks the
+// SIF RPC protocol (the analyzer's other HLE stubs diverged from the originals,
+// e.g. libgraph placed Z over a display buffer).
+bool runtime_owned_stub(const std::string& line) {
+    static const std::array<std::string_view, 14> prefixes = {
+        "sceSif", "_sceSif", "isceSif", "_sceRpc", "sceCd", "_sceCd", "sceMc", "mce",
+        "scePad", "sceFs", "_sceFs", "sceDeci2", "sceTty", "sceIo"};
+    // libkernel routines that patch or extend the kernel (kCopy/SetSyscall)
+    // belong to the runtime, which is the kernel here.
+    static const std::array<std::string_view, 20> names = {
+        "sceOpen", "sceClose", "sceLseek", "sceRead", "sceWrite", "sceIoctl",
+        "InitThread", "InitAlarm", "InitTLB", "InitTLBFunctions", "InitTLB32MB", "InitExecPS2", "InitOsd",
+        "StartThread", "iWakeupThread", "iRotateThreadReadyQueue", "SetAlarm", "iSetAlarm", "ReleaseAlarm",
+        "iReleaseAlarm"};
     const auto start = line.find('"');
-    const auto at = line.find('@', start);
-    if (start == std::string::npos || at == std::string::npos) return false;
-    const std::string_view name(line.data() + start + 1, at - start - 1);
-    return std::find(names.begin(), names.end(), name) != names.end();
+    if (start == std::string::npos) return true;
+    auto end = line.find_first_of("@\"", start + 1);
+    if (end == std::string::npos) return true;
+    const std::string_view name(line.data() + start + 1, end - start - 1);
+    if (std::find(names.begin(), names.end(), name) != names.end()) return true;
+    return std::any_of(prefixes.begin(), prefixes.end(), [&](std::string_view p) { return name.starts_with(p); });
 }
 
 void analyze(const Game& game) {
@@ -403,7 +413,7 @@ void analyze(const Game& game) {
         else if (line.starts_with("output = ")) line = "output = \"generated/\"";
         else if (line.starts_with("stubs = [")) in_stubs = true;
         else if (line.starts_with("]")) in_stubs = false;
-        else if (in_stubs && original_libgraph_stub(line)) continue;
+        else if (in_stubs && !runtime_owned_stub(line)) continue;
         config += line + "\n";
     }
     write_text(game.dir / "config.toml", config);
