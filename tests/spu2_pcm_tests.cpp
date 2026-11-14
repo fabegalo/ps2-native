@@ -4,7 +4,9 @@
 #include "kzspu2.h"
 #include "ps2native/sha256.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -86,10 +88,27 @@ int main() {
     const size_t end = pcm.size() / 2;
     const double on = rms(start + 2400, start + 24000), tail = rms(end - 4800, end);
     const auto hash = ps2native::sha256_hex({reinterpret_cast<const uint8_t*>(pcm.data()), pcm.size() * 2});
+    if (const char* out = std::getenv("PS2N_SPU2_PCM_OUT"))  // raw S16 stereo, for listening and diffing
+        if (FILE* f = std::fopen(out, "wb")) { std::fwrite(pcm.data(), 2, pcm.size(), f); std::fclose(f); }
     std::printf("frames=%zu rms_on=%.1f rms_tail=%.1f sha256=%s\n", end, on, tail, hash.c_str());
     if (on < 500) { std::puts("FAIL: voices silent"); return 1; }
     constexpr const char* kExpected = "ac5db4520c88b13ae29a8f20a7cb5cce0e50c06a8916c603430f3e1725784818";
-    if (hash != kExpected) { std::puts("FAIL: PCM differs from the reference mix"); return 1; }
+    if (hash != kExpected) {
+        // Locate the first 1200-frame block that differs and show it, to diagnose the divergent path.
+        static const uint64_t kBlocks[] = {
+            0x7dbf3899dfcbe0beull, 0x296099c117326f10ull, 0x80dda82e575a46d4ull, 0x9229035f86791c21ull, 0xe547101d87d1c97dull, 0x5f7a744ed2134c6dull, 0xc8f8b81669fd2eefull, 0x5b6ec171f2b84599ull, 0x27c9dd826fa9c97aull, 0xf947734be6da8c88ull, 0xed7a953220f222d2ull, 0xcc0a66d0e473b1a4ull, 0xd8f455df4dbfeab2ull, 0x681719d0facded39ull, 0xa1387c4fcf4a4b7dull, 0x3a1c7c9cbccb0bd8ull, 0xec8e7c042f4e0601ull, 0xe147471e88c4ba77ull, 0x7df53e5a2e08a988ull, 0xb1858d2ea4f2b33bull, 0xd336c4ecc29482c3ull, 0x5d0de6b30ce1953dull, 0xaf3b93e43f58e486ull, 0x2e00b20ba42cdb2bull, 0x7a31c02c858965ffull, 0xa1063ae79e9d164cull, 0x885151abaa4ec097ull, 0x848d51688fd07648ull, 0x782e582366bdd4dull, 0xe1c9ce1e4c2f895full, 0x6bea631f8940284aull, 0x9949b3bbce880773ull, 0xcd1962cf6b2f0b7full};
+        for (size_t b = 0; b * 1200 < end; ++b) {
+            uint64_t h = 14695981039346656037ull;
+            for (size_t i = b * 2400; i < std::min(pcm.size(), b * 2400 + 2400); ++i) h = (h ^ uint16_t(pcm[i])) * 1099511628211ull;
+            if (b < sizeof kBlocks / sizeof *kBlocks ? h == kBlocks[b] : false) continue;
+            std::printf("first divergent block %zu (frame %zu) hash=%llx:", b, b * 1200, (unsigned long long)h);
+            for (size_t i = b * 2400; i < std::min(pcm.size(), b * 2400 + 64); ++i) std::printf(" %d", pcm[i]);
+            std::puts("");
+            break;
+        }
+        std::puts("FAIL: PCM differs from the reference mix");
+        return 1;
+    }
     std::puts("SPU2 PCM regression passed");
     return 0;
 }
