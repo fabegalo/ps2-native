@@ -241,6 +241,16 @@ static void drawAndRead(Vulkan::Device& device, ParallelGS::SuperSampling sampli
 
 int main() try {
     GSMem::InitLookupTables();
+    {
+        // PATH2 header: A+D x4, then an IMAGE tag whose 4 qwords come in the next packet.
+        uint64_t packet[12] = {4ull | (1ull << 60), 0xE};
+        packet[10] = 4ull | (2ull << 58);
+        const auto* bytes = reinterpret_cast<const uint8_t*>(packet);
+        require(ps2n_whole_gif_tags(bytes, 96) == 80 && ps2n_whole_gif_tags(bytes, 80) == 80 &&
+                ps2n_gif_loops_in(packet[10], 0) == 0 && ps2n_gif_loops_in(packet[10], 32) == 2 &&
+                ps2n_gif_payload_bytes(3ull | (1ull << 58) | (3ull << 60)) == 80,
+                "GIF packet framing differs from the frontend parser");
+    }
     require(Vulkan::Context::init_loader(nullptr), "Vulkan loader unavailable");
     Vulkan::Context context;
     context.set_num_thread_indices(1);

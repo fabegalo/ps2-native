@@ -82,7 +82,18 @@ public:
     }
     void submitGsPacket(const uint8_t* data, uint32_t size) override {
         DeviceLock lock(mutex_);
-        gpu_.gif_transfer(0, data, size);
+        // The frontend parses every packet from a tag boundary and drops what a
+        // last tag lacks (PATH2 sends an IMAGE tag alone, then re-tags its data).
+        // paraLLEl-GS keeps tag state across calls, so give it the same view.
+        const uint32_t whole = ps2n_whole_gif_tags(data, size);
+        gpu_.gif_transfer(0, data, whole);
+        if (size - whole < 16) return;
+        uint64_t tag[2];
+        std::memcpy(tag, data + whole, sizeof tag);
+        const uint32_t loops = ps2n_gif_loops_in(tag[0], size - whole - 16);
+        tag[0] = (tag[0] & ~0x7fffull) | loops;
+        gpu_.gif_transfer(0, tag, sizeof tag);
+        gpu_.gif_transfer(0, data + whole + 16, ps2n_gif_payload_bytes(tag[0]));
     }
     void writeGsRegister(uint8_t address, uint64_t value) override {
         DeviceLock lock(mutex_);
@@ -227,6 +238,28 @@ public:
 }
 #endif
 
+uint32_t ps2n_gif_payload_bytes(uint64_t tag) {
+    const uint64_t loops = tag & 0x7fff, format = (tag >> 58) & 3, regs = ((tag >> 60) & 15) ? ((tag >> 60) & 15) : 16;
+    return uint32_t(format == 0 ? loops * regs * 16 : format == 1 ? ((loops * regs * 8 + 15) & ~15ull) : loops * 16);
+}
+
+uint32_t ps2n_gif_loops_in(uint64_t tag, uint32_t bytes) {
+    const uint64_t format = (tag >> 58) & 3, regs = ((tag >> 60) & 15) ? ((tag >> 60) & 15) : 16;
+    return std::min<uint32_t>(tag & 0x7fff, uint32_t(format == 0 ? bytes / (regs * 16) : format == 1 ? bytes / (regs * 8) : bytes / 16));
+}
+
+uint32_t ps2n_whole_gif_tags(const uint8_t* data, uint32_t size) {
+    uint32_t offset = 0;
+    while (size - offset >= 16) {
+        uint64_t tag;
+        std::memcpy(&tag, data + offset, sizeof tag);
+        const uint32_t payload = ps2n_gif_payload_bytes(tag);
+        if (size - offset - 16 < payload) break;
+        offset += 16 + payload;
+    }
+    return offset;
+}
+
 void ps2n_trace_vram(const std::vector<uint8_t>& vram, uint64_t tick) {
     for (size_t page = 0; page < vram.size(); page += 256 * 1024) {
         uint64_t hash = 14695981039346656037ull;
@@ -244,7 +277,8 @@ void ps2n_trace_scanout(const PresentationFrame& frame, const GSPresentationRequ
     // Optional bounded captures, shared by every backend for visual comparison.
     static const char* shots = std::getenv("PS2N_GS_SHOT");
     static unsigned shotCount = 0;
-    static uint64_t nextShot = 0;
+    static const char* from = std::getenv("PS2N_GS_SHOT_FROM"); // first guest vsync to capture
+    static uint64_t nextShot = from ? std::strtoull(from, nullptr, 10) : 0;
     const auto anyLit = [&] {
         for (size_t i = 0; i + 3 < frame.pixels.size(); i += 4)
             if (frame.pixels[i] | frame.pixels[i + 1] | frame.pixels[i + 2]) return true;
