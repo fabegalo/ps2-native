@@ -1,0 +1,266 @@
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -7,6 +7,10 @@
+ #include "runtime/gs/ps2_gs_memory.h"
+ #include "ps2_log.h"
+ #include <atomic>
++#include <condition_variable>
++#include <functional>
++#include <mutex>
++#include <thread>
+ #include <algorithm>
+ #include <cmath>
+ #include <chrono>
+@@ -305,6 +309,150 @@
+ 
+ namespace
+ {
++    // Draws the row bands of one large primitive on helper threads; the GS
++    // thread takes bands too and returns once every band is done.
++    class RasterBands
++    {
++    public:
++        static RasterBands &instance()
++        {
++            static RasterBands pool;
++            return pool;
++        }
++        unsigned threads() const { return static_cast<unsigned>(m_workers.size()) + 1u; }
++        void run(unsigned bands, const std::function<void(unsigned)> &job)
++        {
++            {
++                std::lock_guard<std::mutex> lock(m_mutex);
++                m_job = &job;
++                m_bands = bands;
++                m_next = 0u;
++                m_done = 0u;
++                ++m_generation;
++            }
++            m_wake.notify_all();
++            work();
++            std::unique_lock<std::mutex> lock(m_mutex);
++            m_finished.wait(lock, [&] { return m_done == m_bands; });
++            m_job = nullptr;
++        }
++
++    private:
++        RasterBands()
++        {
++            const unsigned count = std::min(8u, std::max(1u, std::thread::hardware_concurrency() / 2u));
++            for (unsigned i = 1u; i < count; ++i)
++                m_workers.emplace_back([this] { loop(); });
++        }
++        ~RasterBands()
++        {
++            {
++                std::lock_guard<std::mutex> lock(m_mutex);
++                m_stop = true;
++            }
++            m_wake.notify_all();
++            for (auto &worker : m_workers)
++                worker.join();
++        }
++        void loop()
++        {
++            uint64_t seen = 0u;
++            for (;;)
++            {
++                std::unique_lock<std::mutex> lock(m_mutex);
++                m_wake.wait(lock, [&] { return m_stop || m_generation != seen; });
++                if (m_stop)
++                    return;
++                seen = m_generation;
++                lock.unlock();
++                work();
++            }
++        }
++        void work()
++        {
++            std::unique_lock<std::mutex> lock(m_mutex);
++            while (m_job && m_next < m_bands)
++            {
++                const unsigned band = m_next++;
++                const auto *job = m_job;
++                lock.unlock();
++                (*job)(band);
++                lock.lock();
++                if (++m_done == m_bands)
++                    m_finished.notify_all();
++            }
++        }
++
++        std::vector<std::thread> m_workers;
++        std::mutex m_mutex;
++        std::condition_variable m_wake, m_finished;
++        const std::function<void(unsigned)> *m_job = nullptr;
++        unsigned m_bands = 0u, m_next = 0u, m_done = 0u;
++        uint64_t m_generation = 0u;
++        bool m_stop = false;
++    };
++
++    // Swizzled VRAM bytes a buffer of this format and width may touch in rows [0, height).
++    struct VramSpan
++    {
++        uint64_t begin, end;
++        bool overlaps(const VramSpan &other) const { return begin < other.end && other.begin < end; }
++    };
++
++    // Columns past the buffer width spill into the next page row, so width counts too.
++    VramSpan vramSpan(uint32_t block, uint32_t psm, uint32_t bw, uint32_t width, uint32_t height)
++    {
++        uint32_t pageW = 64u, pageH = 32u;
++        switch (psm)
++        {
++        case GS_PSM_CT16: case GS_PSM_CT16S: case GS_PSM_Z16: case GS_PSM_Z16S: pageH = 64u; break;
++        case GS_PSM_T8: pageW = 128u; pageH = 64u; break;
++        case GS_PSM_T4: pageW = 128u; pageH = 128u; break;
++        default: break;
++        }
++        const uint64_t pagesWide = (std::max<uint32_t>(bw, 1u) * 64u + pageW - 1u) / pageW;
++        const uint64_t pagesTall = (std::max<uint64_t>(height, 1u) + pageH - 1u) / pageH;
++        const uint64_t lastRowPages = (std::max<uint64_t>(width, 1u) + pageW - 1u) / pageW;
++        const uint64_t begin = static_cast<uint64_t>(block) * 256u;
++        return {begin, begin + ((pagesTall - 1u) * pagesWide + std::max(lastRowPages, pagesWide) + 1u) * 8192u};
++    }
++
++    // Rows of a primitive can be drawn in parallel bands when it is large and
++    // no band can read or write bytes that another band writes.
++    bool canDrawInBands(const GSDrawState &state, int x1, int y0, int y1, const VramSpan *texture)
++    {
++        constexpr uint64_t kMinPixels = 16384u;
++        constexpr uint64_t kVramBytes = 4u * 1024u * 1024u;
++        const auto &ctx = state.context;
++        if (static_cast<uint64_t>(x1 + 1) * static_cast<uint64_t>(y1 - y0 + 1) < kMinPixels)
++            return false;
++        const uint32_t fbw = std::max<uint32_t>(ctx.frame.fbw, 1u);
++        const uint32_t rows = static_cast<uint32_t>(y1 + 1);
++        const uint32_t columns = static_cast<uint32_t>(x1 + 1);
++        const VramSpan frame = vramSpan(GSInternal::framePageBaseToBlock(ctx.frame.fbp), ctx.frame.psm, fbw, columns, rows);
++        const VramSpan depth = vramSpan(GSInternal::framePageBaseToBlock(ctx.zbuf.zbp), ctx.zbuf.psm, fbw, columns, rows);
++        const bool usesDepth = ((ctx.test >> 17) & 3u) >= 2u || !ctx.zbuf.zmask; // Z read by GEQUAL/GREATER, written unless masked
++        if (frame.end > kVramBytes || (usesDepth && (depth.end > kVramBytes || depth.overlaps(frame))))
++            return false;
++        if (texture && (texture->end > kVramBytes || texture->overlaps(frame) || (usesDepth && texture->overlaps(depth))))
++            return false;
++        return true;
++    }
++
++    template <class Prepare, class Draw>
++    void drawInBands(int y0, int y1, Prepare prepare, Draw draw)
++    {
++        auto &pool = RasterBands::instance();
++        const int rows = y1 - y0 + 1;
++        const unsigned count = std::min<unsigned>(pool.threads() * 4u, static_cast<unsigned>(rows));
++        prepare(count);
++        const std::function<void(unsigned)> job = [&](unsigned band) {
++            draw(band, y0 + static_cast<int>(static_cast<int64_t>(rows) * band / count),
++                 y0 + static_cast<int>(static_cast<int64_t>(rows) * (band + 1u) / count) - 1);
++        };
++        pool.run(count, job);
++    }
++
+     static constexpr uint32_t kDefaultDisplayWidth = 640u;
+     static constexpr uint32_t kDefaultDisplayHeight = 448u;
+     static constexpr uint32_t kHostFrameWidth = 640u;
+@@ -1305,7 +1453,8 @@
+                     sample - static_cast<float>(i0)};
+         };
+ 
+-        thread_local std::vector<TextureAxis> columns;
++        thread_local std::vector<TextureAxis> columnStorage;
++        std::vector<TextureAxis> &columns = columnStorage; // bands on other threads read this thread's columns
+         columns.resize(static_cast<size_t>(drawX1 - drawX0 + 1));
+         for (int x = drawX0; x <= drawX1; ++x)
+         {
+@@ -1315,9 +1464,9 @@
+                 static_cast<uint16_t>((clamp >> 14) & 0x3FFu));
+         }
+ 
+-        auto fetch = [&](int sampleU, int sampleV) -> uint32_t
++        auto fetch = [&](GSMem::TexturePageCache &cache, int sampleU, int sampleV) -> uint32_t
+         {
+-            const u32 out = ReadTextureVramUnlocked(tex.psm, tex.tbp0, tex.tbw, sampleU, sampleV);
++            const u32 out = !m_vram ? 0u : GSMem::ReadTexture(cache, m_vram, tex.psm, tex.tbp0, tex.tbw, sampleU, sampleV);
+             switch (tex.psm)
+             {
+             case GS_PSM_CT32:
+@@ -1340,7 +1489,9 @@
+             return 0xFFFF00FFu;
+         };
+ 
+-        for (int y = drawY0; y <= drawY1; ++y)
++        auto drawRows = [&](int firstRow, int lastRow, GSMem::TexturePageCache &cache)
++        {
++        for (int y = firstRow; y <= lastRow; ++y)
+         {
+             const float ty = (static_cast<float>(y - unclippedY0) + 0.5f) / spriteH;
+             const TextureAxis row = resolveAxis(v0f + (v1f - v0f) * ty, texH,
+@@ -1353,14 +1504,14 @@
+                 uint32_t texel;
+                 if (!state.linearFilter)
+                 {
+-                    texel = fetch(column.i0, row.i0);
++                    texel = fetch(cache, column.i0, row.i0);
+                 }
+                 else
+                 {
+-                    const uint32_t c00 = fetch(column.i0, row.i0);
+-                    const uint32_t c10 = fetch(column.i1, row.i0);
+-                    const uint32_t c01 = fetch(column.i0, row.i1);
+-                    const uint32_t c11 = fetch(column.i1, row.i1);
++                    const uint32_t c00 = fetch(cache, column.i0, row.i0);
++                    const uint32_t c10 = fetch(cache, column.i1, row.i0);
++                    const uint32_t c01 = fetch(cache, column.i0, row.i1);
++                    const uint32_t c11 = fetch(cache, column.i1, row.i1);
+                     texel = 0u;
+                     for (unsigned shift = 0; shift < 32u; shift += 8u)
+                         texel |= static_cast<uint32_t>(lerpChannel(static_cast<uint8_t>(c00 >> shift),
+@@ -1380,12 +1531,45 @@
+                 WritePixel(state, x, y, z1, color.r, color.g, color.b, color.a, v1.fog);
+             }
+         }
++        };
++
++        // Bands match the sequential draw only while the cached texture page
++        // still equals VRAM; each band then starts from that same cache.
++        // Region clamp/repeat can address up to texel 1023 on either axis.
++        const uint32_t texSpanW = (clamp & 0x2u) ? 1024u : static_cast<uint32_t>(texW);
++        const uint32_t texSpanH = (clamp & 0x8u) ? 1024u : static_cast<uint32_t>(texH);
++        const VramSpan texture = vramSpan(tex.tbp0, tex.psm, tex.tbw, texSpanW, texSpanH);
++        bool bands = m_vram && canDrawInBands(state, drawX1, drawY0, drawY1, &texture);
++        for (uint64_t page = texture.begin & ~uint64_t(8191u); bands && page < texture.end; page += 8192u)
++        {
++            GSMem::TexturePageCache probe = m_texturePageCache;
++            const uint32_t address = static_cast<uint32_t>(page);
++            bands = std::memcmp(probe.Resolve(m_vram, address), m_vram + address, 8192u) == 0;
++        }
++        if (!bands)
++        {
++            drawRows(drawY0, drawY1, m_texturePageCache);
++            return;
++        }
++        std::vector<GSMem::TexturePageCache> caches;
++        drawInBands(drawY0, drawY1, [&](unsigned count) { caches.assign(count, m_texturePageCache); },
++                    [&](unsigned band, int first, int last) { drawRows(first, last, caches[band]); });
++        m_texturePageCache = caches.back(); // what the last rows leave, as in a sequential draw
+     }
+     else
+     {
+-        for (int y = drawY0; y <= drawY1; ++y)
+-            for (int x = drawX0; x <= drawX1; ++x)
+-                WritePixel(state, x, y, z1, r, g, b, a, v1.fog);
++        auto drawRows = [&](int firstRow, int lastRow)
++        {
++            for (int y = firstRow; y <= lastRow; ++y)
++                for (int x = drawX0; x <= drawX1; ++x)
++                    WritePixel(state, x, y, z1, r, g, b, a, v1.fog);
++        };
++        if (!canDrawInBands(state, drawX1, drawY0, drawY1, nullptr))
++        {
++            drawRows(drawY0, drawY1);
++            return;
++        }
++        drawInBands(drawY0, drawY1, [](unsigned) {}, [&](unsigned, int first, int last) { drawRows(first, last); });
+     }
+ }
+ 

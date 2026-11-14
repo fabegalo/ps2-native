@@ -844,6 +844,17 @@
         },
         "hash_format": "utf8-lf",
         "sha256": "a4dbdaa81c20d92580e26bc139e9590ebf166c4b638e388b6fada6e0f87125c7"
+      },
+      {
+        "base_files": {
+          "ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp": "c192570fcce7a6be237ba7de44c18f823155ce8fcfd00f4099c25b9f4da9d9e2"
+        },
+        "file": "patches/ps2recomp/0059-parallel-sprite-bands.patch",
+        "files": {
+          "ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp": "d528768c4d9acecf9228140c795f8a066dc011a9e522637421f43749ff1a7687"
+        },
+        "hash_format": "utf8-lf",
+        "sha256": "99588d9fb551978154eca1dd778ab753d0e14f77dfecab87cdc631790c83a93c"
       }
     ]
   },
