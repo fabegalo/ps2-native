@@ -87,6 +87,20 @@ foreach(_path IN LISTS _changes)
 endforeach()
 set(PS2N_PS2RECOMP_DIR "${_ps2recomp}")
 
+# ARM64 hosts: PS2Recomp's SSE code goes through sse2neon, pinned in deps.lock.json host_libraries.
+set(_ps2n_sse2neon "${PROJECT_SOURCE_DIR}/external/sse2neon")
+set(_ps2n_cpu "${CMAKE_SYSTEM_PROCESSOR}")
+if(MSVC)
+    set(_ps2n_cpu "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}")
+endif()
+if(_ps2n_cpu MATCHES "^(aarch64|arm64|ARM64)$")
+    if(NOT EXISTS "${_ps2n_sse2neon}/sse2neon.h")
+        message(FATAL_ERROR "sse2neon missing; run scripts/fetch-pcsx2-components.py --group host_libraries")
+    endif()
+    include_directories(SYSTEM "${_ps2n_sse2neon}")
+    add_compile_definitions(USE_SSE2NEON)
+endif()
+
 # Recompiler and analyzer: the upstream top-level build, tools only.
 set(PS2N_PS2RECOMP_TOOLS_DIR "${CMAKE_BINARY_DIR}/ps2recomp-tools")
 ExternalProject_Add(ps2recomp_tools
@@ -94,6 +108,7 @@ ExternalProject_Add(ps2recomp_tools
     BINARY_DIR "${PS2N_PS2RECOMP_TOOLS_DIR}"
     CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release -DPS2X_BUILD_RUNTIME=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF
         -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+        "-DFETCHCONTENT_SOURCE_DIR_SSE2NEON=${_ps2n_sse2neon}"
     BUILD_COMMAND "${CMAKE_COMMAND}" --build "${PS2N_PS2RECOMP_TOOLS_DIR}" --config Release --target ps2_recomp ps2_analyzer
     INSTALL_COMMAND ""
     BUILD_ALWAYS ON

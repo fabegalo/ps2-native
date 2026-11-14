@@ -5,6 +5,7 @@
 /external/pcsx2-components/
 /external/parallel-gs/
 /external/sdl3/
+/external/sse2neon/
 cmake-build-*/
 .cache/
 .vs/

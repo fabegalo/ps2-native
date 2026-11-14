@@ -1,0 +1,50 @@
+Select sse2neon before the MSVC intrinsics header, so Windows ARM64 gets SSE types.
+
+--- a/ps2xRuntime/include/ps2_runtime.h
++++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -7,10 +7,10 @@
+ #include <string>
+ #include <string_view>
+ #include <functional>
+-#if defined(_MSC_VER)
++#if defined(USE_SSE2NEON)
++#include "sse2neon.h"
++#elif defined(_MSC_VER)
+ #include <intrin.h>
+-#elif defined(USE_SSE2NEON)
+-#include "sse2neon.h"
+ #else
+ #include <immintrin.h> // For SSE/AVX instructions
+ #include <smmintrin.h> // For SSE4.1 instructions
+--- a/ps2xRuntime/include/ps2_runtime_macros.h
++++ b/ps2xRuntime/include/ps2_runtime_macros.h
+@@ -4,10 +4,10 @@
+ #include <cmath>
+ #include <cstring>
+ #include <bit>
+-#if defined(_MSC_VER)
++#if defined(USE_SSE2NEON)
++#include "sse2neon.h"
++#elif defined(_MSC_VER)
+ #include <intrin.h>
+-#elif defined(USE_SSE2NEON)
+-#include "sse2neon.h"
+ #else
+ #include <immintrin.h> // For SSE/AVX intrinsics
+ #endif
+--- a/ps2xRuntime/include/runtime/ps2_memory.h
++++ b/ps2xRuntime/include/runtime/ps2_memory.h
+@@ -12,10 +12,10 @@
+ #include <mutex>
+ 
+ #include "gs/ps2_gif_arbiter.h"
+-#if defined(_MSC_VER)
++#if defined(USE_SSE2NEON)
++#include "sse2neon.h"
++#elif defined(_MSC_VER)
+ #include <intrin.h>
+-#elif defined(USE_SSE2NEON)
+-#include "sse2neon.h"
+ #else
+ #include <immintrin.h> // For SSE/AVX instructions
+ #include <smmintrin.h> // For SSE4.1 instructions

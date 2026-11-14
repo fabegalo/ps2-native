@@ -816,6 +816,21 @@
           "ps2xIOP/src/emulator/core/iop_kernel.h": "0be90afb61df8a8d8ee6b028d0a99dac2fdf6d0ad4daba68c44471004e70bde9"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0057-sse2neon-before-msvc-intrinsics.patch",
+        "sha256": "d40edcc26008ca7d0204530f8d5e8abd3410a1a7c07851aa59c6a53466b90944",
+        "base_files": {
+          "ps2xRuntime/include/ps2_runtime.h": "f486881c698a34cf026474a66a408cdb0956dfb01becbd0b570207e829880317",
+          "ps2xRuntime/include/ps2_runtime_macros.h": "728d13c159be541a6a2f9250310244c6ff7ed6247988db835f05dfd956a8b197",
+          "ps2xRuntime/include/runtime/ps2_memory.h": "33b39bf5d6bee47382625437ac4205d7c288c14fe20497c9864f4455ec7c6ec2"
+        },
+        "files": {
+          "ps2xRuntime/include/ps2_runtime.h": "aac1a2c685f323ef12246cb63c0b04a4c93b693f0720c4269dee3a515c9a21a4",
+          "ps2xRuntime/include/ps2_runtime_macros.h": "41c2580d9884a637ba49d58a7da591e5c2450f6c8f6714d991702f3855fd7081",
+          "ps2xRuntime/include/runtime/ps2_memory.h": "05d7ab662b2afbf2b6d862bb683e1459a352c824e376feb4fe9c695a5d6a2c21"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },
@@ -924,6 +939,17 @@
       "directory": "external/sdl3",
       "archive": "out/dependencies/sdl3.tar.gz",
       "tree_sha256": "8a404094c286265502a2042c3ac1e05ef94e811f350fa91fdc02b9828a9cfbd7"
+    },
+    {
+      "name": "sse2neon",
+      "url": "https://codeload.github.com/DLTcollab/sse2neon/tar.gz/92f6de174717aef09033ad21568d5bb9e5470404",
+      "sha256": "c6b1abea2debdd534a3845e9079a99cac1c585ded4f8822676e6734ff3d55acb",
+      "archive_bytes": 270510,
+      "source_bytes": 1534022,
+      "files": 41,
+      "directory": "external/sse2neon",
+      "archive": "out/dependencies/sse2neon.tar.gz",
+      "tree_sha256": "92633eefad6b6c43212c62d737abfad192320f8c824036fad77d32396ec3fb77"
     }
   ]
 }
