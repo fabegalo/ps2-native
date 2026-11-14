@@ -5,11 +5,11 @@
 As seções abaixo descrevem o runtime próprio removido e são histórico.
 Contrato e estado vigentes: `docs/ARCHITECTURE.md`, seção Diretriz.
 
-1. Imagem do Super: os dois GS erram (listras/entrelaçamento/metade da altura no
-   CPU, lixo no paraLLEl). Separar fluxo de comandos de rasterizador antes de
-   corrigir; o tempo já é real fora dos picos de carga (patch 0049).
-2. paraLLEl-GS opcional: localizar o primeiro comando/estado que faz a VRAM
-   divergir do GS de CPU em vsync 127/239, sem raster duplicado nem scanout CPU.
+1. Velocidade do Super na partida (~62%): medir se o EE espera o raster de CPU em
+   FINISH (`GSSyncReason::Finish`). Acelerar o raster medido ou sinalizar
+   FINISH/IRQ quando a thread GS o alcançar, sem relógio acelerado.
+2. paraLLEl-GS: comandos e VRAM já iguais ao CPU; corrigir o scanout preto
+   das telas iniciais e a perda de dispositivo após readback local→host.
 3. BIOS: completar o bootstrap IOP por HLE (RESET `rom0:UDNL rom0:OSDCNF`)
    e sinalizar BOOTEND só após conclusão real.
 4. God of War bloqueia no índice de recursos; Killzone SCUS-97402 tem objetos
