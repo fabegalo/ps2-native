@@ -1,0 +1,78 @@
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -1237,6 +1237,9 @@
+ 
+     m_ioRegisters[address] = value;
+ 
++    if (address == 0x10003000u && (value & 1u)) // GIF_CTRL RST
++        transferState()->path3.clear();
++
+     if (address == 0x1000E000u || address == 0x1000F590u)
+         pollDmaRegisters();
+ 
+@@ -1949,6 +1952,28 @@
+     return causes;
+ }
+ 
++namespace
++{
++    // Bytes of whole GIF tags (tag + payload) at the start of a PATH3 stream.
++    uint32_t completeGifTagBytes(const uint8_t *data, uint32_t sizeBytes)
++    {
++        uint32_t offset = 0;
++        while (sizeBytes - offset >= 16u)
++        {
++            uint64_t tag = 0;
++            std::memcpy(&tag, data + offset, sizeof(tag));
++            const uint64_t loops = tag & 0x7FFFu, format = (tag >> 58u) & 3u;
++            const uint64_t registers = ((tag >> 60u) & 15u) ? ((tag >> 60u) & 15u) : 16u;
++            const uint64_t payload = format == 0u ? loops * registers * 16u :
++                format == 1u ? ((loops * registers * 8u + 15u) & ~15ull) : loops * 16u;
++            if (sizeBytes - offset - 16u < payload)
++                break;
++            offset += 16u + static_cast<uint32_t>(payload);
++        }
++        return offset;
++    }
++}
++
+ void PS2Memory::flushMaskedPath3Packets(bool drainImmediately)
+ {
+     if (m_path3Masked || m_path3MaskedFifo.empty())
+@@ -1978,8 +2003,26 @@
+     if (!data || sizeBytes < 16)
+         return;
+ 
++    std::vector<uint8_t> stream;
+     if (pathId == GifPathId::Path3)
+     {
++        // PATH3 is one stream: separate DMAs may carry a GIF tag and its payload
++        // (sceGsExecLoadImage sends the IMAGE tag and the image data apart).
++        // Only whole tags go on; an unfinished one waits for the next transfer.
++        auto &partial = transferState()->path3;
++        if (!partial.empty())
++        {
++            partial.insert(partial.end(), data, data + sizeBytes);
++            stream.swap(partial);
++            data = stream.data();
++            sizeBytes = static_cast<uint32_t>(stream.size());
++        }
++        const uint32_t complete = completeGifTagBytes(data, sizeBytes);
++        partial.assign(data + complete, data + sizeBytes);
++        sizeBytes = complete;
++        if (sizeBytes == 0)
++            return;
++
+         if (m_path3Masked)
+         {
+             m_path3MaskedFifo.emplace_back(data, data + sizeBytes);
+--- a/ps2xRuntime/src/lib/ps2_transfer_state.h
++++ b/ps2xRuntime/src/lib/ps2_transfer_state.h
+@@ -7,6 +7,7 @@
+ {
+     std::array<std::vector<uint8_t>, 2> vif;
+     std::vector<uint8_t> gif;
++    std::vector<uint8_t> path3; // PATH3 bytes of a GIF tag whose payload has not arrived yet
+     uint32_t mode = 0;
+     bool consumerActive = false;
+     bool tagLoaded = false;

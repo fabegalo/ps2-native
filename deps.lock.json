@@ -831,6 +831,19 @@
           "ps2xRuntime/include/runtime/ps2_memory.h": "05d7ab662b2afbf2b6d862bb683e1459a352c824e376feb4fe9c695a5d6a2c21"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "base_files": {
+          "ps2xRuntime/src/lib/ps2_memory.cpp": "2612db43acc20f5e0b53b5b2110e2e7ee230cf6c73105417f5bd93e7219dd17e",
+          "ps2xRuntime/src/lib/ps2_transfer_state.h": "626139433d7463c6006a2aabaf65a313e98a1a171a981307b95ff2ff28103959"
+        },
+        "file": "patches/ps2recomp/0058-path3-gif-tag-stream.patch",
+        "files": {
+          "ps2xRuntime/src/lib/ps2_memory.cpp": "06986e07e55d20a2948de743997a12a360b3d4935f82efc201501839415fe295",
+          "ps2xRuntime/src/lib/ps2_transfer_state.h": "60c5c878c471a0b24818bfab59f6737299c895138980c46c86da8d36c7f49686"
+        },
+        "hash_format": "utf8-lf",
+        "sha256": "a4dbdaa81c20d92580e26bc139e9590ebf166c4b638e388b6fada6e0f87125c7"
       }
     ]
   },
