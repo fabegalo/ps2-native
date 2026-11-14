@@ -4,6 +4,7 @@
 /external/pcsx2/
 /external/pcsx2-components/
 /external/parallel-gs/
+/external/sdl3/
 cmake-build-*/
 .cache/
 .vs/

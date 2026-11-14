@@ -1,5 +1,7 @@
 #include "pcsx2_audio.h"
 #include "kzspu2.h"
+#include <SDL3/SDL.h>
+#include <string>
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
@@ -7,43 +9,63 @@
 #include <stdexcept>
 #include <thread>
 
+namespace {
+// Audio-clock pacing: the SPU2 waits while this much PCM (~43 ms at 48 kHz) is queued.
+constexpr uint32_t kTargetFrames = 2048;
+}
+
 PCSX2Audio::PCSX2Audio() {
     trace_ = std::getenv("PS2N_DEVICE_TRACE") != nullptr;
-    if (!IsAudioDeviceReady()) throw std::runtime_error("Host audio device is unavailable");
+    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) throw std::runtime_error(std::string("SDL audio: ") + SDL_GetError());
     KzSpu2Config config;
     config.user = this;
     config.samples = [](void* p, const int16_t*, uint32_t frames) {
         auto& device = *static_cast<PCSX2Audio*>(p);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-        // Preserve PCM during catch-up; bound the wait if the host stops consuming.
-        while (kzspu2AvailableFrames() + frames > device.ringFrames_ &&
-               IsAudioStreamPlaying(device.stream_) && std::chrono::steady_clock::now() < deadline)
+        // Preserve PCM during catch-up; past the deadline the ring counts what it cannot hold.
+        while (kzspu2AvailableFrames() + frames > kTargetFrames && std::chrono::steady_clock::now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     };
-    ringFrames_ = config.ringFrames;
     config.irq = [](void* p) { static_cast<PCSX2Audio*>(p)->events_ |= 1u; };
     config.dmaComplete = [](void* p, int core) { static_cast<PCSX2Audio*>(p)->events_ |= 2u << core; };
     config.log = [](void*, int level, const char* text) {
         if (level) std::cerr << "[SPU2] " << text << '\n';
     };
-    if (!kzspu2Init(config)) throw std::runtime_error("PCSX2 SPU2 initialization failed");
-    stream_ = LoadAudioStream(48000, 16, 2);
-    if (!IsAudioStreamValid(stream_)) {
-        kzspu2Shutdown();
-        throw std::runtime_error("Could not create SPU2 PCM output");
+    if (!kzspu2Init(config)) {
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        throw std::runtime_error("PCSX2 SPU2 initialization failed");
     }
-    SetAudioStreamCallback(stream_, [](void* buffer, unsigned frames) {
-        const auto copied = kzspu2ReadSamples(static_cast<int16_t*>(buffer), frames);
-        std::memset(static_cast<int16_t*>(buffer) + copied * 2u, 0, (frames - copied) * 4u);
-    });
-    PlayAudioStream(stream_);
+    // The SPU2 outputs signed 16-bit stereo at 48 kHz; SDL receives it unchanged.
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "256");
+    const SDL_AudioSpec spec{SDL_AUDIO_S16, 2, 48000};
+    stream_ = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec,
+        [](void* p, SDL_AudioStream* stream, int additional, int) {
+            auto& device = *static_cast<PCSX2Audio*>(p);
+            int16_t buffer[512 * 2];
+            for (uint32_t wanted = static_cast<uint32_t>(additional) / 4u; wanted;) {
+                const auto copied = kzspu2ReadSamples(buffer, std::min<uint32_t>(wanted, 512u));
+                if (!copied) {
+                    device.underrunFrames_.fetch_add(wanted, std::memory_order_relaxed);
+                    break;
+                }
+                SDL_PutAudioStreamData(stream, buffer, static_cast<int>(copied * 4u));
+                wanted -= copied;
+            }
+        }, this);
+    if (!stream_ || !SDL_ResumeAudioStreamDevice(stream_)) {
+        const std::string error = SDL_GetError();
+        if (stream_) SDL_DestroyAudioStream(stream_);
+        kzspu2Shutdown();
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        throw std::runtime_error("Could not open SPU2 PCM output: " + error);
+    }
 }
 PCSX2Audio::~PCSX2Audio() {
-    StopAudioStream(stream_);
-    UnloadAudioStream(stream_);
+    SDL_DestroyAudioStream(stream_);
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
     const auto status = kzspu2GetStatus();
     std::cerr << "[SPU2] frames=" << status.framesMixed << " dropped=" << status.framesDropped
-              << " dma=" << status.dmaCount[0] << ',' << status.dmaCount[1]
+              << " underrun=" << underrunFrames_.load() << " dma=" << status.dmaCount[0] << ',' << status.dmaCount[1]
               << " peak=" << status.peak[0] << ',' << status.peak[1] << '\n';
     kzspu2Shutdown();
 }
@@ -77,6 +99,7 @@ void PCSX2Audio::advance(uint64_t c) {
                   << " voices=" << s.keyedOnVoices[0] << ',' << s.keyedOnVoices[1]
                   << " attr=" << std::hex << s.coreAttr[0] << ',' << s.coreAttr[1] << std::dec
                   << " peak=" << s.peak[0] << ',' << s.peak[1]
+                  << " underrun=" << underrunFrames_.load(std::memory_order_relaxed)
                   << " queued=" << kzspu2AvailableFrames() << " max_step=" << maxAdvance_
                   << " wall_ms=" << wallMs << '\n';
         maxAdvance_ = 0;

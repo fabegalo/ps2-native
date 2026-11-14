@@ -1,7 +1,9 @@
 #pragma once
 #include "ps2x/iop/iop_spu2.h"
-#include "raylib.h"
+#include <atomic>
 #include <chrono>
+
+struct SDL_AudioStream;
 
 // One device instance belongs to one supervised console session.
 class PCSX2Audio final : public ps2x::iop::IopSpu2Backend {
@@ -17,9 +19,9 @@ public:
     uint64_t nextEvent() override;
     uint32_t takeEvents() override;
 private:
-    AudioStream stream_{};
+    SDL_AudioStream* stream_ = nullptr;
+    std::atomic<uint64_t> underrunFrames_{0};
     uint32_t events_ = 0;
-    uint32_t ringFrames_ = 0;
     bool trace_ = false;
     uint64_t nextTrace_ = 36864000;
     uint64_t lastAdvance_ = 0, maxAdvance_ = 0;

@@ -68,7 +68,9 @@ jobs:
         run: ./scripts/apply-sdk-patches.ps1
 
       - name: Fetch locked PCSX2 device sources
-        run: ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/fetch-pcsx2-components.py
+        run: |
+          ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/fetch-pcsx2-components.py &&
+            ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/fetch-pcsx2-components.py --group host_libraries
 
       - name: Install Qt 6 (Ubuntu packages)
         if: runner.os == 'Linux'

@@ -829,7 +829,7 @@
       "files": 2812,
       "directory": "external/pcsx2",
       "archive": "out/dependencies/pcsx2.tar.gz",
-      "tree_sha256": "6afe2da89c72d20c8e745d7d16bc01a7c381ea814c3196942d225c28a07cc6fb"
+      "tree_sha256": "474d9827c0c7749d671581026de3a186b77ed678ee393befb7bfdf86e67d4b36"
     },
     {
       "name": "components",
@@ -840,7 +840,7 @@
       "files": 41,
       "directory": "external/pcsx2-components",
       "archive": "out/dependencies/components.tar.gz",
-      "tree_sha256": "3dabed31676de8dc446bceea7b46df5465d907476438f3c50355399884aa3507"
+      "tree_sha256": "042371b8b2487c1f01b3887df4e1e01e959f4189d8dbb28e76bd603e4b6e94b8"
     }
   ],
   "graphics_devices": [
@@ -854,7 +854,7 @@
       "files": 81,
       "directory": "external/parallel-gs",
       "archive": "out/dependencies/graphics-parallel-gs.tar.gz",
-      "tree_sha256": "1790d9c03130619bd1f9c56cd37d36a83994c771cb940ca741beabb5e03789c9",
+      "tree_sha256": "259e17475e91508bc7fff29f6ccfe79aeb32670131b1befcbc64b5ac9a9ee5dd",
       "excluded_directories": [
         "Granite"
       ]
@@ -869,7 +869,7 @@
       "files": 871,
       "directory": "external/parallel-gs/Granite",
       "archive": "out/dependencies/graphics-granite.tar.gz",
-      "tree_sha256": "1b2a8d5f0e2a5b47f1f394a881b7f58abf0ba62bf5e75b48d7069171da1a524f",
+      "tree_sha256": "dd669ae7a14a3b7b0fd3d41679bf29f0529506a974d5dc6535c4aa91a2c73393",
       "excluded_directories": [
         "third_party/volk",
         "third_party/khronos/vulkan-headers",
@@ -886,7 +886,7 @@
       "files": 21,
       "directory": "external/parallel-gs/Granite/third_party/volk",
       "archive": "out/dependencies/graphics-volk.tar.gz",
-      "tree_sha256": "81b3f5834f3c807922863d4cc4d4becf4abf703ebabe1fa096eefd5266e7cdac"
+      "tree_sha256": "874965697d87b0fa71c6a60cd47779460839180e620630fbc303482a619fa544"
     },
     {
       "name": "vulkan-headers",
@@ -898,7 +898,7 @@
       "files": 89,
       "directory": "external/parallel-gs/Granite/third_party/khronos/vulkan-headers",
       "archive": "out/dependencies/graphics-vulkan-headers.tar.gz",
-      "tree_sha256": "267f21b99b62ad461d9ac0222da9cf067e58a5227c8c2c7f387b0eb0c1894ca6"
+      "tree_sha256": "57d3f4b938e2b0f7c4f85ba48427b714587fe7e271499cf0961c509a02ce57b3"
     },
     {
       "name": "rapidjson",
@@ -910,7 +910,20 @@
       "files": 313,
       "directory": "external/parallel-gs/Granite/third_party/rapidjson",
       "archive": "out/dependencies/graphics-rapidjson.tar.gz",
-      "tree_sha256": "a355c23cfc57e44fa3ca6a0e13e9e993436abe43995e024f3cb5d0cb8f6f65d1"
+      "tree_sha256": "8c894fd7c3f943666661899dfa72831416cf4fec72bb16e82045b61df4b7ee07"
+    }
+  ],
+  "host_libraries": [
+    {
+      "name": "sdl3",
+      "url": "https://codeload.github.com/libsdl-org/SDL/tar.gz/8bf3b7215ad9fc3deb583c6a3a37c6c67f2e24e4",
+      "sha256": "bb4f83f5d6041c3a22186cdac4e15ed71e4127a1a8532dbb382f4b730a334b61",
+      "archive_bytes": 15977394,
+      "source_bytes": 50842712,
+      "files": 2200,
+      "directory": "external/sdl3",
+      "archive": "out/dependencies/sdl3.tar.gz",
+      "tree_sha256": "8a404094c286265502a2042c3ac1e05ef94e811f350fa91fdc02b9828a9cfbd7"
     }
   ]
 }

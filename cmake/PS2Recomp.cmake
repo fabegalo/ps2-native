@@ -57,8 +57,11 @@ if(_patch_count GREATER 0)
             # Patches apply in order; a file touched by several must match the last result.
             string(JSON "_want_${_path}" GET "${_files}" "${_path}")
             list(APPEND _patched_files "${_path}")
-            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-                "${PROJECT_SOURCE_DIR}/${_file}" "${_ps2recomp}/${_path}")
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/${_file}")
+            # CMake already tracks the SDK's own scripts; listing them again duplicates a Ninja output.
+            if(NOT _path MATCHES "(CMakeLists\\.txt|\\.cmake)$")
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_ps2recomp}/${_path}")
+            endif()
         endforeach()
     endforeach()
     list(REMOVE_DUPLICATES _patched_files)

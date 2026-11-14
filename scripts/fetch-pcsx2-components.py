@@ -10,7 +10,8 @@ import urllib.request
 
 def tree_hash(directory, excluded=()):
     digest = hashlib.sha256()
-    for path in sorted(directory.rglob('*')):
+    # Case-sensitive POSIX order: WindowsPath sorting ignores case and differs from Linux/macOS.
+    for path in sorted(directory.rglob('*'), key=lambda item: item.relative_to(directory).as_posix()):
         relative = path.relative_to(directory)
         if any(relative.is_relative_to(item) for item in excluded):
             continue
@@ -23,7 +24,7 @@ def tree_hash(directory, excluded=()):
 def main(root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check', action='store_true', help='Verify without downloading or writing')
-    parser.add_argument('--group', choices=('pcsx2_devices', 'graphics_devices'), default='pcsx2_devices')
+    parser.add_argument('--group', choices=('pcsx2_devices', 'graphics_devices', 'host_libraries'), default='pcsx2_devices')
     args = parser.parse_args()
     root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
     entries = json.loads((root / 'deps.lock.json').read_text())[args.group]
