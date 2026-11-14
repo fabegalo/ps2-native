@@ -39,7 +39,7 @@
              makeDormant(*running);
              m_currentThreadId = 0;
              copyMainContextToRuntime();
-@@ -533,6 +545,9 @@
+@@ -533,12 +545,27 @@
              continue;
          }
          PS2Runtime::RecompiledFunction function = m_runtime.lookupFunction(context.pc);
@@ -49,3 +49,21 @@
  
          if (checkpointDue(kGuestDispatchCycles))
          {
+             continue;
+         }
+ 
++        // PS2N_EE_WATCH=addr: report the dispatched function that changed a guest word.
++        static const uint32_t watch = [] { const char *v = std::getenv("PS2N_EE_WATCH"); return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 16)) & 0x1FFFFFCu : 0u; }();
++        static uint32_t watched = 0u;
++        if (watch != 0u)
++        {
++            uint32_t value = 0u;
++            std::memcpy(&value, m_rdram + watch, sizeof(value));
++            if (value != watched)
++                std::cerr << "[EE-watch] " << std::hex << watch << "=" << watched << "->" << value << " after 0x" << g_recent[(g_recentAt - 2u) & 15u][0]
++                          << " now 0x" << context.pc << " tid=" << std::dec << running->id << std::endl;
++            watched = value;
++        }
+         try
+         {
+             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;

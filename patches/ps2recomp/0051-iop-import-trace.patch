@@ -8,7 +8,7 @@
  #include <map>
  #include <optional>
  #include <span>
-@@ -252,7 +253,26 @@
+@@ -252,7 +253,30 @@
              Missing,
          };
  
@@ -26,6 +26,10 @@
 +                out << "[IOP-IMPORT] " << call.library << ':' << std::dec << call.ordinal << std::hex << " ra=0x" << ra
 +                    << " a=" << a[0] << ',' << a[1] << ',' << a[2] << ',' << a[3] << " v0=" << cpu.gpr[2]
 +                    << (disposition == ImportDisposition::Missing ? " missing" : "");
++                if (iequals(call.library, "sifman") && call.ordinal == 7)
++                    for (uint32_t i = 0; i < std::min<uint32_t>(a[1], 4u); ++i)
++                        out << " [src=" << memory.read32(a[0] + 16u * i) << " dst=" << memory.read32(a[0] + 16u * i + 4u)
++                            << " size=" << memory.read32(a[0] + 16u * i + 8u) << ']';
 +                log(LogLevel::Info, out.str());
 +            }
 +            return disposition;

@@ -733,12 +733,12 @@
       },
       {
         "file": "patches/ps2recomp/0051-iop-import-trace.patch",
-        "sha256": "bd7f9f4fcd9e975345c9ca28b0b5d0d04c156d51722a17ed1c43eb01ff7adcbb",
+        "sha256": "2c1e491d7625f2709d8faf9b118d63e16f505898584fda0026af004d6e8c15f8",
         "base_files": {
           "ps2xIOP/src/emulator/iop_emulator.cpp": "51b9798eb6095b4835eda5e7939f1a3407073793b771414fa52aa68d647d9145"
         },
         "files": {
-          "ps2xIOP/src/emulator/iop_emulator.cpp": "8fef36035f697b2dd61858d185fe22c496a62478dce85b4c8421f2f27d44aa6e"
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "541dfe44bc9db89a3843440c0134833c9817909e070046cf0e4dd8d03db793f0"
         },
         "hash_format": "utf8-lf"
       },
@@ -759,29 +759,29 @@
       },
       {
         "file": "patches/ps2recomp/0053-ee-thread-exit-trace.patch",
-        "sha256": "c40f3232fe5d088a834dba6f2810e2b40217863dda73098cd9723f060c434d8d",
+        "sha256": "2c84655ab603c3ae9e7a05579a3699ea58d2dd27ad04d86d8a090b957e98e6e4",
         "base_files": {
           "ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp": "dc9f0abb11727c09294a7386673ad33b0be463aa9b6b5e0b1439babc058b9464",
           "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "d8063868b96f3090b4f11f935cce7fe723d56b2af4d1e2d403bab5aab2194138"
         },
         "files": {
           "ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp": "ff85da54fc4c552f3a9bdd49d7727c0ecf9347196898d6f1511cc7ddf3927c2a",
-          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "d159fdd363a87d39f562aa05d36d987116a54e2239f78c4851133c7ea3920e8b"
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "0745060065b2b5d771e263f65cf196a1d22a43b22bf267f18010444006e0bd1c"
         },
         "hash_format": "utf8-lf"
       },
       {
         "file": "patches/ps2recomp/0054-kernel-interrupt-state.patch",
-        "sha256": "ea0b49551404da7b8b7aea01cf5be3ca99a4c6faa2157ac48019337998a678df",
+        "sha256": "de4b38861a31d03ad50a1009a23e9c00795485ff3704fbac39616c6f24a4fe0b",
         "base_files": {
           "ps2xRuntime/include/runtime/ps2_memory.h": "5dc1b97effc7e85d79cb91254b581439ab0b8e592651a488f3a7d49f355ba741",
           "ps2xRuntime/src/lib/ps2_memory.cpp": "bb6908bc37d6f65f123f2071e4ffbef3ac01313158c0f0543845aa415c9bc0a4",
-          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "d159fdd363a87d39f562aa05d36d987116a54e2239f78c4851133c7ea3920e8b"
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "0745060065b2b5d771e263f65cf196a1d22a43b22bf267f18010444006e0bd1c"
         },
         "files": {
           "ps2xRuntime/include/runtime/ps2_memory.h": "33b39bf5d6bee47382625437ac4205d7c288c14fe20497c9864f4455ec7c6ec2",
           "ps2xRuntime/src/lib/ps2_memory.cpp": "2612db43acc20f5e0b53b5b2110e2e7ee230cf6c73105417f5bd93e7219dd17e",
-          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "7719713c37dd66c5614f564f316c4340bfda10869aa7397b3fa5a67e159b523e"
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "3feed74f4310519966d9a4e8004d8475eb0463f51836b7e0b925e80b5ef0e1bd"
         },
         "hash_format": "utf8-lf"
       },

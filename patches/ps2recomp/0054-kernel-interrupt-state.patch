@@ -40,7 +40,7 @@
      if (address == 0x1000F520u)
 --- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-@@ -1460,8 +1460,12 @@
+@@ -1472,8 +1472,12 @@
      {
          return existing->second;
      }
@@ -54,7 +54,7 @@
      if (top == 0u)
      {
          throw std::runtime_error("EE invocation stack space exhausted");
-@@ -1545,6 +1549,8 @@
+@@ -1557,6 +1561,8 @@
  void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
  {
      assertExecutor();

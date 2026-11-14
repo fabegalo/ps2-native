@@ -188,7 +188,8 @@ endfunction()
 
 function(ps2n_add_game id generated)
     file(GLOB _sources CONFIGURE_DEPENDS "${generated}/*.cpp")
-    add_executable(ps2n-game-${id} EXCLUDE_FROM_ALL ${_sources} "${PROJECT_SOURCE_DIR}/tools/ps2n_game_main.cpp")
+    add_executable(ps2n-game-${id} EXCLUDE_FROM_ALL ${_sources} "${PROJECT_SOURCE_DIR}/tools/ps2n_game_main.cpp"
+        "${PROJECT_SOURCE_DIR}/tools/ps2n_hw_watch.cpp")
     target_include_directories(ps2n-game-${id} PRIVATE "${generated}")
     target_link_libraries(ps2n-game-${id} PRIVATE ps2_runtime ps2n_pcsx2_audio ps2n_gs_host_link)
     # Link the content archive without exporting its flags/includes to generated EE code.

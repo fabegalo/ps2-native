@@ -35,6 +35,8 @@ void ps2n_register_iop_modules();
 void ps2n_register_ee_modules(EeScheduler& scheduler);
 #include <vector>
 
+void ps2n_hw_watch(uint8_t* rdram, uint32_t guest, std::vector<std::pair<uintptr_t, uint32_t>> functions);
+
 namespace {
 // PS2N_GS_TRACE: forwards to the PS2Recomp CPU backend and summarizes the
 // image transfers it receives (destination, size, non-zero bytes).
@@ -297,6 +299,13 @@ int run_game(int argc, char** argv) {
         if (!runtime.loadELF(elf.string())) {
             std::cerr << "PS2Recomp could not load " << elf.string() << "\n";
             return 1;
+        }
+        if (const char* watch = std::getenv("PS2N_EE_HWWATCH")) {
+            std::vector<std::pair<uintptr_t, uint32_t>> functions;
+            for (uint32_t address = 0x100000u; address < 0x01000000u; address += 4u)
+                if (runtime.hasFunction(address))
+                    functions.emplace_back(reinterpret_cast<uintptr_t>(runtime.lookupFunction(address)), address);
+            ps2n_hw_watch(runtime.memory().getRDRAM(), static_cast<uint32_t>(std::strtoul(watch, nullptr, 16)), std::move(functions));
         }
         if (browser) runtime.eeScheduler().setExecutableArguments({"rom0:OSDSYS"});
         if (!prepareExec) ps2n_register_ee_modules(runtime.eeScheduler());
