@@ -12,7 +12,6 @@ include(cmake/PCSX2Components.cmake)
 add_library(ps2n_pcsx2_audio STATIC src/host/pcsx2_audio.cpp)
 target_include_directories(ps2n_pcsx2_audio PUBLIC "${PROJECT_SOURCE_DIR}/src/host")
 target_link_libraries(ps2n_pcsx2_audio PRIVATE kzspu2 ps2_runtime)
-target_link_libraries(ps2n_pcsx2_audio PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,kzspu2_sse4,kzspu2_avx,kzspu2_avx2>")
 
 include(CTest)
 include(cmake/ParallelGS.cmake)
@@ -86,6 +85,7 @@ if(NOT PS2N_LAUNCHER STREQUAL "OFF")
 endif()
 
 if(BUILD_TESTING)
+    add_test(NAME spu2 COMMAND kzspu2_test)
     add_executable(ps2n-sdk-gs-crt-tests tests/sdk_gs_crt_tests.cpp
         "${PS2N_PS2RECOMP_DIR}/ps2xTest/src/test_function_table.cpp")
     target_link_libraries(ps2n-sdk-gs-crt-tests PRIVATE ps2_runtime)

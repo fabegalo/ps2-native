@@ -67,6 +67,9 @@ jobs:
         shell: pwsh
         run: ./scripts/apply-sdk-patches.ps1
 
+      - name: Fetch locked PCSX2 device sources
+        run: ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/fetch-pcsx2-components.py
+
       - name: Install Qt 6 (Ubuntu packages)
         if: runner.os == 'Linux'
         run: |
@@ -77,13 +80,14 @@ jobs:
             qml6-module-qtqml-workerscript qml6-module-qtquick qml6-module-qtquick-controls \
             qml6-module-qtquick-dialogs qml6-module-qtquick-layouts qml6-module-qtquick-templates \
             qml6-module-qtquick-window qml6-module-qtquick-shapes qml6-module-qtqml-models \
-            qml6-module-qt-labs-folderlistmodel
+            qml6-module-qt-labs-folderlistmodel pkg-config libavcodec-dev libavformat-dev libavutil-dev \
+            libswscale-dev libswresample-dev
           echo "QT_PREFIX=/usr" >> "$GITHUB_ENV"
 
       - name: Install Qt 6 (Homebrew)
         if: runner.os == 'macOS'
         run: |
-          brew install qt ninja
+          brew install qt ninja ffmpeg pkgconf
           echo "QT_PREFIX=$(brew --prefix qt)" >> "$GITHUB_ENV"
 
       - name: Install Qt 6.8.3 (official archives, SHA-1 verified)
