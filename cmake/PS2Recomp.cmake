@@ -99,6 +99,9 @@ if(_ps2n_cpu MATCHES "^(aarch64|arm64|ARM64)$")
     endif()
     include_directories(SYSTEM "${_ps2n_sse2neon}")
     add_compile_definitions(USE_SSE2NEON)
+elseif(NOT MSVC)
+    # PS2Recomp's 128-bit code uses SSE4.1 intrinsics; MSVC x64 accepts them without a flag.
+    add_compile_options(-msse4.1)
 endif()
 
 # Recompiler and analyzer: the upstream top-level build, tools only.
