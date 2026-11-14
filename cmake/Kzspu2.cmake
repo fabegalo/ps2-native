@@ -28,23 +28,24 @@ target_compile_features(kzspu2_flags INTERFACE cxx_std_20)
 target_compile_definitions(kzspu2_flags INTERFACE NOMINMAX)
 target_include_directories(kzspu2_flags INTERFACE "${_kzspu2}/shim/include" "${_kzspu2}/include" "${_pcsx2}"
     "${_pcsx2}/pcsx2" "${_pcsx2}/3rdparty/include" "${_pcsx2}/3rdparty/fmt/include" "${_pcsx2}/3rdparty/fast_float/include")
+# No FMA contraction anywhere: AArch64 compilers fuse the DC filter's a-b+k*c, changing the PCM vs x86.
 if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     # clang-cl: PCSX2's Windows ARM64 toolchain (its NEON GSVector uses Clang vector extensions).
     target_compile_definitions(kzspu2_flags INTERFACE WINVER=0x0A00 _WIN32_WINNT=0x0A00 WIN32_LEAN_AND_MEAN
         _CRT_NONSTDC_NO_WARNINGS _CRT_SECURE_NO_WARNINGS _SCL_SECURE_NO_WARNINGS _UNICODE UNICODE)
-    target_compile_options(kzspu2_flags INTERFACE /utf-8 /GS -w /clang:-fno-strict-aliasing
+    target_compile_options(kzspu2_flags INTERFACE /utf-8 /GS -w /clang:-fno-strict-aliasing /clang:-ffp-contract=off
         "/FI${_kzspu2}/shim/include/kzspu2_prefix.h")
 elseif(MSVC)
     target_compile_definitions(kzspu2_flags INTERFACE WINVER=0x0A00 _WIN32_WINNT=0x0A00 WIN32_LEAN_AND_MEAN
         _CRT_NONSTDC_NO_WARNINGS _CRT_SECURE_NO_WARNINGS _SCL_SECURE_NO_WARNINGS _UNICODE UNICODE)
     target_compile_options(kzspu2_flags INTERFACE /Zc:externConstexpr /Zc:__cplusplus /permissive- /Zc:preprocessor
-        /utf-8 /Zo /GS /fp:contract /W1 /wd4005 /wd4996 "/FI${_kzspu2}/shim/include/kzspu2_prefix.h")
+        /utf-8 /Zo /GS /W1 /wd4005 /wd4996 "/FI${_kzspu2}/shim/include/kzspu2_prefix.h")
     if(_kzspu2_x64)
         target_compile_definitions(kzspu2_flags INTERFACE _M_X86=1 __SSE4_1__=1)
     endif()
 else()
     # PCSX2's own GCC/Clang settings for this code: no strict aliasing, no fast-math.
-    target_compile_options(kzspu2_flags INTERFACE -fno-strict-aliasing -w -include "${_kzspu2}/shim/include/kzspu2_prefix.h")
+    target_compile_options(kzspu2_flags INTERFACE -fno-strict-aliasing -ffp-contract=off -w -include "${_kzspu2}/shim/include/kzspu2_prefix.h")
     if(_kzspu2_x64)
         target_compile_options(kzspu2_flags INTERFACE -msse4.1)
     endif()
