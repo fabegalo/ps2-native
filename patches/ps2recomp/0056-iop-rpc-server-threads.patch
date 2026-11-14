@@ -1,0 +1,298 @@
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -409,6 +409,11 @@
+                 cpu.stopped = true;
+                 return false;
+             }
++            if (cpu.pc == kRpcReturnSentinel)
++            {
++                cpu.yielded = true; // the RPC server thread finished a request
++                return false;
++            }
+             if (physicalAddress(cpu.pc) >= kRamSize)
+             {
+                 std::ostringstream out;
+@@ -548,6 +553,9 @@
+         {
+             return callFunction(address, a0, a1, a2, a3, gp, instructionBudget);
+         }
++
++        bool canRunThreads() const override { return activeCpu == nullptr; }
++        void runThreads(uint64_t cycles) override { runCycles(cycles); }
+ 
+         // Not that good to use exception handling for control flow but will do for now
+         void servicePendingDmaInterrupts()
+@@ -650,6 +658,8 @@
+                     }
+                     const uint64_t before = totalCycles;
+                     runCpu(next->cpu, static_cast<uint32_t>(std::min<uint64_t>(kDefaultSlice, target - totalCycles)));
++                    if (next->cpu.pc == kRpcReturnSentinel)
++                        (void)rpc.finishServerCall(*next);
+                     kernel.endTimeslice(*next, kThreadReturnSentinel);
+                     if (totalCycles == before)
+                         ++totalCycles;
+--- a/ps2xIOP/src/emulator/iop_emulator_const.h
++++ b/ps2xIOP/src/emulator/iop_emulator_const.h
+@@ -3,6 +3,7 @@
+ 
+ constexpr uint32_t kThreadReturnSentinel = 0x1FFFFF00u;
+ constexpr uint32_t kCallReturnSentinel = 0x1FFFFF04u;
++constexpr uint32_t kRpcReturnSentinel = 0x1FFFFF08u;
+ constexpr uint64_t kIopClockHz = 36'864'000ull;
+ // NTSC field cadence (approximately 59.94 Hz).  VBlank imports are
+ // scheduler waits, not no-op timing hints: returning immediately lets
+--- a/ps2xIOP/src/emulator/services/iop_rpc.cpp
++++ b/ps2xIOP/src/emulator/services/iop_rpc.cpp
+@@ -3,6 +3,7 @@
+ #include "../core/iop_cpu.h"
+ #include "../core/iop_kernel.h"
+ #include "../core/iop_memory.h"
++#include "../iop_emulator_const.h"
+ #include "ps2x/iop/iop_host.h"
+ 
+ #include <algorithm>
+@@ -30,6 +31,8 @@
+         m_eeCommandBuffer = 0;
+         m_sifRegisters.clear();
+         m_pendingCommands.clear();
++        m_queueThreads.clear();
++        m_call = {};
+     }
+ 
+     bool IopRpcBridge::dispatchSifManImport(uint16_t ordinal, IopCpuState &cpu)
+@@ -240,20 +243,30 @@
+         case 18:
+             setV0(0);
+             return true;
+-        case 19: // SetRpcQueue
++        case 19: // SetRpcQueue(queue, thread)
++            m_queueThreads[cpu.gpr[4]] = static_cast<int>(cpu.gpr[5]);
+             setV0(cpu.gpr[4]);
+             return true;
+         case 20:
+         case 21:
+             setV0(0);
+             return true;
+-        case 22: // RpcLoop
++        case 22: // RpcLoop: the thread now serves this queue's requests
++            if (const IopThread *thread = m_kernel.currentThread())
++                m_queueThreads[cpu.gpr[4]] = thread->id;
+             m_kernel.sleepCurrent(cpu);
+             setV0(0);
+             return true;
+-        case 23:
+-            setV0(0);
+-            return true;
++        case 23: // sceSifGetOtherData(receive, eeSource, iopDestination, size, mode)
++        {
++            const uint32_t source = cpu.gpr[5], destination = cpu.gpr[6], size = cpu.gpr[7];
++            std::vector<uint8_t> data(size);
++            const bool copied = size != 0u && size <= IopMemory::RamSize &&
++                                m_host.readGuest(source, data.data(), data.size()) &&
++                                m_memory.writeRam(destination, data.data(), data.size());
++            setV0(copied || size == 0u ? 0u : static_cast<uint32_t>(-1));
++            return true;
++        }
+         case 24: // RemoveRpc
+         {
+             const uint32_t serverData = cpu.gpr[4];
+@@ -299,12 +312,53 @@
+             }
+         }
+ 
+-        uint32_t returnPointer = executor.executeGuestFunction(server.function,
+-                                                               request.function,
+-                                                               server.buffer,
+-                                                               request.send.size,
+-                                                               0u,
+-                                                               server.gp);
++        // The server function runs on the IOP thread that waits in
++        // sceSifRpcLoop, under the IOP priority scheduler, so its semaphores
++        // and locks exclude the module's other threads as on the console.
++        uint32_t returnPointer = 0u;
++        IopThread *loop = nullptr;
++        if (const auto queue = m_queueThreads.find(server.queue); queue != m_queueThreads.end())
++            loop = m_kernel.findThread(queue->second);
++        if (loop != nullptr && loop->state == IopThreadState::Sleep && !m_call.active && executor.canRunThreads())
++        {
++            m_call = {};
++            m_call.active = true;
++            m_call.thread = loop->id;
++            m_call.savedCpu = loop->cpu;
++            IopCpuState &cpu = loop->cpu;
++            cpu.pc = server.function;
++            cpu.gpr[4] = request.function;
++            cpu.gpr[5] = server.buffer;
++            cpu.gpr[6] = request.send.size;
++            cpu.gpr[7] = 0u;
++            cpu.gpr[28] = server.gp;
++            cpu.gpr[29] = (m_call.savedCpu.gpr[29] - 64u) & ~15u;
++            cpu.gpr[31] = kRpcReturnSentinel;
++            cpu.branchPending = cpu.pendingLoad = false;
++            cpu.stopped = cpu.yielded = cpu.exception = false;
++            loop->state = IopThreadState::Ready;
++            constexpr uint64_t kSlice = 4096u;
++            for (uint64_t ran = 0u; !m_call.done && ran < kIopClockHz; ran += kSlice)
++                executor.runThreads(kSlice);
++            m_call.active = false;
++            if (!m_call.done)
++            {
++                std::ostringstream out;
++                out << "[IOP] RPC server thread did not reply: sid=0x" << std::hex << request.sid
++                    << " function=0x" << request.function;
++                throw std::runtime_error(out.str());
++            }
++            returnPointer = m_call.result;
++        }
++        else
++        {
++            returnPointer = executor.executeGuestFunction(server.function,
++                                                          request.function,
++                                                          server.buffer,
++                                                          request.send.size,
++                                                          0u,
++                                                          server.gp);
++        }
+         if (returnPointer == 0u)
+             returnPointer = server.buffer;
+         if (request.receive.address != 0u && request.receive.size != 0u && returnPointer != 0u)
+@@ -411,6 +465,17 @@
+         return previous;
+     }
+ 
++    bool IopRpcBridge::finishServerCall(IopThread &thread)
++    {
++        if (!m_call.active || m_call.done || thread.id != m_call.thread)
++            return false;
++        m_call.result = thread.cpu.gpr[2];
++        thread.cpu = m_call.savedCpu; // back to sceSifRpcLoop
++        thread.state = IopThreadState::Sleep;
++        m_call.done = true;
++        return true;
++    }
++
+     void IopRpcBridge::removeServersInRange(uint32_t base, uint32_t size)
+     {
+         for (auto server = m_servers.begin(); server != m_servers.end();)
+--- a/ps2xIOP/src/emulator/services/iop_rpc.h
++++ b/ps2xIOP/src/emulator/services/iop_rpc.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "ps2x/iop/iop_types.h"
++#include "../core/iop_cpu.h"
+ 
+ #include <cstddef>
+ #include <cstdint>
+@@ -16,6 +17,7 @@
+ namespace ps2x::iop::detail
+ {
+     struct IopCpuState;
++    struct IopThread;
+     class IopKernel;
+     class IopMemory;
+ 
+@@ -40,6 +42,9 @@
+         {
+             return executeGuestFunction(address, a0, a1, a2, a3, gp);
+         }
++        // Thread scheduling for RPC servers that run on their own IOP thread.
++        [[nodiscard]] virtual bool canRunThreads() const { return false; }
++        virtual void runThreads(uint64_t cycles) { (void)cycles; }
+     };
+ 
+     class IopRpcBridge
+@@ -56,6 +61,8 @@
+         uint32_t readSifRegister(uint32_t reg);
+         uint32_t writeSifRegister(uint32_t reg, uint32_t value);
+         void removeServersInRange(uint32_t base, uint32_t size);
++        // Called when an RPC server thread returns from its server function.
++        bool finishServerCall(IopThread &thread);
+ 
+         [[nodiscard]] bool hasServer(uint32_t sid) const noexcept;
+         [[nodiscard]] size_t serverCount() const noexcept { return m_servers.size(); }
+@@ -83,5 +90,14 @@
+         uint32_t m_eeCommandBuffer = 0;
+         std::unordered_map<uint32_t, uint32_t> m_sifRegisters;
+         std::deque<std::vector<uint8_t>> m_pendingCommands;
++        std::unordered_map<uint32_t, int> m_queueThreads; // RPC queue -> server thread
++        struct ServerCall
++        {
++            bool active = false;
++            bool done = false;
++            int thread = 0;
++            uint32_t result = 0;
++            IopCpuState savedCpu{};
++        } m_call;
+     };
+ }
+--- a/ps2xIOP/src/emulator/core/iop_kernel.cpp
++++ b/ps2xIOP/src/emulator/core/iop_kernel.cpp
+@@ -32,6 +32,7 @@
+         m_nextSemaphoreId = 1;
+         m_nextEventFlagId = 1;
+         m_currentThread = nullptr;
++        m_preemptedThread = 0;
+     }
+ 
+     bool IopKernel::dispatchThreadImport(uint16_t ordinal, IopCpuState &cpu, uint64_t currentCycle)
+@@ -294,6 +295,9 @@
+         }
+         case 41:
+             setV0(0);
++            return true;
++        case 43: // GetSystemTimeLow
++            setV0(static_cast<int32_t>(static_cast<uint32_t>(currentCycle)));
+             return true;
+         default:
+             return false;
+@@ -682,8 +686,11 @@
+         {
+             if (thread.state != IopThreadState::Ready)
+                 continue;
++            // The IOP kernel does not time-slice: a thread that the host slice
++            // interrupted keeps the CPU against threads of equal priority.
+             if (next == nullptr || thread.priority < next->priority ||
+-                (thread.priority == next->priority && thread.id < next->id))
++                (thread.priority == next->priority && next->id != m_preemptedThread &&
++                 (thread.id == m_preemptedThread || thread.id < next->id)))
+                 next = &thread;
+         }
+         if (next == nullptr)
+@@ -709,10 +716,14 @@
+ 
+     void IopKernel::endTimeslice(IopThread &thread, uint32_t returnSentinel)
+     {
++        m_preemptedThread = 0;
+         if (thread.cpu.pc == returnSentinel || thread.cpu.stopped)
+             thread.state = IopThreadState::Dormant;
+         else if (thread.state == IopThreadState::Running)
++        {
+             thread.state = IopThreadState::Ready;
++            m_preemptedThread = thread.id;
++        }
+         m_currentThread = nullptr;
+         cleanupDeadThreads();
+     }
+--- a/ps2xIOP/src/emulator/core/iop_kernel.h
++++ b/ps2xIOP/src/emulator/core/iop_kernel.h
+@@ -67,6 +67,12 @@
+         void terminateThreadsInRange(uint32_t base, uint32_t size);
+ 
+         [[nodiscard]] size_t threadCount() const noexcept { return m_threads.size(); }
++        [[nodiscard]] IopThread *currentThread() noexcept { return m_currentThread; }
++        [[nodiscard]] IopThread *findThread(int id) noexcept
++        {
++            const auto it = m_threads.find(id);
++            return it == m_threads.end() ? nullptr : &it->second;
++        }
+ 
+     private:
+         struct Semaphore
+@@ -99,5 +105,6 @@
+         uint32_t m_nextSemaphoreId = 1;
+         uint32_t m_nextEventFlagId = 1;
+         IopThread *m_currentThread = nullptr;
++        int m_preemptedThread = 0;
+     };
+ }
