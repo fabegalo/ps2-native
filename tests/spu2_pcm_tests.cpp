@@ -102,7 +102,7 @@ int main() {
             for (size_t i = b * 2400; i < std::min(pcm.size(), b * 2400 + 2400); ++i) h = (h ^ uint16_t(pcm[i])) * 1099511628211ull;
             if (b < sizeof kBlocks / sizeof *kBlocks ? h == kBlocks[b] : false) continue;
             std::printf("first divergent block %zu (frame %zu) hash=%llx:", b, b * 1200, (unsigned long long)h);
-            for (size_t i = b * 2400; i < std::min(pcm.size(), b * 2400 + 64); ++i) std::printf(" %d", pcm[i]);
+            for (size_t i = b * 2400; i < std::min(pcm.size(), b * 2400 + 2400); ++i) std::printf(" %d", pcm[i]);
             std::puts("");
             break;
         }
