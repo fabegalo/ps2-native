@@ -4,6 +4,9 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <vector>
+
+bool ps2ConsumeGsInterruptRequest(); // PS2Recomp gs_frontend.cpp
 
 static void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
@@ -39,4 +42,28 @@ int main() try {
                 "sceGsResetGraph changed its guest arguments");
     }
     std::cout << "PASS canonical NTSC/PAL CRT fields and preserved state\n";
+
+    // INTC_GS: a SIGNAL (0x60) or FINISH (0x61) 0->1 CSR edge requests one
+    // interrupt unless its IMR mask bit (8/9) is set.
+    std::vector<uint8_t> vram(4 * 1024 * 1024);
+    GS frontend;
+    frontend.init(vram.data(), static_cast<uint32_t>(vram.size()), &gs);
+    gs.csr = 0;
+    gs.imr = 0x7f00;
+    frontend.writeRegister(0x61, 0);
+    require((gs.csr.load() & 2) && !ps2ConsumeGsInterruptRequest(), "Masked FINISH requested INTC_GS");
+    gs.csr = 0;
+    gs.imr = 0x7d00;
+    frontend.writeRegister(0x61, 0);
+    require((gs.csr.load() & 2) && ps2ConsumeGsInterruptRequest() && !ps2ConsumeGsInterruptRequest(),
+            "Unmasked FINISH must request INTC_GS exactly once");
+    frontend.writeRegister(0x61, 0);
+    require(!ps2ConsumeGsInterruptRequest(), "FINISH without a CSR edge requested INTC_GS");
+    frontend.writeRegister(0x60, 0);
+    require((gs.csr.load() & 1) && !ps2ConsumeGsInterruptRequest(), "Masked SIGNAL requested INTC_GS");
+    gs.csr = 0;
+    gs.imr = 0x7e00;
+    frontend.writeRegister(0x60, 0);
+    require(ps2ConsumeGsInterruptRequest(), "Unmasked SIGNAL must request INTC_GS");
+    std::cout << "PASS GS SIGNAL/FINISH interrupt requests follow CSR edges and IMR\n";
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

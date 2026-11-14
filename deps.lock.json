@@ -855,6 +855,21 @@
         },
         "hash_format": "utf8-lf",
         "sha256": "99588d9fb551978154eca1dd778ab753d0e14f77dfecab87cdc631790c83a93c"
+      },
+      {
+        "base_files": {
+          "ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h": "b1640bdc33adb42e7873ff501ed5a07657a2b21fede3c5448d86f15ce34699db",
+          "ps2xRuntime/src/lib/gs/gs_frontend.cpp": "2a5891185a7e6daa9187dfadf067d9b4e8c818a62d1bb7060e782d27f56dbbe8",
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "c9e4b76cd900d98fa83af1863c38a25aa3c32ddf68d4a7c3db894da34b4e2c7d"
+        },
+        "file": "patches/ps2recomp/0060-gs-signal-finish-interrupt.patch",
+        "files": {
+          "ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h": "2ee1443b5be8a76bcaa29f0621e691a1f1f705928ed298c04087f046a0a386e6",
+          "ps2xRuntime/src/lib/gs/gs_frontend.cpp": "11f1a52cb7ba84b9a8cfdd0a06cfd7602534ad5fcfa209158d45d75c1afc1c6b",
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "2d9b7b3f25a962568b1ec3337040a8458afcbc9f3692368e81a22111fedbecf5"
+        },
+        "hash_format": "utf8-lf",
+        "sha256": "f93d396bfcee61acf1a9b590337f848a84fa9d507c56bf01053a11eee3034d6e"
       }
     ]
   },

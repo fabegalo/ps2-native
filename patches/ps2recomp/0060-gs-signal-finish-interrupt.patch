@@ -1,0 +1,71 @@
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
+@@ -1433,6 +1433,7 @@ namespace
+         {
+             ps2_syscalls::dispatchDmacHandlersForCause(rdram, runtime, completedCause);
+         }
++        runtime->drainCompletedDmacHandlers(rdram); // also delivers a GS SIGNAL/FINISH interrupt
+ 
+         return 0;
+     }
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -1081,6 +1081,28 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
+     }
+ }
+ 
++namespace
++{
++    // shortcut: process-wide, because prepared EE objects depend on the public
++    // GS layout; make it a GS member at the next runtime ABI change.
++    std::atomic<bool> g_gsInterruptRequest{false};
++
++    // The GS raises INTC_GS when a CSR event bit (SIGNAL 0, FINISH 1) goes from
++    // 0 to 1 while its IMR mask bit (8 + n) is clear.
++    void requestInterruptOnCsrEvent(GSRegisters &regs, uint64_t bit)
++    {
++        const uint64_t before = regs.csr.fetch_or(bit);
++        if ((before & bit) == 0u && (regs.imr & (bit << 8u)) == 0u)
++            g_gsInterruptRequest.store(true, std::memory_order_release);
++    }
++}
++
++// True once per pending INTC_GS request; the EE executor delivers it.
++bool ps2ConsumeGsInterruptRequest()
++{
++    return g_gsInterruptRequest.exchange(false, std::memory_order_acq_rel);
++}
++
+ void GS::writeRegister(uint8_t regAddr, uint64_t value)
+ {
+     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+@@ -1495,7 +1517,7 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
+             uint32_t lo = static_cast<uint32_t>(m_privRegs->siglblid & 0xFFFFFFFF);
+             lo = (lo & ~mask) | (id & mask);
+             m_privRegs->siglblid = (m_privRegs->siglblid & 0xFFFFFFFF00000000ULL) | lo;
+-            m_privRegs->csr.fetch_or(0x1);
++            requestInterruptOnCsrEvent(*m_privRegs, 0x1u);
+         }
+         break;
+     }
+@@ -1507,7 +1529,7 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
+             m_backend->Sync(GSSyncReason::Finish);
+         }
+         if (m_privRegs)
+-            m_privRegs->csr.fetch_or(0x2);
++            requestInterruptOnCsrEvent(*m_privRegs, 0x2u);
+         break;
+     }
+     case GS_REG_LABEL:
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1494,6 +1494,9 @@ void PS2Runtime::drainCompletedDmacHandlers(uint8_t *rdram)
+     {
+         ps2_syscalls::dispatchDmacHandlersForCause(rdram, this, cause);
+     }
++    extern bool ps2ConsumeGsInterruptRequest(); // gs_frontend.cpp
++    if (ps2ConsumeGsInterruptRequest())
++        eeScheduler().dispatchIrq(false, 0u); // INTC_GS
+ }
+ 
+ void PS2Runtime::handleTrap(uint8_t *rdram, R5900Context *ctx)
