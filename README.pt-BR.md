@@ -51,7 +51,7 @@ Requisitos: **CMake 3.21+**, **compilador C++20** e **Ninja** (ou gerador nativo
 
 ```sh
 git submodule update --init external/ps2recomp
-git -C external/ps2recomp apply ../../patches/ps2recomp/*.patch
+pwsh scripts/apply-sdk-patches.ps1
 cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2X_RELEASE_LTCG=OFF
 cmake --build out/build --parallel
 ctest --test-dir out/build --output-on-failure

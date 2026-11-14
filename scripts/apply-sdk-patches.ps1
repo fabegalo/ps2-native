@@ -57,10 +57,18 @@ $before = if ($Revert) { $final } else { $base }
 if (Matches $wanted) { Write-Host 'SDK already matches requested state'; exit 0 }
 if (-not (Matches $before)) { throw 'Unexpected/partial SDK state; preserving files' }
 if ($paths.Count) {
-    $flags = @('apply')
-    if ($Revert) { [array]::Reverse($paths); $flags += '--reverse' }
-    GitSdk ($flags + @('--check') + $paths)
-    GitSdk ($flags + $paths)
+    # Some pinned upstream files are CRLF in Git while patches are LF; result hashes still verify.
+    $flags = @('apply', '--ignore-whitespace')
+    $undo = @('apply', '--ignore-whitespace', '--reverse')
+    if ($Revert) { [array]::Reverse($paths); $flags += '--reverse'; $undo = $flags[0..1] }
+    # One patch per call: a batched git apply rejects files that several patches touch.
+    $done = @()
+    try {
+        foreach ($path in $paths) { GitSdk ($flags + @($path)); $done = @($path) + $done }
+    } catch {
+        foreach ($path in $done) { GitSdk ($undo + @($path)) }
+        throw
+    }
 }
 if (-not (Matches $wanted)) { throw 'SDK result hash mismatch' }
 Write-Host 'SDK patch state updated and verified'

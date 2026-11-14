@@ -177,17 +177,17 @@ Preserve AOT-visible layouts and generated headers.
  #include <cstddef>
  #include <cstdint>
  #include <optional>
-@@ -40,6 +41,9 @@
+@@ -40,5 +41,9 @@
          IopMemory();
  
          void reset();
 +        void attachSpu2(IopSpu2Backend* backend, const uint64_t* cycle);
 +        uint32_t advanceSpu2();
 +        uint64_t nextSpu2Event() const;
- 
++
  
          [[nodiscard]] uint8_t read8(uint32_t address) const;
-@@ -78,6 +82,8 @@
+@@ -77,6 +82,8 @@
          void writeHardware32(uint32_t address, uint32_t value);
          void markOwned(uint32_t address, size_t size);
  

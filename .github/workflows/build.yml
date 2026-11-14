@@ -44,8 +44,13 @@ jobs:
           submodules: true
 
       - name: Apply locked PS2Recomp patches
-        shell: bash
-        run: git -C external/ps2recomp apply ../../patches/ps2recomp/*.patch
+        shell: pwsh
+        run: |
+          ${{ runner.os == 'Windows' && 'python' || 'python3' }} tests/sdk_patch_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./scripts/apply-sdk-patches.ps1
+          ./scripts/apply-sdk-patches.ps1
+          ./scripts/apply-sdk-patches.ps1 -Check
 
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'

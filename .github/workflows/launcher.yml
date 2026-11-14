@@ -64,8 +64,8 @@ jobs:
           submodules: true
 
       - name: Apply locked PS2Recomp patches
-        shell: bash
-        run: git -C external/ps2recomp apply ../../patches/ps2recomp/*.patch
+        shell: pwsh
+        run: ./scripts/apply-sdk-patches.ps1
 
       - name: Install Qt 6 (Ubuntu packages)
         if: runner.os == 'Linux'
