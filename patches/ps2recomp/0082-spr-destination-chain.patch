@@ -1,0 +1,127 @@
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index 2119918..9bf31a9 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -1624,54 +1624,86 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
+     if (channelBase != kSprFromChannel && channelBase != kSprToChannel)
+         return false;
+ 
++    const bool fromScratchpad = channelBase == kSprFromChannel;
+     const uint32_t mode = (chcr >> 2u) & 0x3u;
+-    if (mode != 0u)
++    // Destination chain exists only on fromSPR: tags live in SPR at SADR (PCSX2 SPR.cpp _dmaSPR0).
++    if (mode != 0u && !(mode == 1u && fromScratchpad))
+         return false;
+ 
+-    const uint32_t qwc = m_ioRegisters[channelBase + 0x20u] & 0xFFFFu;
+-    const uint32_t byteCount = qwc * 16u;
+-    const uint32_t originalMadr = m_ioRegisters[channelBase + 0x10u] & 0x7FFFFFF0u;
+-    const uint32_t originalSadr = m_ioRegisters[channelBase + 0x80u] & 0x3FF0u;
+-
+-    uint32_t mainOffset = 0u;
+-    try
+-    {
+-        mainOffset = translateAddress(originalMadr);
+-    }
+-    catch (const std::exception &)
++    uint32_t madr = m_ioRegisters[channelBase + 0x10u] & 0x7FFFFFF0u;
++    uint32_t sadr = m_ioRegisters[channelBase + 0x80u] & 0x3FF0u;
++    uint32_t qwc = m_ioRegisters[channelBase + 0x20u] & 0xFFFFu;
++    const auto transfer = [&]
+     {
+-        return false;
+-    }
+-
+-    if (mainOffset > PS2_RAM_SIZE || byteCount > PS2_RAM_SIZE - mainOffset)
+-        return false;
+-
+-    const bool fromScratchpad = channelBase == kSprFromChannel;
+-    uint32_t scratchOffset = originalSadr;
+-    uint32_t bytesLeft = byteCount;
+-    uint32_t copied = 0u;
+-    while (bytesLeft != 0u)
+-    {
+-        const uint32_t scratchChunk = PS2_SCRATCHPAD_SIZE - scratchOffset;
+-        const uint32_t chunk = std::min(bytesLeft, scratchChunk);
+-        if (fromScratchpad)
++        const uint32_t byteCount = qwc * 16u;
++        uint32_t mainOffset = 0u;
++        try
+         {
+-            std::memcpy(m_rdram + mainOffset + copied, m_scratchpad + scratchOffset, chunk);
+-            markModified(mainOffset + copied, chunk);
++            mainOffset = translateAddress(madr);
+         }
+-        else
++        catch (const std::exception &)
++        {
++            return false;
++        }
++        if (mainOffset > PS2_RAM_SIZE || byteCount > PS2_RAM_SIZE - mainOffset)
++            return false;
++
++        uint32_t copied = 0u;
++        while (copied != byteCount)
+         {
+-            std::memcpy(m_scratchpad + scratchOffset, m_rdram + mainOffset + copied, chunk);
++            const uint32_t chunk = std::min(byteCount - copied, PS2_SCRATCHPAD_SIZE - sadr);
++            if (fromScratchpad)
++            {
++                std::memcpy(m_rdram + mainOffset + copied, m_scratchpad + sadr, chunk);
++                markModified(mainOffset + copied, chunk);
++            }
++            else
++            {
++                std::memcpy(m_scratchpad + sadr, m_rdram + mainOffset + copied, chunk);
++            }
++            copied += chunk;
++            sadr = (sadr + chunk) & (PS2_SCRATCHPAD_SIZE - 1u);
+         }
++        madr = (madr + byteCount) & 0x7FFFFFF0u;
++        qwc = 0u;
++        return true;
++    };
+ 
+-        copied += chunk;
+-        bytesLeft -= chunk;
+-        scratchOffset = (scratchOffset + chunk) & (PS2_SCRATCHPAD_SIZE - 1u);
++    const auto dctrl = m_ioRegisters.find(0x1000E000u);
++    const bool stallFromSpr = fromScratchpad && dctrl != m_ioRegisters.end() && ((dctrl->second >> 6u) & 3u) == 2u;
++    if (!transfer())
++        return false;
++    if (mode == 1u)
++    {
++        // The EE fills the whole chain before kicking it, so it runs to its END (or TIE+IRQ) tag at once.
++        for (uint32_t tags = 0u;; ++tags)
++        {
++            if (tags == PS2_SCRATCHPAD_SIZE / 16u)
++                throw std::runtime_error("fromSPR destination chain has no END tag");
++            uint32_t tag[2];
++            std::memcpy(tag, m_scratchpad + sadr, sizeof(tag));
++            sadr = (sadr + 16u) & (PS2_SCRATCHPAD_SIZE - 1u);
++            qwc = tag[0] & 0xFFFFu;
++            madr = tag[1] & 0x7FFFFFF0u;
++            chcr = (chcr & 0xFFFFu) | (tag[0] & 0xFFFF0000u);
++            const uint32_t id = (tag[0] >> 28u) & 7u;
++            m_ioRegisters[channelBase] = chcr;
++            if (!transfer())
++                return false;
++            if (id == 0u && stallFromSpr) // CNTS
++                m_ioRegisters[0x1000E020u] = madr;
++            if (id == 7u || ((chcr & 0x80u) && (tag[0] & 0x80000000u)))
++                break;
++        }
++    }
++    else if (stallFromSpr)
++    {
++        m_ioRegisters[0x1000E020u] = madr;
+     }
+ 
+-    m_ioRegisters[channelBase + 0x10u] = (originalMadr + byteCount) & 0x7FFFFFF0u;
++    m_ioRegisters[channelBase + 0x10u] = madr;
+     m_ioRegisters[channelBase + 0x20u] = 0u;
+-    m_ioRegisters[channelBase + 0x80u] = (originalSadr + byteCount) & 0x3FF0u;
++    m_ioRegisters[channelBase + 0x80u] = sadr;
+     completeDmacChannel(channelBase, fromScratchpad ? 8u : 9u);
+     return true;
+ }

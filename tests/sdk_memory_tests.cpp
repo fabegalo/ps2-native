@@ -265,6 +265,36 @@ void dma_resume_test() {
     require(memory.readIORegister(vif + 0x30u) == base + 32u, "CNT did not advance TADR with its payload");
 }
 
+void spr_destination_chain_test() {
+    constexpr uint32_t spr = 0x1000D000u;
+    for (const bool tie : {false, true}) {
+        PS2Memory memory;
+        require(memory.initialize(), "fromSPR chain initialization");
+        uint8_t *scratch = memory.getScratchpad();
+        const auto put = [&](uint32_t offset, uint32_t lo, uint32_t hi) {
+            const uint32_t words[4]{lo, hi, 0u, 0u};
+            std::memcpy(scratch + offset, words, sizeof(words));
+        };
+        put(0x3FF0u, 0x10000001u, 0x50000u); // CNT at the SPR end: payload wraps to SADR 0
+        put(0x0000u, 0xA1u, 0u);
+        put(0x0010u, 0x80000001u, 0x60000u); // CNTS with IRQ
+        put(0x0020u, 0xB2u, 0u);
+        put(0x0030u, 0x70000001u, 0x70000u); // END
+        put(0x0040u, 0xC3u, 0u);
+        memory.writeIORegister(0x1000E000u, 0x81u); // DMAE, STS = fromSPR
+        memory.writeIORegister(spr + 0x80u, 0x3FF0u);
+        memory.writeIORegister(spr + 0x20u, 0u);
+        memory.writeIORegister(spr, tie ? 0x184u : 0x104u);
+        require(!(memory.readIORegister(spr) & 0x100u), "fromSPR destination chain left STR set");
+        require(memory.readIORegister(0x1000E010u) & (1u << 8u), "fromSPR destination chain raised no D_STAT");
+        require(memory.read32(0x50000u) == 0xA1u && memory.read32(0x60000u) == 0xB2u, "fromSPR chain payload missing");
+        require(memory.readIORegister(0x1000E020u) == 0x60010u, "CNTS did not update D_STADR");
+        require(memory.read32(0x70000u) == (tie ? 0u : 0xC3u), "TIE+IRQ did not stop the fromSPR chain");
+        require(memory.readIORegister(spr + 0x80u) == (tie ? 0x30u : 0x50u), "fromSPR chain SADR");
+        require((memory.readIORegister(spr) >> 28u) == (tie ? 8u : 7u), "fromSPR chain CHCR tag");
+    }
+}
+
 void transfer_lifetime_test() {
     alignas(PS2Memory) std::array<unsigned char, sizeof(PS2Memory)> storage{};
     auto *memory = new (storage.data()) PS2Memory;
@@ -540,6 +570,7 @@ int main() {
         mfifo_test(2u, 2u);
         dma_chain_test();
         dma_resume_test();
+        spr_destination_chain_test();
         transfer_lifetime_test();
         cop0_count_test();
         disconnected_usb_test();

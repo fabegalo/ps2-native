@@ -1243,6 +1243,17 @@
           "ps2xRuntime/src/lib/ps2_runtime.cpp": "6bdffc9c94705adafd771f7f550d9301f055defeb51c98f8dfb5c66c3be2e07f"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0082-spr-destination-chain.patch",
+        "sha256": "366cd5f379bac422ba1a428bc27123eb594762d768ce5fcf2a97d1d6ab26b2c2",
+        "base_files": {
+          "ps2xRuntime/src/lib/ps2_memory.cpp": "06986e07e55d20a2948de743997a12a360b3d4935f82efc201501839415fe295"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/ps2_memory.cpp": "6730e34e8dcb6cee0c9d94e02c6b55e8cd17a30ed3d98a1cafac04f2072f4d47"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },
