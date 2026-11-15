@@ -10,6 +10,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <vector>
+#include <atomic>
+#include <thread>
+#include <chrono>
+#include <stdexcept>
 
 namespace {
 constexpr uint32_t kSpu2 = 0xBF900000u;
@@ -17,6 +21,9 @@ constexpr uint64_t kCyclesPerSample = 768;
 uint64_t cycle = 1000;
 std::vector<int16_t> pcm;
 uint32_t dmaDone = 0;
+bool concurrent = false;
+std::atomic<bool> finished{false};
+std::vector<int16_t> consumed;
 
 void w16(uint32_t reg, uint16_t v) { kzspu2Write16(kSpu2 + reg, v, cycle); }
 void w32(uint32_t reg, uint32_t v) { w16(reg, uint16_t(v >> 16)); w16(reg + 2, uint16_t(v)); }
@@ -25,7 +32,7 @@ void advance(uint64_t samples) {
         cycle += 64 * kCyclesPerSample;
         kzspu2Advance(cycle);
         int16_t drain[4096];
-        while (kzspu2ReadSamples(drain, 2048)) {}
+        if (!concurrent) while (kzspu2ReadSamples(drain, 2048)) {}
     }
 }
 double rms(size_t from, size_t to) {
@@ -35,11 +42,29 @@ double rms(size_t from, size_t to) {
 }
 } // namespace
 
-int main() {
+int main(int argc, char**) {
+    concurrent = argc > 1;
     KzSpu2Config config;
-    config.samples = [](void*, const int16_t* s, uint32_t frames) { pcm.insert(pcm.end(), s, s + frames * 2); };
+    config.samples = [](void*, const int16_t* s, uint32_t frames) {
+        pcm.insert(pcm.end(), s, s + frames * 2);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (concurrent && kzspu2AvailableFrames() + frames > 8192) {
+            if (std::chrono::steady_clock::now() >= deadline) throw std::runtime_error("PCM consumer stalled");
+            std::this_thread::yield();
+        }
+    };
     config.dmaComplete = [](void*, int) { ++dmaDone; };
     if (!kzspu2Init(config)) return 1;
+
+    std::jthread consumer;
+    if (concurrent) consumer = std::jthread([](std::stop_token stop) {
+        int16_t block[514];
+        do {
+            const auto n = kzspu2ReadSamples(block, 257); // Cross both block and ring wrap boundaries.
+            consumed.insert(consumed.end(), block, block + n * 2);
+            if (!n) std::this_thread::yield();
+        } while (!stop.stop_requested() && (!finished.load(std::memory_order_acquire) || kzspu2AvailableFrames()));
+    });
 
     // Eight looping ADPCM blocks: filter b % 5, varied shifts, LCG nibbles.
     std::vector<uint16_t> adpcm(8 * 8);
@@ -83,7 +108,13 @@ int main() {
     advance(24000);
     w16(0x1A4, 1 | 8); w16(0x400 + 0x1A4, 4);
     advance(14400);
+    finished.store(true, std::memory_order_release);
+    if (consumer.joinable()) consumer.join();
+    const auto dropped = kzspu2GetStatus().framesDropped;
     kzspu2Shutdown();
+    if (concurrent && (dropped || consumed != pcm)) {
+        std::puts("FAIL: concurrent PCM queue lost or reordered samples"); return 1;
+    }
 
     const size_t end = pcm.size() / 2;
     const double on = rms(start + 2400, start + 24000), tail = rms(end - 4800, end);

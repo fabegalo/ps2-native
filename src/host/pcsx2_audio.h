@@ -2,6 +2,8 @@
 #include "ps2x/iop/iop_spu2.h"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 
 struct SDL_AudioStream;
 
@@ -19,6 +21,10 @@ public:
     uint64_t nextEvent() override;
     uint32_t takeEvents() override;
 private:
+    void initializeSpu2();
+    std::mutex pcmMutex_;
+    std::condition_variable pcmConsumed_;
+    std::atomic<bool> outputFailed_{false};
     SDL_AudioStream* stream_ = nullptr;
     std::atomic<uint64_t> underrunFrames_{0};
     uint32_t events_ = 0;
