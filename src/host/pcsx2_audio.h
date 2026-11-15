@@ -12,6 +12,9 @@ class PCSX2Audio final : public ps2x::iop::IopSpu2Backend {
 public:
     PCSX2Audio();
     ~PCSX2Audio() override;
+    using FailureHandler = void (*)(void*) noexcept;
+    void setFailureHandler(void*, FailureHandler);
+    void checkOutput() const;
     void reset(uint8_t*, uint32_t, uint64_t) override;
     uint16_t read16(uint32_t, uint64_t) override;
     void write16(uint32_t, uint16_t, uint64_t) override;
@@ -21,10 +24,15 @@ public:
     uint64_t nextEvent() override;
     uint32_t takeEvents() override;
 private:
+    enum class OutputFailure { None, Submission, Stalled };
+    void failOutput(OutputFailure) noexcept;
     void initializeSpu2();
     std::mutex pcmMutex_;
     std::condition_variable pcmConsumed_;
-    std::atomic<bool> outputFailed_{false};
+    std::atomic<OutputFailure> outputFailure_{OutputFailure::None};
+    std::mutex failureMutex_;
+    void* failureContext_ = nullptr;
+    FailureHandler failureHandler_ = nullptr;
     SDL_AudioStream* stream_ = nullptr;
     std::atomic<uint64_t> underrunFrames_{0};
     uint32_t events_ = 0;

@@ -39,7 +39,7 @@ PCSX2Audio::PCSX2Audio() {
                     break;
                 }
                 if (!SDL_PutAudioStreamData(stream, buffer, static_cast<int>(copied * 4u)))
-                    device.outputFailed_.store(true, std::memory_order_relaxed);
+                    device.failOutput(OutputFailure::Submission);
                 // Pair notification with the producer's predicate check, including spurious wakes.
                 { std::lock_guard lock(device.pcmMutex_); }
                 device.pcmConsumed_.notify_one();
@@ -62,12 +62,11 @@ void PCSX2Audio::initializeSpu2() {
         std::unique_lock lock(device.pcmMutex_);
         // Backpressure never advances guest time or silently drops a block on a stalled device.
         if (!device.pcmConsumed_.wait_for(lock, std::chrono::milliseconds(250), [&] {
-                return device.outputFailed_.load(std::memory_order_relaxed) ||
+                return device.outputFailure_.load(std::memory_order_relaxed) != OutputFailure::None ||
                        kzspu2AvailableFrames() + frames <= kTargetFrames;
             }))
-            throw std::runtime_error("SPU2 PCM output stalled for 250 ms");
-        if (device.outputFailed_.load(std::memory_order_relaxed))
-            throw std::runtime_error("SDL SPU2 PCM submission failed");
+            device.failOutput(OutputFailure::Stalled);
+        device.checkOutput();
     };
     config.irq = [](void* p) { static_cast<PCSX2Audio*>(p)->events_ |= 1u; };
     config.dmaComplete = [](void* p, int core) { static_cast<PCSX2Audio*>(p)->events_ |= 2u << core; };
@@ -76,6 +75,25 @@ void PCSX2Audio::initializeSpu2() {
     };
     if (!kzspu2Init(config)) {
         throw std::runtime_error("PCSX2 SPU2 initialization failed");
+    }
+}
+void PCSX2Audio::setFailureHandler(void* context, FailureHandler handler) {
+    // Clearing waits for an in-flight notification before its session owner can be destroyed.
+    std::lock_guard lock(failureMutex_);
+    failureContext_ = context;
+    failureHandler_ = handler;
+}
+void PCSX2Audio::failOutput(OutputFailure failure) noexcept {
+    auto expected = OutputFailure::None;
+    if (!outputFailure_.compare_exchange_strong(expected, failure)) return;
+    std::lock_guard lock(failureMutex_);
+    if (failureHandler_) failureHandler_(failureContext_);
+}
+void PCSX2Audio::checkOutput() const {
+    switch (outputFailure_.load()) {
+    case OutputFailure::Submission: throw std::runtime_error("SDL SPU2 PCM submission failed");
+    case OutputFailure::Stalled: throw std::runtime_error("SPU2 PCM output stalled for 250 ms");
+    case OutputFailure::None: break;
     }
 }
 PCSX2Audio::~PCSX2Audio() {
@@ -100,7 +118,7 @@ void PCSX2Audio::reset(uint8_t* ram, uint32_t size, uint64_t cycle) {
         kzspu2SetIopRam(ram, size);
         events_ = 0;
         underrunFrames_ = 0;
-        outputFailed_ = false;
+        outputFailure_ = OutputFailure::None;
     }
     if (!SDL_ResumeAudioStreamDevice(stream_)) throw std::runtime_error(SDL_GetError());
     nextTrace_ = cycle + 36864000;

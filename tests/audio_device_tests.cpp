@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <stdexcept>
+#include <string>
 
 static void require(bool value, const char* message) {
     if (!value) throw std::runtime_error(message);
@@ -61,6 +62,27 @@ int main() {
                 std::chrono::steady_clock::now() - started).count();
             std::printf("session=%d frames=51200 elapsed_ms=%lld dropped=0\n", session, (long long)ms);
             require(ms >= 700 && ms < 5000, "Audio pacing did not follow the output clock");
+        }
+        {
+            // SDL_OpenAudioDeviceStream starts paused: deliberately leave this owned stream paused.
+            PCSX2Audio audio;
+            unsigned failures = 0;
+            audio.setFailureHandler(&failures, [](void* value) noexcept { ++*static_cast<unsigned*>(value); });
+            const auto started = std::chrono::steady_clock::now();
+            bool rejected = false;
+            try { audio.advance(36864000); }
+            catch (const std::runtime_error& error) {
+                rejected = std::string(error.what()).find("stalled for 250 ms") != std::string::npos;
+            }
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started).count();
+            require(rejected && failures == 1 && ms >= 200 && ms < 3000,
+                    "Stalled output did not notify its owner once within the bounded timeout");
+            rejected = false;
+            try { audio.checkOutput(); } catch (const std::runtime_error&) { rejected = true; }
+            require(rejected,"Output failure was lost before session shutdown");
+            require(kzspu2GetStatus().framesDropped == 0,"Output failure silently dropped PCM");
+            audio.setFailureHandler(nullptr, nullptr);
         }
         std::puts("SDL/SPU2/IOP lifecycle passed (dummy output)");
     } catch (const std::exception& error) {

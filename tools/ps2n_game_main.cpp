@@ -380,11 +380,15 @@ int run_game(int argc, char** argv) {
         ps2SetHostDevices(&runtime, &devices);
         struct DetachDevices {
             PS2Runtime& runtime;
+            PCSX2Audio& audio;
             ~DetachDevices() {
+                audio.setFailureHandler(nullptr, nullptr);
                 ps2SetHostDevices(&runtime, nullptr);
             }
-        } detach{runtime};
-
+        } detach{runtime, audio};
+        audio.setFailureHandler(&runtime, [](void* owner) noexcept {
+            static_cast<PS2Runtime*>(owner)->requestStop();
+        });
         if (!runtime.initialize(("ps2-native | " + elf.filename().string()).c_str())) {
             std::cerr << "PS2Recomp runtime initialization failed\n";
             return 1;
@@ -461,6 +465,7 @@ int run_game(int argc, char** argv) {
             throw;
         }
         ps2_stubs::mcFlushStorage();
+        audio.checkOutput();
     } catch (const std::exception& error) {
         std::cerr << "ps2n-game: " << error.what() << "\n";
         std::cerr.flush();
