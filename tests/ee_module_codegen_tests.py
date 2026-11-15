@@ -83,4 +83,32 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2] if len(sys.argv) > 2 else None)
         changed = {name for name in groups.keys() | expanded.keys()
                    if groups.get(name) != expanded.get(name)}
         assert len(changed) == 1, f'Learning invalidated unrelated unity groups: {changed}'
-print('PASS raw EE module identity, dispatch isolation, instruction/delay guards, cache and invalid inputs')
+    # A guarded word table can have its LUI in the bounds branch's delay slot.
+    switch = [0x74000000] * 66
+    switch[:9] = [0x2c820002, 0x10400016, 0x3c020020, 0x00041880,
+                  0x24420100, 0x00621821, 0x8c640000, 0x00800008, 0]
+    switch[24:26] = [0x03e00008, 0]
+    switch[32:35] = [0x2402002a, 0x03e00008, 0]
+    switch[36:39] = [0x2402002b, 0x03e00008, 0]
+    switch[64:66] = [0x200080, 0x200090]
+    def table(words):
+        data = struct.pack(f'<{len(words)}I', *words)
+        (root / 'image.bin').write_bytes(data)
+        return run(name=hashlib.sha256(data).hexdigest())
+    cases = table(switch)
+    assert all(any(name.endswith(f'_0x{pc:x}.cpp') for name in cases)
+               for pc in (0x200080, 0x200090)), 'Bounded raw jump table left its cases untranslated'
+    for address in (0x200091, 0x200108):
+        bad = switch.copy()
+        bad[65] = address
+        cases = table(bad)
+        assert not any(name.endswith('_0x200080.cpp') for name in cases), 'Invalid table was partially accepted'
+    bad = switch.copy()
+    bad[3] = 0x000418c0  # Scaling by eight does not describe a word table.
+    cases = table(bad)
+    assert not any(name.endswith('_0x200080.cpp') for name in cases), 'Unproven raw table was decoded as code'
+    bad = switch.copy()
+    bad[2], bad[4], bad[5] = 0x3c040020, 0x24840100, 0x00641821
+    cases = table(bad)
+    assert not any(name.endswith('_0x200080.cpp') for name in cases), 'Clobbered switch index retained a stale bound'
+print('PASS raw EE identity, guarded tables, dispatch isolation, delay guards, cache and invalid inputs')

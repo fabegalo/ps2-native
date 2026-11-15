@@ -1449,6 +1449,17 @@
           "ps2xIOP/tests/iop_compat_test_support.h": "ffdd3e2cf1a13d71ac8c112bf85f8d5392c5bbcb9e10a9bdb3d39f1d92c0c1b9"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0101-ee-raw-guarded-word-tables.patch",
+        "sha256": "5ebe842861af04965a45a9be193860565ad5acca240aa8c61c9e1a0c6af8a480",
+        "base_files": {
+          "ps2xRecomp/src/lib/elf_parser.cpp": "1150689c5df1aa16efe18824177ddae735b6781c1a7576038cfdc037182810f8"
+        },
+        "files": {
+          "ps2xRecomp/src/lib/elf_parser.cpp": "4358df480c438fd9b3e9aeb85ebab16baa017ca993585428be1f557d5018b062"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },

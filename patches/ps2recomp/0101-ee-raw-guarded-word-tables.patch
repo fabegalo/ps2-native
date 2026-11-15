@@ -1,0 +1,75 @@
+Prepare proven, bounds-checked word-table destinations in flat EE images.
+Reuse the existing offline decoder and entry-point queue; validate the complete table before adding code.
+No runtime decoder or title-specific addresses are introduced.
+
+--- a/ps2xRecomp/src/lib/elf_parser.cpp
++++ b/ps2xRecomp/src/lib/elf_parser.cpp
+@@ -23,6 +23,7 @@
+ #include <fstream>
+ #include <sstream>
+ #include <algorithm>
++#include <array>
+ #include <cstring>
+ 
+ namespace
+@@ -2334,6 +2335,42 @@
+             }
+         };
+         R5900Decoder decoder;
++        const auto enqueueWordTable = [&](uint32_t pc) {
++            // A bounds-checked switch: SLTIU/BEQZ/LUI/SLL/ADDIU/ADDU/LW/JR.
++            // Include the branch delay slot, which can construct the table base.
++            if (pc < base + 28u) return;
++            std::array<Instruction, 8> pattern;
++            for (uint32_t i = 0; i < pattern.size(); ++i) {
++                const uint32_t address = pc - 28u + i * 4u;
++                if (!m_rawReachable[(address - base) / 4]) return;
++                pattern[i] = decoder.decodeInstruction(address, readWord(address), false);
++            }
++            const auto& bound = pattern[0]; const auto& guard = pattern[1];
++            const auto& high = pattern[2]; const auto& shift = pattern[3];
++            const auto& low = pattern[4]; const auto& sum = pattern[5];
++            const auto& load = pattern[6]; const auto& jump = pattern[7];
++            if (bound.opcode != OPCODE_SLTIU || !bound.rt || !bound.rs || bound.rt == bound.rs ||
++                !bound.immediate || bound.immediate > 1000u ||
++                guard.opcode != OPCODE_BEQ || guard.rs != bound.rt || guard.rt ||
++                high.opcode != OPCODE_LUI || !high.rt || high.rt == bound.rs ||
++                shift.opcode != OPCODE_SPECIAL || shift.function != SPECIAL_SLL || shift.sa != 2 ||
++                shift.rt != bound.rs || !shift.rd || shift.rd == high.rt ||
++                low.opcode != OPCODE_ADDIU || low.rs != high.rt || low.rt != high.rt ||
++                sum.opcode != OPCODE_SPECIAL || sum.function != SPECIAL_ADDU || !sum.rd ||
++                !((sum.rs == shift.rd && sum.rt == high.rt) || (sum.rt == shift.rd && sum.rs == high.rt)) ||
++                load.opcode != OPCODE_LW || load.rs != sum.rd || !load.rt ||
++                jump.opcode != OPCODE_SPECIAL || jump.function != SPECIAL_JR || jump.rs != load.rt)
++                return;
++            const uint32_t fallback = decoder.getBranchTarget(guard);
++            if (fallback >= pc - 28u && fallback <= pc + 4u) return;
++            const int64_t table = (uint32_t(high.immediate) << 16) + int64_t(int16_t(low.immediate)) + int16_t(load.immediate);
++            const uint64_t tableSize = uint64_t(bound.immediate) * 4u;
++            if (table < base || (table & 3) || uint64_t(table) + tableSize > uint64_t(base) + bytes.size()) return;
++            for (uint32_t i = 0; i < bound.immediate; ++i)
++                if (!valid(readWord(uint32_t(table) + i * 4u))) return;
++            for (uint32_t i = 0; i < bound.immediate; ++i)
++                enqueue(readWord(uint32_t(table) + i * 4u), true);
++        };
+         while (!pending.empty())
+         {
+             uint32_t pc = pending.back(); pending.pop_back();
+@@ -2358,6 +2395,8 @@
+                     }
+                     else
+                     {
++                        if (inst.opcode == OPCODE_SPECIAL && inst.function == SPECIAL_JR && inst.rs != 31)
++                            enqueueWordTable(pc);
+                         if (inst.opcode == OPCODE_J || inst.opcode == OPCODE_JAL)
+                             enqueue(decoder.getJumpTarget(inst), true);
+                         if (inst.opcode == OPCODE_JAL ||
+@@ -2372,7 +2411,7 @@
+             }
+         }
+         // No section metadata exists in a flat image. Translate only reachable code;
+-        // indirect entries are supplied by the existing entry-point learning path.
++        // Other indirect entries use the existing entry-point learning path.
+         std::vector<uint32_t> ordered;
+         for (uint32_t start : starts)
+             if (valid(start) && m_rawReachable[(start - base) / 4]) ordered.push_back(start);
