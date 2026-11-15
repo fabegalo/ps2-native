@@ -27,9 +27,12 @@ int main() {
                 require(kzspu2GetStatus().iopCycle == 0 && kzspu2AvailableFrames() == 0,
                         "Reset retained the old clock or queued PCM");
                 require(audio.takeEvents() == 0, "Reset retained interrupts");
+                uint32_t events = 0;
                 for (uint32_t core = 0; core < 2; ++core) {
                     const uint32_t regs = 0xbf900000u + core * 0x400u;
-                    memory.write16(regs + 0x19a, 0x8000); // Enable SPU2.
+                    memory.write16(regs + 0x19c, 0);
+                    memory.write16(regs + 0x19e, 0x5008); // IRQ inside the DMA destination range.
+                    memory.write16(regs + 0x19a, 0x8040); // Enable SPU2 and this core's IRQ.
                     memory.write16(regs + 0x1a8, 0);
                     memory.write16(regs + 0x1aa, 0x5000);
                     require(memory.read16(regs + 0x1aa) == 0x5000, "IOP register readback failed");
@@ -38,9 +41,13 @@ int main() {
                     memory.write32(dma, 0x10000u + core * 0x100u);
                     memory.write32(dma + 4, 0x00010010);
                     memory.write32(dma + 8, 0x01000201);
+                    cycle += 128 * 768;
+                    const auto coreEvents = memory.advanceSpu2();
+                    require(coreEvents & 1u, "Real SPU2 IRQ missing from an enabled core");
+                    events |= coreEvents;
+                    memory.write16(regs + 0x19a, 0x8000); // Acknowledge before testing the other core.
                 }
-                uint32_t events = 0;
-                for (int block = 0; block < 100; ++block) {
+                for (int block = 2; block < 100; ++block) {
                     cycle += 128 * 768;
                     events |= memory.advanceSpu2();
                 }

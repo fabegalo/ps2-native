@@ -374,7 +374,17 @@ int run_game(int argc, char** argv) {
             ps2native::create_directories(vu1);
             pcsx2vu1::aot::setRecordPath(ps2native::path_utf8(vu1 / "recorded.txt").c_str());
         }
+        PCSX2Audio audio;
         PS2Runtime runtime;
+        PS2HostDevices devices{&audio};
+        ps2SetHostDevices(&runtime, &devices);
+        struct DetachDevices {
+            PS2Runtime& runtime;
+            ~DetachDevices() {
+                ps2SetHostDevices(&runtime, nullptr);
+            }
+        } detach{runtime};
+
         if (!runtime.initialize(("ps2-native | " + elf.filename().string()).c_str())) {
             std::cerr << "PS2Recomp runtime initialization failed\n";
             return 1;
@@ -393,15 +403,6 @@ int run_game(int argc, char** argv) {
         if (browser) runtime.eeScheduler().setExecutableArguments({"rom0:OSDSYS"});
         if (!prepareExec) ps2n_register_ee_modules(runtime.eeScheduler());
         if (!browser && elf.parent_path().filename() == "cd") install_loaded_code_capture(elf.parent_path().parent_path());
-        PCSX2Audio audio;
-        PS2HostDevices devices{&audio};
-        ps2SetHostDevices(&runtime, &devices);
-        struct DetachDevices {
-            PS2Runtime& runtime;
-            ~DetachDevices() {
-                ps2SetHostDevices(&runtime, nullptr);
-            }
-        } detach{runtime};
         std::jthread diagnostics;
         const char* gsBackend = std::getenv("PS2N_GS_BACKEND");
         const char* gsMode = std::getenv("PS2N_GS_MODE");

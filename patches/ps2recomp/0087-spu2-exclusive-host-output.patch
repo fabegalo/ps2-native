@@ -1,0 +1,37 @@
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -13,6 +13,7 @@
+ #include "Kernel/Stubs/GS.h"
+ #include "Kernel/Stubs/MPEG.h"
+ #include "ps2_host_backend.h"
++#include "runtime/host_devices.h"
+ #include "ps2_iop_host.h"
+ #include "ps2x/iop/iop_subsystem.h"
+ 
+@@ -771,8 +772,12 @@
+ #else
+         SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
+-        InitAudioDevice();
+-        m_audioBackend.setAudioReady(IsAudioDeviceReady());
++        const auto* devices = ps2GetHostDevices(this);
++        if (!devices || !devices->spu2)
++        {
++            InitAudioDevice();
++            m_audioBackend.setAudioReady(IsAudioDeviceReady());
++        }
+ #endif
+         SetTargetFPS(60);
+         if (m_debugUiInitCallback)
+--- a/ps2xRuntime/src/lib/ps2_iop_host.cpp
++++ b/ps2xRuntime/src/lib/ps2_iop_host.cpp
+@@ -272,6 +272,9 @@
+                                      ps2x::iop::GuestBuffer send,
+                                      ps2x::iop::GuestBuffer receive)
+ {
++    // A real sound server must drive the attached SPU2, never the legacy VAG player.
++    if (spu2Backend())
++        throw std::runtime_error("Audio RPC requires the original sound IRX server with SPU2 attached");
+     uint8_t *sendPointer = nullptr;
+     uint8_t *receivePointer = nullptr;
+     if (send.address && !guestRange(send.address, send.size, sendPointer))

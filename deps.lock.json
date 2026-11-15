@@ -1254,6 +1254,19 @@
           "ps2xRuntime/src/lib/ps2_memory.cpp": "6730e34e8dcb6cee0c9d94e02c6b55e8cd17a30ed3d98a1cafac04f2072f4d47"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0087-spu2-exclusive-host-output.patch",
+        "sha256": "021f01b2983527d0205d8e6189c4440a0d3e5523235d9ddb9a1d0c3bfa7040ba",
+        "base_files": {
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "6bdffc9c94705adafd771f7f550d9301f055defeb51c98f8dfb5c66c3be2e07f",
+          "ps2xRuntime/src/lib/ps2_iop_host.cpp": "4bf88b294594d3eefe3a37869ae61711e4e8cad4277fecd6c811353956b69ff0"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "b779d5263bc5224acbdf7a61f8e827386a8532862a5d9f0b8e8db47469bc7ddc",
+          "ps2xRuntime/src/lib/ps2_iop_host.cpp": "ff5e6672e0098c11eb7e587616302b53509f345cb5230c3109718275afe4bad4"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },
