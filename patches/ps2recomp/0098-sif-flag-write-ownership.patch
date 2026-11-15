@@ -1,0 +1,36 @@
+Preserve SIF hardware flag ownership at the EE/IOP boundary.
+Observed original OSDSYS clears SIFINIT/CMDINIT after EESYNC sets BOOTEND; those writes must not erase BOOTEND.
+Reference: PCSX2 pcsx2/IopMem.cpp and pcsx2/HwWrite.cpp (SBUS_F220/F230).
+
+--- a/ps2xIOP/src/emulator/services/iop_rpc.cpp
++++ b/ps2xIOP/src/emulator/services/iop_rpc.cpp
+@@ -140,7 +140,7 @@
+         case 22: // IOP writes clear MSFLAG bits (PCSX2 IopMem.cpp).
+         {
+             const uint32_t value = readSifRegister(3) & ~cpu.gpr[4];
+-            writeSifRegister(3, value);
++            m_sifRegisters.insert_or_assign(3, value);
+             setV0(value);
+             return true;
+         }
+@@ -149,7 +149,7 @@
+         {
+             const auto found = m_sifRegisters.find(4);
+             uint32_t value = found == m_sifRegisters.end() ? 0x00020000u : found->second;
+-            if (ordinal == 24) { value |= cpu.gpr[4]; writeSifRegister(4, value); }
++            if (ordinal == 24) { value |= cpu.gpr[4]; m_sifRegisters.insert_or_assign(4, value); }
+             setV0(value);
+             return true;
+         }
+@@ -505,7 +505,10 @@
+     uint32_t IopRpcBridge::writeSifRegister(uint32_t reg, uint32_t value)
+     {
+         const auto found = m_sifRegisters.find(reg);
+-        const uint32_t previous = found == m_sifRegisters.end() ? 0u : found->second;
++        const uint32_t previous = found == m_sifRegisters.end() ? (reg == 4u ? 0x00020000u : 0u) : found->second;
++        // EE and IOP write opposite sides of the hardware handshake (PCSX2 IopMem.cpp / HwWrite.cpp).
++        if (reg == 3u) value |= previous;      // EE sets MSFLAG; IOP clears it.
++        else if (reg == 4u) value = previous & ~value; // EE clears SMFLAG; IOP sets it.
+         m_sifRegisters.insert_or_assign(reg, value);
+         return previous;
+     }

@@ -1,0 +1,130 @@
+IOP LOADCORE post-boot callbacks: preserve original EESYNC as the BOOTEND producer.
+Behavioral reference: ps2dev/ps2sdk iop/system/loadcore/src/loadcore.c (AddRebootNotifyHandler and boot phases).
+Maintainer approved completing this existing HLE contract on 2026-11-15.
+
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -98,4 +98,7 @@
+         };
+ 
++        struct BootCallback : GuestCallback { uint32_t priority; };
++        enum class BootState { Inactive, Pending, Completing, Complete, Failed };
++
+         explicit Impl(IopHost &hostRef)
+             : host(hostRef),
+@@ -137,4 +140,7 @@
+             pendingDmaInterrupts.clear();
+             pendingGuestCallbacks.clear();
++            bootCallbacks.clear();
++            bootState = BootState::Inactive;
++            bootPriority = 0;
+             nextModuleId = 1;
+             moduleCursor = kModuleLoadBase;
+@@ -360,4 +366,26 @@
+             }
+ 
++            // PS2SDK loadcore:20 defers notifications through boot phases 0..3.
++            if (iequals(call.library, "loadcore") && call.ordinal == 20u)
++            {
++                const BootCallback callback{{a0, cpu.gpr[28]}, cpu.gpr[5] & 3u};
++                if (!a0 || (a0 & 3u) || !memory.ownsRamRange(a0, 4u))
++                    throw std::runtime_error("Invalid IOP post-boot callback address");
++                if (bootState == BootState::Pending ||
++                    (bootState == BootState::Completing && bootPriority < 3u))
++                {
++                    if (bootCallbacks.size() >= 128u)
++                        throw std::runtime_error("IOP post-boot callback queue exhausted");
++                    bootCallbacks.push_back(callback);
++                    setV0(1);
++                }
++                else
++                {
++                    const auto status = invokeBootCallback(callback, 1u, 0u);
++                    if (cpu.gpr[6]) memory.write32(cpu.gpr[6], status);
++                    setV0(0);
++                }
++                return ImportDisposition::Handled;
++            }
+             if (iequals(call.library, "loadcore") && loadcore.dispatchImport(call.ordinal, cpu))
+                 return ImportDisposition::Handled;
+@@ -639,4 +667,45 @@
+         {
+             return callFunction(address, a0, a1, a2, a3, gp, instructionBudget);
++        }
++
++        uint32_t invokeBootCallback(const BootCallback& callback, uint32_t next, uint32_t delayed)
++        {
++            const auto argument = allocate(sizeof(uint32_t));
++            if (!argument) throw std::runtime_error("Cannot allocate IOP post-boot callback argument");
++            memory.write32(argument, next);
++            try
++            {
++                const auto result = executeGuestFunction(callback.function, argument, delayed, 0, 0, callback.gp);
++                freeAllocation(argument);
++                return result;
++            }
++            catch (...) { freeAllocation(argument); throw; }
++        }
++
++        void finishBootstrap()
++        {
++            if (bootState == BootState::Complete) return;
++            if (bootState != BootState::Pending)
++                throw std::runtime_error("IOP bootstrap callbacks are not pending");
++            bootState = BootState::Completing;
++            try
++            {
++                for (bootPriority = 0; bootPriority < 4; ++bootPriority)
++                {
++                    for (size_t i = 0; i < bootCallbacks.size(); ++i)
++                    {
++                        const auto callback = bootCallbacks[i]; // Registration may append during a callback.
++                        if (callback.priority != bootPriority) continue;
++                        const auto& next = bootCallbacks[bootPriority == 3 ? i : 0];
++                        invokeBootCallback(callback, next.function | next.priority, 1);
++                    }
++                    if (bootPriority == 2)
++                        while (!bootCallbacks.empty() && bootCallbacks.back().priority != 3)
++                            bootCallbacks.pop_back();
++                }
++                bootCallbacks.clear();
++                bootState = BootState::Complete;
++            }
++            catch (...) { bootState = BootState::Failed; throw; }
+         }
+ 
+@@ -923,4 +992,7 @@
+         CpuState *activeCpu = nullptr;
+         std::string lastError;
++        std::vector<BootCallback> bootCallbacks;
++        BootState bootState = BootState::Inactive;
++        uint32_t bootPriority = 0;
+         bool aotOnly = false;
+         bool servicingDmaInterrupts = false;
+@@ -1008,4 +1080,10 @@
+         m_impl->rpc.holdBootEnd(true);
+         m_impl->aotOnly = true;
++        m_impl->bootState = Impl::BootState::Pending;
++    }
++
++    void IopEmulator::finishBootstrap()
++    {
++        m_impl->finishBootstrap();
+     }
+ 
+--- a/ps2xIOP/src/emulator/iop_emulator.h
++++ b/ps2xIOP/src/emulator/iop_emulator.h
+@@ -24,4 +24,5 @@
+         void reset();
+         void reboot();
++        void finishBootstrap();
+         std::optional<std::string> takeResetRequest();
+         void holdBootEnd(bool hold);
+--- a/ps2xIOP/src/iop_subsystem.cpp
++++ b/ps2xIOP/src/iop_subsystem.cpp
+@@ -283,4 +283,5 @@
+             m_impl->rebuildRoutes();
+         }
++        m_impl->emulator.finishBootstrap();
+         // EESYNC must actually publish BOOTEND; a loaded-module count is not completion.
+         m_impl->emulator.holdBootEnd(false);

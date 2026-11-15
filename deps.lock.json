@@ -1349,6 +1349,58 @@
           "ps2xIOP/src/iop_module_manager.cpp": "89f632950eef1d5b83b3d53bee7e0b4a59fd834ec6b37c10117dd33b31b3d27b"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0095-iop-post-boot-callbacks.patch",
+        "sha256": "3922e22b0dcfcf95607c8f7a67016318faf5e0f692e031cf9500c793dc97d77e",
+        "base_files": {
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "f2cdfefbcfbea2ca400395ec27b9f392aa7f3894f98fdf7b4a86e8b2ece44bc9",
+          "ps2xIOP/src/emulator/iop_emulator.h": "257b9f5779a3281015d7760fa21c42751a3e761a9bfd027b3ad70798fd7ed826",
+          "ps2xIOP/src/iop_subsystem.cpp": "41f429089f6d44f99bc68b4e22f681a68388818d53a5a943c569ed3023bb6262"
+        },
+        "files": {
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "5a0afff1564636262231ba05cbcbb36135a5a13876a42a2d75afe2169e47e2bc",
+          "ps2xIOP/src/emulator/iop_emulator.h": "0feb1174d412a9cee629761c2f2d46028e5a216e3a3f22d5108737ef5bb1847f",
+          "ps2xIOP/src/iop_subsystem.cpp": "cbe49c6f89d575094d44425ecc56735a9964653b6a345491c3602fd765543983"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0096-iop-sif-boot-primitives.patch",
+        "sha256": "2955a6e470399aa9890ec70c82f4a79c0622595bb2b8ee957d243c2747d9f7b8",
+        "base_files": {
+          "ps2xIOP/src/emulator/services/iop_rpc.cpp": "f88fbb1adc2bc00589fc382270ab321e971eb85ba06621ff595cf0f549f02918",
+          "ps2xIOP/src/emulator/core/iop_kernel.cpp": "2bb5317a057f44f7df79dc94a4b8486990349ab265b7dd90651c67a4d9e3ab2f",
+          "ps2xIOP/src/emulator/core/iop_kernel.h": "0be90afb61df8a8d8ee6b028d0a99dac2fdf6d0ad4daba68c44471004e70bde9"
+        },
+        "files": {
+          "ps2xIOP/src/emulator/services/iop_rpc.cpp": "3cda16dcede3bd5dc4bbcc9449af4d85d56898ee608604c3ded5ec471f04107e",
+          "ps2xIOP/src/emulator/core/iop_kernel.cpp": "ad4bb21c1ff7e6333938324c31a5d97b4cbfa32ddb350f7de1ef999a64551e1c",
+          "ps2xIOP/src/emulator/core/iop_kernel.h": "a0c8bcf98575842297b5d00463c29934bd6798689fb0df89b1d667745c88c674"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0097-sif-register-diagnostics.patch",
+        "sha256": "5164dfb3238ef1f49308e0b082b99111173d1129abc314028b545518a80ab0ed",
+        "base_files": {
+          "ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp": "a0fb0e130e03acd6071d5aa234b64f888708c9ab4fd3a5fee3c0b4fe3c67e07d"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp": "ef418b6490febb492e4fc2ee59e6552ffbaf6f20009911cbb9260ddb6226f3e9"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0098-sif-flag-write-ownership.patch",
+        "sha256": "eace7bd96355770d8aba1df9b0be6ce6bc2d96b3d1289addd197f5c659ba7a2f",
+        "base_files": {
+          "ps2xIOP/src/emulator/services/iop_rpc.cpp": "3cda16dcede3bd5dc4bbcc9449af4d85d56898ee608604c3ded5ec471f04107e"
+        },
+        "files": {
+          "ps2xIOP/src/emulator/services/iop_rpc.cpp": "a20ceb5560d7354caee1a141f6db821fb1edf9c6a4fe89d3e2688a0174ddae5c"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },

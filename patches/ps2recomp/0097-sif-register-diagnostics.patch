@@ -1,0 +1,55 @@
+Restore existing bounded SIF register traces behind PS2N_DEVICE_TRACE, including the caller condition register.
+No register behavior or default logging change; retain the existing 128-read/write limits.
+
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
+@@ -7,6 +7,7 @@
+ 
+ #include <algorithm>
+ #include <cstring>
++#include <cstdlib>
+ #include <limits>
+ #include <vector>
+ 
+@@ -93,6 +94,8 @@
+ 
+         bool shouldTraceSifReg(uint32_t reg)
+         {
++            static const bool enabled = [] { const char* v = std::getenv("PS2N_DEVICE_TRACE"); return v && v[0] && v[0] != '0'; }();
++            if (!enabled) return false;
+             switch (reg)
+             {
+             case 0x2u:
+@@ -482,15 +485,14 @@
+         }
+         if (shouldLog)
+         {
+-            PS2_IF_AGRESSIVE_LOGS({
+                 auto flags = std::cerr.flags();
+                 std::cerr << "[sceSifGetReg] reg=0x" << std::hex << reg
+                           << " value=0x" << value
++                          << " s0=0x" << (ctx ? getRegU32(ctx, 16) : 0u)
+                           << " pc=0x" << (ctx ? ctx->pc : 0u)
+                           << " ra=0x" << (ctx ? getRegU32(ctx, 31) : 0u)
+                           << std::dec << std::endl;
+                 std::cerr.flags(flags);
+-            });
+         }
+         setReturnU32(ctx, value);
+     }
+@@ -779,7 +781,6 @@
+         }
+         if (shouldLog)
+         {
+-            PS2_IF_AGRESSIVE_LOGS({
+                 auto flags = std::cerr.flags();
+                 std::cerr << "[sceSifSetReg] reg=0x" << std::hex << reg
+                           << " prev=0x" << prev
+@@ -788,7 +789,6 @@
+                           << " ra=0x" << (ctx ? getRegU32(ctx, 31) : 0u)
+                           << std::dec << std::endl;
+                 std::cerr.flags(flags);
+-            });
+         }
+         setReturnU32(ctx, prev);
+     }

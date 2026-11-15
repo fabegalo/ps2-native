@@ -2,8 +2,132 @@
 #include "emulator/services/iop_module_loader.h"
 #include "emulator/iop_emulator.h"
 #include "emulator/core/iop_memory.h"
+#include "emulator/services/iop_aot_frame.h"
+#include "ps2x/iop/iop_aot.h"
+#include "emulator/core/iop_kernel.h"
+#include "emulator/services/iop_rpc.h"
+#include <cstdlib>
 
 using namespace iop_test;
+
+// Small offline-compiled fixture; no runtime instruction decoder is used after reboot.
+template <uint32_t Word>
+static bool boot_instruction(ps2x::iop::detail::IopCpuState& cpu,
+                             ps2x::iop::detail::IopMemory& memory, uint32_t) {
+    ps2x::iop::detail::IopAotFrame f(cpu, memory);
+    constexpr unsigned op = Word >> 26, rs = Word >> 21 & 31, rt = Word >> 16 & 31;
+    constexpr int32_t imm = int16_t(Word);
+    if constexpr (Word == 0) {}
+    else if constexpr (op == 9) f.write(rt, cpu.gpr[rs] + uint32_t(imm));
+    else if constexpr (op == 15) f.write(rt, (Word & 0xffff) << 16);
+    else if constexpr (op == 13) f.write(rt, cpu.gpr[rs] | (Word & 0xffff));
+    else if constexpr (op == 43) f.store32(rt, cpu.gpr[rs] + uint32_t(imm));
+    else if constexpr (op == 35) f.load32(rt, cpu.gpr[rs] + uint32_t(imm));
+    else if constexpr (op == 3) { f.write(31, cpu.pc + 8); f.jump((Word & 0x3ffffff) << 2); }
+    else if constexpr (op == 0 && (Word & 63) == 8) f.jump(cpu.gpr[rs]);
+    else if constexpr (op == 0 && (Word & 63) == 0) f.write(Word >> 11 & 31, cpu.gpr[rt] << (Word >> 6 & 31));
+    else static_assert(Word == 0, "Fixture needs another offline-compiled instruction");
+    return f.finish();
+}
+
+template <uint32_t... Words>
+static void boot_code(Irx& image, IopAotModule& module, uint32_t offset) {
+    image.words(offset, {Words...});
+    ((module.entries.push_back({offset, boot_instruction<Words>, Words}), offset += 4), ...);
+}
+
+static void post_boot_test() {
+    using ps2x::iop::detail::IopEmulator;
+    Irx image;
+    IopAotModule module;
+    boot_code<0x27bdfff0,0xafbf000c,0x3c1c3344,0x379c5566,0x3c040001,
+        0x34840280,0x24050002,0x3c060001,0x34c60440,0x0c004065,0,
+        0x3c040001,0x34840200,0x24050000,0x0c004065,0,
+        0x3c040001,0x348402c0,0x24050003,0x0c004065,0,
+        0x3c040001,0x34840240,0x24050001,0x0c004065,0,
+        0x8fbf000c,0x24020000,0x27bd0010,0x03e00008,0>(image,module,0);
+    image.words(0x180,{0x41e00000,0,0x101,0x64616f6c,0x65726f63,0x03e00008,0x24000014,0,0});
+    // Each callback appends its priority, records GP/delayed/next and returns a distinct status.
+#define BOOT_CALLBACK(P) boot_code<0x3c080001,0x8d090400,0,0x00094900,0x35290000u|(P+1), \
+    0xad090400,0xad1c0404u+(P*4),0xad050414u+(P*4),0x8c8a0000,0, \
+    0xad0a0424u+(P*4),0x03e00008,0x24020010u+P>(image,module,0x200+P*0x40)
+    BOOT_CALLBACK(0); BOOT_CALLBACK(1); BOOT_CALLBACK(2); BOOT_CALLBACK(3);
+#undef BOOT_CALLBACK
+    image.words(0x440,{0xaabbccdd});
+    module.image = image.bytes;
+    registerIopAotModule(std::move(module));
+    Host host;
+    IopEmulator iop(host);
+    const auto word = [&](uint32_t address) { uint32_t v; require(iop.readMemory(address,&v,4),"Cannot read callback result"); return v; };
+    const auto install = [&] { image.install(host); require(iop.loadModuleBuffer(0x1000,nullptr,0).startResult == 0,"Callback initializer failed"); };
+    iop.reboot(); install();
+    require(word(0x10400) == 0 && word(0x10440) == 0xaabbccdd,"Callback ran before boot completed or changed deferred status");
+    iop.finishBootstrap();
+    require(word(0x10400) == 0x1234,"Post-boot callbacks did not run in priority order");
+    for (unsigned p=0;p<4;++p) {
+        require(word(0x10404+p*4) == 0x33445566 && word(0x10414+p*4) == 1,"Callback lost GP or deferred flag");
+        require(word(0x10424+p*4) == (p==3 ? 0x102c3 : 0x10282),"Callback received the wrong next entry");
+    }
+    iop.finishBootstrap();
+    require(word(0x10400) == 0x1234,"Boot completion ran callbacks twice");
+    iop.reboot(); install(); iop.reboot(); iop.finishBootstrap();
+    require(!(iop.readSifRegister(4)&0x40000),"Reset retained a callback or fabricated BOOTEND");
+    iop.reset(); install();
+    require(word(0x10400)==0x3142 && word(0x10440)==0x11 && word(0x10414)==0,
+            "Post-bootstrap registration did not run immediately with status and delayed=0");
+    iop.reboot(); install();
+    const uint32_t corrupt=0;
+    require(iop.writeMemory(0x10200,&corrupt,4),"Cannot set callback negative control");
+    bool failed=false;
+    try { iop.finishBootstrap(); } catch(const std::runtime_error&) { failed=true; }
+    require(failed && !(iop.readSifRegister(4)&0x40000),"Invalid callback falsely completed boot");
+    failed=false;
+    try { iop.finishBootstrap(); } catch(const std::runtime_error&) { failed=true; }
+    require(failed,"Failed callback boot was treated as complete on retry");
+}
+
+static void boot_primitives_test() {
+    using namespace ps2x::iop::detail;
+    Host host;
+    IopMemory memory;
+    IopKernel kernel(memory);
+    kernel.reset();
+    IopRpcBridge rpc(host,memory,kernel);
+    rpc.reset();
+    IopCpuState cpu;
+    rpc.holdBootEnd(true);
+    cpu.gpr[4]=0x40000;
+    require(rpc.dispatchSifManImport(24,cpu) && cpu.gpr[2]==0x60000,
+            "IOP SMFLAG write did not set BOOTEND");
+    require(!(rpc.readSifRegister(4)&0x40000),"EE saw BOOTEND before callbacks completed");
+    require(rpc.dispatchSifManImport(23,cpu) && cpu.gpr[2]==0x60000,"IOP could not see its own pending SMFLAG");
+    cpu.gpr[4]=0x10;
+    require(rpc.dispatchSifManImport(24,cpu) && cpu.gpr[2]==0x60010,"Second SMFLAG write erased pending BOOTEND");
+    rpc.holdBootEnd(false);
+    require(rpc.readSifRegister(4)==0x60010,"EE did not see the actual EESYNC flag after boot completion");
+    rpc.writeSifRegister(4,0x10000);
+    rpc.writeSifRegister(4,0x20000);
+    require(rpc.readSifRegister(4)==0x40010,"OSDSYS clearing init flags erased EESYNC BOOTEND");
+    rpc.writeSifRegister(4,0x40000);
+    require(rpc.readSifRegister(4)==0x10,"EE could not acknowledge actual BOOTEND");
+    rpc.writeSifRegister(3,0xff);
+    rpc.writeSifRegister(3,0x100);
+    require(rpc.readSifRegister(3)==0x1ff,"EE MSFLAG write erased earlier bits");
+    cpu.gpr[4]=0x5;
+    require(rpc.dispatchSifManImport(22,cpu) && cpu.gpr[2]==0x1fa && rpc.readSifRegister(3)==0x1fa,
+            "IOP MSFLAG write did not clear the requested bits");
+    require(kernel.dispatchThreadImport(41,cpu,0) && int32_t(cpu.gpr[2])>0,"System-status event is invalid");
+    const auto flag=cpu.gpr[2];
+    require(kernel.dispatchThreadImport(41,cpu,0) && cpu.gpr[2]==flag,"System-status event is not shared");
+    cpu.gpr[4]=flag;cpu.gpr[5]=0x400;cpu.gpr[6]=0;cpu.gpr[7]=0;
+    require(kernel.dispatchEventImport(11,cpu) && int32_t(cpu.gpr[2])==-418,"REBOOT event completed without a request");
+    require(kernel.setInternalEventFlag(flag,0x400),"Cannot signal actual reboot event");
+    require(kernel.dispatchEventImport(11,cpu) && cpu.gpr[2]==0,"REBOOT event did not observe the real request");
+    kernel.reset();
+    require(kernel.dispatchThreadImport(41,cpu,0),"System-status event unavailable after reset");
+    cpu.gpr[4]=cpu.gpr[2];
+    require(kernel.dispatchEventImport(11,cpu) && int32_t(cpu.gpr[2])==-418,"Reset retained the reboot event bits");
+}
 
 static void boot_contract_test() {
     Host host;
@@ -112,6 +236,8 @@ static void boot_contract_test() {
 
 int main() {
     try {
+        post_boot_test();
+        boot_primitives_test();
         boot_contract_test();
         constexpr uint32_t sid = 0xA11CE055u;
         Host host;
