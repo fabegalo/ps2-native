@@ -56,14 +56,21 @@ int main(int argc, char**) {
     config.dmaComplete = [](void*, int) { ++dmaDone; };
     if (!kzspu2Init(config)) return 1;
 
-    std::jthread consumer;
-    if (concurrent) consumer = std::jthread([](std::stop_token stop) {
+    std::thread consumer;
+    struct JoinConsumer {
+        std::thread& thread;
+        ~JoinConsumer() {
+            finished.store(true, std::memory_order_release);
+            if (thread.joinable()) thread.join();
+        }
+    } joinConsumer{consumer};
+    if (concurrent) consumer = std::thread([] {
         int16_t block[514];
         do {
             const auto n = kzspu2ReadSamples(block, 257); // Cross both block and ring wrap boundaries.
             consumed.insert(consumed.end(), block, block + n * 2);
             if (!n) std::this_thread::yield();
-        } while (!stop.stop_requested() && (!finished.load(std::memory_order_acquire) || kzspu2AvailableFrames()));
+        } while (!finished.load(std::memory_order_acquire) || kzspu2AvailableFrames());
     });
 
     // Eight looping ADPCM blocks: filter b % 5, varied shifts, LCG nibbles.
