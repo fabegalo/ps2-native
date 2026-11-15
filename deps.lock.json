@@ -1163,6 +1163,17 @@
           "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.h": "e57df202effe82ee41465bb0132554d41732fcb80cdbed837a6043122a350230"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0076-vif1-unpack-v3-w-and-fill.patch",
+        "sha256": "8d492f38c340d0f9f968cb56c4891e5d72399a51df5166de21c51248f142a55d",
+        "base_files": {
+          "ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp": "cc8a2243652a41f32fb7c45d3f091698773455a00ed3c105a0c64fd9928da76e"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp": "e16fd4dba57065efc57ec41d7aa20f75702b4844d1946864dec0ac46effb8a6b"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },

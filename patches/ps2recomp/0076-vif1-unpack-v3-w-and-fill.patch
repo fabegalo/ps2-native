@@ -1,0 +1,50 @@
+--- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+@@ -602,11 +602,14 @@ void PS2Memory::executeVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+                     uint32_t decompressed[4] = {lanes[0], lanes[1], lanes[2], lanes[3]};
+                     bool decoded = false;
+ 
++                    // Fill cycles (CL < WL) unpack the next source vector without consuming it, like PCSX2's
++                    // _nVifUnpackLoop; only the fill after the last source vector falls back to ROW below.
+                     const uint8_t *srcVec = nullptr;
+-                    if (sourceAvailable && srcIndex < sourceVectorCount)
++                    if (srcIndex < sourceVectorCount)
+                     {
+                         srcVec = srcBase + srcIndex * bytesPerVector;
+-                        ++srcIndex;
++                        if (sourceAvailable)
++                            ++srcIndex;
+                         decoded = true;
+                     }
+ 
+@@ -708,6 +711,30 @@ void PS2Memory::executeVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+                         handledFormat = false;
+                     }
+ 
++                    // V3 uses the V4 unpack on hardware: W takes the next source element (PCSX2 UNPACK_V4).
++                    // That element lies past this UNPACK's data only for the last vector; PCSX2 then reads the
++                    // following stream word, which this buffer does not hold, so it becomes 0 (approximation).
++                    if (handledFormat && components == 3)
++                    {
++                        const uint32_t elementBytes = static_cast<uint32_t>(bitsPerComponent / 8);
++                        const uint8_t *next = srcVec + 3u * elementBytes;
++                        uint32_t w = 0u;
++                        if (next + elementBytes <= data + sizeBytes)
++                        {
++                            if (elementBytes == 4u)
++                                std::memcpy(&w, next, sizeof(w));
++                            else if (elementBytes == 2u)
++                            {
++                                uint16_t raw = 0;
++                                std::memcpy(&raw, next, sizeof(raw));
++                                w = extend16(raw);
++                            }
++                            else
++                                w = extend8(*next);
++                        }
++                        decompressed[3] = w;
++                    }
++
+                     // V2 writes XYXY on hardware, before masks and STMOD apply (PCSX2 UNPACK_V2).
+                     if (handledFormat && components == 2)
+                     {
