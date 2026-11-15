@@ -34,6 +34,8 @@
 
 void ps2n_register_iop_modules();
 void ps2n_register_ee_modules(EeScheduler& scheduler);
+void ps2n_register_vu1_blocks();
+#include "vu_pcsx2/pcsx2_vu1_aot.h"
 #include <vector>
 
 void ps2n_hw_watch(uint8_t* rdram, uint32_t guest, std::vector<std::pair<uintptr_t, uint32_t>> functions, PS2Runtime* runtime);
@@ -311,6 +313,13 @@ int run_game(int argc, char** argv) {
         paths.cdImage = browser ? std::filesystem::path{} : std::filesystem::absolute(path(argv[2]));
         PS2Runtime::setIoPaths(paths);
         std::cerr << "[storage] console=" << ps2native::path_utf8(stateRoot) << "\n";
+        // VU1 blocks without a translation are recorded for the next `ps2n play` to translate.
+        ps2n_register_vu1_blocks();
+        if (elf.parent_path().filename() == "cd") {
+            const auto vu1 = elf.parent_path().parent_path() / "vu1";
+            ps2native::create_directories(vu1);
+            pcsx2vu1::aot::setRecordPath(ps2native::path_utf8(vu1 / "recorded.txt").c_str());
+        }
         PS2Runtime runtime;
         if (!runtime.initialize(("ps2-native | " + elf.filename().string()).c_str())) {
             std::cerr << "PS2Recomp runtime initialization failed\n";

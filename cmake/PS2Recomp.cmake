@@ -233,6 +233,29 @@ function(ps2n_add_ee_modules target content_directory)
     target_sources(${target} PRIVATE "${_source}")
 endfunction()
 
+# VU1 blocks that ps2n translated from the game's recorded microprograms
+# (vu1/blocks_<n>.cpp); each defines ps2n_vu1_blocks_<n>(), which registers them.
+function(ps2n_add_vu1_blocks target content_directory)
+    file(GLOB _blocks CONFIGURE_DEPENDS "${content_directory}/vu1/blocks_*.cpp")
+    set(_registration "")
+    set(_calls "")
+    foreach(_block IN LISTS _blocks)
+        get_filename_component(_name "${_block}" NAME_WE)
+        string(APPEND _registration "void ps2n_vu1_${_name}();\n")
+        string(APPEND _calls "    ps2n_vu1_${_name}();\n")
+    endforeach()
+    if(_blocks)
+        target_sources(${target} PRIVATE ${_blocks})
+        set_source_files_properties(${_blocks} PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON
+            INCLUDE_DIRECTORIES "${_ps2recomp}/ps2xRuntime/src/lib/vu_pcsx2;${_ps2recomp}/ps2xRuntime/src/lib")
+    endif()
+    string(APPEND _registration "void ps2n_register_vu1_blocks() {\n${_calls}}\n")
+    set(_source "${CMAKE_BINARY_DIR}/generated/${target}-vu1.cpp")
+    file(GENERATE OUTPUT "${_source}" CONTENT "${_registration}")
+    set_source_files_properties("${_source}" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+    target_sources(${target} PRIVATE "${_source}")
+endfunction()
+
 function(ps2n_add_game id generated)
     file(GLOB _sources CONFIGURE_DEPENDS "${generated}/*.cpp")
     add_executable(ps2n-game-${id} EXCLUDE_FROM_ALL ${_sources} "${PROJECT_SOURCE_DIR}/tools/ps2n_game_main.cpp"
@@ -247,6 +270,7 @@ function(ps2n_add_game id generated)
     string(REGEX REPLACE "^elf=" "" _boot_elf "${_boot_elf}")
     ps2n_add_iop_modules(ps2n-game-${id} "${_game_directory}/cd" "${_game_directory}/cd/${_boot_elf}")
     ps2n_add_ee_modules(ps2n-game-${id} "${_game_directory}")
+    ps2n_add_vu1_blocks(ps2n-game-${id} "${_game_directory}")
     set_target_properties(ps2n-game-${id} PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 32)
     # The host reads the runtime's SIF RPC history (an SDK-internal header) for its opt-in trace.
     set_source_files_properties("${PROJECT_SOURCE_DIR}/tools/ps2n_game_main.cpp" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON

@@ -1,0 +1,567 @@
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -698,7 +698,8 @@ bool PS2Runtime::syncCoreSubsystems()
+                                              m_memory.getVU1Code(), m_memory.getVU1Data(), startPC, top, itop,
+                                              m_vu1.state().dBitEnabled, m_vu1.state().tBitEnabled, 65536,
+                                              [this](const uint8_t *packet, uint32_t size)
+-                                             { m_memory.submitGifPacket(GifPathId::Path1, packet, size); });
++                                             { m_memory.submitGifPacket(GifPathId::Path1, packet, size); },
++                                             m_memory.getVU1CodeGeneration());
+                                          m_vu1.state().stoppedByD = result.stoppedByD;
+                                          m_vu1.state().stoppedByT = result.stoppedByT;
+                                      }
+@@ -727,7 +728,8 @@ bool PS2Runtime::syncCoreSubsystems()
+                                              m_memory.getVU1Code(), m_memory.getVU1Data(), -1, top, itop,
+                                              m_vu1.state().dBitEnabled, m_vu1.state().tBitEnabled, 65536,
+                                              [this](const uint8_t *packet, uint32_t size)
+-                                             { m_memory.submitGifPacket(GifPathId::Path1, packet, size); });
++                                             { m_memory.submitGifPacket(GifPathId::Path1, packet, size); },
++                                             m_memory.getVU1CodeGeneration());
+                                          m_vu1.state().stoppedByD = result.stoppedByD;
+                                          m_vu1.state().stoppedByT = result.stoppedByT;
+                                      }
+--- /dev/null
++++ b/ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_aot.h
+@@ -0,0 +1,33 @@
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++
++struct VURegs;
++
++// Ahead-of-time VU1 blocks (ps2-native, 2026-11-14). A block is the code from a start pc up to a branch or E-bit
++// pair plus its delay pair; it is identified by its pc and bytes. Generated blocks run PCSX2's VU1 interpreter step
++// with the instruction words as compile-time constants on the same VURegs state, so control can pass between a block
++// and the interpreter at any pair boundary. Blocks without a translation run interpreted, are counted and recorded.
++namespace pcsx2vu1::aot
++{
++    // Runs the block's pairs while TPC follows them, VU1 runs and the cycle budget lasts; returns pairs executed.
++    using BlockFn = uint32_t (*)(VURegs *vu, uint64_t budgetEnd);
++
++    struct Block
++    {
++        uint64_t key; // blockKey(pc, bytes)
++        uint32_t pc;
++        uint32_t pairs;
++        BlockFn run;
++    };
++
++    // Pairs in the block starting at pc: up to and including the delay pair after a branch/jump or E-bit pair.
++    uint32_t blockPairs(const uint8_t *micro, uint32_t pc);
++    // FNV-1a 64 over the little-endian pc and the block bytes.
++    uint64_t blockKey(uint32_t pc, const uint8_t *bytes, uint32_t size);
++
++    void registerBlocks(const Block *blocks, size_t count);
++    // Appends each untranslated block, once, as a text line "pc word0 word1 ..." (hex) to this file.
++    void setRecordPath(const char *utf8Path);
++}
+--- /dev/null
++++ b/ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_aot_step.h
+@@ -0,0 +1,221 @@
++// SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
++// SPDX-License-Identifier: GPL-3.0+
++//
++// Included only by generated VU1 block sources (ps2-native). Each instruction pair is VU1microInterp.cpp's _vu1Exec
++// with the pair's words as template constants, so the compiler resolves fetch and opcode dispatch. The interpreter's
++// operations are compiled into a private namespace of the generated unit; they act on the same global VURegs state.
++#pragma once
++
++#include "Common.h"
++#include "VUmicro.h"
++#include "GS.h"
++#include "Gif_Unit.h"
++#include "MTVU.h"
++#include "pcsx2_vu1_aot.h"
++
++#include <cfenv>
++#include <cmath>
++#include <float.h>
++
++// The private copies of functions the headers also declare globally get their own names, so argument-dependent
++// lookup on VURegs* does not see both.
++#define VU_MACx_UPDATE aot_VU_MACx_UPDATE
++#define VU_MACy_UPDATE aot_VU_MACy_UPDATE
++#define VU_MACz_UPDATE aot_VU_MACz_UPDATE
++#define VU_MACw_UPDATE aot_VU_MACw_UPDATE
++#define VU_MACx_CLEAR aot_VU_MACx_CLEAR
++#define VU_MACy_CLEAR aot_VU_MACy_CLEAR
++#define VU_MACz_CLEAR aot_VU_MACz_CLEAR
++#define VU_MACw_CLEAR aot_VU_MACw_CLEAR
++#define VU_STAT_UPDATE aot_VU_STAT_UPDATE
++#define GET_VU_MEM aot_GET_VU_MEM
++#define _vuClearFMAC aot_vuClearFMAC
++#define _vuTestPipes aot_vuTestPipes
++#define _vuTestUpperStalls aot_vuTestUpperStalls
++#define _vuTestLowerStalls aot_vuTestLowerStalls
++#define _vuAddUpperStalls aot_vuAddUpperStalls
++#define _vuAddLowerStalls aot_vuAddLowerStalls
++#define _vuXGKICKTransfer aot_vuXGKICKTransfer
++#define _vuFlushAll aot_vuFlushAll
++
++namespace pcsx2vu1_aot_ops
++{
++    // What the headers declare for the originals, for uses ahead of the definitions.
++    u32 *GET_VU_MEM(VURegs *VU, u32 addr);
++    void _vuClearFMAC(VURegs *VU);
++    void _vuTestPipes(VURegs *VU);
++    void _vuTestUpperStalls(VURegs *VU, _VURegsNum *VUregsn);
++    void _vuTestLowerStalls(VURegs *VU, _VURegsNum *VUregsn);
++    void _vuAddUpperStalls(VURegs *VU, _VURegsNum *VUregsn);
++    void _vuAddLowerStalls(VURegs *VU, _VURegsNum *VUregsn);
++    void _vuXGKICKTransfer(s32 cycles, bool flush);
++    void _vuFlushAll(VURegs *VU);
++
++#include "VUflags.cpp"
++#include "VUops.cpp"
++
++    template <u32 Upper, u32 Lower>
++    inline void step(VURegs *VU)
++    {
++        _VURegsNum lregs;
++        _VURegsNum uregs;
++
++        VU->VI[REG_TPC].UL += 8;
++
++        if constexpr ((Upper & 0x40000000u) != 0u) // E flag
++            VU->ebit = 2;
++        if constexpr ((Upper & 0x10000000u) != 0u) // D flag
++        {
++            if (VU0.VI[REG_FBRST].UL & 0x400)
++            {
++                VU0.VI[REG_VPU_STAT].UL |= 0x200;
++                hwIntcIrq(INTC_VU1);
++                VU->ebit = 1;
++            }
++        }
++        if constexpr ((Upper & 0x08000000u) != 0u) // T flag
++        {
++            if (VU0.VI[REG_FBRST].UL & 0x800)
++            {
++                VU0.VI[REG_VPU_STAT].UL |= 0x400;
++                hwIntcIrq(INTC_VU1);
++                VU->ebit = 1;
++            }
++        }
++
++        VU->code = Upper;
++        VU1regs_UPPER_OPCODE[Upper & 0x3f](&uregs);
++
++        u32 cyclesBeforeOp = VU1.cycle - 1;
++
++        _vuTestUpperStalls(VU, &uregs);
++
++        if constexpr ((Upper & 0x80000000u) != 0u) // I flag: the lower word is a float
++        {
++            _vuTestPipes(VU);
++
++            if (VU->VIBackupCycles > 0)
++                VU->VIBackupCycles -= std::min((u8)(VU1.cycle - cyclesBeforeOp), VU->VIBackupCycles);
++
++            VU->code = Upper;
++            VU1_UPPER_OPCODE[Upper & 0x3f]();
++
++            VU->VI[REG_I].UL = Lower;
++            memset(&lregs, 0, sizeof(lregs));
++        }
++        else
++        {
++            VECTOR _VF;
++            VECTOR _VFc;
++            REG_VI _VI;
++            REG_VI _VIc;
++            int vfreg = 0;
++            int vireg = 0;
++            int discard = 0;
++
++            VU->code = Lower;
++            lregs.cycles = 0;
++            VU1regs_LOWER_OPCODE[Lower >> 25](&lregs);
++
++            _vuTestLowerStalls(VU, &lregs);
++            _vuTestPipes(VU);
++
++            if (VU->VIBackupCycles > 0)
++                VU->VIBackupCycles -= std::min((u8)(VU1.cycle - cyclesBeforeOp), VU->VIBackupCycles);
++
++            if (uregs.VFwrite)
++            {
++                if (lregs.VFwrite == uregs.VFwrite)
++                    discard = 1;
++                if (lregs.VFread0 == uregs.VFwrite || lregs.VFread1 == uregs.VFwrite)
++                {
++                    _VF = VU->VF[uregs.VFwrite];
++                    vfreg = uregs.VFwrite;
++                }
++            }
++            if (uregs.VIwrite & (1 << REG_CLIP_FLAG))
++            {
++                if (lregs.VIwrite & (1 << REG_CLIP_FLAG))
++                    discard = 1;
++                if (lregs.VIread & (1 << REG_CLIP_FLAG))
++                {
++                    _VI = VU->VI[REG_CLIP_FLAG];
++                    vireg = REG_CLIP_FLAG;
++                }
++            }
++
++            VU->code = Upper;
++            VU1_UPPER_OPCODE[Upper & 0x3f]();
++
++            if (discard == 0)
++            {
++                if (vfreg)
++                {
++                    _VFc = VU->VF[vfreg];
++                    VU->VF[vfreg] = _VF;
++                }
++                if (vireg)
++                {
++                    _VIc = VU->VI[vireg];
++                    VU->VI[vireg] = _VI;
++                }
++
++                VU->code = Lower;
++                VU1_LOWER_OPCODE[Lower >> 25]();
++
++                if (vfreg)
++                    VU->VF[vfreg] = _VFc;
++                if (vireg)
++                    VU->VI[vireg] = _VIc;
++            }
++        }
++        if (uregs.pipe == VUPIPE_FMAC || lregs.pipe == VUPIPE_FMAC)
++            _vuClearFMAC(VU);
++
++        _vuAddUpperStalls(VU, &uregs);
++        _vuAddLowerStalls(VU, &lregs);
++
++        if (VU->branch > 0)
++        {
++            if (VU->branch-- == 1)
++            {
++                VU->VI[REG_TPC].UL = VU->branchpc;
++
++                if (VU->takedelaybranch)
++                {
++                    VU->branch = 1;
++                    VU->branchpc = VU->delaybranchpc;
++                    VU->takedelaybranch = false;
++                }
++            }
++        }
++
++        if (VU->ebit > 0)
++        {
++            if (VU->ebit-- == 1)
++            {
++                VU->VIBackupCycles = 0;
++                _vuFlushAll(VU);
++                VU0.VI[REG_VPU_STAT].UL &= ~0x100;
++                vif1Regs.stat.VEW = false;
++
++                if (VU1.xgkickenable)
++                    _vuXGKICKTransfer(0, true);
++                if (INSTANT_VU1)
++                    VU1.xgkicklastcycle = cpuRegs.cycle;
++            }
++        }
++
++        if (uregs.pipe == VUPIPE_FMAC || lregs.pipe == VUPIPE_FMAC)
++            VU->fmacwritepos = (VU->fmacwritepos + 1) & 3;
++    }
++
++    // One pair of a block (vu1Exec): true while the next pair of the block follows.
++    template <u32 Pc, u32 Upper, u32 Lower>
++    inline bool pair(VURegs *VU, u64 budgetEnd)
++    {
++        VU->cycle++;
++        step<Upper, Lower>(VU);
++        return VU->VI[REG_TPC].UL == Pc + 8u && (VU0.VI[REG_VPU_STAT].UL & 0x100u) != 0u && VU->cycle < budgetEnd;
++    }
++}
+--- a/ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.cpp
++++ b/ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.cpp
+@@ -1,14 +1,218 @@
+ #include "pcsx2_vu1_bridge.h"
++#include "pcsx2_vu1_aot.h"
+ 
+ #include "Common.h"
+ #include "Gif_Unit.h"
+ #include "MTVU.h"
+ #include "VUmicro.h"
+ 
++#include <array>
+ #include <cfenv>
++#include <chrono>
+ #include <cstdlib>
++#include <filesystem>
++#include <string>
++#include <unordered_map>
++#include <unordered_set>
+ #include <vector>
+ 
++namespace pcsx2vu1::aot
++{
++    namespace
++    {
++        constexpr uint32_t kMicroBytes = 0x4000u;
++        constexpr uint32_t kMaxBlockPairs = 256u;
++
++        std::unordered_map<uint64_t, const Block *> &registry()
++        {
++            static std::unordered_map<uint64_t, const Block *> blocks;
++            return blocks;
++        }
++
++        // Blocks by pc for one micro memory generation; null = no translation.
++        struct Cache
++        {
++            uint64_t generation = ~0ull;
++            std::array<const Block *, kMicroBytes / 8u> block{};
++            std::array<bool, kMicroBytes / 8u> known{};
++            std::array<uint16_t, kMicroBytes / 8u> pairs{};
++        } s_cache;
++
++        std::string s_recordPath;
++        std::FILE *s_record = nullptr;
++        std::unordered_set<uint64_t> s_recorded;
++
++        struct Counters
++        {
++            uint64_t aotPairs = 0, interpretedPairs = 0, misses = 0;
++            std::chrono::steady_clock::time_point lastReport = std::chrono::steady_clock::now();
++        } s_counters;
++
++        void record(uint64_t key, const uint8_t *micro, uint32_t pc, uint32_t pairs)
++        {
++            ++s_counters.misses;
++            if (s_recordPath.empty() || !s_recorded.insert(key).second)
++                return;
++            if (!s_record)
++#ifdef _WIN32
++                s_record = _wfopen(std::filesystem::path(std::u8string(s_recordPath.begin(), s_recordPath.end())).c_str(), L"ab");
++#else
++                s_record = std::fopen(s_recordPath.c_str(), "ab");
++#endif
++            if (!s_record)
++                return;
++            std::fprintf(s_record, "%x", pc);
++            for (uint32_t i = 0; i < pairs * 2u; ++i)
++            {
++                uint32_t word;
++                std::memcpy(&word, micro + pc + i * 4u, sizeof(word));
++                std::fprintf(s_record, " %x", word);
++            }
++            std::fputc('\n', s_record);
++            std::fflush(s_record);
++        }
++
++        const Block *lookup(const uint8_t *micro, uint32_t pc, uint64_t generation, uint32_t &pairsOut)
++        {
++            if (s_cache.generation != generation)
++            {
++                s_cache.known.fill(false);
++                s_cache.generation = generation;
++            }
++            const uint32_t slot = (pc & (kMicroBytes - 1u)) / 8u;
++            if (!s_cache.known[slot])
++            {
++                const uint32_t pairs = blockPairs(micro, pc);
++                const uint64_t key = blockKey(pc, micro + pc, pairs * 8u);
++                const auto found = registry().find(key);
++                const Block *block = found != registry().end() && found->second->pc == pc && found->second->pairs == pairs ? found->second : nullptr;
++                if (!block)
++                    record(key, micro, pc, pairs);
++                s_cache.block[slot] = block;
++                s_cache.pairs[slot] = static_cast<uint16_t>(pairs);
++                s_cache.known[slot] = true;
++            }
++            pairsOut = s_cache.pairs[slot];
++            return s_cache.block[slot];
++        }
++
++        void report()
++        {
++            const auto now = std::chrono::steady_clock::now();
++            if (now - s_counters.lastReport < std::chrono::seconds(10))
++                return;
++            s_counters.lastReport = now;
++            if (s_counters.interpretedPairs == 0 && s_counters.misses == 0)
++                return;
++            std::fprintf(stderr, "[vu1-aot] blocks=%zu aot_pairs=%llu interpreted_pairs=%llu misses=%llu\n", registry().size(),
++                         static_cast<unsigned long long>(s_counters.aotPairs), static_cast<unsigned long long>(s_counters.interpretedPairs),
++                         static_cast<unsigned long long>(s_counters.misses));
++            s_counters.aotPairs = s_counters.interpretedPairs = s_counters.misses = 0;
++        }
++    }
++
++    uint32_t blockPairs(const uint8_t *micro, uint32_t pc)
++    {
++        uint32_t pairs = 0;
++        for (uint32_t at = pc; at + 8u <= kMicroBytes && pairs < kMaxBlockPairs; at += 8u)
++        {
++            uint32_t lower, upper;
++            std::memcpy(&lower, micro + at, 4);
++            std::memcpy(&upper, micro + at + 4, 4);
++            ++pairs;
++            const bool ends = (upper & 0x40000000u) != 0u ||                                  // E bit
++                              ((upper & 0x80000000u) == 0u && ((lower >> 25) & 0x70u) == 0x20u); // branch/jump
++            if (ends)
++                return at + 16u <= kMicroBytes ? pairs + 1u : pairs; // with the delay pair
++        }
++        return pairs;
++    }
++
++    uint64_t blockKey(uint32_t pc, const uint8_t *bytes, uint32_t size)
++    {
++        uint64_t hash = 1469598103934665603ull;
++        for (uint32_t i = 0; i < 4u; ++i)
++            hash = (hash ^ ((pc >> (i * 8u)) & 0xFFu)) * 1099511628211ull;
++        for (uint32_t i = 0; i < size; ++i)
++            hash = (hash ^ bytes[i]) * 1099511628211ull;
++        return hash;
++    }
++
++    void registerBlocks(const Block *blocks, size_t count)
++    {
++        for (size_t i = 0; i < count; ++i)
++            registry().emplace(blocks[i].key, &blocks[i]);
++        s_cache.generation = ~0ull;
++    }
++
++    void setRecordPath(const char *utf8Path)
++    {
++        s_recordPath = utf8Path ? utf8Path : "";
++    }
++
++    // PS2N_VU1_AOT_VERIFY=1 (diagnostic): each block also runs on the interpreter from the same state; any
++    // difference in VU0/VU1 registers, VIF1 TOP/STAT, data memory or kicked GIF data is reported.
++    bool verifyEnabled()
++    {
++        static const bool on = [] { const char *v = std::getenv("PS2N_VU1_AOT_VERIFY"); return v && v[0] == '1'; }();
++        return on;
++    }
++
++    uint32_t verifyBlock(const Block &block, VURegs &vu, uint8_t *dataMem, std::vector<uint8_t> &kick, uint64_t budgetEnd)
++    {
++        static std::vector<uint8_t> memBefore, memAot;
++        static uint64_t checked = 0, failed = 0;
++        alignas(16) static unsigned char regsBefore[2][sizeof(VURegs)], regsAot[2][sizeof(VURegs)];
++        const VIFregisters vifBefore = vif1Regs;
++        const Pcsx2CpuRegsShim cpuBefore = cpuRegs;
++        const size_t kickBefore = kick.size();
++        std::memcpy(regsBefore, static_cast<void *>(vuRegs), sizeof(regsBefore));
++        memBefore.assign(dataMem, dataMem + 0x4000);
++
++        const uint32_t pairs = block.run(&vu, budgetEnd);
++        std::memcpy(regsAot, static_cast<void *>(vuRegs), sizeof(regsAot));
++        memAot.assign(dataMem, dataMem + 0x4000);
++        const VIFregisters vifAot = vif1Regs;
++        const std::vector<uint8_t> kickAot(kick.begin() + kickBefore, kick.end());
++
++        std::memcpy(static_cast<void *>(vuRegs), regsBefore, sizeof(regsBefore));
++        std::memcpy(dataMem, memBefore.data(), 0x4000);
++        vif1Regs = vifBefore;
++        cpuRegs = cpuBefore;
++        kick.resize(kickBefore);
++        for (uint32_t i = 0; i < pairs; ++i)
++            vu1Exec(&vu);
++
++        ++checked;
++        // A pipe entry's xyzw mask is unread while its register is 0; the interpreter leaves stack data there.
++        const auto normalize = [](VURegs *regs) {
++            for (VURegs *r = regs; r != regs + 2; ++r)
++                for (fmacPipe &pipe : r->fmac)
++                {
++                    if (pipe.regupper == 0u) pipe.xyzwupper = 0u;
++                    if (pipe.reglower == 0u) pipe.xyzwlower = 0u;
++                }
++        };
++        normalize(reinterpret_cast<VURegs *>(regsAot));
++        normalize(vuRegs);
++        const bool regsSame = std::memcmp(regsAot, static_cast<void *>(vuRegs), sizeof(regsAot)) == 0;
++        const bool memSame = std::memcmp(memAot.data(), dataMem, 0x4000) == 0;
++        const bool vifSame = vifAot.top == vif1Regs.top && vifAot.itop == vif1Regs.itop && vifAot.stat.VEW == vif1Regs.stat.VEW;
++        const bool kickSame = kickAot.size() == kick.size() - kickBefore && std::equal(kickAot.begin(), kickAot.end(), kick.begin() + kickBefore);
++        if (!(regsSame && memSame && vifSame && kickSame) && failed++ < 20)
++        {
++            size_t at = 0;
++            const auto *a = regsAot[0], *b = reinterpret_cast<const unsigned char *>(vuRegs);
++            while (at < sizeof(regsAot) && a[at] == b[at]) ++at;
++            std::fprintf(stderr, "[vu1-aot-verify] MISMATCH pc=0x%x pairs=%u regs=%d(first byte %zu) mem=%d vif=%d kick=%d\n",
++                         block.pc, pairs, regsSame, at, memSame, vifSame, kickSame);
++        }
++        if ((checked & 0xFFFFFu) == 0u)
++            std::fprintf(stderr, "[vu1-aot-verify] checked=%llu mismatches=%llu\n", static_cast<unsigned long long>(checked), static_cast<unsigned long long>(failed));
++        return pairs; // the interpreter's result stands
++    }
++}
++
+ // Globals the borrowed PCSX2 sources expect.
+ VURegs vuRegs[2];
+ VIFregisters vif0Regs{};
+@@ -76,8 +280,10 @@ u32 Pcsx2GifUnitShim::TransferGSPacketData(GIF_TRANSFER_TYPE, u8 *mem, u32 size,
+ namespace pcsx2vu1
+ {
+     RunResult run(uint8_t *microMem, uint8_t *dataMem, int64_t startPc, uint32_t top, uint32_t itop,
+-                  bool dBitEnabled, bool tBitEnabled, uint64_t maxCycles, const SubmitPath1 &submit)
++                  bool dBitEnabled, bool tBitEnabled, uint64_t maxCycles, const SubmitPath1 &submit,
++                  uint64_t codeGeneration)
+     {
++        aot::report();
+         resetVu1Once();
+         VURegs &vu = vuRegs[1];
+         vu.Micro = microMem;
+@@ -102,7 +308,40 @@ namespace pcsx2vu1
+         const u64 budgetEnd = vu.cycle + maxCycles;
+         while ((vpuStat & 0x100u) != 0u && vu.cycle < budgetEnd)
+         {
+-            vu1Exec(&vu);
++            const uint32_t pc = vu.VI[REG_TPC].UL;
++            // Translated blocks still model the pipeline per pair and measured slower than the interpreter
++            // (GoW menu, 2026-11-14), so dispatch is opt-in (PS2N_VU1_AOT=1) until stalls are resolved statically.
++            static const bool dispatch = [] { const char *v = std::getenv("PS2N_VU1_AOT"); return v && v[0] == '1'; }();
++            uint32_t pairs = 1;
++            const aot::Block *block = pc + 8u <= aot::kMicroBytes ? aot::lookup(microMem, pc, codeGeneration, pairs) : nullptr;
++            if (!dispatch && !aot::verifyEnabled())
++                block = nullptr;
++            if (block && aot::verifyEnabled())
++            {
++                aot::s_counters.aotPairs += aot::verifyBlock(*block, vu, dataMem, s_kickPacket, budgetEnd);
++            }
++            else if (block)
++            {
++                aot::s_counters.aotPairs += block->run(&vu, budgetEnd);
++            }
++            else
++            {
++                // The interpreter runs the same extent, so lookups (and recorded blocks) start at block boundaries.
++                for (uint32_t i = 0; i < pairs; ++i)
++                {
++                    const uint32_t at = vu.VI[REG_TPC].UL;
++                    vu1Exec(&vu);
++                    ++aot::s_counters.interpretedPairs;
++                    if (!vu.xgkickenable && !s_kickPacket.empty())
++                    {
++                        submit(s_kickPacket.data(), static_cast<uint32_t>(s_kickPacket.size()));
++                        s_kickPacket.clear();
++                    }
++                    if (vu.VI[REG_TPC].UL != at + 8u || (vpuStat & 0x100u) == 0u || vu.cycle >= budgetEnd)
++                        break;
++                }
++                continue;
++            }
+             if (!vu.xgkickenable && !s_kickPacket.empty())
+             {
+                 submit(s_kickPacket.data(), static_cast<uint32_t>(s_kickPacket.size()));
+--- a/ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.h
++++ b/ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.h
+@@ -18,5 +18,6 @@ namespace pcsx2vu1
+ 
+     // startPc: byte address to start at (MSCAL), or -1 to continue from the current TPC (MSCNT).
+     RunResult run(uint8_t *microMem, uint8_t *dataMem, int64_t startPc, uint32_t top, uint32_t itop,
+-                  bool dBitEnabled, bool tBitEnabled, uint64_t maxCycles, const SubmitPath1 &submit);
++                  bool dBitEnabled, bool tBitEnabled, uint64_t maxCycles, const SubmitPath1 &submit,
++                  uint64_t codeGeneration); // changes whenever VU1 micro memory is written
+ }

@@ -1144,6 +1144,25 @@
           "ps2xRuntime/src/lib/ps2_runtime.cpp": "ec00683cec30e70191ca8eb25c2c1e1d96fc42cde48533675de11d0f0fab3b6e"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0075-vu1-aot-blocks.patch",
+        "sha256": "958f35a56039e220347adeb2b13c5d57c219f0cdeda72ecb39c149f863991ab5",
+        "base_files": {
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "ec00683cec30e70191ca8eb25c2c1e1d96fc42cde48533675de11d0f0fab3b6e",
+          "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_aot.h": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_aot_step.h": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.cpp": "e93b6b74daf68bed26a4aa9a818efaabe35c7e4e226348fd505ad1503304f80e",
+          "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.h": "2f8f4d30261105118254b86c0c37a20ab2f83e1ff5688290559b5b68e8217daa"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "915c42e274b747b8d5d7b112fb9a4165a865d548acb8e272f5258af7e7b51a73",
+          "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_aot.h": "95d437fa63484f67fb8a28197cc9c6366900f726e68d8ed2d911d84c504ba5b6",
+          "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_aot_step.h": "cf7b14918faf6dbbf1a3454564645b0a6cd88b544ae86b24665cea86a59c41cc",
+          "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.cpp": "93ee95605e2e1fa2f173d16a769188e331dfc68ffe0df48f4c71c3112b1f70d9",
+          "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.h": "e57df202effe82ee41465bb0132554d41732fcb80cdbed837a6043122a350230"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },

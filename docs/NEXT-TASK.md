@@ -12,8 +12,36 @@ Contrato e estado vigentes: `docs/ARCHITECTURE.md`, seção Diretriz.
    das telas iniciais e a perda de dispositivo após readback local→host.
 3. BIOS: completar o bootstrap IOP por HLE (RESET `rom0:UDNL rom0:OSDCNF`)
    e sinalizar BOOTEND só após conclusão real.
-4. God of War bloqueia no índice de recursos; Killzone SCUS-97402 tem objetos
-   preservados de uma compilação interrompida. Reutilizar builds existentes.
+4. God of War (14/11, Windows x64/GS CPU): o patch 0061 descobre callbacks em
+   `.data` executável sem dividir delay slots. O 0068 implementa `sceSifSetDmaIntr`
+   (sifman:32), pelo qual o DBCMAN entrega o estado do Pad2 ao EE: o aviso de
+   DualShock 2 some. O 0069 faz JR/JALR da VU1 lerem o VI atual (só desvios
+   condicionais usam o valor anterior, como `_vuJR` e `mVUanalyzeJump` do
+   PCSX2): o alvo de `JALR` deixa de ficar obsoleto, somem os XGKICK
+   `0xfffffffb` e os cortes de orçamento, e o menu (logo, "New Game") aparece.
+   Próximo: entrar em New Game e chegar ao gameplay. Super Bust sem regressão
+   ("Now Loading" no quadro 1140, como antes). Descartados: cache de textura
+   do GS, V2/V3/V4-5 do UNPACK, troca TOPS/DBF e orçamento VU maior.
+   Velocidade no menu (14/11, vsync EE por segundo de host, 60 = real):
+   GS CPU + VU1 PS2Recomp 0,5; + triângulos em faixas (0074) 0,5, gargalo
+   no VU1 exato; `PS2N_VU1_PCSX2=1` 1,2; + `PS2N_GS_BACKEND=parallel` 4,3,
+   gargalo no interpretador VU1 do PCSX2 (~1,7 M pares por vsync).
+   VU1 AOT nível 1 (0075): `ps2n` grava blocos em `games/<id>/vu1/recorded.txt`
+   e gera `blocks_*.cpp` (passo do interpretador com palavras constantes);
+   `PS2N_VU1_AOT_VERIFY=1` comparou 9,4 M blocos sem divergência, mas o
+   despacho (`PS2N_VU1_AOT=1`) mediu 4,0 vsync/s contra 4,9 do interpretador:
+   fica opcional. Próximo: nível 2, resolver stalls/flags FMAC/FDIV/EFU na
+   tradução a partir do estado do pipeline na entrada do bloco.
+   Menu ainda errado nos dois VU1 e nos dois GS: falta o Kratos (nenhum
+   desenho dele chega ao GS) e um triângulo do fogo (vértices em 0xFFFF).
+   Prioridade (mantenedor, 14/11): fidelidade do menu → paraLLEl-GS padrão →
+   VU1 AOT nível 2. Dump temporário do VU1: o programa em pc 0 (TOP 0x2AB)
+   emite PACKED ST/NOP/RGBAQ/XYZ2 sem ADC com x=0xFFF7 (≈−0,6 px absoluto),
+   ou seja, o próprio VU1 calcula o vértice fora da tela; VF02.w=−FLT_MAX na
+   entrada. Hipótese: dados/matrizes do EE. Auditadas sem erro: vmr32,
+   vopmula/vopmsub, vftoi0, vmulq, vabs, vmove, máscaras, ps2_frsqrt/fdiv.
+   Próximo: dump com a memória de microcódigo (patch temporário) e seguir o vértice.
+   Killzone SCUS-97402 conserva objetos de uma compilação interrompida; reutilizá-los.
 
 ## Pré-requisito após a remoção do interpretador — 08/11/2026
 
