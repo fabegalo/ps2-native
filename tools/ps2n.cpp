@@ -29,7 +29,7 @@ namespace fs = std::filesystem;
 using namespace ps2native;
 
 namespace {
-constexpr int kMaxLearningRounds = 16;
+constexpr int kMaxLearningRounds = 32;
 
 fs::path from_utf8(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
 fs::path games_root() { return from_utf8(PS2N_GAMES_DIR); }
@@ -341,37 +341,58 @@ struct ExecModule {
     uint32_t base = 0, size = 0;
 };
 
-std::optional<ExecModule> exec_module(const Game& game, const BrowserFirmware& firmware) {
-    const auto metadata = game.dir / "exec/current.txt";
-    if (!fs::exists(metadata)) return std::nullopt;
-    if (!firmware.unpacked) throw std::runtime_error("executable receipt has no matching firmware payload");
-    std::istringstream input(read_text(metadata));
+// "magic\nkey=value..." receipts written by ps2n-game; exactly `keys`, each once.
+std::map<std::string, std::string> read_receipt(const fs::path& path, std::string_view magic,
+                                                std::initializer_list<std::string_view> keys) {
+    std::istringstream input(read_text(path));
     std::string line;
-    if (!std::getline(input, line) || line != "ps2n-exec-image-v1")
-        throw std::runtime_error("unsupported executable receipt");
+    if (!std::getline(input, line) || line != magic)
+        throw std::runtime_error("unsupported receipt: " + path_utf8(path));
     std::map<std::string, std::string> fields;
     while (std::getline(input, line)) {
         const auto equal = line.find('=');
         if (equal == line.npos || !fields.emplace(line.substr(0, equal), line.substr(equal + 1)).second)
-            throw std::runtime_error("malformed executable receipt");
+            throw std::runtime_error("malformed receipt: " + path_utf8(path));
     }
-    if (fields.size() != 5 || !fields.contains("sha256") || !fields.contains("parent_sha256") ||
-        !fields.contains("load_address") || !fields.contains("size") || !fields.contains("entry"))
-        throw std::runtime_error("incomplete executable receipt");
+    if (fields.size() != keys.size() ||
+        !std::all_of(keys.begin(), keys.end(), [&](auto key) { return fields.contains(std::string(key)); }))
+        throw std::runtime_error("incomplete receipt: " + path_utf8(path));
+    return fields;
+}
+
+uint32_t receipt_number(const std::map<std::string, std::string>& fields, const char* name) {
+    const auto& value = fields.at(name);
+    size_t used = 0;
+    const auto result = std::stoull(value, &used, 10);
+    if (used != value.size() || result > UINT32_MAX || std::to_string(result) != value)
+        throw std::runtime_error("invalid receipt number");
+    return static_cast<uint32_t>(result);
+}
+
+std::string quoted_toml_path(const fs::path& path) {
+    const auto generic = path.generic_u8string();
+    std::string text;
+    for (const char byte : std::string(generic.begin(), generic.end())) {
+        if (byte == '"' || byte == '\\') text += '\\';
+        if (static_cast<unsigned char>(byte) < 0x20) throw std::runtime_error("control character in native input path");
+        text += byte;
+    }
+    return '"' + text + '"';
+}
+
+std::optional<ExecModule> exec_module(const Game& game, const BrowserFirmware& firmware) {
+    const auto metadata = game.dir / "exec/current.txt";
+    if (!fs::exists(metadata)) return std::nullopt;
+    if (!firmware.unpacked) throw std::runtime_error("executable receipt has no matching firmware payload");
+    const auto fields = read_receipt(metadata, "ps2n-exec-image-v1",
+        {"sha256", "parent_sha256", "load_address", "size", "entry"});
     const auto& image = *firmware.unpacked;
     const auto identity = sha256_hex(image.bytes);
     if (fields.at("sha256") != identity || fields.at("parent_sha256") != firmware.bios.sha256 ||
         game.rom0_sha256 != firmware.bios.sha256)
         throw std::runtime_error("executable receipt belongs to different firmware content");
-    const auto number = [&](const char* name) {
-        const auto& value = fields.at(name);
-        size_t used = 0;
-        const auto result = std::stoull(value, &used, 10);
-        if (used != value.size() || result > UINT32_MAX || std::to_string(result) != value)
-            throw std::runtime_error("invalid executable receipt number");
-        return static_cast<uint32_t>(result);
-    };
-    const auto base = number("load_address"), size = number("size"), entry = number("entry");
+    const auto base = receipt_number(fields, "load_address"), size = receipt_number(fields, "size"),
+        entry = receipt_number(fields, "entry");
     if (base != image.load_address || size != image.bytes.size() || size < 4 || (entry & 3u) ||
         entry < base || uint64_t(entry) + 4 > uint64_t(base) + size)
         throw std::runtime_error("executable receipt range differs from its firmware payload");
@@ -383,17 +404,46 @@ std::optional<ExecModule> exec_module(const Game& game, const BrowserFirmware& f
     module.game.elf = path_utf8(binary);
     module.game.native_output = "g";
     module.base = base; module.size = size;
-    const auto generic = binary.generic_u8string();
-    std::string native_input;
-    for (const char byte : std::string(generic.begin(), generic.end())) {
-        if (byte == '"' || byte == '\\') native_input += '\\';
-        if (static_cast<unsigned char>(byte) < 0x20) throw std::runtime_error("control character in native input path");
-        native_input += byte;
-    }
-    module.config = "[general]\ninput = \"" + native_input + "\"\noutput = \"g\"\nmodule_id = \"" +
+    module.config = "[general]\ninput = " + quoted_toml_path(binary) + "\noutput = \"g\"\nmodule_id = \"" +
         identity + "\"\noutput_worker_threads = 8\n[raw_image]\nload_address = " + std::to_string(base) +
         "\nentry = " + std::to_string(entry) + "\n";
     return module;
+}
+
+// Code the game linked into RAM itself, captured by ps2n-game when control first reached it
+// (ee-load/<sha256>.txt with the .bin image, .functions symbol starts and .live import sites).
+std::vector<ExecModule> loaded_modules(const Game& game) {
+    std::vector<ExecModule> modules;
+    const auto directory = game.dir / "ee-load";
+    if (!fs::exists(directory)) return modules;
+    for (const auto& item : fs::directory_iterator(directory)) {
+        if (item.path().extension() != ".txt") continue;
+        const auto fields = read_receipt(item.path(), "ps2n-loaded-image-v1", {"sha256", "load_address", "size", "entry"});
+        const auto& identity = fields.at("sha256");
+        const auto base = receipt_number(fields, "load_address"), size = receipt_number(fields, "size"),
+            entry = receipt_number(fields, "entry");
+        const auto binary = fs::absolute(directory / (identity + ".bin"));
+        if (path_utf8(item.path().stem()) != identity || sha256_file(binary) != identity || fs::file_size(binary) != size ||
+            (entry & 3u) || entry < base || uint64_t(entry) + 4 > uint64_t(base) + size)
+            throw std::runtime_error("loaded-image receipt differs from its image: " + path_utf8(item.path()));
+        ExecModule module;
+        module.game.id = identity;
+        module.game.dir = fs::path(PS2N_BINARY_DIR) / "ee-aot" / identity;
+        module.game.elf = path_utf8(binary);
+        module.game.native_output = "g";
+        module.base = base; module.size = size;
+        std::ostringstream entries;
+        std::istringstream functions(read_text(directory / (identity + ".functions")));
+        const char* separator = "";
+        for (std::string line; std::getline(functions, line); separator = ", ")
+            entries << separator << "\"entry@0x" << std::hex << std::stoul(line) << '"';
+        module.config = "[general]\ninput = " + quoted_toml_path(binary) + "\noutput = \"g\"\nmodule_id = \"" +
+            identity + "\"\noutput_worker_threads = 8\nlive_immediates = " +
+            quoted_toml_path(fs::absolute(directory / (identity + ".live"))) + "\nentry_points = [" + entries.str() +
+            "]\n[raw_image]\nload_address = " + std::to_string(base) + "\nentry = " + std::to_string(entry) + "\n";
+        modules.push_back(std::move(module));
+    }
+    return modules;
 }
 
 // Translates the VU1 blocks a game session recorded (vu1/recorded.txt, "pc word0 word1 ..." in hex) into
@@ -458,6 +508,14 @@ void generate_vu1_blocks(const Game& game) {
     }
 }
 
+void prepare_module(const ExecModule& module) {
+    ps2native::create_directories(module.game.dir / module.game.native_output);
+    if (!fs::exists(module.game.dir / "config.toml")) write_text(module.game.dir / "config.toml", module.config);
+    run_tool(PS2N_RECOMP_EXE, {"config.toml", "--describe-inputs", "generation.inputs"},
+        module.game.dir, module.game.dir / "recomp.log");
+    if (!generation_current(module.game)) recompile(module.game);
+}
+
 void ensure_prepared(Game& game, bool configure = false) {
     configure = attach_console_firmware(game) || configure;
     if (game.browser()) {
@@ -472,14 +530,9 @@ void ensure_prepared(Game& game, bool configure = false) {
     if (game.browser()) {
         const auto firmware = load_browser_firmware(read_file(from_utf8(game.rom0)), game.console_profile,
             read_file(from_utf8(game.nvm)), {game.rom0_sha256}, {game.nvm_sha256});
-        if (auto module = exec_module(game, firmware)) {
-            ps2native::create_directories(module->game.dir / module->game.native_output);
-            if (!fs::exists(module->game.dir / "config.toml")) write_text(module->game.dir / "config.toml", module->config);
-            run_tool(PS2N_RECOMP_EXE, {"config.toml", "--describe-inputs", "generation.inputs"},
-                module->game.dir, module->game.dir / "recomp.log");
-            if (!generation_current(module->game)) recompile(module->game);
-        }
+        if (auto module = exec_module(game, firmware)) prepare_module(*module);
     }
+    for (const auto& module : loaded_modules(game)) prepare_module(module);
     restore_heuristic_stores(game);
     ps2native::create_directories(game.dir / "generated");
     run_tool(PS2N_RECOMP_EXE, {"config.toml", "--describe-inputs", "generation.inputs"},
@@ -504,8 +557,8 @@ bool runtime_owned_stub(const std::string& line) {
         "scePad", "sceFs", "_sceFs", "sceDeci2", "sceTty", "sceIo"};
     // libkernel routines that patch or extend the kernel (kCopy/SetSyscall)
     // belong to the runtime, which is the kernel here.
-    static const std::array<std::string_view, 20> names = {
-        "sceOpen", "sceClose", "sceLseek", "sceRead", "sceWrite", "sceIoctl",
+    static const std::array<std::string_view, 21> names = {
+        "sceOpen", "sceClose", "sceLseek", "sceRead", "sceWrite", "sceIoctl", "sceGetstat",
         "InitThread", "InitAlarm", "InitTLB", "InitTLBFunctions", "InitTLB32MB", "InitExecPS2", "InitOsd",
         "StartThread", "iWakeupThread", "iRotateThreadReadyQueue", "SetAlarm", "iSetAlarm", "ReleaseAlarm",
         "iReleaseAlarm"};
@@ -673,14 +726,24 @@ int run(Game game) {
             ensure_prepared(game);
             continue;
         }
-        const auto targets = missing_targets(read_text(log));
+        const auto output = read_text(log);
+        if (output.find("[guest-load:captured]") != output.npos) {
+            std::cout << "Captured code the game loaded itself; preparing its native module" << std::endl;
+            ensure_prepared(game);
+            continue;
+        }
+        const auto targets = missing_targets(output);
         if (targets.empty()) return code;
         std::cout << "PS2Recomp reported " << targets.size() << " missing entry point(s); recompiling\n";
-        std::set<std::string> module_targets, initial_targets;
+        auto modules = loaded_modules(game);
+        if (module) modules.push_back(*module);
+        std::vector<std::set<std::string>> module_targets(modules.size());
+        std::set<std::string> initial_targets;
         for (const auto& target : targets) {
             const auto address = std::stoull(target, nullptr, 0);
-            if (module && address >= module->base && address < uint64_t(module->base) + module->size)
-                module_targets.insert(target);
+            const auto owner = std::find_if(modules.begin(), modules.end(), [&](const ExecModule& m) {
+                return address >= m.base && address < uint64_t(m.base) + m.size; });
+            if (owner != modules.end()) module_targets[owner - modules.begin()].insert(target);
             else initial_targets.insert(target);
         }
         const auto learn = [&](const Game& owner, const std::set<std::string>& entries) {
@@ -690,7 +753,7 @@ int run(Game game) {
             recompile(owner);
         };
         learn(game, initial_targets);
-        if (module) learn(module->game, module_targets);
+        for (size_t i = 0; i < modules.size(); ++i) learn(modules[i].game, module_targets[i]);
         build(game, false);
     }
     throw std::runtime_error("entry-point learning did not converge");

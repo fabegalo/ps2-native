@@ -17,6 +17,7 @@
 - **14/11/2026 — memory card SIO2.** Manter também MC2_D original em AOT e implementar o cartão por SIO2, unificando a persistência com os serviços de arquivos existentes e preservando os saves. Não substituir MC2_D por HLE seletivo nem criar cartões independentes para cada fronteira.
 - **14/11/2026 — autenticação do cartão.** Executar SECRMAN original em AOT do BIOS verificado SCPH-70004:GH-032-11 para atender MC2_D, completando CDVD/MechaCon conforme necessário; não substituir a autenticação por um retorno de sucesso fixo.
 - **14/11/2026 — identidade MagicGate virtual.** Implementar o protocolo e a criptografia 3DES do par virtual MechaCon/cartão no runtime existente, com segredos próprios persistidos localmente e verificação efetiva dos desafios. Manter SECRMAN original e armazenamento único; conteúdo cifrado com a identidade de outro aparelho permanece explicitamente sem suporte.
+- **15/11/2026 — módulos EE carregados pelo jogo (overlays, ex.: XFF do Shadow).** Captura em execução: quando o jogo salta para código fora do registrado, as seções executáveis do módulo já relocado pelo carregador original são salvas por identidade de conteúdo e endereço, traduzidas pelo `ps2xRecomp` como módulo EE e ligadas ao reencontrar a mesma imagem na RAM. Instruções que o ligador do jogo reescreve depois (imports) leem o imediato da RAM. Parser offline e interpretador não foram escolhidos.
 
 **Estado implementado — patches 0010–0047 (13/11/2026).**
 

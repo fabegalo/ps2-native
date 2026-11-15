@@ -206,8 +206,9 @@ endfunction()
 function(ps2n_add_ee_modules target content_directory)
     set(_registration "#include \"runtime/ee_scheduler.h\"\n#include \"ps2native/sha256.hpp\"\n")
     set(_calls "")
-    file(GLOB _receipt CONFIGURE_DEPENDS "${content_directory}/exec/current.txt")
-    if(_receipt)
+    # exec/current.txt: the executable ExecPS2 starts; ee-load/*.txt: code the game links into RAM itself.
+    file(GLOB _receipts CONFIGURE_DEPENDS "${content_directory}/exec/current.txt" "${content_directory}/ee-load/*.txt")
+    foreach(_receipt IN LISTS _receipts)
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_receipt}")
         file(STRINGS "${_receipt}" _identity REGEX "^sha256=" LIMIT_COUNT 1)
         string(REGEX REPLACE "^sha256=" "" _identity "${_identity}")
@@ -220,11 +221,11 @@ function(ps2n_add_ee_modules target content_directory)
         endif()
         target_link_libraries(${target} PRIVATE ps2n-ee-${_identity})
         string(APPEND _registration "extern const EeAotModule g_ps2EeAot_${_identity};\n")
-        string(APPEND _calls "    const auto& module = g_ps2EeAot_${_identity};\n"
+        string(APPEND _calls "    {\n    const auto& module = g_ps2EeAot_${_identity};\n"
             "    if (ps2native::sha256_hex(std::span(module.image, module.imageSize)) != module.identity)\n"
             "        throw std::runtime_error(\"Prepared EE descriptor identity differs from its content\");\n"
-            "    scheduler.registerAotModule(module);\n")
-    endif()
+            "    scheduler.registerAotModule(module);\n    }\n")
+    endforeach()
     string(APPEND _registration "void ps2n_register_ee_modules(EeScheduler& scheduler) {\n${_calls}}\n")
     set(_source "${CMAKE_BINARY_DIR}/generated/${target}-ee.cpp")
     file(GENERATE OUTPUT "${_source}" CONTENT "${_registration}")

@@ -23,7 +23,7 @@ include(cmake/ParallelGS.cmake)
 # preparation/supervision tool. No CPU, device or graphics emulation here.
 add_library(ps2n_content STATIC
     src/io.cpp src/sha256.cpp src/elf.cpp src/packed_elf.cpp src/disc.cpp src/process.cpp
-    src/bios.cpp src/console.cpp src/nvm.cpp
+    src/bios.cpp src/console.cpp src/nvm.cpp src/xff.cpp
     src/frontend/content.cpp src/frontend/library.cpp src/frontend/runtime.cpp)
 target_include_directories(ps2n_content PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 if(MSVC)

@@ -10,6 +10,7 @@
 #include "pcsx2_gs_dump.h"
 #include "runtime/host_devices.h"
 #include "runtime/ee_scheduler.h"
+#include "runtime/ee_missing_code.h"
 #include "runtime/guest_executable_request.h"
 #include "runtime/gs/gs_cpu_backend.h"
 #include "Kernel/Syscalls/Helpers/State.h"
@@ -17,6 +18,7 @@
 #include "ps2native/bios.hpp"
 #include "ps2native/io.hpp"
 #include "ps2native/sha256.hpp"
+#include "ps2native/xff.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -260,6 +262,58 @@ void trace_gs(PS2Runtime& runtime, std::stop_token stop) {
 }
 } // namespace
 
+// Code the game links into RAM itself (xff2 modules) is captured when control first reaches it:
+// the executable sections at their final addresses, their function symbols and the import sites
+// the game's linker rewrites later. `ps2n` translates each capture into an EE module; the next
+// session binds that module when the same image is in RAM at the same address.
+void install_loaded_code_capture(const std::filesystem::path& content) {
+    ps2SetEeMissingCodeHook([content](PS2Runtime& runtime, uint32_t target) {
+        auto& scheduler = runtime.eeScheduler();
+        const uint8_t* ram = runtime.memory().getRDRAM();
+        if (const auto* module = scheduler.executableModule(target, ram)) {
+            scheduler.bindAotModule(*module, module->linkedBase, ram);
+            std::cerr << "[guest-load:bound] module=" << module->identity << " base=0x" << std::hex
+                      << module->linkedBase << " target=0x" << target << std::dec << '\n';
+            return true;
+        }
+        if (runtime.memory().isCodeAddress(target)) return false;
+        const auto loaded = ps2native::find_loaded_xff(std::span(ram, PS2_RAM_SIZE), target);
+        if (!loaded) return false;
+        const auto directory = content / "ee-load";
+        ps2native::create_directories(directory);
+        for (const auto& section : loaded->code) {
+            const std::span image(ram + section.address, section.size);
+            const auto identity = ps2native::sha256_hex(image);
+            const auto inside = [&](uint32_t address) { return address - section.address < section.size; };
+            uint32_t entry = inside(loaded->entry) ? loaded->entry : 0;
+            std::string functions, live;
+            for (const auto address : loaded->functions)
+                if (inside(address)) {
+                    if (!entry) entry = address;
+                    functions += std::to_string(address) + '\n';
+                }
+            if (!entry) continue;  // no reachable function in this section
+            for (const auto& site : loaded->live)
+                if (inside(site.address)) live += std::to_string(site.address) + ' ' + std::to_string(site.type) + '\n';
+            const auto text = [](const std::string& value) {
+                return std::span(reinterpret_cast<const uint8_t*>(value.data()), value.size());
+            };
+            ps2native::write_file_atomically(directory / (identity + ".bin"), image);
+            ps2native::write_file_atomically(directory / (identity + ".functions"), text(functions));
+            ps2native::write_file_atomically(directory / (identity + ".live"), text(live));
+            const auto receipt = "ps2n-loaded-image-v1\nsha256=" + identity + "\nload_address=" +
+                std::to_string(section.address) + "\nsize=" + std::to_string(section.size) +
+                "\nentry=" + std::to_string(entry) + "\n";
+            ps2native::write_file_atomically(directory / (identity + ".txt"), text(receipt));
+            std::cerr << "[guest-load:captured] sha256=" << identity << " base=0x" << std::hex << section.address
+                      << " size=0x" << section.size << " entry=0x" << entry << std::dec << " functions="
+                      << std::count(functions.begin(), functions.end(), '\n') << " live="
+                      << std::count(live.begin(), live.end(), '\n') << '\n';
+        }
+        return false;
+    });
+}
+
 int run_game(int argc, char** argv) {
     const char* stateRootArgument = nullptr;
     if (argc >= 3 && std::string_view(argv[argc - 2]) == "--state-root") {
@@ -338,6 +392,7 @@ int run_game(int argc, char** argv) {
         }
         if (browser) runtime.eeScheduler().setExecutableArguments({"rom0:OSDSYS"});
         if (!prepareExec) ps2n_register_ee_modules(runtime.eeScheduler());
+        if (!browser && elf.parent_path().filename() == "cd") install_loaded_code_capture(elf.parent_path().parent_path());
         PCSX2Audio audio;
         PS2HostDevices devices{&audio};
         ps2SetHostDevices(&runtime, &devices);
@@ -353,7 +408,8 @@ int run_game(int argc, char** argv) {
         const bool enhanced = gsMode && std::strcmp(gsMode, "enhanced") == 0;
         if (gsMode && !enhanced && std::strcmp(gsMode, "fidelity") != 0)
             throw std::runtime_error("PS2N_GS_MODE must be fidelity or enhanced");
-        const bool parallel = gsBackend && std::strcmp(gsBackend, "parallel") == 0;
+        // paraLLEl-GS is the default; PS2N_GS_BACKEND=cpu selects the CPU rasterizer (also the default for a GS dump).
+        const bool parallel = gsBackend ? std::strcmp(gsBackend, "parallel") == 0 : !std::getenv("PS2N_GS_PCSX2_DUMP");
         if (gsBackend && !parallel && std::strcmp(gsBackend, "cpu") != 0)
             throw std::runtime_error("PS2N_GS_BACKEND must be cpu or parallel");
         if (enhanced && !parallel) throw std::runtime_error("Enhanced requires the optional paraLLEl-GS device");

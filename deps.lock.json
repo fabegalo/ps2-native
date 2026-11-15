@@ -1228,6 +1228,21 @@
           "ps2xRuntime/src/lib/Kernel/Stubs/FileIO.h": "69e428fd4d9254bf7aae920133879e306ae1fbeb015282d8a31d58a48c9838f0"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0081-ee-missing-code-hook.patch",
+        "sha256": "94ec464fee4517db69d94dd4bcfd576338695a82c54c53855ec80154e9685874",
+        "base_files": {
+          "ps2xRuntime/include/runtime/ee_missing_code.h": "",
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "c2b728b3ad10a0a7097d9382c7958ac82fafe0850067a0db8afb464b6b11c10e",
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "5685b4335d3ec838e347c28fd8d827806f5422162dd5e06875beb91ba7d0e3a9"
+        },
+        "files": {
+          "ps2xRuntime/include/runtime/ee_missing_code.h": "a6eca5a1fac25f3e4dea962c77c719b0ed8bf4a41960e9dc1574da3ed9704c99",
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "db6ce9082488e9e277abe5224c0690627a6c2684e55c0d787ddd71a5166f1c94",
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "6bdffc9c94705adafd771f7f550d9301f055defeb51c98f8dfb5c66c3be2e07f"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },

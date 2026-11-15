@@ -1,0 +1,97 @@
+diff --git a/ps2xRuntime/include/runtime/ee_missing_code.h b/ps2xRuntime/include/runtime/ee_missing_code.h
+new file mode 100644
+index 0000000..7052eb7
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ee_missing_code.h
+@@ -0,0 +1,14 @@
++#pragma once
++
++#include <cstdint>
++#include <functional>
++
++class PS2Runtime;
++
++// Host hook for guest control reaching an address without a translation, such as code the
++// game loaded itself. It returns true only after making a translation available there (for
++// example by binding a prepared EE module), so the dispatcher retries the lookup.
++using EeMissingCodeHook = std::function<bool(PS2Runtime &runtime, uint32_t target)>;
++
++void ps2SetEeMissingCodeHook(EeMissingCodeHook hook);
++bool ps2RunEeMissingCodeHook(PS2Runtime &runtime, uint32_t target);
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index afd5cac..d569019 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -1,5 +1,6 @@
+ #include "runtime/ee_scheduler.h"
+ #include "runtime/guest_executable_request.h"
++#include "runtime/ee_missing_code.h"
+ #include "../ps2_iop_transport.h"
+ 
+ #include "ps2_log.h"
+@@ -530,7 +531,7 @@ void EeScheduler::run()
+             continue;
+         }
+ 
+-        if (!m_runtime.hasFunction(context.pc))
++        if (!m_runtime.hasFunction(context.pc) && !ps2RunEeMissingCodeHook(m_runtime, context.pc))
+         {
+             if (!running->invocations.empty())
+             {
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 79df946..f3922b0 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -7,6 +7,7 @@
+ #include "ps2_runtime_macros.h"
+ #include "runtime/gs/gs_frontend.h"
+ #include "runtime/ee_scheduler.h"
++#include "runtime/ee_missing_code.h"
+ #include "ThreadNaming.h"
+ #include "Kernel/Stubs/Audio.h"
+ #include "Kernel/Stubs/GS.h"
+@@ -1377,6 +1378,26 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+     }
+ }
+ 
++namespace
++{
++    EeMissingCodeHook &eeMissingCodeHook()
++    {
++        static EeMissingCodeHook hook;
++        return hook;
++    }
++}
++
++void ps2SetEeMissingCodeHook(EeMissingCodeHook hook)
++{
++    eeMissingCodeHook() = std::move(hook);
++}
++
++bool ps2RunEeMissingCodeHook(PS2Runtime &runtime, uint32_t target)
++{
++    const auto &hook = eeMissingCodeHook();
++    return hook && hook(runtime, target) && runtime.hasFunction(target);
++}
++
+ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+                                      R5900Context *ctx,
+                                      uint32_t targetPc,
+@@ -1399,7 +1420,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+     if (!isCall)
+     {
+         m_eeScheduler->noteControlTransfer();
+-        if (!hasFunction(targetPc))
++        if (!hasFunction(targetPc) && !ps2RunEeMissingCodeHook(*this, targetPc))
+         {
+             reportMissingFunction(rdram, ctx, targetPc, sourcePc, kind, debugName);
+         }
+@@ -1408,7 +1429,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+         return false;
+     }
+ 
+-    if (!hasFunction(targetPc))
++    if (!hasFunction(targetPc) && !ps2RunEeMissingCodeHook(*this, targetPc))
+     {
+         reportMissingFunction(rdram, ctx, targetPc, sourcePc, kind, debugName);
+ 
