@@ -1,0 +1,13 @@
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -474,6 +474,10 @@
+ 
+             if (const auto import = imports.decode(cpu.pc))
+             {
++                // The linked import stub advances the load pipeline before the service sees arguments.
++                if (cpu.pendingLoad && cpu.pendingLoadReg)
++                    cpu.gpr[cpu.pendingLoadReg] = cpu.pendingLoadValue;
++                cpu.pendingLoad = false;
+                 const ImportDisposition disposition = dispatchImport(*import, cpu);
+                 ++totalInstructions;
+                 ++totalCycles;

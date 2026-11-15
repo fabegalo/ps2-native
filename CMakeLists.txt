@@ -106,7 +106,7 @@ if(BUILD_TESTING)
         "${PS2N_PS2RECOMP_DIR}/ps2xTest/src/test_function_table.cpp")
     target_include_directories(ps2n-sdk-memory-card-io-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib")
     target_link_libraries(ps2n-sdk-memory-card-io-tests PRIVATE ps2_runtime)
-    add_test(NAME sdk-memory-card-io COMMAND ps2n-sdk-memory-card-io-tests)
+    add_test(NAME sdk-memory-card-io COMMAND ps2n-sdk-memory-card-io-tests "${CMAKE_BINARY_DIR}/sdk-memory-card-io-fixture")
     add_executable(ps2n-sdk-gs-presentation-tests tests/sdk_gs_presentation_tests.cpp)
     target_link_libraries(ps2n-sdk-gs-presentation-tests PRIVATE ps2_runtime)
     add_test(NAME sdk-gs-presentation COMMAND ps2n-sdk-gs-presentation-tests)
@@ -117,6 +117,9 @@ if(BUILD_TESTING)
     add_test(NAME sdk-ee-module-codegen COMMAND "${Python3_EXECUTABLE}"
         "${PROJECT_SOURCE_DIR}/tests/ee_module_codegen_tests.py" "${PS2N_RECOMP_EXE}"
         "${PROJECT_SOURCE_DIR}/out/game-functional" "${CMAKE_COMMAND}" "${PS2N_PS2RECOMP_DIR}")
+    add_test(NAME sdk-recompiler-incremental COMMAND "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/recompiler_incremental_tests.py" "${PS2N_RECOMP_EXE}"
+        "${CMAKE_CURRENT_BINARY_DIR}")
     foreach(_var IN ITEMS INCLUDE LIB LIBPATH PATH)
         string(REPLACE ";" "\\;" _value "${PS2N_ENV_${_var}}")
         list(APPEND _ee_test_environment "${_var}=${_value}")
@@ -174,6 +177,21 @@ if(BUILD_TESTING)
     target_include_directories(ps2n-sdk-iop-aot-tests PRIVATE
         "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tests" "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
     add_test(NAME sdk-iop-aot COMMAND ps2n-sdk-iop-aot-tests)
+    add_executable(ps2n-sdk-sio2-tests tests/sdk_sio2_tests.cpp)
+    target_link_libraries(ps2n-sdk-sio2-tests PRIVATE ps2_iop)
+    target_include_directories(ps2n-sdk-sio2-tests PRIVATE
+        "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tests" "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
+    add_test(NAME sdk-sio2 COMMAND ps2n-sdk-sio2-tests)
+    add_executable(ps2n-sdk-magicgate-tests tests/sdk_magicgate_tests.cpp)
+    target_link_libraries(ps2n-sdk-magicgate-tests PRIVATE ps2_iop)
+    target_include_directories(ps2n-sdk-magicgate-tests PRIVATE
+        "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tests" "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
+    add_test(NAME sdk-magicgate COMMAND ps2n-sdk-magicgate-tests)
+    add_executable(ps2n-sdk-card-tests tests/sdk_card_tests.cpp
+        "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/Kernel/Stubs/Ps2CardImage.cpp")
+    target_include_directories(ps2n-sdk-card-tests PRIVATE
+        "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/Kernel")
+    add_test(NAME sdk-card COMMAND ps2n-sdk-card-tests "${CMAKE_BINARY_DIR}/sdk-card-fixture")
     set(_iop_fixture "${CMAKE_BINARY_DIR}/generated/iop-aot-test")
     set(_iop_fixture_sources "${_iop_fixture}/module.cpp")
     foreach(_bucket RANGE 0 15)

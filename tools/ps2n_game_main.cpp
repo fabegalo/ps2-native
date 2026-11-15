@@ -13,6 +13,7 @@
 #include "runtime/guest_executable_request.h"
 #include "runtime/gs/gs_cpu_backend.h"
 #include "Kernel/Syscalls/Helpers/State.h"
+#include "Kernel/Stubs/MemoryCard.h"
 #include "ps2native/bios.hpp"
 #include "ps2native/io.hpp"
 #include "ps2native/sha256.hpp"
@@ -35,7 +36,7 @@ void ps2n_register_iop_modules();
 void ps2n_register_ee_modules(EeScheduler& scheduler);
 #include <vector>
 
-void ps2n_hw_watch(uint8_t* rdram, uint32_t guest, std::vector<std::pair<uintptr_t, uint32_t>> functions);
+void ps2n_hw_watch(uint8_t* rdram, uint32_t guest, std::vector<std::pair<uintptr_t, uint32_t>> functions, PS2Runtime* runtime);
 
 namespace {
 // PS2N_GS_TRACE: forwards to the PS2Recomp CPU backend and summarizes the
@@ -258,39 +259,58 @@ void trace_gs(PS2Runtime& runtime, std::stop_token stop) {
 } // namespace
 
 int run_game(int argc, char** argv) {
+    const char* stateRootArgument = nullptr;
+    if (argc >= 3 && std::string_view(argv[argc - 2]) == "--state-root") {
+        stateRootArgument = argv[argc - 1];
+        argc -= 2;
+    }
     const bool prepareExec = argc == 9 && std::string_view(argv[8]) == "--prepare-exec";
     const bool browser = (argc == 8 || prepareExec) && std::string_view(argv[2]) == "--bios";
-    if (argc != 3 && !browser) {
-        std::cerr << "Usage: " << (argc ? argv[0] : "ps2n-game") << " <boot-elf> <cd-image>\n";
+    const bool gameFirmware = argc == 9 && std::string_view(argv[3]) == "--firmware";
+    if (argc != 3 && !browser && !gameFirmware) {
+        std::cerr << "Usage: " << (argc ? argv[0] : "ps2n-game") << " <boot-elf> <cd-image> [--state-root <directory>]\n";
         return 2;
     }
     try {
         const auto path = [](const char* value) { return std::filesystem::path(std::u8string(value, value + std::strlen(value))); };
+        if (stateRootArgument && !*stateRootArgument) throw std::runtime_error("--state-root requires a nonempty directory");
         const std::filesystem::path elf = std::filesystem::absolute(path(argv[1]));
         std::optional<ps2native::BrowserFirmware> sourceFirmware;
-        if (browser) {
-            sourceFirmware.emplace(ps2native::load_browser_firmware(ps2native::read_file(path(argv[3])), argv[5],
-                ps2native::read_file(path(argv[6])), {std::string(argv[4])}, {std::string(argv[7])}));
+        if (browser || gameFirmware) {
+            const auto biosArgs = argv + (gameFirmware ? 1 : 0);
+            sourceFirmware.emplace(ps2native::load_browser_firmware(ps2native::read_file(path(biosArgs[3])), biosArgs[5],
+                ps2native::read_file(path(biosArgs[6])), {std::string(biosArgs[4])}, {std::string(biosArgs[7])}));
             const auto& firmware = *sourceFirmware;
-            if (ps2native::sha256_file(elf) != ps2native::sha256_hex(firmware.program.bytes))
+            if (browser && ps2native::sha256_file(elf) != ps2native::sha256_hex(firmware.program.bytes))
                 throw std::runtime_error("OSDSYS executable does not belong to the selected ROM0");
             PS2RomProfile profile;
             profile.id = firmware.bios.sha256;
             profile.provider = "ps2-native ROM0";
             profile.matcher.elfName = elf.filename().string();
-            profile.matcher.entryPoint = firmware.program.entry;
+            profile.matcher.entryPoint = browser ? firmware.program.entry : 0;
             for (const auto& module : firmware.bios.modules) {
                 const auto first = firmware.bios.rom0.begin() + module.offset;
                 profile.files[module.name] = std::vector<std::uint8_t>(first, first + module.size);
             }
             PS2RomDevice::registerProfile(std::move(profile));
-            std::cerr << "[firmware] original OSDSYS ROM0=" << firmware.bios.sha256
+            std::cerr << "[firmware] original console ROM0=" << firmware.bios.sha256
                       << " profile=" << firmware.console_profile << " NVM=" << firmware.nvm.sha256 << '\n';
         }
         if (std::getenv("PS2N_DIAGNOSTIC_IOP_DECODED"))
             std::cerr << "[IOP-AOT] diagnostic control: using existing decoded executor\n";
         else
             ps2n_register_iop_modules();
+        auto paths = PS2Runtime::getIoPaths();
+        const auto stateRoot = stateRootArgument ? std::filesystem::absolute(path(stateRootArgument)) :
+            ps2native::console_state_root(std::filesystem::absolute(path(argv[0])).parent_path() / "console");
+        const auto cardRoot = stateRoot / "mc0";
+        ps2native::check_memory_card_root_transition(elf.parent_path() / "mc0", cardRoot);
+        paths.elfPath = elf; paths.elfDirectory = elf.parent_path();
+        paths.hostRoot = paths.cdRoot = elf.parent_path();
+        paths.mcRoot = cardRoot;
+        paths.cdImage = browser ? std::filesystem::path{} : std::filesystem::absolute(path(argv[2]));
+        PS2Runtime::setIoPaths(paths);
+        std::cerr << "[storage] console=" << ps2native::path_utf8(stateRoot) << "\n";
         PS2Runtime runtime;
         if (!runtime.initialize(("ps2-native | " + elf.filename().string()).c_str())) {
             std::cerr << "PS2Recomp runtime initialization failed\n";
@@ -305,13 +325,10 @@ int run_game(int argc, char** argv) {
             for (uint32_t address = 0x100000u; address < 0x01000000u; address += 4u)
                 if (runtime.hasFunction(address))
                     functions.emplace_back(reinterpret_cast<uintptr_t>(runtime.lookupFunction(address)), address);
-            ps2n_hw_watch(runtime.memory().getRDRAM(), static_cast<uint32_t>(std::strtoul(watch, nullptr, 16)), std::move(functions));
+            ps2n_hw_watch(runtime.memory().getRDRAM(), static_cast<uint32_t>(std::strtoul(watch, nullptr, 16)), std::move(functions), &runtime);
         }
         if (browser) runtime.eeScheduler().setExecutableArguments({"rom0:OSDSYS"});
         if (!prepareExec) ps2n_register_ee_modules(runtime.eeScheduler());
-        auto paths = PS2Runtime::getIoPaths();
-        paths.cdImage = browser ? std::filesystem::path{} : std::filesystem::absolute(path(argv[2]));
-        PS2Runtime::setIoPaths(paths);
         PCSX2Audio audio;
         PS2HostDevices devices{&audio};
         ps2SetHostDevices(&runtime, &devices);
@@ -371,11 +388,12 @@ int run_game(int argc, char** argv) {
                     ps2native::write_file_atomically(directory / "current.txt",
                         std::span(reinterpret_cast<const std::uint8_t*>(metadata.data()), metadata.size()));
                     std::cerr << "[guest-exec:prepared] sha256=" << identity << '\n';
-                    if (prepareExec) return 0;
+                    if (prepareExec) { ps2_stubs::mcFlushStorage(); return 0; }
                 }
             }
             throw;
         }
+        ps2_stubs::mcFlushStorage();
     } catch (const std::exception& error) {
         std::cerr << "ps2n-game: " << error.what() << "\n";
         std::cerr.flush();

@@ -73,7 +73,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_LAUNCHER=OFF -DPS2X_RELEASE_LTCG=OFF
-          cmake --build out/build --parallel 2 --target ps2n ps2n-content-tests ps2_runtime kzspu2_test ps2n-spu2-pcm-tests
+          cmake --build out/build --parallel 2 --target ps2n ps2n-content-tests ps2_runtime kzspu2_test ps2n-spu2-pcm-tests ps2n-sdk-sio2-tests ps2n-sdk-magicgate-tests ps2n-sdk-iop-rpc-tests ps2n-sdk-card-tests ps2n-sdk-memory-card-io-tests
 
       # Ninja inside the MSVC developer shell: ps2n builds prepared games with
       # the same toolchain and records its environment at configure time.
@@ -90,10 +90,10 @@ jobs:
           Enter-VsDevShell -VsInstallPath $installation -SkipAutomaticLocation -DevCmdArguments "-arch=$targetArch -host_arch=$hostArch"
           cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2N_LAUNCHER=OFF -DPS2X_RELEASE_LTCG=OFF
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build out/build --parallel 2 --target ps2n ps2n-content-tests ps2_runtime kzspu2_test ps2n-spu2-pcm-tests
+          cmake --build out/build --parallel 2 --target ps2n ps2n-content-tests ps2_runtime kzspu2_test ps2n-spu2-pcm-tests ps2n-sdk-sio2-tests ps2n-sdk-magicgate-tests ps2n-sdk-iop-rpc-tests ps2n-sdk-card-tests ps2n-sdk-memory-card-io-tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test disc access, process supervision and SPU2
-        run: ctest --test-dir out/build -R "^(content|spu2|spu2-pcm.*)$" --output-on-failure
+        run: ctest --test-dir out/build -R "^(content|spu2|spu2-pcm.*|sdk-recompiler-incremental|sdk-sio2|sdk-magicgate|sdk-iop-rpc|sdk-card|sdk-memory-card-io)$" --output-on-failure
 
 # Developer-only proof of concept. No publishing or release automation.

@@ -74,6 +74,8 @@ A execução usa o submódulo fixado do [PS2Recomp](https://github.com/ran-j/PS2
 
 Caminho experimental de firmware: `ps2n prepare-bios <ROM0> <perfil-do-console> <NVM>` prepara o ELF OSDSYS original, validando revisão/perfil/NVM; `ps2n bios` com os mesmos argumentos também o inicia. Para payloads compactados suportados, a primeira execução captura e verifica a saída do loader original, prepara o módulo OSDSYS descompactado por hash e o relança automaticamente; as seguintes o reutilizam. A revisão validada entra no programa principal original, no mesmo runtime, e aguarda a conclusão do reinício IOP; isso ainda **não** completa o boot do Browser. Os originais permanecem somente para leitura.
 
+Selecione o firmware do console para os jogos com `ps2n use-bios <ROM0> <perfil-do-console> <NVM>`; o launcher passa o BIOS/perfil/NVM selecionado ao preparo e ao Play. Os jogos compartilham os cartões em `console/mc0` e `console/mc1` dentro de `PS2N_DATA_DIR` (por padrão, ao lado do diretório de jogos da CLI); `PS2N_CONSOLE_STATE_ROOT` substitui esse local. Cada cartão usa uma imagem `.ps2n-card.raw` comum aos serviços de arquivos e ao SIO2. Pastas de saves existentes são importadas no primeiro uso e preservadas. Um cartão antigo por jogo com conteúdo exige migração explícita antes de trocar a raiz; ele nunca é mesclado ou excluído silenciosamente. A integração do SECRMAN original permanece experimental e ainda não comprova autenticação do cartão nem gameplay.
+
 ROM0, ROM1/ROM2, NVM, jogos e traduÃ§Ãµes proprietÃ¡rias geradas **nÃ£o sÃ£o fornecidos**. Mantenha esses arquivos localmente e nÃ£o os publique no repositÃ³rio. A correspondÃªncia BIOS/NVM deve ser validada, nÃ£o presumida pelo nome.
 
 ## Roadmap

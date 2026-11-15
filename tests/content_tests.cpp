@@ -5,6 +5,8 @@
 #include "ps2native/process.hpp"
 
 #include <chrono>
+#include <cstdlib>
+#include <optional>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -46,6 +48,46 @@ void processes(const fs::path& self, const fs::path& dir) {
     require(seen.find("marker") != seen.npos, "observer saw the child output");
     require(std::chrono::steady_clock::now() - started < std::chrono::seconds(20), "observer stopped the child");
 }
+void console_storage(const fs::path& dir) {
+    const auto owned = fs::absolute(dir / "card-root-test");
+    require(!fs::exists(native_io_path(owned)), "stale card-root fixture");
+    const auto legacy = owned / "old", selected = owned / "console";
+    ps2native::create_directories(legacy);
+    check_memory_card_root_transition(legacy, selected);
+    const std::vector<std::uint8_t> save{1,2,3,4};
+    write_file_atomically(legacy / "save", save);
+    check_memory_card_root_transition(legacy, legacy);
+    bool refused = false;
+    try { check_memory_card_root_transition(legacy, selected); }
+    catch (const std::exception&) { refused = true; }
+    require(refused && read_file(legacy / "save") == save && !file_exists(selected / "save"),
+        "console storage transition moved, merged or ignored an existing save");
+#ifdef _WIN32
+    using EnvString = std::wstring;
+    const wchar_t* names[] = {L"PS2N_CONSOLE_STATE_ROOT", L"PS2N_DATA_DIR"};
+    const auto get = [](const wchar_t* name) { return _wgetenv(name); };
+    const auto set = [](const wchar_t* name, const EnvString& value) { _wputenv_s(name, value.c_str()); };
+#else
+    using EnvString = std::string;
+    const char* names[] = {"PS2N_CONSOLE_STATE_ROOT", "PS2N_DATA_DIR"};
+    const auto get = [](const char* name) { return std::getenv(name); };
+    const auto set = [](const char* name, const EnvString& value) { if(value.empty()) unsetenv(name); else setenv(name,value.c_str(),1); };
+#endif
+    std::optional<EnvString> previous[2];
+    for (unsigned i=0;i<2;++i) if (const auto* value=get(names[i])) previous[i]=value;
+    const auto restore = [&] { for(unsigned i=0;i<2;++i) set(names[i],previous[i].value_or(EnvString{})); };
+    try {
+        const auto explicitRoot = owned / fs::path(u8"estado-\u00e7");
+        set(names[0],explicitRoot.native()); set(names[1],selected.native());
+        require(console_state_root(legacy)==explicitRoot,"explicit Unicode console root ignored");
+        set(names[0],{});
+        require(console_state_root(legacy)==selected/"console","launcher data root ignored");
+        set(names[1],{});
+        require(console_state_root(legacy)==legacy,"standalone console root changed");
+    } catch (...) { restore(); throw; }
+    restore();
+    remove_directory_tree(owned);
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -65,6 +107,7 @@ int main(int argc, char** argv) {
         const fs::path dir = argv[1];
         ps2native::create_directories(dir);
         disc_formats(dir);
+        console_storage(dir);
         processes(fs::absolute(argv[0]), dir);
         std::cout << "content tests passed\n";
         return 0;

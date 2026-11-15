@@ -107,15 +107,13 @@ struct Game {
     std::string id, elf, cd_image;
     std::string native_output = "generated";
     std::string rom0, rom0_sha256, console_profile, nvm, nvm_sha256;
-    bool browser() const { return !rom0.empty(); }
+    bool browser() const { return cd_image.empty() && !rom0.empty(); }
 };
 
-Game load_game(const std::string& selector) {
-    Game game;
-    game.dir = fs::exists(from_utf8(selector)) ? from_utf8(selector) : games_root() / from_utf8(selector);
-    const auto text = read_text(game.dir / "game.txt");
+void read_game_metadata(Game& game, const std::string& text) {
     std::istringstream lines(text);
     for (std::string line; std::getline(lines, line);) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         const auto equal = line.find('=');
         if (equal == line.npos) continue;
         const auto key = line.substr(0, equal), value = line.substr(equal + 1);
@@ -128,10 +126,67 @@ Game load_game(const std::string& selector) {
         else if (key == "nvm") game.nvm = value;
         else if (key == "nvm_sha256") game.nvm_sha256 = value;
     }
+}
+
+Game load_game(const std::string& selector) {
+    Game game;
+    game.dir = fs::exists(from_utf8(selector)) ? from_utf8(selector) : games_root() / from_utf8(selector);
+    read_game_metadata(game, read_text(game.dir / "game.txt"));
     if (game.id.empty() || game.elf.empty() || (!game.browser() && game.cd_image.empty()) ||
-        (game.browser() && (game.rom0_sha256.empty() || game.console_profile.empty() || game.nvm.empty() || game.nvm_sha256.empty())))
+        (!game.rom0.empty() && (game.rom0_sha256.empty() || game.console_profile.empty() || game.nvm.empty() || game.nvm_sha256.empty())))
         throw std::runtime_error("incomplete game.txt in " + path_utf8(game.dir));
     return game;
+}
+
+fs::path console_firmware_path() {
+    return console_state_root(games_root().parent_path() / "console") / "firmware.txt";
+}
+
+std::string firmware_metadata(const Game& game) {
+    return "rom0=" + game.rom0 + "\nrom0_sha256=" + game.rom0_sha256 +
+        "\nconsole_profile=" + game.console_profile + "\nnvm=" + game.nvm +
+        "\nnvm_sha256=" + game.nvm_sha256 + "\n";
+}
+
+void select_console_firmware(const fs::path& rom0, const std::string& profile, const fs::path& nvm) {
+    const auto firmware = load_browser_firmware(read_file(rom0), profile, read_file(nvm));
+    Game game;
+    game.rom0 = path_utf8(fs::absolute(rom0)); game.rom0_sha256 = firmware.bios.sha256;
+    game.console_profile = profile;
+    game.nvm = path_utf8(fs::absolute(nvm)); game.nvm_sha256 = firmware.nvm.sha256;
+    const auto selected = console_firmware_path();
+    ps2native::create_directories(selected.parent_path());
+    write_text(selected, firmware_metadata(game));
+}
+
+bool attach_console_firmware(Game& game) {
+    if (game.browser() || !fs::exists(console_firmware_path())) return false;
+    Game selected;
+    read_game_metadata(selected, read_text(console_firmware_path()));
+    if (selected.rom0.empty() || selected.rom0_sha256.empty() || selected.console_profile.empty() ||
+        selected.nvm.empty() || selected.nvm_sha256.empty())
+        throw std::runtime_error("Incomplete selected console firmware; run ps2n use-bios");
+    const auto firmware = load_browser_firmware(read_file(from_utf8(selected.rom0)), selected.console_profile,
+        read_file(from_utf8(selected.nvm)), {selected.rom0_sha256}, {selected.nvm_sha256});
+    game.rom0=selected.rom0; game.rom0_sha256=selected.rom0_sha256;
+    game.console_profile=selected.console_profile; game.nvm=selected.nvm; game.nvm_sha256=selected.nvm_sha256;
+    const auto module = firmware.bios.find("SECRMAN");
+    if (!module) throw std::runtime_error("Selected ROM0 has no SECRMAN module");
+    const auto image = std::span(firmware.bios.rom0).subspan(module->offset, module->size);
+    // Keep unrelated preparation metadata and entry-point learning intact.
+    const auto before = read_text(game.dir / "game.txt");
+    std::istringstream lines(before); std::string after;
+    for (std::string line; std::getline(lines,line);) {
+        const auto key = line.substr(0,line.find('='));
+        if (key == "rom0" || key == "rom0_sha256" || key == "console_profile" ||
+            key == "nvm" || key == "nvm_sha256" || key.starts_with("secrman_")) continue;
+        after += line + "\n";
+    }
+    after += firmware_metadata(game) + "secrman_offset=" + std::to_string(module->offset) +
+        "\nsecrman_size=" + std::to_string(module->size) + "\nsecrman_sha256=" + sha256_hex(image) + "\n";
+    if (before == after) return false;
+    write_text(game.dir / "game.txt",after);
+    return true;
 }
 
 void run_tool(const fs::path& exe, const std::vector<std::string>& args, const fs::path& cwd, const fs::path& log) {
@@ -341,7 +396,8 @@ std::optional<ExecModule> exec_module(const Game& game, const BrowserFirmware& f
     return module;
 }
 
-void ensure_prepared(const Game& game, bool configure = false) {
+void ensure_prepared(Game& game, bool configure = false) {
+    configure = attach_console_firmware(game) || configure;
     if (game.browser()) {
         const auto firmware = load_browser_firmware(read_file(from_utf8(game.rom0)), game.console_profile,
             read_file(from_utf8(game.nvm)), {game.rom0_sha256}, {game.nvm_sha256});
@@ -533,6 +589,12 @@ int run(Game game) {
             game.rom0_sha256, game.console_profile, game.nvm, game.nvm_sha256} :
             std::vector<std::string>{game.elf, game.cd_image};
         if (game.browser() && !module) arguments.emplace_back("--prepare-exec");
+        if (!game.browser() && !game.rom0.empty()) {
+            arguments.insert(arguments.end(), {"--firmware",game.rom0,game.rom0_sha256,
+                game.console_profile,game.nvm,game.nvm_sha256});
+        }
+        arguments.emplace_back("--state-root");
+        arguments.emplace_back(path_utf8(console_state_root(games_root().parent_path() / "console")));
         const auto code = run_process(game_executable(game), arguments, game.dir / "cd", log,
             [&](std::string_view output) {
                 // Keep a short overlap so a report split across reads is still seen.
@@ -573,27 +635,37 @@ int run(Game game) {
 
 int usage() {
     std::cerr << "Usage: ps2n prepare <disc.bin|.cue|.iso>\n"
+                 "       ps2n use-bios <ROM0> <console-profile> <NVM>\n"
                  "       ps2n prepare-bios <ROM0> <console-profile> <NVM>\n"
                  "       ps2n bios <ROM0> <console-profile> <NVM>\n"
                  "       ps2n build <game-id|game-dir>    reuse content; update native artifacts\n"
                  "       ps2n run <game-id|game-dir>\n"
                  "       ps2n play <disc.bin|.cue|.iso>\n"
+                 "prepare/build/run/play also accept --bios <ROM0> <console-profile> <NVM>\n"
                  "Games are kept in " << path_utf8(games_root()) << "\n";
     return 2;
 }
 
 template <class C> int main_impl(int argc, C** argv) {
     try {
+        if (argc == 7 && path_utf8(fs::path(argv[3])) == "--bios") {
+            select_console_firmware(fs::path(argv[4]),path_utf8(fs::path(argv[5])),fs::path(argv[6]));
+            argc = 3;
+        }
         if (argc != 3 && argc != 5) return usage();
         const auto command = path_utf8(fs::path(argv[1]));
         const fs::path argument(argv[2]);
         if (argc == 5) {
+            if (command == "use-bios") {
+                select_console_firmware(argument,path_utf8(fs::path(argv[3])),fs::path(argv[4]));
+                return 0;
+            }
             if (command != "bios" && command != "prepare-bios") return usage();
             const auto game = prepare_browser(argument, path_utf8(fs::path(argv[3])), fs::path(argv[4]));
             return command == "bios" ? run(game) : 0;
         }
         if (command == "prepare") return (void)prepare(argument), 0;
-        if (command == "build") return (void)ensure_prepared(load_game(path_utf8(argument))), 0;
+        if (command == "build") { auto game = load_game(path_utf8(argument)); ensure_prepared(game); return 0; }
         if (command == "run") return run(load_game(path_utf8(argument)));
         if (command == "play") {
             const auto image = disc_image(argument);

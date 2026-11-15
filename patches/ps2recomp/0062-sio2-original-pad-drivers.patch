@@ -1,0 +1,516 @@
+--- a/ps2xIOP/include/ps2x/iop/iop_host.h
++++ b/ps2xIOP/include/ps2x/iop/iop_host.h
+@@ -59,6 +59,9 @@
+     public:
+         virtual ~IopHost() = default;
+         virtual IopSpu2Backend* spu2Backend() const { return nullptr; }
++        // The same pad source used by EE compatibility services; false means disconnected.
++        virtual bool readPadState(int port, int slot, uint8_t *data, size_t size) { return false; }
++        virtual void setPadRumble(int port, int slot, uint8_t small, uint8_t large) {}
+ 
+         virtual bool readGuest(uint32_t address, void *destination, size_t size) const = 0;
+         virtual bool writeGuest(uint32_t address, const void *source, size_t size) = 0;
+--- a/ps2xIOP/src/emulator/core/iop_memory.h
++++ b/ps2xIOP/src/emulator/core/iop_memory.h
+@@ -1,8 +1,10 @@
+ #pragma once
+ 
+-#include "ps2x/iop/iop_spu2.h"
++#include "ps2x/iop/iop_host.h"
+ #include <cstddef>
+ #include <cstdint>
++#include <array>
++#include <deque>
+ #include <optional>
+ #include <span>
+ #include <string>
+@@ -42,6 +44,8 @@
+ 
+         void reset();
+         void attachSpu2(IopSpu2Backend* backend, const uint64_t* cycle);
++        void attachHost(IopHost* host) { m_host = host; }
++        bool completeSio2Dma(int irq);
+         uint32_t advanceSpu2();
+         uint64_t nextSpu2Event() const;
+ 
+@@ -81,6 +85,22 @@
+         [[nodiscard]] uint32_t readHardware32(uint32_t address) const;
+         void writeHardware32(uint32_t address, uint32_t value);
+         void markOwned(uint32_t address, size_t size);
++        void writeSio2(uint8_t value);
++        void finishSio2Packet();
++        void startSio2Dma(uint32_t address, uint32_t value);
++
++        struct SerialPad {
++            uint8_t mode = 0x41;
++            bool config = false;
++            std::array<uint8_t, 6> motors{0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
++        };
++        IopHost* m_host = nullptr;
++        std::array<SerialPad, 2> m_serialPads{};
++        std::array<uint32_t, 16> m_sio2Commands{};
++        std::vector<uint8_t> m_sio2Input;
++        mutable std::deque<uint8_t> m_sio2Output;
++        uint32_t m_sio2Command = 0, m_sio2Received = 0, m_sio2BlockSize = 0;
++        uint32_t m_sio2Status = 0x1d100, m_sio2Interrupt = 0;
+ 
+         IopSpu2Backend* m_spu2 = nullptr;
+         const uint64_t* m_spu2Cycle = nullptr;
+--- a/ps2xIOP/src/emulator/core/iop_memory.cpp
++++ b/ps2xIOP/src/emulator/core/iop_memory.cpp
+@@ -4,6 +4,7 @@
+ #include <cstring>
+ #include <stdexcept>
+ #include <limits>
++#include <cstdlib>
+ 
+ namespace ps2x::iop::detail
+ {
+@@ -29,10 +30,20 @@
+ 
+     void IopMemory::reset()
+     {
++        if (m_host)
++            for (int port = 0; port < 2; ++port) m_host->setPadRumble(port, 0, 0, 0);
++        m_serialPads = {};
++        m_sio2Commands = {};
++        m_sio2Input.clear();
++        m_sio2Output.clear();
++        m_sio2Command = m_sio2Received = m_sio2BlockSize = 0;
++        m_sio2Status = 0x1d100;
++        m_sio2Interrupt = 0;
+         std::fill(m_ram.begin(), m_ram.end(), uint8_t{0});
+         std::fill(m_owned.begin(), m_owned.end(), uint8_t{0});
+         std::fill(m_scratch.begin(), m_scratch.end(), uint8_t{0});
+         m_hardware.clear();
++        m_hardware[0x1f808268u] = 0x3bcu;
+         m_allocations.clear();
+         m_heapCursor = HeapBase;
+         m_interruptStatus = 0;
+@@ -253,6 +264,19 @@
+ 
+     uint32_t IopMemory::readHardware32(uint32_t address) const
+     {
++        switch (address) {
++        case 0x1f808264u: {
++            if (m_sio2Output.empty()) return 0xff;
++            const auto value = m_sio2Output.front();
++            m_sio2Output.pop_front();
++            return value;
++        }
++        case 0x1f80826cu: return m_sio2Status;
++        case 0x1f808270u: return 0xf;
++        case 0x1f808274u: return 0;
++        case 0x1f808280u: return m_sio2Interrupt;
++        default: break;
++        }
+         if (m_spu2 && address >= Spu2Base && address < Spu2Base + 0x800u)
+             return uint32_t(m_spu2->read16(address, *m_spu2Cycle)) |
+                    (uint32_t(m_spu2->read16(address + 2u, *m_spu2Cycle)) << 16u);
+@@ -280,6 +304,32 @@
+ 
+     void IopMemory::writeHardware32(uint32_t address, uint32_t value)
+     {
++        if (address == 0x1f801574u) {
++            const auto flags = m_hardware[address] & ~value & 0x7f000000u;
++            const auto control = value & 0xffffffu;
++            m_hardware[address] = flags | control;
++            if ((control & (1u << 23)) && (flags & (control << 8u))) m_hardware[address] |= 0x80000000u;
++            return;
++        }
++        if (address >= 0x1f808200u && address < 0x1f808240u) {
++            const auto index = (address - 0x1f808200u) / 4u;
++            m_sio2Commands[index] = value;
++            if (index == 0) {
++                m_sio2Command = m_sio2Received = m_sio2BlockSize = 0;
++                m_sio2Input.clear();
++                m_sio2Status = 0;
++            }
++        }
++        if (address == 0x1f808260u) { writeSio2(static_cast<uint8_t>(value)); return; }
++        if (address == 0x1f808280u) { m_sio2Interrupt &= ~value; return; }
++        if (address == 0x1f808268u && (value & 1u) && !m_sio2Interrupt) {
++            m_sio2Interrupt = 1;
++            m_dmaStart = DmaStart{17, 0};
++        }
++        if ((address == 0x1f801548u || address == 0x1f801558u) && (value & kDmaStart)) {
++            startSio2Dma(address, value);
++            return;
++        }
+         if (m_spu2 && address >= Spu2Base && address < Spu2Base + 0x800u) {
+             m_spu2->write16(address, static_cast<uint16_t>(value), *m_spu2Cycle);
+             m_spu2->write16(address + 2u, static_cast<uint16_t>(value >> 16u), *m_spu2Cycle);
+@@ -337,6 +387,151 @@
+             secondCore ? kDmaSpu1Irq : kDmaSpu0Irq,
+             std::max<uint64_t>(transferWords * 2u, 64u),
+         };
++    }
++
++    // Register and serial command behavior checked against PCSX2 SIO/Sio2.cpp,
++    // Pad/PadDualshock2.cpp and IopDma.cpp (PCSX2 Dev Team, GPL-3.0-or-later).
++    void IopMemory::writeSio2(uint8_t value)
++    {
++        if (m_sio2Command >= m_sio2Commands.size()) return;
++        const auto length = (m_sio2Commands[m_sio2Command] >> 8u) & 0x3ffu;
++        if (!length) return;
++        if (m_sio2Received < length) m_sio2Input.push_back(value);
++        const auto blockSize = m_sio2BlockSize ? m_sio2BlockSize : length;
++        if (++m_sio2Received == blockSize) {
++            finishSio2Packet();
++            m_sio2Input.clear();
++            m_sio2Received = 0;
++            ++m_sio2Command;
++        }
++    }
++
++    void IopMemory::finishSio2Packet()
++    {
++        const auto descriptor = m_sio2Commands[m_sio2Command];
++        const unsigned port = descriptor & 1u;
++        const auto receiveLength = (descriptor >> 18u) & 0x3ffu;
++        const auto size = std::max<size_t>(m_sio2Input.size(), receiveLength);
++        std::vector<uint8_t> reply(size, 0xff);
++        const auto& input = m_sio2Input;
++        if (input.empty()) throw std::runtime_error("SIO2 packet has no device byte");
++        if (input[0] == 0x81)
++            throw std::runtime_error("SIO2 memory-card protocol is not implemented; existing console storage is unchanged");
++        if (input[0] != 1u && input[0] != 0x21u && input[0] != 0x61u)
++            throw std::runtime_error("Unsupported SIO2 peripheral protocol");
++        uint8_t state[32]{};
++        const bool connected = input[0] == 1u && m_host && m_host->readPadState(port, 0, state, sizeof state);
++        m_sio2Status |= 0x1000u;
++        m_sio2Status = (m_sio2Status & 0x300u) ? ((m_sio2Status & ~0x300u) | 0x200u) : (m_sio2Status | 0x100u);
++        if (!connected) {
++            m_sio2Status |= (port && input[0] != 0x21) ? 0x2d000u : 0x1d000u;
++            if (input[0] == 1u) {
++                m_serialPads[port] = {};
++                if (m_host) m_host->setPadRumble(port, 0, 0, 0);
++            }
++        } else {
++            if (input.size() < 2) throw std::runtime_error("Truncated SIO2 pad command");
++            auto& pad = m_serialPads[port];
++            const uint8_t command = input[1];
++            const auto put = [&](size_t index, uint8_t value) { if (index < reply.size()) reply[index] = value; };
++            const auto argument = [&](size_t index) -> uint8_t { return index < input.size() ? input[index] : 0; };
++            put(1, pad.config ? 0xf3 : pad.mode);
++            put(2, 0x5a);
++            for (size_t i = 3; i < std::min<size_t>(reply.size(), 9); ++i) reply[i] = 0;
++            switch (command) {
++            case 0x40: put(5, 2); put(8, 0x5a); break;
++            case 0x41:
++                if (pad.mode != 0x41) { put(3, 0xff); put(4, 0xff); put(5, 3); put(8, 0x5a); }
++                break;
++            case 0x42: {
++                put(3, state[2]); put(4, state[3]);
++                const size_t dataLength = pad.mode == 0x79 ? 21 : pad.mode == 0x73 ? 9 : 5;
++                for (size_t i = 5; i < std::min(dataLength, reply.size()); ++i) reply[i] = state[i - 1];
++                for (size_t i = dataLength; i < reply.size(); ++i) reply[i] = 0xff;
++                uint8_t small = 0, large = 0;
++                for (size_t i = 0; i < pad.motors.size() && i + 3 < input.size(); ++i) {
++                    if (pad.motors[i] == 0) small = input[i + 3] & 1u;
++                    if (pad.motors[i] == 1) large = input[i + 3];
++                }
++                m_host->setPadRumble(port, 0, small, large);
++                break;
++            }
++            case 0x43: if (input.size() > 3) pad.config = input[3] != 0; break;
++            case 0x44:
++                if (!pad.config) throw std::runtime_error("SIO2 pad mode change outside configuration");
++                if (input.size() > 3) pad.mode = input[3] ? 0x73 : 0x41;
++                break;
++            case 0x45: put(3, 3); put(4, 2); put(5, pad.mode != 0x41); put(6, 2); put(7, 1); break;
++            case 0x46: put(5, 1); put(6, argument(3) ? 1 : 2); put(7, argument(3) ? 1 : 0); put(8, argument(3) ? 0x14 : 0xa); break;
++            case 0x47: put(5, 2); put(7, 1); break;
++            case 0x4c: put(6, argument(3) ? 7 : 4); break;
++            case 0x4d:
++                for (size_t i = 0; i < pad.motors.size(); ++i) {
++                    put(i + 3, pad.motors[i]);
++                    if (i + 3 < input.size()) pad.motors[i] = input[i + 3];
++                }
++                break;
++            case 0x4f:
++                if (input.size() >= 6) {
++                    const uint32_t mask = input[3] | (uint32_t(input[4]) << 8u) | (uint32_t(input[5]) << 16u);
++                    pad.mode = mask == 0x3ffffu ? 0x79 : mask == 0x3fu ? 0x73 : 0x41;
++                }
++                put(8, 0x5a);
++                break;
++            default: throw std::runtime_error("Unsupported SIO2 pad command " + std::to_string(command));
++            }
++        }
++        if (m_sio2BlockSize && reply.size() % m_sio2BlockSize)
++            reply.resize(reply.size() + m_sio2BlockSize - reply.size() % m_sio2BlockSize, 0);
++        if (reply.size() > RamSize - m_sio2Output.size()) throw std::runtime_error("SIO2 output FIFO limit exceeded");
++        m_sio2Output.insert(m_sio2Output.end(), reply.begin(), reply.end());
++        static const bool trace = [] { const auto* v = std::getenv("PS2N_DEVICE_TRACE"); return v && v[0] && v[0] != '0'; }();
++        if (trace && m_host && input[0] == 1u && input.size() > 1 && input[1] != 0x42)
++            m_host->log(LogLevel::Debug, "[SIO2] port=" + std::to_string(port) + " command=" +
++                std::to_string(input[1]) + " connected=" + std::to_string(connected) + " mode=" + std::to_string(m_serialPads[port].mode));
++    }
++
++    void IopMemory::startSio2Dma(uint32_t address, uint32_t value)
++    {
++        const bool receive = address == 0x1f801558u;
++        if (value != (receive ? 0x41000200u : 0x01000201u))
++            throw std::runtime_error("Unsupported SIO2 DMA mode");
++        const auto madr = readHardware32(address - 8u) & 0x1fffffu;
++        const auto bcr = readHardware32(address - 4u);
++        const uint32_t blockSize = (bcr & 0xffffu) * 4u;
++        const uint64_t size = uint64_t(blockSize) * (bcr >> 16u);
++        if ((madr & 3u) || size > RamSize - madr) throw std::runtime_error("SIO2 DMA exceeds physical IOP RAM");
++        if (receive) {
++            if (size > m_sio2Output.size()) throw std::runtime_error("SIO2 DMA output FIFO underflow");
++            for (uint64_t i = 0; i < size; ++i) {
++                m_ram[madr + i] = m_sio2Output.front();
++                m_sio2Output.pop_front();
++            }
++            markOwned(madr, static_cast<size_t>(size));
++        } else {
++            m_sio2BlockSize = blockSize;
++            for (uint64_t i = 0; i < size; ++i) {
++                if (m_sio2Command < m_sio2Commands.size() && ((m_sio2Commands[m_sio2Command] >> 8u) & 0x3ffu) > blockSize)
++                    throw std::runtime_error("SIO2 descriptor exceeds its DMA block");
++                writeSio2(m_ram[madr + i]);
++            }
++        }
++        m_hardware[address - 8u] = madr + static_cast<uint32_t>(size);
++        m_hardware[address] = value;
++        m_dmaStart = DmaStart{receive ? 0x2d : 0x2c, size / 16u};
++    }
++
++    bool IopMemory::completeSio2Dma(int irq)
++    {
++        if (irq == 0x2c || irq == 0x2d) {
++            m_hardware[irq == 0x2c ? 0x1f801548u : 0x1f801558u] &= ~kDmaStart;
++            const auto bit = irq == 0x2c ? 4u : 5u;
++            auto& dicr = m_hardware[0x1f801574u];
++            if (!(dicr & (1u << (16u + bit)))) return false;
++            dicr |= 1u << (24u + bit);
++            if (dicr & (1u << 23)) dicr |= 0x80000000u;
++        }
++        return true;
+     }
+ 
+     std::optional<IopMemory::DmaStart> IopMemory::takeDmaStart() noexcept
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -115,6 +115,7 @@
+               imports(memory),
+               loadcore(memory, imports)
+         {
++            memory.attachHost(&host);
+             reset();
+         }
+ 
+@@ -276,6 +277,53 @@
+             return disposition;
+         }
+ 
++        bool dispatchDmacmanImport(uint16_t ordinal, CpuState &cpu)
++        {
++            // Public DMACMAN ABI ordinals/register mapping: PS2SDK dmacman.h.
++            const auto channel = cpu.gpr[4], value = cpu.gpr[5];
++            const auto base = channel < 7 ? 0x1f801080u + channel * 16u : 0x1f801500u + (channel - 7u) * 16u;
++            cpu.gpr[2] = 0;
++            if (ordinal >= 4 && ordinal <= 9) {
++                if (channel > 12) return true;
++                const auto address = base + ((ordinal - 4u) / 2u) * 4u;
++                if (ordinal & 1u) cpu.gpr[2] = memory.read32(address);
++                else write32(address, value);
++                return true;
++            }
++            if (ordinal == 14 || ordinal == 15 || ordinal == 16 || ordinal == 17 ||
++                ordinal == 20 || ordinal == 21 || ordinal == 22 || ordinal == 23) {
++                const auto address = ordinal < 18 ? (ordinal < 16 ? 0x1f8010f0u : 0x1f801570u) :
++                    (ordinal < 22 ? 0x1f8010f4u : 0x1f801574u);
++                if (ordinal & 1u) cpu.gpr[2] = memory.read32(address);
++                else write32(address, channel);
++                return true;
++            }
++            if (ordinal == 28) {
++                if (channel > 12 || channel == 6) return true;
++                const auto direction = memory.read32(cpu.gpr[29] + 16u);
++                write32(base, value & 0xffffffu);
++                write32(base + 4, (cpu.gpr[6] & 0xffffu) | (cpu.gpr[7] << 16u));
++                write32(base + 8, 0x200u | (direction & 1u) | (direction == 0 ? 0x40000000u : 0u));
++                cpu.gpr[2] = 1;
++                return true;
++            }
++            if (ordinal == 32) {
++                if (channel > 12) return true;
++                write32(base + 8, memory.read32(base + 8) | 0x1000000u);
++                return true;
++            }
++            if (ordinal >= 33 && ordinal <= 35) {
++                if (channel > 12) return true;
++                const auto address = channel < 7 ? 0x1f8010f0u : 0x1f801570u;
++                const auto shift = (channel < 7 ? channel : channel - 7) * 4u;
++                const auto old = memory.read32(address);
++                write32(address, ordinal == 33 ? ((old & ~(7u << shift)) | ((value & 7u) << shift)) :
++                    ordinal == 34 ? (old | (8u << shift)) : (old & ~(8u << shift)));
++                return true;
++            }
++            return false;
++        }
++
+         ImportDisposition dispatchServiceImport(const IopImportCall &call, CpuState &cpu)
+         {
+             const uint32_t a0 = cpu.gpr[4];
+@@ -370,8 +418,7 @@
+                 return ImportDisposition::Handled;
+             if (iequals(call.library, "dmacman"))
+             {
+-                setV0(0);
+-                return ImportDisposition::Handled;
++                return dispatchDmacmanImport(call.ordinal, cpu) ? ImportDisposition::Handled : ImportDisposition::Missing;
+             }
+             if (iequals(call.library, "stdio") && stdio.dispatchImport(call.ordinal, cpu))
+                 return ImportDisposition::Handled;
+@@ -573,13 +620,19 @@
+                     ++it;
+                     continue;
+                 }
++                if (it->first == 17 && (memory.interruptControl() == 0 || !(memory.interruptMask() & (1u << 17)))) {
++                    ++it;
++                    continue;
++                }
+                 completed.push_back(it->first);
+                 it = pendingDmaInterrupts.erase(it);
+             }
+             try
+             {
+                 for (const int irq : completed)
+-                    (void)intrman.dispatchInterrupt(irq, *this);
++                {
++                    if (memory.completeSio2Dma(irq)) (void)intrman.dispatchInterrupt(irq, *this);
++                }
+             }
+             catch (...)
+             {
+--- a/ps2xRuntime/src/lib/ps2_iop_host.h
++++ b/ps2xRuntime/src/lib/ps2_iop_host.h
+@@ -45,6 +45,8 @@
+                                       uint8_t *rdram = nullptr);
+ 
+     ps2x::iop::IopSpu2Backend* spu2Backend() const override;
++    bool readPadState(int port, int slot, uint8_t* data, size_t size) override;
++    void setPadRumble(int port, int slot, uint8_t small, uint8_t large) override;
+     bool readGuest(uint32_t address, void *destination, size_t size) const override;
+     bool writeGuest(uint32_t address, const void *source, size_t size) override;
+     bool zeroGuest(uint32_t address, size_t size) override;
+--- a/ps2xRuntime/src/lib/ps2_iop_host.cpp
++++ b/ps2xRuntime/src/lib/ps2_iop_host.cpp
+@@ -7,6 +7,12 @@
+ 
+ 
+ #include "ps2_runtime.h"
++bool PS2IopHostAdapter::readPadState(int port, int slot, uint8_t* data, size_t size) {
++    return m_runtime.padBackend().readState(port, slot, data, size);
++}
++void PS2IopHostAdapter::setPadRumble(int port, int slot, uint8_t small, uint8_t large) {
++    m_runtime.padBackend().setRumble(port, slot, small, large);
++}
+ #include "ps2_stubs.h"
+ #include "Kernel/Stubs/SIF.h"
+ #include "runtime/ps2_memory.h"
+--- a/ps2xRuntime/src/lib/ps2_pad.cpp
++++ b/ps2xRuntime/src/lib/ps2_pad.cpp
+@@ -25,9 +25,9 @@
+     constexpr uint16_t PAD_L2 = 0x0100u;
+ }
+ 
+-bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t size)
++bool PSPadBackend::readState(int port, int slot, uint8_t *data, size_t size)
+ {
+-    if (!data || size < 32)
++    if (!data || size < 32 || port < 0 || port > 1 || slot != 0 || (port != 0 && !IsGamepadAvailable(port)))
+         return false;
+ 
+     std::memset(data, 0, 32);
+@@ -38,7 +38,7 @@
+     data[4] = data[5] = data[6] = data[7] = kPadStickCenter;
+ 
+     uint16_t btns = 0xFFFFu;
+-    constexpr int kGamepad = 0;
++    const int kGamepad = port;
+     const bool useGamepad = IsGamepadAvailable(kGamepad);
+     auto clearBit = [&btns](uint16_t mask)
+     { btns &= ~mask; };
+@@ -121,5 +121,14 @@
+ 
+     data[2] = static_cast<uint8_t>(btns & 0xFF);
+     data[3] = static_cast<uint8_t>(btns >> 8);
++    constexpr unsigned pressureBits[] = {5, 7, 4, 6, 12, 13, 14, 15, 10, 11, 8, 9};
++    for (unsigned i = 0; i < 12; ++i)
++        data[8 + i] = (btns & (1u << pressureBits[i])) ? 0 : 255;
+     return true;
+ }
++
++void PSPadBackend::setRumble(int port, int slot, uint8_t small, uint8_t large)
++{
++    if (port >= 0 && port < 2 && slot == 0 && IsGamepadAvailable(port))
++        SetGamepadVibration(port, large / 255.0f, small ? 1.0f : 0.0f, 0.1f);
++}
+--- a/ps2xRuntime/include/runtime/ps2_pad.h
++++ b/ps2xRuntime/include/runtime/ps2_pad.h
+@@ -11,6 +11,7 @@
+     ~PSPadBackend() = default;
+ 
+     bool readState(int port, int slot, uint8_t *data, size_t size);
++    void setRumble(int port, int slot, uint8_t small, uint8_t large);
+ };
+ 
+ #endif
+--- a/ps2xIOP/src/emulator/imports/iop_intrman.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_intrman.cpp
+@@ -45,6 +45,8 @@
+             m_enabled[static_cast<int>(a0)] = true;
+             if (a0 < 32u)
+                 m_memory.setInterruptMask(m_memory.interruptMask() | (1u << a0));
++            else if (a0 >= 0x28u && a0 <= 0x2du)
++                m_memory.write32(0x1f801574u, (m_memory.read32(0x1f801574u) & 0xffffffu) | (1u << 23u) | (1u << (16u + a0 - 0x28u)));
+             setV0(0u);
+             return true;
+         case 7: // DisableIntr
+@@ -52,6 +54,8 @@
+                 m_memory.write32(a1, a0);
+             if (a0 < 32u)
+                 m_memory.setInterruptMask(m_memory.interruptMask() & ~(1u << a0));
++            else if (a0 >= 0x28u && a0 <= 0x2du)
++                m_memory.write32(0x1f801574u, (m_memory.read32(0x1f801574u) & 0xffffffu) & ~(1u << (16u + a0 - 0x28u)));
+             m_enabled[static_cast<int>(a0)] = false;
+             setV0(0u);
+             return true;
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+@@ -310,6 +310,7 @@
+                 }
+                 else
+                 {
++                    if (runtime) return false; // host connection state is authoritative for both pad paths
+                     applyGamepadState(state);
+                     applyKeyboardState(state, portState.analogMode);
+                 }
+@@ -453,12 +454,20 @@
+     void scePadGetState(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         (void)rdram;
+-        (void)runtime;
++        bool connected = true;
++        {
++            std::lock_guard<std::mutex> overrideLock(g_padOverrideMutex);
++            if (runtime && !g_padOverrideEnabled) {
++                uint8_t data[32];
++                connected = runtime->padBackend().readState(static_cast<int>(getRegU32(ctx, 4)),
++                    static_cast<int>(getRegU32(ctx, 5)), data, sizeof data);
++            }
++        }
+         std::lock_guard<std::mutex> lock(g_padStateMutex);
+         PadPortState *portState = lookupPadPortStateLocked(static_cast<int>(getRegU32(ctx, 4)),
+                                                            static_cast<int>(getRegU32(ctx, 5)));
+         int32_t state = kPadStateDisconnected;
+-        if (portState && portState->open)
++        if (connected && portState && portState->open)
+         {
+             if (portState->transientState != 0u)
+             {

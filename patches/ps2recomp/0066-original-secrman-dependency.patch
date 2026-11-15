@@ -1,0 +1,170 @@
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -145,9 +145,10 @@
+             servicingDmaInterrupts = false;
+             servicingGuestCallbacks = false;
+             callDepth = 0u;
+-            secrMcCommandHandler = {};
+-            secrMcDevIdHandler = {};
+             checkKelfPathCallback = {};
++            secrCardBootCallback = {};
++            secrDiskBootCallback = {};
++            setLoadfileCallbacks = {};
+         }
+ 
+         uint8_t read8(uint32_t address) const
+@@ -382,21 +383,24 @@
+             }
+             if (iequals(call.library, "intrman") && intrman.dispatchImport(call.ordinal, cpu, *this))
+                 return ImportDisposition::Handled;
+-            if (iequals(call.library, "secrman"))
+-            {
+-                switch (call.ordinal)
+-                {
+-                case 4: // SecrSetMcCommandHandler
+-                    secrMcCommandHandler = {a0, cpu.gpr[28]};
+-                    setV0(0);
+-                    return ImportDisposition::Handled;
+-                case 5: // SecrSetMcDevIDHandler
+-                    secrMcDevIdHandler = {a0, cpu.gpr[28]};
+-                    setV0(0);
+-                    return ImportDisposition::Handled;
+-                default:
+-                    break;
+-                }
++            if (iequals(call.library, "secrman") && !imports.findTable("secrman", call.version))
++            {
++                const auto loaded = loadModule("rom0:SECRMAN", nullptr, 0);
++                if (loaded.moduleId < 0 || !imports.findTable("secrman", call.version))
++                    throw std::runtime_error("Original SECRMAN is unavailable or failed to register; prepare the selected console firmware");
++            }
++            if (iequals(call.library, "modload") && call.ordinal == 12u)
++            {
++                secrCardBootCallback = {a0, cpu.gpr[28]};
++                secrDiskBootCallback = {cpu.gpr[5], cpu.gpr[28]};
++                setLoadfileCallbacks = {cpu.gpr[6], cpu.gpr[28]};
++                return ImportDisposition::Handled;
++            }
++            if (iequals(call.library, "modload") && call.ordinal == 14u)
++            {
++                if (a0) memory.write32(a0, checkKelfPathCallback.function);
++                if (cpu.gpr[5]) memory.write32(cpu.gpr[5], setLoadfileCallbacks.function);
++                return ImportDisposition::Handled;
+             }
+             if (iequals(call.library, "modload") && call.ordinal == 13u)
+             {
+@@ -886,9 +890,10 @@
+         bool servicingDmaInterrupts = false;
+         bool servicingGuestCallbacks = false;
+         uint32_t callDepth = 0u;
+-        GuestCallback secrMcCommandHandler;
+-        GuestCallback secrMcDevIdHandler;
+         GuestCallback checkKelfPathCallback;
++        GuestCallback secrCardBootCallback;
++        GuestCallback secrDiskBootCallback;
++        GuestCallback setLoadfileCallbacks;
+     };
+ 
+     IopEmulator::IopEmulator(IopHost &host)
+--- a/ps2xRuntime/src/lib/ps2_iop_host.cpp
++++ b/ps2xRuntime/src/lib/ps2_iop_host.cpp
+@@ -106,6 +106,7 @@
+     for (auto &[handle, file] : m_hostFiles)
+     {
+         (void)handle;
++        if (file.virtualDescriptor >= 0) (void)m_runtime.vfs().close(file.virtualDescriptor);
+         if (file.stream)
+         {
+             std::fclose(file.stream);
+@@ -308,7 +309,7 @@
+ std::string PS2IopHostAdapter::translateGuestPath(std::string_view path) const
+ {
+     const auto parsed=ps2x::iop::parsePs2Path(path);
+-    if(parsed.device==ps2x::iop::Ps2PathDevice::MemoryCard0 || parsed.device==ps2x::iop::Ps2PathDevice::MemoryCard1)
++    if(parsed.device==ps2x::iop::Ps2PathDevice::MemoryCard0 || parsed.device==ps2x::iop::Ps2PathDevice::MemoryCard1 || parsed.device==ps2x::iop::Ps2PathDevice::Rom0)
+         return std::string(path);
+     const PS2Runtime::IoPaths &paths = PS2Runtime::getIoPaths();
+     const PS2VfsMounts mounts{paths.hostRoot, paths.cdRoot, paths.mcRoot};
+@@ -326,14 +327,16 @@
+     }
+ 
+     const auto parsed=ps2x::iop::parsePs2Path(path);
+-    if(parsed.device==ps2x::iop::Ps2PathDevice::MemoryCard0 || parsed.device==ps2x::iop::Ps2PathDevice::MemoryCard1) {
+-        const auto& root=PS2Runtime::getIoPaths().mcRoot; PS2VfsStat status{};
+-        const int port=parsed.device==ps2x::iop::Ps2PathDevice::MemoryCard0?0:1;
+-        if(!ps2_stubs::mcVfsStat(port,parsed.path,root,status) || status.directory) return 0;
+-        auto file=ps2_stubs::mcVfsOpen(port,parsed.path,PS2_FIO_O_RDONLY,root); if(!file) return 0;
++    if(parsed.device==ps2x::iop::Ps2PathDevice::MemoryCard0 || parsed.device==ps2x::iop::Ps2PathDevice::MemoryCard1 || parsed.device==ps2x::iop::Ps2PathDevice::Rom0) {
++        const auto& paths=PS2Runtime::getIoPaths();
++        const PS2VfsMounts mounts{paths.hostRoot,paths.cdRoot,paths.mcRoot};
++        PS2VfsStat status{};
++        if(!m_runtime.vfs().stat(path,mounts,m_runtime.romDevice(),status) || status.directory) return 0;
++        const auto descriptor=m_runtime.vfs().open(path,PS2_FIO_O_RDONLY,mounts,m_runtime.romDevice());
++        if(descriptor<0) return 0;
+         std::lock_guard<std::mutex> lock(m_hostFileMutex);
+         uint64_t handle=m_nextHostFileHandle++; if(!handle) handle=m_nextHostFileHandle++;
+-        HostFile entry; entry.size=status.size; entry.card=std::move(file);
++        HostFile entry; entry.size=status.size; entry.virtualDescriptor=descriptor;
+         m_hostFiles.emplace(handle,std::move(entry)); return handle;
+     }
+     const std::filesystem::path hostPath{std::string(path)};
+@@ -361,7 +364,7 @@
+     {
+         handle = m_nextHostFileHandle++;
+     }
+-    m_hostFiles.emplace(handle, HostFile{stream, {}, size});
++    m_hostFiles.emplace(handle, HostFile{stream, -1, size});
+     return handle;
+ }
+ 
+@@ -370,7 +373,7 @@
+     size = 0u;
+     std::lock_guard<std::mutex> lock(m_hostFileMutex);
+     const auto it = m_hostFiles.find(handle);
+-    if (it == m_hostFiles.end() || (!it->second.stream && !it->second.card))
++    if (it == m_hostFiles.end() || (!it->second.stream && it->second.virtualDescriptor < 0))
+     {
+         return false;
+     }
+@@ -392,14 +395,14 @@
+ 
+     std::lock_guard<std::mutex> lock(m_hostFileMutex);
+     const auto it = m_hostFiles.find(handle);
+-    if (it == m_hostFiles.end() || (!it->second.stream && !it->second.card))
+-    {
+-        return false;
+-    }
+-
+-    if(it->second.card) {
+-        if(offset>INT64_MAX || it->second.card->seek(int64_t(offset),SEEK_SET)<0) return false;
+-        const auto count=it->second.card->read(destination,size);
++    if (it == m_hostFiles.end() || (!it->second.stream && it->second.virtualDescriptor < 0))
++    {
++        return false;
++    }
++
++    if(it->second.virtualDescriptor >= 0) {
++        if(offset>INT64_MAX || m_runtime.vfs().seek(it->second.virtualDescriptor,int64_t(offset),SEEK_SET)<0) return false;
++        const auto count=m_runtime.vfs().read(it->second.virtualDescriptor,destination,size);
+         if(count<0) return false; bytesRead=size_t(count); return true;
+     }
+ #if defined(_WIN32)
+@@ -435,6 +438,7 @@
+             return;
+         }
+         stream = it->second.stream;
++        if(it->second.virtualDescriptor>=0) (void)m_runtime.vfs().close(it->second.virtualDescriptor);
+         m_hostFiles.erase(it);
+     }
+     if (stream)
+--- a/ps2xRuntime/src/lib/ps2_iop_host.h
++++ b/ps2xRuntime/src/lib/ps2_iop_host.h
+@@ -110,7 +110,7 @@
+     struct HostFile
+     {
+         std::FILE *stream = nullptr;
+-        std::unique_ptr<IPS2OpenFile> card;
++        int32_t virtualDescriptor = -1;
+         uint64_t size = 0u;
+     };
+     mutable std::mutex m_hostFileMutex;

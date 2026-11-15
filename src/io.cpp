@@ -4,6 +4,7 @@
 #include <array>
 #include <cerrno>
 #include <cstring>
+#include <cstdlib>
 #include <fstream>
 #include <stdexcept>
 #include <system_error>
@@ -32,6 +33,32 @@ void make_directories(const std::filesystem::path& native) {
 std::string path_utf8(const std::filesystem::path& path) {
     const auto utf8 = path.u8string();
     return {utf8.begin(), utf8.end()};
+}
+std::filesystem::path console_state_root(const std::filesystem::path& fallback) {
+#ifdef _WIN32
+    if (const auto* root = _wgetenv(L"PS2N_CONSOLE_STATE_ROOT"); root && *root)
+        return std::filesystem::absolute(root).lexically_normal();
+    if (const auto* data = _wgetenv(L"PS2N_DATA_DIR"); data && *data)
+        return std::filesystem::absolute(std::filesystem::path(data) / "console").lexically_normal();
+#else
+    if (const auto* root = std::getenv("PS2N_CONSOLE_STATE_ROOT"); root && *root)
+        return std::filesystem::absolute(root).lexically_normal();
+    if (const auto* data = std::getenv("PS2N_DATA_DIR"); data && *data)
+        return std::filesystem::absolute(std::filesystem::path(data) / "console").lexically_normal();
+#endif
+    return std::filesystem::absolute(fallback).lexically_normal();
+}
+void check_memory_card_root_transition(const std::filesystem::path& legacy, const std::filesystem::path& selected) {
+    if (legacy.lexically_normal() == selected.lexically_normal()) return;
+    const auto old = native_io_path(legacy), next = native_io_path(selected);
+    std::error_code error;
+    if (!std::filesystem::exists(old, error) && !error) return;
+    if (error) fail("Cannot inspect existing memory card", old, error);
+    if (std::filesystem::equivalent(old, next, error) && !error) return;
+    error.clear();
+    if (std::filesystem::is_directory(old, error) && !error && std::filesystem::is_empty(old, error) && !error) return;
+    throw std::runtime_error("Existing per-title memory card at " + path_utf8(legacy) +
+        "; select its parent with PS2N_CONSOLE_STATE_ROOT or --state-root. Existing saves are not moved or merged.");
 }
 std::filesystem::path native_io_path(const std::filesystem::path& input) {
     const auto& text = input.native();

@@ -12,6 +12,8 @@ namespace ps2native {
 // Absolute extended Win32 path (drive or UNC); preserves already extended paths.
 // On other hosts the path is unchanged. Performs no filesystem access.
 [[nodiscard]] std::filesystem::path native_io_path(const std::filesystem::path& path);
+[[nodiscard]] std::filesystem::path console_state_root(const std::filesystem::path& fallback);
+void check_memory_card_root_transition(const std::filesystem::path& legacy, const std::filesystem::path& selected);
 void create_directories(const std::filesystem::path& path);
 [[nodiscard]] bool file_exists(const std::filesystem::path& path);
 [[nodiscard]] std::filesystem::file_time_type file_write_time(const std::filesystem::path& path);

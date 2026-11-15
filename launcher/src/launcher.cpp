@@ -12,6 +12,7 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QGuiApplication>
+#include <QProcessEnvironment>
 #include <QLocale>
 #include <QSysInfo>
 #include <QThread>
@@ -79,6 +80,9 @@ Launcher::Launcher(const QString& data_dir, QObject* parent)
       recent_(std::make_unique<EntryFilterModel>(game_model_.get())) {
     game_.setProcessChannelMode(QProcess::MergedChannels);
     game_.setStandardOutputFile(QDir(data_dir).filePath(QStringLiteral("ps2n.log")));
+    auto environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("PS2N_DATA_DIR"), data_dir_);
+    game_.setProcessEnvironment(environment);
     connect(&game_, &QProcess::stateChanged, this, &Launcher::gameRunningChanged);
     connect(&game_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
         if (status == QProcess::NormalExit && code == 0)
@@ -707,7 +711,14 @@ bool Launcher::launchGame(const QString& id, bool prepare_only) {
     if (!gameToolAvailable()) return fail(tr("ps2n was not found next to the launcher: %1").arg(gameTool()));
     // ps2n prepares (PS2Recomp analysis, recompilation, build) and runs the game in its own window.
     game_title_ = qstr(game->title);
-    game_.start(gameTool(), {prepare_only ? QStringLiteral("prepare") : QStringLiteral("play"), qpath(game->path)});
+    QStringList arguments{prepare_only ? QStringLiteral("prepare") : QStringLiteral("play"), qpath(game->path)};
+    if (const auto* bios = library_.find(settings_.active_bios)) {
+        if (bios->kind != ContentKind::Bios || bios->status != ProbeStatus::Valid ||
+            bios->console_profile.empty() || bios->nvm_path.empty() || bios->nvm_status != ProbeStatus::Valid)
+            return fail(tr("Select a valid BIOS, console profile and matching NVM."));
+        arguments << QStringLiteral("--bios") << qpath(bios->path) << qstr(bios->console_profile) << qpath(bios->nvm_path);
+    }
+    game_.start(gameTool(), arguments);
     emit notify(QStringLiteral("info"), game_title_,
                 prepare_only ? tr("Preparing with PS2Recomp. The first time takes several minutes.")
                              : tr("Starting. The first time PS2Recomp prepares the game, which takes several minutes."));

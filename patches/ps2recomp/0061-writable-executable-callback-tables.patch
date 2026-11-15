@@ -1,0 +1,37 @@
+--- a/ps2xRecomp/src/lib/elf_parser.cpp
++++ b/ps2xRecomp/src/lib/elf_parser.cpp
+@@ -499,6 +499,7 @@
+ 
+     bool HasReachableReturnByControlFlow(const ps2recomp::Section &section,
+                                          uint32_t startOffset);
++    bool IsControlTransfer(uint32_t raw);
+ 
+     bool LooksLikeCallableEntry(const std::vector<ps2recomp::Section> &sections,
+                                 uint32_t address,
+@@ -518,6 +519,14 @@
+         }
+ 
+         const uint32_t startOffset = address - section->address;
++        uint32_t predecessorRaw = 0;
++        // Heuristic callback entries must not split a branch from its delay slot.
++        if (startOffset >= MIPS_INSTRUCTION_SIZE &&
++            ReadSectionWord(*section, startOffset - MIPS_INSTRUCTION_SIZE, predecessorRaw) &&
++            IsControlTransfer(predecessorRaw))
++        {
++            return false;
++        }
+         constexpr uint32_t kStandardProbeWords = 8;
+         // Retail initializer tables sometimes point at functions that materialize
+         // a sizeable block of constants before allocating their stack frame.
+@@ -1419,7 +1428,10 @@
+ 
+         for (const auto &section : sections)
+         {
+-            if (!section.isData || section.isCode || section.isBSS ||
++            // Some retail linker scripts flag .data executable (W|A|X); its
++            // pointer tables are still the only reference to callback code.
++            const bool writableCode = section.isCode && !section.isReadOnly;
++            if (!(section.isData || writableCode) || (section.isCode && !writableCode) || section.isBSS ||
+                 !section.data || section.size < MIPS_INSTRUCTION_SIZE)
+             {
+                 continue;

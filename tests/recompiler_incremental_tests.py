@@ -6,9 +6,9 @@ import sys
 import tempfile
 
 
-def elf(words=(0x03e00008, 0)):
+def elf(words=(0x03e00008, 0), table_flags=None):
     strings = b'\0_start\0'
-    names = b'\0.text\0.symtab\0.strtab\0.shstrtab\0'
+    names = b'\0.text\0.symtab\0.strtab\0.shstrtab\0.data\0'
     data = bytearray(0x100)
     code_size = len(words) * 4
     data += struct.pack(f'<{len(words)}I', *words)
@@ -19,18 +19,23 @@ def elf(words=(0x03e00008, 0)):
     shstrtab = len(data)
     data += names
     data += bytes(-len(data) % 4)
+    table = len(data)
+    if table_flags is not None:
+        data += struct.pack('<5I', 0x100020, 0x100040, 0x100061, 0x200000, 0x100064)
     sections = len(data)
     data += bytes(40)
     for section in (
         (1, 1, 6, 0x100000, 0x100, code_size, 0, 0, 16, 0),
-        (7, 2, 0, 0, symbols, 32, 3, 1, 4, 16),
+        (7, 2 if table_flags is None else 1, 0, 0, symbols, 32, 3, 1, 4, 16),
         (15, 3, 0, 0, strtab, len(strings), 0, 0, 1, 0),
         (23, 3, 0, 0, shstrtab, len(names), 0, 0, 1, 0),
     ):
         data += struct.pack('<10I', *section)
+    if table_flags is not None:
+        data += struct.pack('<10I', 33, 1, table_flags, 0x200000, table, 20, 0, 0, 4, 0)
     ident = b'\x7fELF\x01\x01\x01' + bytes(9)
     struct.pack_into('<16sHHIIIIIHHHHHH', data, 0, ident, 2, 8, 1, 0x100000,
-                     52, sections, 0x20924001, 52, 32, 1, 40, 5, 4)
+                     52, sections, 0x20924001, 52, 32, 1, 40, 5 + (table_flags is not None), 4)
     struct.pack_into('<8I', data, 52, 1, 0x100, 0x100000, 0x100000, code_size, code_size, 5, 16)
     return data
 
@@ -81,4 +86,19 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2] if len(sys.argv) > 2 else None)
     code = b'\n'.join(value[0] for name, value in count.items() if name.endswith('.cpp'))
     assert b'runtime->readCop0Count()' in code
     assert b'runtime->writeCop0Count(GPR_U32(ctx, 4))' in code
+    # Executable .data still contains callback tables on retail linker scripts.
+    # Keep the same callable-shape and alignment checks used for ordinary data.
+    words = [0x03e00008, 0] + [0] * 30
+    for offset in (8, 16, 24):
+        words[offset:offset + 4] = [0x27bdfff0, 0xffbf0000, 0x03e00008, 0x27bd0010]
+    words[24:28] = [0x0c040000, 0x27bdfff0, 0x03e00008, 0x27bd0010]
+    for flags in (3, 7, 6):  # W|A, W|A|X, and read-only A|X
+        (root / 'fixture.elf').write_bytes(elf(words, flags))
+        callbacks = run('sceIpuInit')
+        registration = callbacks['register_functions.cpp'][0]
+        for address in (b'0x100020', b'0x100040'):
+            assert (address in registration) == (flags != 6), (flags, registration.decode())
+        assert b'0x100060' not in registration, 'Unaligned data became a callback'
+        assert b'0x100064' not in registration, 'A callback split a call from its delay slot'
+        assert b'0x200000' not in registration, 'Table data became callable code'
 print('Recompiler incremental regression passed')

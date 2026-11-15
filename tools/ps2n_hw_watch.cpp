@@ -7,12 +7,15 @@
 #include <cstring>
 #include <utility>
 #include <vector>
+class PS2Runtime;
 
 #ifdef _WIN32
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <tlhelp32.h>
+#include "ps2_runtime.h"
+#include "runtime/ee_scheduler.h"
 
 #include <algorithm>
 #include <atomic>
@@ -23,6 +26,7 @@ std::vector<std::pair<uintptr_t, uint32_t>> g_functions; // host entry -> guest 
 uintptr_t g_watch = 0;
 uint32_t g_guest = 0;
 std::atomic<int> g_hits{0};
+PS2Runtime* g_runtime = nullptr;
 
 uint32_t guest_function(uintptr_t host) {
     auto it = std::upper_bound(g_functions.begin(), g_functions.end(), std::make_pair(host, UINT32_MAX));
@@ -33,12 +37,20 @@ LONG CALLBACK on_exception(EXCEPTION_POINTERS* info) {
     if (info->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP || !(info->ContextRecord->Dr6 & 1u))
         return EXCEPTION_CONTINUE_SEARCH;
     info->ContextRecord->Dr6 = 0;
-    const int hit = ++g_hits;
     uint32_t value = 0;
     std::memcpy(&value, reinterpret_cast<const void*>(g_watch), sizeof value);
+    // Optional value filter keeps normal ring-buffer updates out of corruption logs.
+    static const uint32_t minimum = [] { const auto* v = std::getenv("PS2N_EE_HWWATCH_MIN"); return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 16)) : 0u; }();
+    if (value < minimum) return EXCEPTION_CONTINUE_EXECUTION;
+    const int hit = ++g_hits;
     void* frames[48];
     const USHORT count = CaptureStackBackTrace(0, 48, frames, nullptr);
     std::fprintf(stderr, "[EE-hwwatch] %x=%x hit=%d guest:", g_guest, value, hit);
+    if (g_runtime) if (const auto* ctx = g_runtime->eeScheduler().currentContext()) {
+        std::fprintf(stderr, " pc=%x hi=%llx lo=%llx", ctx->pc, static_cast<unsigned long long>(ctx->hi), static_cast<unsigned long long>(ctx->lo));
+        for (int reg : {2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 29, 31})
+            std::fprintf(stderr, " r%d=%x", reg, getRegU32(ctx, reg));
+    }
     uint32_t last = 0;
     for (USHORT i = 0; i < count; ++i) {
         const uint32_t guest = guest_function(reinterpret_cast<uintptr_t>(frames[i]));
@@ -98,11 +110,12 @@ void arm_all_threads() {
 }
 } // namespace
 
-void ps2n_hw_watch(uint8_t* rdram, uint32_t guest, std::vector<std::pair<uintptr_t, uint32_t>> functions) {
+void ps2n_hw_watch(uint8_t* rdram, uint32_t guest, std::vector<std::pair<uintptr_t, uint32_t>> functions, PS2Runtime* runtime) {
     std::sort(functions.begin(), functions.end());
     g_functions = std::move(functions);
     g_guest = guest & 0x1FFFFFCu;
     g_watch = reinterpret_cast<uintptr_t>(rdram + g_guest);
+    g_runtime = runtime;
     AddVectoredExceptionHandler(1, on_exception);
     std::thread([] {
         while (g_hits < 200) {
@@ -112,5 +125,5 @@ void ps2n_hw_watch(uint8_t* rdram, uint32_t guest, std::vector<std::pair<uintptr
     }).detach();
 }
 #else
-void ps2n_hw_watch(uint8_t*, uint32_t, std::vector<std::pair<uintptr_t, uint32_t>>) {}
+void ps2n_hw_watch(uint8_t*, uint32_t, std::vector<std::pair<uintptr_t, uint32_t>>, PS2Runtime*) {}
 #endif

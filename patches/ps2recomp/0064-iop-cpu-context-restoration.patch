@@ -1,0 +1,39 @@
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -509,6 +509,11 @@
+             memory.attachSpu2(host.spu2Backend(), &totalCycles);
+             CpuState *previous = activeCpu;
+             activeCpu = &cpu;
++            struct ActiveCpuGuard {
++                CpuState *&active;
++                CpuState *previous;
++                ~ActiveCpuGuard() { active = previous; }
++            } activeGuard{activeCpu, previous};
+             const uint64_t start = totalInstructions;
+             while (!cpu.stopped && !cpu.yielded && totalInstructions - start < instructionBudget)
+             {
+@@ -520,7 +525,6 @@
+                 if (!servicingGuestCallbacks && !pendingGuestCallbacks.empty())
+                     servicePendingGuestCallbacks();
+             }
+-            activeCpu = previous;
+             return static_cast<uint32_t>(totalInstructions - start);
+         }
+ 
+@@ -722,9 +726,15 @@
+                         ++totalCycles;
+                 }
+             }
++            catch (const std::exception &error)
++            {
++                // Runtime scheduling must never throw through EeScheduler::accountCycles().
++                if (lastError != error.what()) log(LogLevel::Error, error.what());
++                lastError = error.what();
++            }
+             catch (...)
+             {
+-                // Runtime scheduling must never throw through EeScheduler::accountCycles().
++                // Preserve the noexcept scheduler boundary for foreign host callbacks.
+             }
+         }
+ 
