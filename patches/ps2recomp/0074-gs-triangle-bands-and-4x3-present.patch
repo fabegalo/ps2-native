@@ -1,0 +1,137 @@
+--- a/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
+@@ -45,7 +45,8 @@ private:
+     void DrawTriangle(const GSPrimitiveBatch &batch);
+     void DrawLine(const GSPrimitiveBatch &batch);
+     void WritePixel(const GSDrawState &state, int x, int y, int z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog);
+-    uint32_t SampleTexture(const GSDrawState &state, float s, float t, float q, uint16_t u, uint16_t v);
++    uint32_t SampleTexture(GSMem::TexturePageCache &cache, const GSDrawState &state, float s, float t, float q, uint16_t u, uint16_t v);
++    bool CanDrawTextureInBands(const GSDrawState &state, int x1, int y0, int y1);
+     uint32_t LookupCLUT(const GSDrawState &state, uint8_t index, uint8_t cpsm, uint8_t csm, uint8_t csa, uint8_t sourcePsm);
+ 
+     void PerformLocalToLocalTransfer();
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -1237,7 +1237,7 @@ uint32_t GSCpuBackend::LookupCLUT(const GSDrawState &state,
+ #if defined(_MSC_VER)
+ __forceinline
+ #endif
+-uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t, float q, uint16_t u, uint16_t v)
++uint32_t GSCpuBackend::SampleTexture(GSMem::TexturePageCache &cache, const GSDrawState &state, float s, float t, float q, uint16_t u, uint16_t v)
+ {
+     const auto &ctx = state.context;
+     const auto &tex = ctx.tex0;
+@@ -1270,7 +1270,7 @@ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t,
+         sampleU = wrapTextureCoordinate(sampleU, texW, wrapU, minU, maxU);
+         sampleV = wrapTextureCoordinate(sampleV, texH, wrapV, minV, maxV);
+ 
+-        u32 out = ReadTextureVramUnlocked(tex.psm, tex.tbp0, tex.tbw, sampleU, sampleV);
++        u32 out = m_vram ? GSMem::ReadTexture(cache, m_vram, tex.psm, tex.tbp0, tex.tbw, sampleU, sampleV) : 0u;
+ 
+         switch (tex.psm)
+         {
+@@ -1341,6 +1341,26 @@ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t,
+            (static_cast<uint32_t>(a) << 24);
+ }
+ 
++// Bands match the sequential draw only while the cached texture page still
++// equals VRAM; each band then starts from that same cache. Region
++// clamp/repeat can address up to texel 1023 on either axis.
++bool GSCpuBackend::CanDrawTextureInBands(const GSDrawState &state, int x1, int y0, int y1)
++{
++    const auto &tex = state.context.tex0;
++    const uint64_t clamp = state.context.clamp;
++    const uint32_t texSpanW = (clamp & 0x2u) ? 1024u : static_cast<uint32_t>(state.textureWidth);
++    const uint32_t texSpanH = (clamp & 0x8u) ? 1024u : static_cast<uint32_t>(state.textureHeight);
++    const VramSpan texture = vramSpan(tex.tbp0, tex.psm, tex.tbw, texSpanW, texSpanH);
++    bool bands = m_vram && canDrawInBands(state, x1, y0, y1, &texture);
++    for (uint64_t page = texture.begin & ~uint64_t(8191u); bands && page < texture.end; page += 8192u)
++    {
++        GSMem::TexturePageCache probe = m_texturePageCache;
++        const uint32_t address = static_cast<uint32_t>(page);
++        bands = std::memcmp(probe.Resolve(m_vram, address), m_vram + address, 8192u) == 0;
++    }
++    return bands;
++}
++
+ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
+ {
+     const GSDrawState &state = batch.state;
+@@ -1533,20 +1553,7 @@ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
+         }
+         };
+ 
+-        // Bands match the sequential draw only while the cached texture page
+-        // still equals VRAM; each band then starts from that same cache.
+-        // Region clamp/repeat can address up to texel 1023 on either axis.
+-        const uint32_t texSpanW = (clamp & 0x2u) ? 1024u : static_cast<uint32_t>(texW);
+-        const uint32_t texSpanH = (clamp & 0x8u) ? 1024u : static_cast<uint32_t>(texH);
+-        const VramSpan texture = vramSpan(tex.tbp0, tex.psm, tex.tbw, texSpanW, texSpanH);
+-        bool bands = m_vram && canDrawInBands(state, drawX1, drawY0, drawY1, &texture);
+-        for (uint64_t page = texture.begin & ~uint64_t(8191u); bands && page < texture.end; page += 8192u)
+-        {
+-            GSMem::TexturePageCache probe = m_texturePageCache;
+-            const uint32_t address = static_cast<uint32_t>(page);
+-            bands = std::memcmp(probe.Resolve(m_vram, address), m_vram + address, 8192u) == 0;
+-        }
+-        if (!bands)
++        if (!CanDrawTextureInBands(state, drawX1, drawY0, drawY1))
+         {
+             drawRows(drawY0, drawY1, m_texturePageCache);
+             return;
+@@ -1609,7 +1616,9 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
+     const float invAbsDenom = 1.0f / std::fabs(denom);
+     constexpr float kEdgeEpsilon = 1.0e-4f;
+ 
+-    for (int y = minY; y <= maxY; ++y)
++    auto drawRows = [&](int firstRow, int lastRow, GSMem::TexturePageCache &cache)
++    {
++    for (int y = firstRow; y <= lastRow; ++y)
+     {
+         float py = static_cast<float>(y) + 0.5f;
+         for (int x = minX; x <= maxX; ++x)
+@@ -1665,7 +1674,7 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
+                     iv = 0;
+                 }
+ 
+-                uint32_t texel = SampleTexture(state, is, it, iq, iu, iv);
++                uint32_t texel = SampleTexture(cache, state, is, it, iq, iu, iv);
+ 
+                 uint8_t tr = static_cast<uint8_t>(texel & 0xFF);
+                 uint8_t tg = static_cast<uint8_t>((texel >> 8) & 0xFF);
+@@ -1689,6 +1698,19 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
+             WritePixel(state, x, y, static_cast<u32>(z + 0.5), r, g, b, a, fog);
+         }
+     }
++    };
++
++    const bool bands = state.prim.tme ? CanDrawTextureInBands(state, maxX, minY, maxY)
++                                      : canDrawInBands(state, maxX, minY, maxY, nullptr);
++    if (!bands)
++    {
++        drawRows(minY, maxY, m_texturePageCache);
++        return;
++    }
++    std::vector<GSMem::TexturePageCache> caches;
++    drawInBands(minY, maxY, [&](unsigned count) { caches.assign(count, m_texturePageCache); },
++                [&](unsigned band, int first, int last) { drawRows(first, last, caches[band]); });
++    m_texturePageCache = caches.back(); // what the last rows leave, as in a sequential draw
+ }
+ 
+ void GSCpuBackend::DrawLine(const GSPrimitiveBatch &batch)
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2535,9 +2535,10 @@ void PS2Runtime::run()
+         const float srcHeight = static_cast<float>(std::max<uint32_t>(1u, presentHeight));
+         const float screenWidth = static_cast<float>(GetScreenWidth());
+         const float screenHeight = static_cast<float>(GetScreenHeight());
+-        const float scale = std::min(screenWidth / srcWidth, screenHeight / srcHeight);
+-        const float dstWidth = srcWidth * scale;
+-        const float dstHeight = srcHeight * scale;
++        // The CRTC scans any framebuffer width across the whole 4:3 picture
++        // (MAGH stretches 512-pixel frames), so pixels are not square.
++        const float dstHeight = std::min(screenHeight, screenWidth * 3.0f / 4.0f);
++        const float dstWidth = dstHeight * 4.0f / 3.0f;
+         const Rectangle srcRect{0.0f, 0.0f, srcWidth, srcHeight};
+         const Rectangle dstRect{
+             (screenWidth - dstWidth) * 0.5f,

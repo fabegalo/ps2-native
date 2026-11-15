@@ -1,0 +1,24 @@
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_lower.cpp
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_lower.cpp
+@@ -283,8 +283,10 @@
+     }
+     case 0x24: // JR
+     {
+-        uint8_t is = VIS(instr);
+-        uint32_t target = ((uint32_t)(uint16_t)readBranchVi(is) * 8u) & pcMask;
++        // Only conditional branches read the pre-write VI value; JR/JALR
++        // use the current one (PCSX2 mVUanalyzeJump has no VI delay).
++        uint8_t is = VIS(instr);
++        uint32_t target = ((uint32_t)(uint16_t)(is ? m_state.vi[is] : 0) * 8u) & pcMask;
+         m_state.branchPending = true;
+         m_state.branchTarget = target;
+         m_state.branchDelay = 1;
+@@ -294,7 +296,7 @@
+     {
+         uint8_t it = VIT(instr);
+         uint8_t is = VIS(instr);
+-        uint32_t target = ((uint32_t)(uint16_t)readBranchVi(is) * 8u) & pcMask;
++        uint32_t target = ((uint32_t)(uint16_t)(is ? m_state.vi[is] : 0) * 8u) & pcMask;
+         if (it != 0)
+             m_state.vi[it] = (int32_t)((m_state.pc + 16) / 8);
+         m_state.branchPending = true;

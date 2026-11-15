@@ -1030,6 +1030,120 @@
           "ps2xIOP/src/emulator/iop_emulator.cpp": "b725d89db849c5f5234886d1e515bea87b27bb1993b7b1965a8dc9078aa14be4"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0069-vu-jump-current-vi.patch",
+        "sha256": "d9c5e951fd5e45f52867b8b3ae80cda932298324a14790b4240fad055a6be104",
+        "base_files": {
+          "ps2xRuntime/src/lib/vu/ps2_vu1_lower.cpp": "2c73d6da443e64dc68f76215285fcb0f17cbcad2765dac3d3752f1ea6738ad93"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/vu/ps2_vu1_lower.cpp": "ec96b1247769e90221316381b0b9b12a954775fcc125e32b14be0e5dc03989df"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0070-vu-efu-and-vif-unpack.patch",
+        "sha256": "eaf69f76e34c26683c43b50737a5eb6a926838935f9eb011622086f72cad38cb",
+        "base_files": {
+          "ps2xRuntime/src/lib/vu/ps2_vu1_lower.cpp": "ec96b1247769e90221316381b0b9b12a954775fcc125e32b14be0e5dc03989df",
+          "ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp": "81f16c0d97f041bab0654fdc8930b60fb2c2a269153f83f2d3a56ed75b2e91c1",
+          "ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp": "406cabd9d23ca6b5e60e98fc50480191c524967794bcd03bfbc35dffcbf5f3fa"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/vu/ps2_vu1_lower.cpp": "293c3e4e5b185d8ecbc7f02ed17a60c0e6e32692f09bd44afaa18ff1f806532a",
+          "ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp": "d4c8f7c024bbce72bc02bdd957620a4c041b052fd518092f2048a507959f7f0b",
+          "ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp": "cc8a2243652a41f32fb7c45d3f091698773455a00ed3c105a0c64fd9928da76e"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0071-pcsx2-vu1-interpreter.patch",
+        "sha256": "7eb8340b0e5cae03f72a0e383cfa14333a6a626b8229e3e584f7de07014fbbc7",
+        "base_files": {
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "508e0908bb87c1b29cd3116f7b9f1aa35e46a635cfd7d37ab8581a9f8404136c",
+          "ps2xRuntime/CMakeLists.txt": "dc7841f858089018b9ffb7f12352f35a1c77833ec9cbb87bc50cde353bfb559d",
+          "ps2xRuntime/src/lib/vu_pcsx2/Common.h": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/GS.h": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/Gif_Unit.h": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/MTVU.h": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/R5900.h": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/VU.h": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/VU1microInterp.cpp": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/VUflags.cpp": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/VUflags.h": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/VUmicro.h": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/VUops.cpp": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/VUops.h": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/Vif.h": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.cpp": "",
+          "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.h": ""
+        },
+        "files": {
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "5a42b4468a6a8c6e116b4262f5c82b38333f94d96cd45e5f31f21bdcc9eedc2a",
+          "ps2xRuntime/CMakeLists.txt": "c52319d65f0ae0ea6f678359f85c307e6fe8131a3d5c0535c0fc06eefd2b886c",
+          "ps2xRuntime/src/lib/vu_pcsx2/Common.h": "9232f6462966767392a74a6b1003b3be7aa7bb36c59cc60c14d0c053065e1ad9",
+          "ps2xRuntime/src/lib/vu_pcsx2/GS.h": "3ac4f8e20d0e2c60b61b17530e649991374672bab0b9341f5895bab31767a376",
+          "ps2xRuntime/src/lib/vu_pcsx2/Gif_Unit.h": "a922069b34654bcb133fe859c18c5c548c0ef555ac73ea143773875f3a19469e",
+          "ps2xRuntime/src/lib/vu_pcsx2/MTVU.h": "b5bbe1b8618a7a247f00d58d5f0a82f32ad793085945be6f33af9e46d0766f9e",
+          "ps2xRuntime/src/lib/vu_pcsx2/R5900.h": "114f1d2700eb2f913a7f8bcc3a75e8d8d4c43b361405493d22d811228b1e2296",
+          "ps2xRuntime/src/lib/vu_pcsx2/VU.h": "c77e856f2ebe46a42cb3f1856afdec9f3662ca51fc7950454060b3ca4b2edea9",
+          "ps2xRuntime/src/lib/vu_pcsx2/VU1microInterp.cpp": "b98c5674cfc00c98743131224649c1fd01c4a3cc1223113e1281508c36d60d33",
+          "ps2xRuntime/src/lib/vu_pcsx2/VUflags.cpp": "76719abf41dc37f90f01843722a7a58639fae9caf303f815d33fc44141ab3595",
+          "ps2xRuntime/src/lib/vu_pcsx2/VUflags.h": "36b407f06b83964cd15111c9fdc6bad061c0d2842f3b59717b426eab7d62767b",
+          "ps2xRuntime/src/lib/vu_pcsx2/VUmicro.h": "bbb6facaeee29653c855f51dd066db6396d74576b7d272bc90d73f89a335b934",
+          "ps2xRuntime/src/lib/vu_pcsx2/VUops.cpp": "9c325a0e94afabb7719edc6408600537db8c43453788905eb412db1c452c3a1f",
+          "ps2xRuntime/src/lib/vu_pcsx2/VUops.h": "624f9b0ec81847f1941826dd05400685fe82ded288de8dd6789122bd8fd07fb1",
+          "ps2xRuntime/src/lib/vu_pcsx2/Vif.h": "af8e9bae4f7e27b8135d9338842ef97387e2d6c69a0bf807d03ccd93fac98a5d",
+          "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.cpp": "5a0278a54b8ae91d839d0093ccddbbc6b27e5a3b5c98cceb2215461a0f10391f",
+          "ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.h": "873e42b5f470bdec2a6f987d093378b2dfcd3c478cf84757c24a178ee583d203"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0072-ee-fpu-vu0-mmi-semantics.patch",
+        "sha256": "2525b86c1db1a41c27345b6a6feb39bc5e1c38e8f03c46c96c5f21c350d8336f",
+        "base_files": {
+          "ps2xRecomp/src/lib/fpu_translator.cpp": "451512275b254d0c10779b76806301841549ac1f982bd44b94847282d56ab454",
+          "ps2xRecomp/src/lib/vu_translation_helpers.cpp": "0cdac73435c609bb5be1757c73350aeb40d172e4b98e5c8339723dc7fa5a5141",
+          "ps2xRecomp/src/lib/mmi_translation_helpers.cpp": "1402bdb9f81923a8c91c7fa790399a2563ebc5f7cd0c899b7c29cb7c6bafc5ee",
+          "ps2xRuntime/include/ps2_runtime_macros.h": "41c2580d9884a637ba49d58a7da591e5c2450f6c8f6714d991702f3855fd7081",
+          "ps2xRecomp/src/lib/control_flow_emitter.cpp": "5acab2f8e071c253af20e0cc2f04293ebaa5fb45f08b9896c732f1a436d209df"
+        },
+        "files": {
+          "ps2xRecomp/src/lib/fpu_translator.cpp": "67fce3810db1cd35f29991905210451e6dfaf0595e148004559cab848c4d18e2",
+          "ps2xRecomp/src/lib/vu_translation_helpers.cpp": "f9dc6204089b5447d6b9c21e275a5bcbfc65ca677c6783903ecc20604b47e640",
+          "ps2xRecomp/src/lib/mmi_translation_helpers.cpp": "88b00fc98048408d82da821146745037dd688eb18ca31971d3cac015c4bbadfb",
+          "ps2xRuntime/include/ps2_runtime_macros.h": "2a8f2a7a682a039a0cfece9e1029e868f2af07751a09d44be6f1825b2d688bb2",
+          "ps2xRecomp/src/lib/control_flow_emitter.cpp": "4c45e8d75b024fb369ef6538b2826eedbc122473a04bcd55f95aab63288ada6b"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0073-ee-fp-control-chop.patch",
+        "sha256": "14b893cb615533122505a4248b75f36220a021f1c9e0b9948a4da72ad3d7baea",
+        "base_files": {
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "3feed74f4310519966d9a4e8004d8475eb0463f51836b7e0b925e80b5ef0e1bd"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/Kernel/EeScheduler.cpp": "c2b728b3ad10a0a7097d9382c7958ac82fafe0850067a0db8afb464b6b11c10e"
+        },
+        "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0074-gs-triangle-bands-and-4x3-present.patch",
+        "sha256": "7532e2e43ca75faabf1d19021d986dbf231bd720aa0a54958d2090c10336eb76",
+        "base_files": {
+          "ps2xRuntime/include/runtime/gs/gs_cpu_backend.h": "2de22e260b71f3da317310b38a7ba40a4b3e5e2bab11a6cbc50662d9d9ef85f8",
+          "ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp": "d528768c4d9acecf9228140c795f8a066dc011a9e522637421f43749ff1a7687",
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "5a42b4468a6a8c6e116b4262f5c82b38333f94d96cd45e5f31f21bdcc9eedc2a"
+        },
+        "files": {
+          "ps2xRuntime/include/runtime/gs/gs_cpu_backend.h": "f5523adc04f3bd26e99a9032cd7c1833724d8baebfe4e251791c296d32f8b0d2",
+          "ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp": "03aa78e62ec6560c5cf139fe2943e0ab90568e4ac213a728a125260a78a33282",
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "ec00683cec30e70191ca8eb25c2c1e1d96fc42cde48533675de11d0f0fab3b6e"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },

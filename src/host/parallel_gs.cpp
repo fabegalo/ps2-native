@@ -279,27 +279,47 @@ void ps2n_trace_scanout(const PresentationFrame& frame, const GSPresentationRequ
     static unsigned shotCount = 0;
     static const char* from = std::getenv("PS2N_GS_SHOT_FROM"); // first guest vsync to capture
     static uint64_t nextShot = from ? std::strtoull(from, nullptr, 10) : 0;
+    static const bool trace = std::getenv("PS2N_GS_COMPARE") != nullptr;
+    const bool capture = shots && frame && request.vsyncTick >= nextShot && shotCount < 12;
+    if (!frame || (!trace && !capture)) return;
+    size_t stride = static_cast<size_t>(frame.width) * 4u;
+    if (frame.pixels.size() != stride * frame.height) {
+        // GSCpuBackend::CopyFrameToHostRgba uses a fixed 640x512 host allocation.
+        if (frame.pixels.size() != 640u * 512u * 4u || frame.width > 640 || frame.height > 512)
+            throw std::runtime_error("Unknown GS capture row layout");
+        stride = 640u * 4u;
+    }
     const auto anyLit = [&] {
-        for (size_t i = 0; i + 3 < frame.pixels.size(); i += 4)
-            if (frame.pixels[i] | frame.pixels[i + 1] | frame.pixels[i + 2]) return true;
+        for (uint32_t y = 0; y < frame.height; ++y)
+            for (uint32_t x = 0; x < frame.width; ++x) {
+                const auto i = y * stride + x * 4u;
+                if (frame.pixels[i] | frame.pixels[i + 1] | frame.pixels[i + 2]) return true;
+            }
         return false;
     };
-    if (shots && frame && request.vsyncTick >= nextShot && shotCount < 12 && anyLit()) {
+    if (capture && anyLit()) {
         nextShot = request.vsyncTick + 90;
         const auto path = std::string(shots) + "/shot-" + std::to_string(request.vsyncTick) + ".ppm";
         if (auto* file = std::fopen(path.c_str(), "wb")) {
-            const size_t rows = frame.width ? frame.pixels.size() / 4 / frame.width : 0;
-            std::fprintf(file, "P6\n%u %zu\n255\n", frame.width, rows);
-            for (size_t i = 0; i + 3 < frame.pixels.size(); i += 4) std::fwrite(&frame.pixels[i], 1, 3, file);
-            std::fclose(file);
+            std::fprintf(file, "P6\n%u %u\n255\n", frame.width, frame.height);
+            std::vector<uint8_t> row(static_cast<size_t>(frame.width) * 3u);
+            for (uint32_t y = 0; y < frame.height; ++y) {
+                for (uint32_t x = 0; x < frame.width; ++x)
+                    std::memcpy(row.data() + x * 3u, frame.pixels.data() + y * stride + x * 4u, 3);
+                if (std::fwrite(row.data(), 1, row.size(), file) != row.size()) {
+                    std::fclose(file);
+                    throw std::runtime_error("GS capture write failed");
+                }
+            }
+            if (std::fclose(file) != 0) throw std::runtime_error("GS capture close failed");
             ++shotCount;
         }
     }
-    static const bool trace = std::getenv("PS2N_GS_COMPARE") != nullptr;
     if (!trace) return;
     uint64_t hash = 14695981039346656037ull;
     size_t lit = 0;
-    for (size_t i = 0; i + 3 < frame.pixels.size(); i += 4) {
+    for (uint32_t y = 0; y < frame.height; ++y) for (uint32_t x = 0; x < frame.width; ++x) {
+        const auto i = y * stride + x * 4u;
         for (unsigned c = 0; c < 3; ++c) { hash ^= frame.pixels[i + c]; hash *= 1099511628211ull; }
         lit += (frame.pixels[i] | frame.pixels[i + 1] | frame.pixels[i + 2]) != 0;
     }

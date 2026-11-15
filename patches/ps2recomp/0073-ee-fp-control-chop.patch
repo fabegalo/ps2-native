@@ -1,0 +1,21 @@
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -7,6 +7,7 @@
+ 
+ #include <algorithm>
+ #include <cassert>
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ #include <stdexcept>
+@@ -404,6 +405,10 @@
+ void EeScheduler::run()
+ {
+     assertExecutor();
++    // EE FPU and VU0 macro arithmetic round toward zero with denormals as zero, like PCSX2's default
++    // FPU control register (ChopZero, DAZ, FTZ). PS2N_EE_CHOP=0 keeps the host default.
++    if (const char *chop = std::getenv("PS2N_EE_CHOP"); !chop || chop[0] != '0')
++        _mm_setcsr((_mm_getcsr() & ~0x6000u) | 0x6000u | 0x8040u);
+     m_running.store(true, std::memory_order_release);
+ 
+     while (!m_stopRequested.load(std::memory_order_acquire))
