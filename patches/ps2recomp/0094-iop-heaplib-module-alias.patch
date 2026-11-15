@@ -1,0 +1,10 @@
+--- a/ps2xIOP/src/iop_module_manager.cpp
++++ b/ps2xIOP/src/iop_module_manager.cpp
+@@ -22,6 +22,7 @@
+             "modload",
+             "stdio",
+             "sysclib",
++            "heaplib",
+             "thbase",
+             "thevent",
+             "thsemap",

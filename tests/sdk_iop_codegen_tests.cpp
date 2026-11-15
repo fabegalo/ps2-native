@@ -100,6 +100,18 @@ int main() {
         }
         // Hardware-contract checks independent of the differential reference.
         IopCpuState cpu;
+        cpu.pc = 0x10000;
+        reference.write32(0x10000, 0x40027800); // mfc0 v0,PRId
+        reference.write32(0x10004, 0);
+        require(core.executeInstruction(cpu) && core.executeInstruction(cpu) && cpu.gpr[2] == 0x1f,
+                "IOP PRId does not identify the original R3000A");
+        cpu.pc = 0x10000; cpu.gpr[2] = 0;
+        reference.write32(0x10000, 0x40827800); // mtc0 v0,PRId (read-only)
+        reference.write32(0x10004, 0x40027800);
+        reference.write32(0x10008, 0);
+        require(core.executeInstruction(cpu) && core.executeInstruction(cpu) && core.executeInstruction(cpu) && cpu.gpr[2] == 0x1f,
+                "Guest code overwrote the read-only IOP processor identity");
+        cpu = {};
         cpu.pc = 0x10000; cpu.gpr[1] = 0x12340; cpu.gpr[31] = 0xabcdef;
         reference.write32(cpu.pc, (1u << 21) | 9u); // jalr zero,r1
         require(core.executeInstruction(cpu) && cpu.gpr[31] == 0xabcdef && cpu.branchTarget == 0x12340,

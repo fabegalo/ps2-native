@@ -1,0 +1,46 @@
+--- a/ps2xIOP/src/emulator/core/iop_cpu.cpp
++++ b/ps2xIOP/src/emulator/core/iop_cpu.cpp
+@@ -317,9 +317,9 @@
+         {
+             const uint32_t copRs = rs;
+             if (copRs == 0x00)
+-                load(rt, cpu.cop0[rd]);
++                load(rt, rd == 15 ? 0x1fu : cpu.cop0[rd]); // Read-only IOP R3000A PRId (PCSX2 R3000A.cpp).
+             else if (copRs == 0x04)
+-                cpu.cop0[rd] = cpu.gpr[rt];
++                { if (rd != 15) cpu.cop0[rd] = cpu.gpr[rt]; }
+             else if (copRs == 0x10 && funct == 0x10)
+             {
+                 const uint32_t status = cpu.cop0[12];
+--- a/ps2xIOP/tools/iop_aot.py
++++ b/ps2xIOP/tools/iop_aot.py
+@@ -62,8 +62,8 @@
+                  12: f'{r} & {imm}', 13: f'{r} | {imm}', 14: f'{r} ^ {imm}', 15: f'{imm} << 16'}[op]
+         return f'f.writeFrom({rt}, {value}, {rs});'
+     elif op == 16:
+-        if rs == 0: return f'f.load({rt}, cpu.cop0[{rd}]);'
+-        if rs == 4: return f'cpu.cop0[{rd}] = {t};'
++        if rs == 0: return f'f.load({rt}, 0x1fu);' if rd == 15 else f'f.load({rt}, cpu.cop0[{rd}]);'
++        if rs == 4: return '(void)cpu;' if rd == 15 else f'cpu.cop0[{rd}] = {t};'
+         if rs == 16 and fn == 16: return 'cpu.cop0[12] = (cpu.cop0[12] & ~0x0fu) | ((cpu.cop0[12] >> 2) & 0x0fu);'
+     elif op in (32, 33, 34, 35, 36, 37, 38, 40, 41, 42, 43, 46):
+         begin = f'const uint32_t address = {r} + uint32_t({simm});\n'
+--- a/ps2xIOP/src/iop_subsystem.cpp
++++ b/ps2xIOP/src/iop_subsystem.cpp
+@@ -272,9 +272,14 @@
+             m_impl->host.log(LogLevel::Info, "[IOP-BOOT] starting " + path + (hle ? " HLE" : " AOT"));
+             const auto result = hle ? m_impl->moduleManager.loadHle(path)
+                                    : m_impl->emulator.loadModule(path, nullptr, 0);
+-            if (result.moduleId <= 0 || (result.startResult != 0 && result.startResult != 2))
++            if (result.moduleId <= 0 || result.startResult < 0 || result.startResult > 2)
+                 throw std::runtime_error("[IOP-BOOT] bootstrap incomplete at " + path);
+-            if (!hle) m_impl->moduleManager.observePhysicalLoad(result.moduleId, path);
++            if (result.startResult == 1) {
++                // MODULE_NO_RESIDENT_END: the original initializer completed without staying loaded.
++                if (hle || !m_impl->emulator.stopModule(result.moduleId, nullptr))
++                    throw std::runtime_error("[IOP-BOOT] could not release non-resident module " + path);
++                m_impl->host.log(LogLevel::Info, "[IOP-BOOT] non-resident completion " + path);
++            } else if (!hle) m_impl->moduleManager.observePhysicalLoad(result.moduleId, path);
+             m_impl->rebuildRoutes();
+         }
+         // EESYNC must actually publish BOOTEND; a loaded-module count is not completion.

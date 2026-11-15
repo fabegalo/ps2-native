@@ -116,6 +116,10 @@ int main() {
         constexpr uint32_t sid = 0xA11CE055u;
         Host host;
         IopSubsystem iop(host);
+        const auto heaplib = iop.loadModule("rom0:HEAPLIB");
+        require(heaplib.moduleId > 0 && heaplib.startResult == 0 &&
+                iop.loadModule("rom0:HEAPLIB").moduleId == heaplib.moduleId,
+                "The existing heaplib HLE was not recognized or initialized more than once");
         auto image = rpcServer(sid, 0x12345678u);
         // Three instructions per iteration, beyond the former two-million cap.
         image.words(0x300u, {0x3C08000Bu, 0x2508FFFFu, 0x1500FFFEu, 0u,
