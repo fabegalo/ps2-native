@@ -1200,6 +1200,17 @@
           "ps2xRuntime/include/ps2_cg.h": "3f72e33c9b41dd73e28003ca4ffb36c3b9de998551a792e0bbc3df6c0fd18e44"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0079-vu1-pcsx2-default.patch",
+        "sha256": "ed67b058b25295688b119cb5e0bf2dd2d0a06f641c279b46990bb0cb4154df8b",
+        "base_files": {
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "915c42e274b747b8d5d7b112fb9a4165a865d548acb8e272f5258af7e7b51a73"
+        },
+        "files": {
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "5685b4335d3ec838e347c28fd8d827806f5422162dd5e06875beb91ba7d0e3a9"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },

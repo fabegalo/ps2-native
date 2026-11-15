@@ -1,0 +1,15 @@
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -17,10 +17,10 @@
+ 
+ namespace
+ {
+-    // PS2N_VU1_PCSX2=1 runs VU1 microprograms on PCSX2's interpreter (vu_pcsx2).
++    // VU1 microprograms run on PCSX2's interpreter (vu_pcsx2) unless PS2N_VU1_PCSX2=0.
+     bool usePcsx2Vu1()
+     {
+-        static const bool enabled = [] { const char *v = std::getenv("PS2N_VU1_PCSX2"); return v && v[0] == '1'; }();
++        static const bool enabled = [] { const char *v = std::getenv("PS2N_VU1_PCSX2"); return !v || v[0] != '0'; }();
+         return enabled;
+     }
+ }
