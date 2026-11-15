@@ -1,9 +1,118 @@
 #include "iop_compat_test_support.h"
+#include "emulator/services/iop_module_loader.h"
+#include "emulator/iop_emulator.h"
+#include "emulator/core/iop_memory.h"
 
 using namespace iop_test;
 
+static void boot_contract_test() {
+    Host host;
+    {
+        IopSubsystem clockProbe(host);
+        clockProbe.runEeCycles(7);
+        require(clockProbe.debugSnapshot().emulatorCycles == 0, "IOP advanced before a complete clock tick");
+        clockProbe.runEeCycles(1);
+        require(clockProbe.debugSnapshot().emulatorCycles == 1, "IOP clock deferred an EE-visible tick");
+    }
+    const auto configuration = [&](std::string text) { host.file.assign(text.begin(), text.end()); };
+    configuration("@800\nSYSMEM\nLOADCORE\nEXCEPMAN\n");
+    using ps2x::iop::detail::IopModuleLoader;
+    const auto direct = IopModuleLoader::readBootModules(host, {});
+    require(direct == std::vector<std::string>({"SYSMEM", "LOADCORE", "EXCEPMAN"}),
+        "Original boot module order changed");
+    const auto text = host.file;
+    host.file.assign(64 + text.size(), 0);
+    const auto entry = [&](unsigned at, const char* name, uint32_t size) {
+        std::memcpy(host.file.data() + at, name, std::strlen(name));
+        std::memcpy(host.file.data() + at + 12, &size, 4);
+    };
+    entry(0, "RESET", 0); entry(16, "ROMDIR", 64);
+    entry(32, "IOPBTCONF", static_cast<uint32_t>(text.size()));
+    std::copy(text.begin(), text.end(), host.file.begin() + 64);
+    const auto image = host.file;
+    require(IopModuleLoader::readBootModules(host, "rom0:UDNL rom0:OSDCNF") == direct,
+        "OSDCNF overlay ignored its original IOPBTCONF");
+    const auto rejected = [&](std::string_view args) {
+        bool failed = false;
+        try { (void)IopModuleLoader::readBootModules(host, args); }
+        catch (const std::runtime_error&) { failed = true; }
+        require(failed, "Malformed or unsupported bootstrap configuration accepted");
+    };
+    host.file[12] = 16; rejected("rom0:UDNL rom0:OSDCNF");
+    host.file = image; host.file[44] = 0xff; rejected("rom0:UDNL rom0:OSDCNF");
+    host.file = image; host.file[16] = 'X'; rejected("rom0:UDNL rom0:OSDCNF");
+    configuration("@800\nSYSMEM\nSYSMEM\n"); rejected({});
+    configuration("@800\nSYSMEM\n!CUSTOM\n"); rejected({});
+    configuration("@900\nSYSMEM\n"); rejected({});
+    configuration("@800\nSYSMEM\n"); rejected("rom0:UDNL host:config");
+    host.file = image;
+    IopSubsystem iop(host);
+    iop.runEeCycles(8000);
+    const auto cycles = iop.debugSnapshot().emulatorCycles;
+    const auto sendReset = [&](uint32_t mode, bool terminated) {
+        const std::string args = "rom0:UDNL rom0:OSDCNF";
+        std::array<uint32_t, 26> packet{};
+        packet[0] = sizeof(packet); packet[2] = 0x80000003;
+        packet[4] = static_cast<uint32_t>(args.size()); packet[5] = mode;
+        std::memcpy(reinterpret_cast<char*>(packet.data()) + 24, args.c_str(), args.size() + 1);
+        if (!terminated) reinterpret_cast<char*>(packet.data())[27] = 0;
+        const auto mailbox = iop.readSifRegister(2);
+        require(iop.writeMemory(mailbox, packet.data(), sizeof(packet)), "Cannot DMA reset packet to IOP mailbox");
+        SifTransfer transfer{};
+        transfer.kind = SifTransferKind::SetDma; transfer.phase = SifTransferPhase::AfterCopy;
+        transfer.destinationAddress = mailbox; transfer.size = sizeof(packet);
+        iop.onSifTransfer(transfer);
+    };
+    for (const auto [mode, terminated] : {std::pair{1u, true}, std::pair{0u, false}}) {
+        bool failed = false;
+        try { sendReset(mode, terminated); } catch (const std::runtime_error&) { failed = true; }
+        require(failed && iop.debugSnapshot().emulatorCycles == cycles, "Malformed RESET altered live IOP state");
+    }
+    bool incomplete = false;
+    try { sendReset(0, true); }
+    catch (const std::runtime_error& error) {
+        incomplete = std::string(error.what()).find("bootstrap incomplete at rom0:EXCEPMAN") != std::string::npos;
+    }
+    require(incomplete, "Missing original module falsely completed bootstrap");
+    require(iop.debugSnapshot().emulatorCycles == cycles, "IOP reboot restarted the shared hardware clock");
+    iop.writeSifRegister(4, 0x60000);
+    require(!(iop.readSifRegister(4) & 0x40000), "Failed bootstrap exposed premature BOOTEND");
+    // Original BIOS execution must never fall back to the SDK interpreter.
+    ps2x::iop::detail::IopEmulator nativeOnly(host);
+    nativeOnly.reboot();
+    Irx untranslated;
+    untranslated.words(0, {0x03e00008, 0});
+    untranslated.install(host);
+    bool refusedDecode = false;
+    try { (void)nativeOnly.loadModuleBuffer(0x1000, nullptr, 0); }
+    catch (const std::runtime_error& error) {
+        refusedDecode = std::string(error.what()).find("AOT entry missing") != std::string::npos;
+    }
+    require(refusedDecode, "BIOS bootstrap interpreted untranslated IOP code");
+    require(nativeOnly.instructions() == 0, "Rejected IOP entry executed guest instructions");
+    struct SpuClock final : IopSpu2Backend {
+        uint64_t resetCycle = 0;
+        void reset(uint8_t*, uint32_t, uint64_t cycle) override { resetCycle = cycle; }
+        uint16_t read16(uint32_t, uint64_t) override { return 0; }
+        void write16(uint32_t, uint16_t, uint64_t) override {}
+        void dma(int, uint16_t*, uint32_t, uint32_t, bool, uint64_t) override {}
+        uint32_t madr(int) override { return 0; }
+        void advance(uint64_t) override {}
+        uint64_t nextEvent() override { return UINT64_MAX; }
+        uint32_t takeEvents() override { return 0; }
+    } spu;
+    uint64_t clock = 8000;
+    ps2x::iop::detail::IopMemory memory;
+    memory.attachSpu2(&spu, &clock);
+    memory.reset(clock);
+    require(spu.resetCycle == clock, "IOP reboot reset the SPU2 clock to a different epoch");
+    iop.reset();
+    require(iop.debugSnapshot().emulatorCycles == 0 && !(iop.readSifRegister(4) & 0x40000), "Session reset retained failed bootstrap state");
+}
+
 int main() {
     try {
+        boot_contract_test();
         constexpr uint32_t sid = 0xA11CE055u;
         Host host;
         IopSubsystem iop(host);

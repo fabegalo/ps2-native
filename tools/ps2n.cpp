@@ -609,6 +609,17 @@ Game prepare_browser(const fs::path& rom0, const std::string& profile, const fs:
     write_text(game.dir / "game.txt", "id=" + game.id + "\nelf=" + game.elf + "\nrom0=" + game.rom0 +
         "\nrom0_sha256=" + game.rom0_sha256 + "\nconsole_profile=" + profile +
         "\nnvm=" + game.nvm + "\nnvm_sha256=" + game.nvm_sha256 + "\n");
+    // Compile ROM IRX in place by identity; never copy original modules into the content tree.
+    std::string romModules;
+    for (const auto& module : firmware.bios.modules) {
+        const auto image = std::span(firmware.bios.rom0).subspan(module.offset, module.size);
+        if (image.size() < 52 || image[0] != 0x7f || image[1] != 'E' || image[2] != 'L' || image[3] != 'F' ||
+            image[4] != 1 || image[5] != 1 || image[18] != 8 || image[19] != 0 ||
+            image[17] != 0xff || (image[16] != 0x80 && image[16] != 0x81)) continue;
+        romModules += "iop_rom_module=" + std::to_string(module.offset) + ":" + std::to_string(module.size) +
+            ":" + sha256_hex(image) + "\n";
+    }
+    if (!romModules.empty()) write_text(game.dir / "game.txt", read_text(game.dir / "game.txt") + romModules);
     ensure_prepared(game);
     return game;
 }

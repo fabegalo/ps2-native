@@ -1267,6 +1267,33 @@
           "ps2xRuntime/src/lib/ps2_iop_host.cpp": "ff5e6672e0098c11eb7e587616302b53509f345cb5230c3109718275afe4bad4"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0086-iop-rom-bootstrap.patch",
+        "sha256": "0118933d37f60ce7b983d2a92b9b4173c939364deb8f2e6ff120590d8488be36",
+        "base_files": {
+          "ps2xIOP/src/emulator/core/iop_memory.h": "17796aacd0d329b30dcae2a986c15daa7423ef4cbffb9a86cde589773399e452",
+          "ps2xIOP/src/emulator/core/iop_memory.cpp": "a47df533123d79256db9a5275e94e51ec14a46eeb5e16882d9b771ef4ddcdf3e",
+          "ps2xIOP/src/emulator/services/iop_rpc.h": "e5c59c91788bfb7c7c2abecb91564224d9c7c2d2c46aa49f8ead4ce882f50522",
+          "ps2xIOP/src/emulator/services/iop_rpc.cpp": "415eff76d938875dd660ab6b786bc208355bd569fc600c90328a34a386a69b17",
+          "ps2xIOP/src/emulator/iop_emulator.h": "cf9010ea184587dd019291db91d8dff895a28bb04b5d21e163600218900a0a11",
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "b725d89db849c5f5234886d1e515bea87b27bb1993b7b1965a8dc9078aa14be4",
+          "ps2xIOP/src/emulator/services/iop_module_loader.h": "6508cc6c0d9b7b1690bfbfd93ba27d36f2f3c8ad637e89298f2630da490baa0c",
+          "ps2xIOP/src/emulator/services/iop_module_loader.cpp": "6ae8ed7bc01527c00830b6c23b9efb23f231a97d61908063205cdbf35438d52b",
+          "ps2xIOP/src/iop_subsystem.cpp": "3219755dfea2dd280871955d1ab0c012097e2e1d791da2f793438cb33cfa1797"
+        },
+        "files": {
+          "ps2xIOP/src/emulator/core/iop_memory.h": "63595a011106fd23f086300c0f275343a5723a529f1d5cb98185db6efde63681",
+          "ps2xIOP/src/emulator/core/iop_memory.cpp": "cd6d4c6d9966fb86aef0304d83cc00688fd73d9723ecdae84728d5193aab692c",
+          "ps2xIOP/src/emulator/services/iop_rpc.h": "762dcf3abc47b034d08c1ae7a5128bcfe2e3058ad34618210f5b96f6dcc6c6e2",
+          "ps2xIOP/src/emulator/services/iop_rpc.cpp": "f88fbb1adc2bc00589fc382270ab321e971eb85ba06621ff595cf0f549f02918",
+          "ps2xIOP/src/emulator/iop_emulator.h": "257b9f5779a3281015d7760fa21c42751a3e761a9bfd027b3ad70798fd7ed826",
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "33fbedcea2445c6afb37c4f905269c40c50a79f872a6a9d64fad1eaf60c82647",
+          "ps2xIOP/src/emulator/services/iop_module_loader.h": "bb2ffd3b248f0d27aab73bce046e7ed9e8fe3c48596f10a11bde9c043879fdbf",
+          "ps2xIOP/src/emulator/services/iop_module_loader.cpp": "2b0a845d916c94c9ffaadae5d861ba457a47945a2887d2fd7cd6abba4eab8ca8",
+          "ps2xIOP/src/iop_subsystem.cpp": "8e049397796daa27cda93387ca825d21d2ff9fad1d3ebb4b2e3d2acab612df8a"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },

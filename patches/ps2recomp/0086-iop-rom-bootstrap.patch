@@ -1,0 +1,375 @@
+--- a/ps2xIOP/src/emulator/core/iop_memory.h
++++ b/ps2xIOP/src/emulator/core/iop_memory.h
+@@ -44,7 +44,7 @@
+ 
+         IopMemory();
+ 
+-        void reset();
++        void reset(uint64_t cycle = 0);
+         void attachSpu2(IopSpu2Backend* backend, const uint64_t* cycle);
+         void attachHost(IopHost* host) { m_host = host; }
+         bool completeSio2Dma(int irq);
+--- a/ps2xIOP/src/emulator/core/iop_memory.cpp
++++ b/ps2xIOP/src/emulator/core/iop_memory.cpp
+@@ -28,7 +28,7 @@
+         reset();
+     }
+ 
+-    void IopMemory::reset()
++    void IopMemory::reset(uint64_t cycle)
+     {
+         if (m_host)
+             for (int port = 0; port < 2; ++port) m_host->setPadRumble(port, 0, 0, 0);
+@@ -52,7 +52,7 @@
+         m_interruptMask = 0;
+         m_interruptControl = 1;
+         m_dmaStart.reset();
+-        if (m_spu2) m_spu2->reset(m_ram.data(), RamSize, 0);
++        if (m_spu2) m_spu2->reset(m_ram.data(), RamSize, cycle);
+     }
+ 
+     void IopMemory::attachSpu2(IopSpu2Backend* backend, const uint64_t* cycle)
+--- a/ps2xIOP/src/emulator/services/iop_rpc.h
++++ b/ps2xIOP/src/emulator/services/iop_rpc.h
+@@ -6,6 +6,8 @@
+ #include <cstddef>
+ #include <cstdint>
+ #include <deque>
++#include <optional>
++#include <string>
+ #include <vector>
+ #include <unordered_map>
+ 
+@@ -58,6 +60,8 @@
+         [[nodiscard]] RpcResult handleRpc(const RpcRequest &request, IopGuestExecutor &executor);
+         void onSifTransfer(const SifTransfer &transfer);
+         void flushSifCommands();
++        std::optional<std::string> takeResetRequest();
++        void holdBootEnd(bool hold) { m_holdBootEnd = hold; }
+         uint32_t readSifRegister(uint32_t reg);
+         uint32_t writeSifRegister(uint32_t reg, uint32_t value);
+         void removeServersInRange(uint32_t base, uint32_t size);
+@@ -86,6 +90,8 @@
+         std::unordered_map<uint32_t, RpcServer> m_servers;
+         uint32_t m_nextDmaId = 1u;
+         bool m_sifInitialized = false;
++        bool m_holdBootEnd = false;
++        std::optional<std::string> m_resetRequest;
+         uint32_t m_commandBuffer = 0;
+         uint32_t m_eeCommandBuffer = 0;
+         std::unordered_map<uint32_t, uint32_t> m_sifRegisters;
+--- a/ps2xIOP/src/emulator/services/iop_rpc.cpp
++++ b/ps2xIOP/src/emulator/services/iop_rpc.cpp
+@@ -25,6 +25,8 @@
+     void IopRpcBridge::reset()
+     {
+         m_servers.clear();
++        m_resetRequest.reset();
++        m_holdBootEnd = false;
+         m_nextDmaId = 1u;
+         m_sifInitialized = false;
+         m_commandBuffer = 0;
+@@ -407,6 +409,22 @@
+             }
+             m_host.log(LogLevel::Debug, message.str());
+         }
++        if (command == 0x80000003u)
++        {
++            if (bytes < 24 || packet[4] > bytes - 24 || packet[5] != 0)
++                throw std::runtime_error("[IOP-BOOT] malformed or unsupported RESET packet");
++            const char* args = reinterpret_cast<const char*>(packet.data()) + 24;
++            const uint32_t count = packet[4];
++            std::string arguments(args, count);
++            if (!arguments.empty() && arguments.back() == '\0') arguments.pop_back();
++            if (arguments.find('\0') != std::string::npos)
++                throw std::runtime_error("[IOP-BOOT] RESET command line contains an embedded NUL");
++            if (m_resetRequest)
++                throw std::runtime_error("[IOP-BOOT] RESET already pending");
++            m_resetRequest = std::move(arguments);
++            m_holdBootEnd = true;
++            return;
++        }
+         if ((command == 0x80000002u && option == 0) || command == 0x80000000u)
+         {
+             if (bytes < 20 || !packet[4]) return;
+@@ -429,6 +447,13 @@
+         }
+     }
+ 
++    std::optional<std::string> IopRpcBridge::takeResetRequest()
++    {
++        auto request = std::move(m_resetRequest);
++        m_resetRequest.reset();
++        return request;
++    }
++
+     void IopRpcBridge::flushSifCommands()
+     {
+         while (!m_pendingCommands.empty())
+@@ -451,7 +476,8 @@
+             if (!m_commandBuffer) return 0;
+             if (reg == 2u) return m_commandBuffer;
+             const auto found = m_sifRegisters.find(reg);
+-            return found == m_sifRegisters.end() ? 0x00020000u : found->second;
++            const uint32_t value = found == m_sifRegisters.end() ? 0x00020000u : found->second;
++            return m_holdBootEnd ? value & ~0x00040000u : value;
+         }
+         const auto found = m_sifRegisters.find(reg);
+         return found == m_sifRegisters.end() ? 0u : found->second;
+--- a/ps2xIOP/src/emulator/iop_emulator.h
++++ b/ps2xIOP/src/emulator/iop_emulator.h
+@@ -5,6 +5,7 @@
+ 
+ #include <cstdint>
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <string_view>
+ #include <vector>
+@@ -21,6 +22,9 @@
+         IopEmulator &operator=(const IopEmulator &) = delete;
+ 
+         void reset();
++        void reboot();
++        std::optional<std::string> takeResetRequest();
++        void holdBootEnd(bool hold);
+         void setUsbDisconnectedMode(bool active);
+         [[nodiscard]] ModuleLoadResult loadModule(std::string_view path, const void *arguments, uint32_t argumentSize);
+         [[nodiscard]] ModuleLoadResult loadModuleBuffer(uint32_t guestAddress, const void *arguments, uint32_t argumentSize);
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -119,9 +119,10 @@
+             reset();
+         }
+ 
+-        void reset()
+-        {
+-            memory.reset();
++        void reset(uint64_t cycle = 0)
++        {
++            aotOnly = false;
++            memory.reset(cycle);
+             kernel.reset();
+             modules.clear();
+             aot.clear();
+@@ -136,7 +137,7 @@
+             pendingGuestCallbacks.clear();
+             nextModuleId = 1;
+             moduleCursor = kModuleLoadBase;
+-            totalCycles = 0;
++            totalCycles = cycle;
+             totalInstructions = 0;
+             totalNativeInstructions = totalDecodedInstructions = 0;
+             eeCycleCarry = 0;
+@@ -512,6 +513,12 @@
+                 lastError = error.what();
+                 log(LogLevel::Error, lastError);
+                 throw;
++            }
++            if (!native && aotOnly) {
++                std::ostringstream error;
++                error << "[IOP-BOOT] AOT entry missing pc=0x" << std::hex << cpu.pc
++                      << "; prepare the original IOP module before execution";
++                throw std::runtime_error(error.str());
+             }
+             const bool running = native ? *native : cpuCore.executeInstruction(cpu);
+             if (native) ++totalNativeInstructions; else ++totalDecodedInstructions;
+@@ -900,6 +907,7 @@
+         uint64_t eeCycleCarry = 0;
+         CpuState *activeCpu = nullptr;
+         std::string lastError;
++        bool aotOnly = false;
+         bool servicingDmaInterrupts = false;
+         bool servicingGuestCallbacks = false;
+         uint32_t callDepth = 0u;
+@@ -970,6 +978,26 @@
+         return m_impl->rpc.writeSifRegister(reg, value);
+     }
+ 
++    void IopEmulator::reboot()
++    {
++        const auto cycles = m_impl->totalCycles;
++        const auto carry = m_impl->eeCycleCarry;
++        m_impl->reset(cycles);
++        m_impl->eeCycleCarry = carry;
++        m_impl->rpc.holdBootEnd(true);
++        m_impl->aotOnly = true;
++    }
++
++    std::optional<std::string> IopEmulator::takeResetRequest()
++    {
++        return m_impl->rpc.takeResetRequest();
++    }
++
++    void IopEmulator::holdBootEnd(bool hold)
++    {
++        m_impl->rpc.holdBootEnd(hold);
++    }
++
+     void IopEmulator::onSifTransfer(const SifTransfer &transfer)
+     {
+         m_impl->rpc.onSifTransfer(transfer);
+--- a/ps2xIOP/src/emulator/services/iop_module_loader.h
++++ b/ps2xIOP/src/emulator/services/iop_module_loader.h
+@@ -4,6 +4,7 @@
+ #include <functional>
+ #include <span>
+ #include <string_view>
++#include <string>
+ #include <vector>
+ 
+ namespace ps2x::iop
+@@ -42,6 +43,7 @@
+     class IopModuleLoader
+     {
+     public:
++        [[nodiscard]] static std::vector<std::string> readBootModules(IopHost &host, std::string_view arguments);
+         [[nodiscard]] static bool readWholeHostFile(IopHost &host, std::string_view guestPath, std::vector<uint8_t> &bytes);
+         [[nodiscard]] static bool readElf(const std::function<bool(uint32_t, void *, size_t)> &read, uint32_t address, std::vector<uint8_t> &bytes);
+         [[nodiscard]] static IopImageLoadResult load(std::span<const uint8_t> image, IopMemory &memory, uint32_t moduleCursor);
+--- a/ps2xIOP/src/emulator/services/iop_module_loader.cpp
++++ b/ps2xIOP/src/emulator/services/iop_module_loader.cpp
+@@ -7,6 +7,8 @@
+ #include <cstring>
+ #include <limits>
+ #include <string>
++#include <sstream>
++#include <stdexcept>
+ 
+ namespace ps2x::iop::detail
+ {
+@@ -298,6 +300,83 @@
+         }
+     }
+ 
++    std::vector<std::string> IopModuleLoader::readBootModules(IopHost &host, std::string_view arguments)
++    {
++        const auto fail = [](const char* reason) -> void {
++            throw std::runtime_error(std::string("[IOP-BOOT] ") + reason);
++        };
++        std::string config = "rom0:IOPBTCONF";
++        if (!arguments.empty())
++        {
++            std::istringstream command{std::string(arguments)};
++            std::string loader, extra;
++            if (!(command >> loader >> config) || command >> extra || loader != "rom0:UDNL" ||
++                !config.starts_with("rom0:") || config.find_first_of("/\\", 5) != std::string::npos)
++                fail("unsupported RESET command line");
++        }
++        std::vector<uint8_t> image;
++        if (!readWholeHostFile(host, config, image) || image.size() > 64u * 1024u)
++            fail("original boot configuration unavailable or oversized");
++        std::span<const uint8_t> text = image;
++        if (image.size() >= 16 && std::memcmp(image.data(), "RESET\0\0\0\0\0", 10) == 0)
++        {
++            // UDNL overlays the ROM directory; OSDCNF carries its own IOPBTCONF.
++            size_t offset = 0, directoryBytes = 0;
++            bool terminated = false, found = false;
++            for (size_t at = 0; at + 16 <= image.size(); at += 16)
++            {
++                const auto* entry = image.data() + at;
++                if (!entry[0]) { terminated = true; break; }
++                size_t length = 0;
++                while (length < 10 && entry[length]) ++length;
++                if (length == 10 || std::any_of(entry + length, entry + 10, [](uint8_t c) { return c != 0; }))
++                    fail("malformed boot ROMDIR name");
++                const std::string name(reinterpret_cast<const char*>(entry), length);
++                uint32_t size = 0;
++                std::memcpy(&size, entry + 12, 4);
++                if (offset > image.size() || size > image.size() - offset)
++                    fail("boot ROMDIR resource outside original image");
++                if (name == "ROMDIR")
++                {
++                    if (offset != 0 || directoryBytes || size % 16 || size < at + 32)
++                        fail("malformed boot ROMDIR extent");
++                    directoryBytes = size;
++                }
++                if (name == "IOPBTCONF")
++                {
++                    if (found) fail("duplicate IOPBTCONF");
++                    text = std::span<const uint8_t>(image).subspan(offset, size);
++                    found = true;
++                }
++                offset += (uint64_t(size) + 15u) & ~uint64_t(15u);
++                if (directoryBytes && at + 32 > directoryBytes)
++                    fail("unterminated boot ROMDIR");
++            }
++            if (!terminated || !directoryBytes || !found) fail("boot ROMDIR lacks IOPBTCONF");
++        }
++        if (!text.empty() && text.back() == 0) text = text.first(text.size() - 1);
++        if (std::find(text.begin(), text.end(), 0) != text.end()) fail("embedded NUL in IOPBTCONF");
++        std::istringstream lines{std::string(reinterpret_cast<const char*>(text.data()), text.size())};
++        std::vector<std::string> modules;
++        std::string line;
++        if (!std::getline(lines, line)) fail("empty IOPBTCONF");
++        if (!line.empty() && line.back() == '\r') line.pop_back();
++        if (line != "@800") fail("unsupported IOPBTCONF bootstrap address");
++        while (std::getline(lines, line))
++        {
++            if (!line.empty() && line.back() == '\r') line.pop_back();
++            if (line.empty()) continue;
++            if (line.size() > 10 || !std::all_of(line.begin(), line.end(), [](unsigned char c) {
++                return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
++            })) fail("unsupported IOPBTCONF directive or module name");
++            if (std::find(modules.begin(), modules.end(), line) != modules.end()) fail("duplicate boot module");
++            modules.push_back(line);
++            if (modules.size() > 128) fail("too many boot modules");
++        }
++        if (modules.empty()) fail("IOPBTCONF has no modules");
++        return modules;
++    }
++
+     bool IopModuleLoader::readWholeHostFile(IopHost &host, std::string_view guestPath, std::vector<uint8_t> &bytes)
+     {
+         const std::string translated = host.translateGuestPath(guestPath);
+--- a/ps2xIOP/src/iop_subsystem.cpp
++++ b/ps2xIOP/src/iop_subsystem.cpp
+@@ -3,10 +3,12 @@
+ #include "iop_service.h"
+ #include "iop_module_manager.h"
+ #include "emulator/iop_emulator.h"
++#include "emulator/services/iop_module_loader.h"
+ #include "module_factories.h"
+ #include "ps2x/iop/ps2_path.h"
+ 
+ #include <sstream>
++#include <algorithm>
+ #include <stdexcept>
+ #include <unordered_map>
+ #include <unordered_set>
+@@ -251,6 +253,35 @@
+             }
+         }
+         m_impl->emulator.onSifTransfer(transfer);
++        const auto request = m_impl->emulator.takeResetRequest();
++        if (!request) return;
++        const auto modules = detail::IopModuleLoader::readBootModules(m_impl->host, *request);
++        m_impl->host.log(LogLevel::Info, "[IOP-BOOT] RESET accepted; original IOPBTCONF modules=" + std::to_string(modules.size()));
++        m_impl->moduleManager.reset();
++        for (auto& service : m_impl->coreServices) service->reset();
++        m_impl->emulator.reboot();
++        m_impl->rebuildRoutes();
++        for (const auto& module : modules)
++        {
++            const auto path = "rom0:" + module;
++            // Only the kernel libraries implemented by this same IOP are HLE.
++            // Device drivers and unknown libraries must execute their original AOT.
++            constexpr std::string_view kernel[] = {"SYSMEM", "LOADCORE", "SYSCLIB", "HEAPLIB",
++                "VBLANK", "IOMAN", "STDIO", "SIFMAN", "SIFCMD", "SIFINIT", "MODLOAD"};
++            const bool hle = std::find(std::begin(kernel), std::end(kernel), module) != std::end(kernel);
++            m_impl->host.log(LogLevel::Info, "[IOP-BOOT] starting " + path + (hle ? " HLE" : " AOT"));
++            const auto result = hle ? m_impl->moduleManager.loadHle(path)
++                                   : m_impl->emulator.loadModule(path, nullptr, 0);
++            if (result.moduleId <= 0 || (result.startResult != 0 && result.startResult != 2))
++                throw std::runtime_error("[IOP-BOOT] bootstrap incomplete at " + path);
++            if (!hle) m_impl->moduleManager.observePhysicalLoad(result.moduleId, path);
++            m_impl->rebuildRoutes();
++        }
++        // EESYNC must actually publish BOOTEND; a loaded-module count is not completion.
++        m_impl->emulator.holdBootEnd(false);
++        m_impl->host.log(LogLevel::Info, (m_impl->emulator.readSifRegister(4) & 0x40000u)
++            ? "[IOP-BOOT] original module bootstrap completed"
++            : "[IOP-BOOT] modules started; waiting for original EESYNC completion");
+     }
+ 
+     uint32_t IopSubsystem::allocateMemory(uint32_t size, uint32_t alignment)
