@@ -182,6 +182,11 @@ if(BUILD_TESTING)
     target_include_directories(ps2n-sdk-sio2-tests PRIVATE
         "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tests" "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
     add_test(NAME sdk-sio2 COMMAND ps2n-sdk-sio2-tests)
+    add_executable(ps2n-sdk-iop-sysclib-tests tests/sdk_iop_sysclib_tests.cpp)
+    target_link_libraries(ps2n-sdk-iop-sysclib-tests PRIVATE ps2_iop)
+    target_include_directories(ps2n-sdk-iop-sysclib-tests PRIVATE
+        "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tests" "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
+    add_test(NAME sdk-iop-sysclib COMMAND ps2n-sdk-iop-sysclib-tests)
     add_executable(ps2n-sdk-magicgate-tests tests/sdk_magicgate_tests.cpp)
     target_link_libraries(ps2n-sdk-magicgate-tests PRIVATE ps2_iop)
     target_include_directories(ps2n-sdk-magicgate-tests PRIVATE

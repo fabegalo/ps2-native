@@ -1174,6 +1174,19 @@
           "ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp": "e16fd4dba57065efc57ec41d7aa20f75702b4844d1946864dec0ac46effb8a6b"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0077-iop-sysclib-strtok.patch",
+        "sha256": "8cad02151aeb082987b6da9c2ebbaa3db291bdb24530f95da65d21cd9b427fdf",
+        "base_files": {
+          "ps2xIOP/src/emulator/imports/iop_sysclib.cpp": "dfa92092fecaa2c792ce7c441ebd7ea62b95cca2e128b1e97c35b33749781041",
+          "ps2xIOP/src/emulator/imports/iop_sysclib.h": "05337a730dddd570ed33bcde9f5d8e16a5ffd57336dde4cb1acc1d75014d544c"
+        },
+        "files": {
+          "ps2xIOP/src/emulator/imports/iop_sysclib.cpp": "2853d7fbd47b462cf9ed7e3c719ded13e1ab1b587810a49f8e0c35bbd99c7574",
+          "ps2xIOP/src/emulator/imports/iop_sysclib.h": "2ebf4088bb39f1bbb98d6d4d99064760711f84dd4df6339193eadb59cc32ccc9"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },
