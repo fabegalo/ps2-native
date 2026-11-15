@@ -331,6 +331,14 @@ void ps2n_trace_scanout(const PresentationFrame& frame, const GSPresentationRequ
     std::fflush(stdout);
 }
 
+bool ps2n_parallel_gs_available() {
+#ifdef PS2N_PARALLEL_GS
+    return true;
+#else
+    return false;
+#endif
+}
+
 std::unique_ptr<GSRasterBackend> ps2n_parallel_gs(const GSRegisters& registers, bool enhanced) {
 #ifdef PS2N_PARALLEL_GS
     return std::make_unique<ParallelBackend>(registers, enhanced);

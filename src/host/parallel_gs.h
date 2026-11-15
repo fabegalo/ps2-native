@@ -8,6 +8,7 @@ struct PresentationFrame;
 struct GSPresentationRequest;
 
 // Selection is host-only; unavailable devices fail explicitly.
+bool ps2n_parallel_gs_available();
 std::unique_ptr<GSRasterBackend> ps2n_parallel_gs(const GSRegisters& registers, bool enhanced);
 void ps2n_trace_scanout(const PresentationFrame& frame, const GSPresentationRequest& request);
 // GIF packet framing shared with the frontend's per-packet parser.

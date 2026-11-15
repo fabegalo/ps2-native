@@ -410,7 +410,8 @@ int run_game(int argc, char** argv) {
         if (gsMode && !enhanced && std::strcmp(gsMode, "fidelity") != 0)
             throw std::runtime_error("PS2N_GS_MODE must be fidelity or enhanced");
         // paraLLEl-GS is the default; PS2N_GS_BACKEND=cpu selects the CPU rasterizer (also the default for a GS dump).
-        const bool parallel = gsBackend ? std::strcmp(gsBackend, "parallel") == 0 : !std::getenv("PS2N_GS_PCSX2_DUMP");
+        const bool parallel = gsBackend ? std::strcmp(gsBackend, "parallel") == 0 :
+            ps2n_parallel_gs_available() && !std::getenv("PS2N_GS_PCSX2_DUMP");
         if (gsBackend && !parallel && std::strcmp(gsBackend, "cpu") != 0)
             throw std::runtime_error("PS2N_GS_BACKEND must be cpu or parallel");
         if (enhanced && !parallel) throw std::runtime_error("Enhanced requires the optional paraLLEl-GS device");
