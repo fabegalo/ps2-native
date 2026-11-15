@@ -101,4 +101,13 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2] if len(sys.argv) > 2 else None)
         assert b'0x100060' not in registration, 'Unaligned data became a callback'
         assert b'0x100064' not in registration, 'A callback split a call from its delay slot'
         assert b'0x200000' not in registration, 'Table data became callable code'
+    # Register locals: a counted loop keeps $v0 in a local; the back edge checkpoint and the call write it back.
+    (root / 'fixture.elf').write_bytes(elf((0x24020003, 0x2442ffff, 0x1440fffe, 0, 0x0c040000, 0,
+                                            0x03e00008, 0)))
+    code = next(value[0] for name, value in run('sceIpuInit').items() if name.endswith('_0x100000.cpp'))
+    assert b'#include "ps2_cg.h"' in code and b'uint64_t gpr2 = PS2_CG_LO(ctx, 2);' in code
+    assert b'L_SET_GPR_S32(2, ' in code and b'SET_GPR_S32(ctx, 2' not in code.split(b'PS2_FLUSH();')[0]
+    assert b'if (PS2_CG_DUE()) { return; }' in code and b'eeCheckpointDue' not in code
+    flushed = code.split(b'PS2_FLUSH();')[1]
+    assert b'dispatchGuestBranch' in flushed.split(b'PS2_RELOAD();')[0], 'The call runs without its registers in ctx'
 print('Recompiler incremental regression passed')

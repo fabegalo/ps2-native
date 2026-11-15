@@ -1187,6 +1187,19 @@
           "ps2xIOP/src/emulator/imports/iop_sysclib.h": "2ebf4088bb39f1bbb98d6d4d99064760711f84dd4df6339193eadb59cc32ccc9"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0078-recompiler-register-locals.patch",
+        "sha256": "fd4520b8d1d5fd0db0e76cc05e1c4ba65072715902add376abd22b9b5fc42f0f",
+        "base_files": {
+          "ps2xRecomp/src/lib/function_emitter.cpp": "55fbd7e549d84cdea45685ff1800a817d0b7c9354fa84544141991b8c48af532",
+          "ps2xRuntime/include/ps2_cg.h": ""
+        },
+        "files": {
+          "ps2xRecomp/src/lib/function_emitter.cpp": "327a751da49d983466d3ab558afc1eb6a570efe5d6b93bb1f1b1212dba60bcf6",
+          "ps2xRuntime/include/ps2_cg.h": "3f72e33c9b41dd73e28003ca4ffb36c3b9de998551a792e0bbc3df6c0fd18e44"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },
