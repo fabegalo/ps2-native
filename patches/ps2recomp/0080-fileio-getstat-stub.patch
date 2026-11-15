@@ -1,0 +1,70 @@
+diff --git a/ps2xRecomp/src/lib/ps2_recompiler.cpp b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+index c7cbd7c..70c8200 100644
+--- a/ps2xRecomp/src/lib/ps2_recompiler.cpp
++++ b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+@@ -1052,6 +1052,25 @@ namespace ps2recomp
+             size_t failedCount = 0;
+             size_t correctnessCriticalFailureCount = 0;
+ 
++            // A resolved stub may be reached only through a tail jump into a
++            // range the ELF scan merged into its neighbour. Give it its own
++            // entry so the runtime handler, not the merged guest body, runs.
++            for (const auto &[stubStart, stubName] : m_stubHandlerBindingsByStart)
++            {
++                if (resolveStubTarget(stubName) == StubTarget::Unknown ||
++                    std::any_of(m_functions.begin(), m_functions.end(),
++                                [stubStart](const Function &function)
++                                { return function.start == stubStart; }))
++                {
++                    continue;
++                }
++                Function stub{};
++                stub.name = stubName;
++                stub.start = stubStart;
++                stub.end = stubStart + 4u;
++                m_functions.push_back(std::move(stub));
++            }
++
+             for (uint32_t initializerStart : m_correctnessCriticalFunctionStarts)
+             {
+                 const auto functionIt = std::find_if(
+diff --git a/ps2xRuntime/include/ps2_call_list.h b/ps2xRuntime/include/ps2_call_list.h
+index 18defce..d844dca 100644
+--- a/ps2xRuntime/include/ps2_call_list.h
++++ b/ps2xRuntime/include/ps2_call_list.h
+@@ -357,6 +357,7 @@
+     X(sceDmaWatch)                            \
+     X(sceFsInit)                              \
+     X(sceFsReset)                             \
++    X(sceGetstat)                             \
+     X(sceGifPkAddGsAD)                        \
+     X(sceGifPkAddGsData)                      \
+     X(sceGifPkCloseGifTag)                    \
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp
+index 1fe6b93..0ac83af 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp
+@@ -75,6 +75,11 @@ namespace ps2_stubs
+         setReturnS32(ctx, 0);
+     }
+ 
++    void sceGetstat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        ps2_syscalls::fioGetstat(rdram, ctx, runtime);
++    }
++
+     void sceIoctl(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         const int32_t cmd = static_cast<int32_t>(getRegU32(ctx, 5));
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.h b/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.h
+index dc9268f..91a4ecf 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.h
+@@ -17,6 +17,7 @@ namespace ps2_stubs
+     void sceClose(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceFsInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceFsReset(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
++    void sceGetstat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceIoctl(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceLseek(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);

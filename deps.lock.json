@@ -1211,6 +1211,23 @@
           "ps2xRuntime/src/lib/ps2_runtime.cpp": "5685b4335d3ec838e347c28fd8d827806f5422162dd5e06875beb91ba7d0e3a9"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0080-fileio-getstat-stub.patch",
+        "sha256": "e48249df0d453eb02b6b8f56cb17fb4eb47f81822d9e25bebb2603bd74acbefa",
+        "base_files": {
+          "ps2xRecomp/src/lib/ps2_recompiler.cpp": "2c06af3cd050ce647eb25fef7ac3ba8db23066f9ca79b139ec7557a53f6687f2",
+          "ps2xRuntime/include/ps2_call_list.h": "ff348ab64b7bd81ad9dc7ae40000e0905dc94cde56f8d8ebaec09d1c613b946b",
+          "ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp": "f03c2654de791d5a5f7c6e1fb60ad1aa10a9c18966d71eb6ec58a09c19914b49",
+          "ps2xRuntime/src/lib/Kernel/Stubs/FileIO.h": "a2b808ab4e912e11b13ac65ff788b16226bde9f86a75b97925314e75ee8db88b"
+        },
+        "files": {
+          "ps2xRecomp/src/lib/ps2_recompiler.cpp": "616af416447948092cf3ee27a05ba2db9bffbe3835af880e1a702e5b9310101f",
+          "ps2xRuntime/include/ps2_call_list.h": "ed41dff54ab5820e4c4b74c5457f4b475839f986c2cb0662652184b48072bf88",
+          "ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp": "86d77fb964735a6fb9eb57625c772232f63c88af44827c854dcbefb808267056",
+          "ps2xRuntime/src/lib/Kernel/Stubs/FileIO.h": "69e428fd4d9254bf7aae920133879e306ae1fbeb015282d8a31d58a48c9838f0"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },
