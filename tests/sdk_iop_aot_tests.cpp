@@ -2,6 +2,7 @@
 #include "emulator/core/iop_cpu.h"
 #include "emulator/core/iop_memory.h"
 #include "emulator/services/iop_aot_registry.h"
+#include "emulator/services/iop_aot_frame.h"
 
 using namespace iop_test;
 using namespace ps2x::iop::detail;
@@ -17,6 +18,11 @@ bool returnZero(IopCpuState& cpu, IopMemory&, uint32_t base) {
     cpu.gpr[2] = 0;
     cpu.pc += 4;
     return true;
+}
+bool copyImmediate(IopCpuState& cpu, IopMemory& memory, uint32_t) {
+    IopAotFrame frame(cpu, memory);
+    frame.write(2, uint32_t(int32_t(int16_t(memory.read32(cpu.pc)))));
+    return frame.finish();
 }
 bool jumpRa(IopCpuState& cpu, IopMemory&, uint32_t) {
     ++nativeCalls;
@@ -44,7 +50,7 @@ int main() {
         Irx image(0);
         image.bytes[16] = 1; // ET_REL: LOADCORE chooses the runtime load address.
         image.words(0, {0x24020000u, 0x03E00008u, 0u});
-        registerIopAotModule({image.bytes, {{0, returnZero, 0x24020000u}, {4, jumpRa, 0x03E00008u}, {8, delayNop, 0u}}});
+        registerIopAotModule({image.bytes, {{0, returnZero, 0x24020000u, 0, copyImmediate, 0xffffu}, {4, jumpRa, 0x03E00008u}, {8, delayNop, 0u}}});
         rejects([&] { registerIopAotModule({image.bytes, {{0, returnZero}}}); }, "Duplicate identity accepted");
         rejects([&] { registerIopAotModule({{1}, {{0, returnZero}, {0, jumpRa}}}); }, "Duplicate offset accepted");
 
@@ -82,6 +88,33 @@ int main() {
         rejects([&] { registry.bind(image.bytes, 0x10000, 0x100, true, memory); }, "Wrong instruction accepted before binding");
         memory.write32(0x10004, code[1]);
         require(registry.bind(image.bytes, 0x10000, 0x100, true, memory) == 3, "Failed bind left partial entries");
+        memory.attachAot(&registry);
+        IopCpuState copier;
+        { IopAotFrame f(copier, memory); f.load32(1, 0x80010000); f.finish(); }
+        { IopAotFrame f(copier, memory); f.store32(1, 0x80); f.finish(); }
+        IopCpuState vector;
+        vector.pc = 0x80000080;
+        require(!registry.execute(vector, memory), "Load delay leaked code provenance before the register was committed");
+        { IopAotFrame f(copier, memory); f.move(2, 1); f.finish(); }
+        { IopAotFrame f(copier, memory); f.store32(2, 0x80000080); f.finish(); }
+        const auto savedOrigin = copier.codeOrigins[2];
+        require(registry.execute(vector, memory).value_or(false), "Verified original code copy has no native translation");
+        { IopAotFrame f(copier, memory); f.writeFrom(2, code[0] | 42u, 2); f.finish(); }
+        { IopAotFrame f(copier, memory); f.store32(2, 0xa8); f.finish(); }
+        vector = {}; vector.pc = 0xa8;
+        require(registry.execute(vector, memory).value_or(false) && vector.gpr[2] == 42,
+                "Offline copied-code variant lost the firmware's patched immediate");
+        { IopAotFrame f(copier, memory); f.writeFrom(2, code[0] ^ 0x04000000u, 2); f.finish(); }
+        { IopAotFrame f(copier, memory); f.store32(2, 0xac); f.finish(); }
+        vector = {}; vector.pc = 0xac;
+        require(!registry.execute(vector, memory), "Copied code changed an opcode outside its prepared relocation mask");
+        { IopAotFrame f(copier, memory); f.write(2, code[0]); f.finish(); }
+        { IopAotFrame f(copier, memory); f.store32(2, 0x90); f.finish(); }
+        vector = {}; vector.pc = 0x90;
+        require(!registry.execute(vector, memory), "An equal constant fabricated an original code copy");
+        memory.write32(0x80, code[0] ^ 1u);
+        vector.pc = 0x80;
+        rejects([&] { registry.execute(vector, memory); }, "Modified copied code reused a stale translation");
         rejects([&] { registry.bind(image.bytes, 0x10000, 0x100, true, memory); }, "Overlapping bindings accepted");
         IopCpuState cpu;
         cpu.pc = 0x80010000;
@@ -89,9 +122,14 @@ int main() {
         memory.write32(0x10004, 0u);
         rejects([&] { registry.execute(cpu, memory); }, "Modified code executed stale native translation");
         registry.eraseRange(0x10000, 0x100);
+        vector = {}; vector.pc = 0x80;
+        require(!registry.execute(vector, memory), "Unloading the source module retained a copied translation");
         require(!registry.execute(cpu, memory).has_value(), "Unload left stale native entry");
         memory.write32(0x10004, code[1]);
         require(registry.bind(image.bytes, 0x10000, 0x100, true, memory) == 3, "Reload failed");
+        memory.write32(0x80, code[0]);
+        memory.copyCode(savedOrigin, 0x80, code[0]);
+        require(!registry.execute(vector, memory), "Reload reused provenance from an unloaded generation");
         registry.clear();
         require(!registry.execute(cpu, memory).has_value(), "Reset left stale native entry");
         require(memory.writeRam(0x1ffc, code, sizeof(code)) && memory.writeRam(0x2010, code, sizeof(code)),

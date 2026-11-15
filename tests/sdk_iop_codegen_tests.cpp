@@ -31,7 +31,7 @@ int main() {
         require(registry.bind(kImage, nativeModule.base, nativeModule.size, true, native) == kInstructionCount,
                 "Generated module did not bind all executable instructions");
         IopCpuCore core(reference);
-        unsigned compared = 0;
+        unsigned compared = 0, copiedCompared = 0;
         for (unsigned index = 0; index < kComparableInstructionCount; ++index) {
             for (unsigned seed = 0; seed < 32; ++seed) {
                 IopCpuState cpu;
@@ -52,6 +52,7 @@ int main() {
                 cpu.pendingLoadValue = 0x11223344;
                 cpu.branchPending = seed & 2;
                 cpu.branchTarget = 0x11000;
+                const auto initial = cpu;
                 auto actual = cpu;
                 for (unsigned off = 0x17ff0; off < 0x18010; off += 4) {
                     reference.write32(off, 0xfedcba98u ^ off);
@@ -67,6 +68,24 @@ int main() {
                 for (unsigned off = 0x17ff0; off < 0x18010; off += 4)
                     require(reference.read32(off) == native.read32(off), "Emitted store changed RAM differently");
                 ++compared;
+                const uint32_t source = nativeModule.base + index * 4;
+                const uint32_t word = native.read32(source);
+                registry.eraseRange(0x80, 4);
+                reference.write32(0x80, word ^ 4u);
+                native.write32(0x80, word ^ 4u);
+                registry.copy(registry.origin(source, word), 0x80, word ^ 4u);
+                auto copied = initial;
+                copied.pc = 0x80;
+                auto expectedCopy = copied;
+                const auto copiedResult = registry.execute(copied, native);
+                if ((word >> 26) == 35u) require(copiedResult.has_value(), "Generated LW copy variant is missing");
+                if (copiedResult) {
+                    require(*copiedResult == core.executeInstruction(expectedCopy) && equal(copied, expectedCopy),
+                            "Patched copied instruction diverged from the IOP core");
+                    require(std::equal(native.ram().begin(), native.ram().end(), reference.ram().begin()),
+                            "Patched copied instruction changed RAM differently");
+                    ++copiedCompared;
+                }
             }
         }
         for (unsigned index = kComparableInstructionCount; index < kInstructionCount; ++index) {
@@ -97,7 +116,9 @@ int main() {
         reference.write32(0x18000, 0x44332211); reference.write32(0x18004, 0x88776655);
         require(core.executeInstruction(cpu) && core.executeInstruction(cpu) && core.executeInstruction(cpu) &&
                 cpu.gpr[2] == 0x55443322, "Paired unaligned loads lost forwarded bytes");
-        std::cout << "PASS " << compared << " emitted IOP state/RAM comparisons and relocation/exception/load-delay contracts\n";
+        require(copiedCompared != 0, "No generated copied-code variants were exercised");
+        std::cout << "PASS " << compared << " emitted + " << copiedCompared
+                  << " copied IOP state/RAM comparisons and relocation/exception/load-delay contracts\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n'; return 1;
