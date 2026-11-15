@@ -1,0 +1,754 @@
+Resumable original IOP bootstrap on the existing kernel and console clock.
+Native module initializers and original post-boot callbacks retain their thread context across SIF waits.
+EE MMIO and SIF imports share the same flags; remove the legacy hard-coded SMFLAG response.
+References: ps2dev/ps2sdk threadman thcommon.c, sifman.c and loadcore.c; PCSX2 IopMem.cpp/HwWrite.cpp.
+Maintainer approved this execution model on 2026-11-15.
+
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -23,6 +23,7 @@
+ #include <cctype>
+ #include <cstdlib>
+ #include <map>
++#include <limits>
+ #include <optional>
+ #include <span>
+ #include <sstream>
+@@ -142,6 +143,8 @@
+             bootCallbacks.clear();
+             bootState = BootState::Inactive;
+             bootPriority = 0;
++            bootCallbackIndex = bootCallbackArgument = 0;
++            asyncThread = asyncModule = asyncArguments = 0;
+             nextModuleId = 1;
+             moduleCursor = kModuleLoadBase;
+             totalCycles = cycle;
+@@ -260,6 +263,7 @@
+         {
+             Handled,
+             JumpToGuest,
++            Blocked,
+             Missing,
+         };
+ 
+@@ -409,6 +413,7 @@
+             }
+             if (iequals(call.library, "sifcmd"))
+             {
++                if (call.ordinal == 4u && rpc.waitForCommandInit(cpu)) return ImportDisposition::Blocked;
+                 return rpc.dispatchSifCmdImport(call.ordinal, cpu)
+                            ? ImportDisposition::Handled
+                            : ImportDisposition::Missing;
+@@ -442,6 +447,8 @@
+             }
+             if (iequals(call.library, "ioman") && ioman.dispatchImport(call.ordinal, cpu, *this))
+                 return ImportDisposition::Handled;
++            if (iequals(call.library, "sifman") && call.ordinal == 5u && rpc.waitForSifInit(cpu))
++                return ImportDisposition::Blocked;
+             if (iequals(call.library, "sifman") && call.ordinal == 32u)
+             {
+                 // sceSifSetDmaIntr(transfers, count, completion, data): sceSifSetDma
+@@ -530,7 +537,7 @@
+                 const ImportDisposition disposition = dispatchImport(*import, cpu);
+                 ++totalInstructions;
+                 ++totalCycles;
+-                if (disposition == ImportDisposition::JumpToGuest)
++                if (disposition == ImportDisposition::JumpToGuest || disposition == ImportDisposition::Blocked)
+                     return true;
+                 cpu.pc = cpu.gpr[31];
+                 cpu.branchPending = false;
+@@ -680,22 +687,80 @@
+             catch (...) { freeAllocation(argument); throw; }
+         }
+ 
+-        void finishBootstrap()
+-        {
+-            if (bootState == BootState::Complete) return;
+-            if (bootState != BootState::Pending)
++        void startNativeCall(uint32_t function, uint32_t gp, uint32_t a0, uint32_t a1, uint32_t a2 = 0, uint32_t a3 = 0)
++        {
++            if (asyncThread) throw std::runtime_error("IOP bootstrap call already active");
++            const auto descriptor = allocate(20);
++            if (!descriptor) throw std::runtime_error("Cannot allocate IOP bootstrap thread descriptor");
++            // PS2SDK thcommon.c starts the bootstrap thread at priority 1.
++            const uint32_t words[] = {0x02000000u, 0, function, kCallStackSize, 1};
++            writeRam(descriptor, words, sizeof(words));
++            CpuState control{};
++            control.gpr[4] = descriptor;
++            control.gpr[28] = gp;
++            if (!kernel.dispatchThreadImport(4, control, totalCycles))
++                throw std::runtime_error("Cannot create IOP bootstrap thread");
++            freeAllocation(descriptor);
++            if (int32_t(control.gpr[2]) <= 0) throw std::runtime_error("Cannot create IOP bootstrap thread");
++            asyncThread = control.gpr[2];
++            control.gpr[4] = asyncThread;
++            control.gpr[5] = a0;
++            control.gpr[6] = a1;
++            if (!kernel.dispatchThreadImport(7, control, totalCycles))
++                throw std::runtime_error("Cannot start IOP bootstrap thread");
++            if (control.gpr[2]) throw std::runtime_error("Cannot start IOP bootstrap thread");
++            auto* thread = kernel.findThread(asyncThread);
++            thread->cpu.gpr[6] = a2;
++            thread->cpu.gpr[7] = a3;
++            lastError.clear();
++        }
++
++        std::optional<uint32_t> pollNativeCall()
++        {
++            if (!lastError.empty()) throw std::runtime_error(lastError);
++            auto* thread = kernel.findThread(asyncThread);
++            if (!thread) throw std::runtime_error("IOP bootstrap thread was removed before completion");
++            if (thread->cpu.pc != kThreadReturnSentinel) {
++                if (thread->state == IopThreadState::Dormant || thread->cpu.stopped)
++                    throw std::runtime_error("IOP bootstrap initializer stopped without returning");
++                return std::nullopt;
++            }
++            const auto value = thread->cpu.gpr[2];
++            CpuState control{}; control.gpr[4] = asyncThread;
++            if (!kernel.dispatchThreadImport(5, control, totalCycles))
++                throw std::runtime_error("Cannot release IOP bootstrap thread");
++            asyncThread = 0;
++            return value;
++        }
++
++        bool advanceBootstrapCallbacks()
++        {
++            if (bootState == BootState::Complete) return true;
++            if (bootState != BootState::Pending && bootState != BootState::Completing)
+                 throw std::runtime_error("IOP bootstrap callbacks are not pending");
+-            bootState = BootState::Completing;
++            if (bootState == BootState::Pending) {
++                bootState = BootState::Completing;
++                bootPriority = 0; bootCallbackIndex = 0;
++            }
+             try
+             {
+-                for (bootPriority = 0; bootPriority < 4; ++bootPriority)
++                if (bootCallbackArgument) {
++                    if (!pollNativeCall()) return false;
++                    freeAllocation(bootCallbackArgument);
++                    bootCallbackArgument = 0;
++                }
++                for (; bootPriority < 4; ++bootPriority, bootCallbackIndex = 0)
+                 {
+-                    for (size_t i = 0; i < bootCallbacks.size(); ++i)
++                    while (bootCallbackIndex < bootCallbacks.size())
+                     {
+-                        const auto callback = bootCallbacks[i]; // Registration may append during a callback.
++                        const auto callback = bootCallbacks[bootCallbackIndex++];
+                         if (callback.priority != bootPriority) continue;
+-                        const auto& next = bootCallbacks[bootPriority == 3 ? i : 0];
+-                        invokeBootCallback(callback, next.function | next.priority, 1);
++                        const auto& next = bootCallbacks[bootPriority == 3 ? bootCallbackIndex - 1 : 0];
++                        bootCallbackArgument = allocate(sizeof(uint32_t));
++                        if (!bootCallbackArgument) throw std::runtime_error("Cannot allocate IOP post-boot callback argument");
++                        memory.write32(bootCallbackArgument, next.function | next.priority);
++                        startNativeCall(callback.function, callback.gp, bootCallbackArgument, 1);
++                        return false;
+                     }
+                     if (bootPriority == 2)
+                         while (!bootCallbacks.empty() && bootCallbacks.back().priority != 3)
+@@ -703,8 +768,21 @@
+                 }
+                 bootCallbacks.clear();
+                 bootState = BootState::Complete;
++                return true;
+             }
+             catch (...) { bootState = BootState::Failed; throw; }
++        }
++
++        void finishBootstrap()
++        {
++            const auto deadline = totalCycles + kIopClockHz;
++            while (!advanceBootstrapCallbacks()) {
++                if (totalCycles >= deadline) {
++                    bootState = BootState::Failed;
++                    throw std::runtime_error("IOP post-boot callbacks did not complete synchronously");
++                }
++                runCycles(kDefaultSlice);
++            }
+         }
+ 
+         bool canRunThreads() const override { return activeCpu == nullptr; }
+@@ -836,7 +914,7 @@
+             }
+         }
+ 
+-        ModuleLoadResult loadImage(std::string path, std::span<const uint8_t> image, const void *arguments, uint32_t argumentSize)
++        ModuleLoadResult loadImage(std::string path, std::span<const uint8_t> image, const void *arguments, uint32_t argumentSize, bool deferred = false)
+         {
+             ModuleLoadResult result{true, -1, -1};
+             const IopImageLoadResult loaded = IopModuleLoader::load(image, memory, moduleCursor);
+@@ -887,6 +965,13 @@
+                     write8(args + argumentSize, 0u);
+                 }
+             }
++            if (deferred) {
++                asyncModule = module.id;
++                asyncArguments = args;
++                modules[module.id] = std::move(module);
++                startNativeCall(modules[asyncModule].entry, modules[asyncModule].gp, argumentSize, args);
++                return {true, static_cast<int32_t>(asyncModule), std::numeric_limits<int32_t>::min()};
++            }
+             const auto nativeStart = totalNativeInstructions, decodedStart = totalDecodedInstructions;
+             const uint32_t startResult = callFunction(module.entry, argumentSize, args, 0u, 0u, module.gp);
+             if (args)
+@@ -907,7 +992,7 @@
+             return result;
+         }
+ 
+-        ModuleLoadResult loadModule(std::string_view path, const void *arguments, uint32_t argumentSize)
++        ModuleLoadResult loadModule(std::string_view path, const void *arguments, uint32_t argumentSize, bool deferred = false)
+         {
+             std::vector<uint8_t> image;
+             if (!IopModuleLoader::readWholeHostFile(host, path, image))
+@@ -915,7 +1000,22 @@
+                 log(LogLevel::Warning, std::string("[IOP] failed to open IRX '") + std::string(path) + "'");
+                 return {true, -1, -1};
+             }
+-            return loadImage(std::string(path), image, arguments, argumentSize);
++            return loadImage(std::string(path), image, arguments, argumentSize, deferred);
++        }
++
++        std::optional<ModuleLoadResult> pollBootstrapModule()
++        {
++            if (!asyncModule) throw std::runtime_error("No IOP bootstrap module is pending");
++            const auto start = pollNativeCall();
++            if (!start) return std::nullopt;
++            ModuleLoadResult result{true, static_cast<int32_t>(asyncModule), static_cast<int32_t>(*start)};
++            modules.at(asyncModule).resident = *start == 0u || *start == 2u;
++            if (asyncArguments) freeAllocation(asyncArguments);
++            asyncArguments = asyncModule = 0;
++            std::ostringstream out;
++            out << "[IOP-BOOT] initializer completed id=" << result.moduleId << " start=" << result.startResult;
++            log(LogLevel::Info, out.str());
++            return result;
+         }
+ 
+         ModuleLoadResult loadModuleBuffer(uint32_t guestAddress, const void *arguments, uint32_t argumentSize)
+@@ -984,6 +1084,9 @@
+         std::vector<BootCallback> bootCallbacks;
+         BootState bootState = BootState::Inactive;
+         uint32_t bootPriority = 0;
++        size_t bootCallbackIndex = 0;
++        uint32_t bootCallbackArgument = 0;
++        uint32_t asyncThread = 0, asyncModule = 0, asyncArguments = 0;
+         bool aotOnly = false;
+         bool servicingDmaInterrupts = false;
+         bool servicingGuestCallbacks = false;
+@@ -1059,9 +1162,13 @@
+     {
+         const auto cycles = m_impl->totalCycles;
+         const auto carry = m_impl->eeCycleCarry;
++        const auto eeFlags = m_impl->rpc.readSifRegister(3);
++        const auto eeCommand = m_impl->rpc.readSifRegister(1);
+         m_impl->reset(cycles);
++        m_impl->rpc.writeSifRegister(3, eeFlags);
++        m_impl->rpc.writeSifRegister(1, eeCommand);
+         m_impl->eeCycleCarry = carry;
+-        m_impl->rpc.holdBootEnd(true);
++        m_impl->rpc.beginBoot();
+         m_impl->aotOnly = true;
+         m_impl->bootState = Impl::BootState::Pending;
+     }
+@@ -1069,6 +1176,24 @@
+     void IopEmulator::finishBootstrap()
+     {
+         m_impl->finishBootstrap();
++    }
++
++    bool IopEmulator::advanceBootstrapCallbacks()
++    {
++        return m_impl->advanceBootstrapCallbacks();
++    }
++
++    void IopEmulator::beginBootstrapModule(std::string_view path)
++    {
++        if (m_impl->asyncThread || m_impl->asyncModule)
++            throw std::runtime_error("IOP bootstrap module is already pending");
++        const auto result = m_impl->loadModule(path, nullptr, 0, true);
++        if (result.moduleId <= 0) throw std::runtime_error("[IOP-BOOT] cannot prepare " + std::string(path));
++    }
++
++    std::optional<ModuleLoadResult> IopEmulator::pollBootstrapModule()
++    {
++        return m_impl->pollBootstrapModule();
+     }
+ 
+     std::optional<std::string> IopEmulator::takeResetRequest()
+--- a/ps2xIOP/src/emulator/iop_emulator.h
++++ b/ps2xIOP/src/emulator/iop_emulator.h
+@@ -24,6 +24,9 @@
+         void reset();
+         void reboot();
+         void finishBootstrap();
++        bool advanceBootstrapCallbacks();
++        void beginBootstrapModule(std::string_view path);
++        std::optional<ModuleLoadResult> pollBootstrapModule();
+         std::optional<std::string> takeResetRequest();
+         void holdBootEnd(bool hold);
+         void setUsbDisconnectedMode(bool active);
+--- a/ps2xIOP/src/emulator/services/iop_rpc.cpp
++++ b/ps2xIOP/src/emulator/services/iop_rpc.cpp
+@@ -17,6 +17,12 @@
+ 
+ namespace ps2x::iop::detail
+ {
++    namespace {
++        // PS2SDK sifman.h/sifdma.h: transport initialization and command initialization are distinct.
++        constexpr uint32_t kSifInit = 0x10000u;
++        constexpr uint32_t kCommandInit = 0x20000u;
++    }
++
+     IopRpcBridge::IopRpcBridge(IopHost &host, IopMemory &memory, IopKernel &kernel) noexcept
+         : m_host(host), m_memory(memory), m_kernel(kernel)
+     {
+@@ -27,6 +33,9 @@
+         m_servers.clear();
+         m_resetRequest.reset();
+         m_holdBootEnd = false;
++        m_requireSifHandshake = false;
++        m_sifInitWaiters.clear();
++        m_commandInitWaiters.clear();
+         m_nextDmaId = 1u;
+         m_sifInitialized = false;
+         m_commandBuffer = 0;
+@@ -37,6 +46,44 @@
+         m_call = {};
+     }
+ 
++    void IopRpcBridge::beginBoot()
++    {
++        m_holdBootEnd = true;
++        m_requireSifHandshake = true;
++        m_sifRegisters[4] = 0;
++    }
++
++    bool IopRpcBridge::waitForSifInit(IopCpuState& cpu)
++    {
++        if (!m_requireSifHandshake || m_sifInitialized || (readSifRegister(3) & kSifInit)) return false;
++        const auto* thread = m_kernel.currentThread();
++        if (!thread) throw std::runtime_error("SIF initialization requires a resumable IOP thread");
++        if (std::find(m_sifInitWaiters.begin(), m_sifInitWaiters.end(), thread->id) == m_sifInitWaiters.end()) {
++            m_sifInitWaiters.push_back(thread->id);
++            if (const char* trace = std::getenv("PS2N_DEVICE_TRACE"); trace && trace[0] && trace[0] != '0') {
++                std::ostringstream message;
++                message << "[SIF-INIT] waiting for EE MSFLAG=0x" << std::hex << readSifRegister(3);
++                m_host.log(LogLevel::Debug, message.str());
++            }
++        }
++        m_kernel.sleepCurrent(cpu);
++        return true;
++    }
++
++    bool IopRpcBridge::waitForCommandInit(IopCpuState& cpu)
++    {
++        if (!readSifRegister(2)) throw std::runtime_error("Cannot allocate IOP SIF command endpoint");
++        const auto found = m_sifRegisters.find(4);
++        m_sifRegisters[4] = (found == m_sifRegisters.end() ? 0u : found->second) | kCommandInit;
++        if (!m_requireSifHandshake || m_eeCommandBuffer) return false;
++        const auto* thread = m_kernel.currentThread();
++        if (!thread) throw std::runtime_error("SIF command initialization requires a resumable IOP thread");
++        if (std::find(m_commandInitWaiters.begin(), m_commandInitWaiters.end(), thread->id) == m_commandInitWaiters.end())
++            m_commandInitWaiters.push_back(thread->id);
++        m_kernel.sleepCurrent(cpu);
++        return true;
++    }
++
+     bool IopRpcBridge::dispatchSifManImport(uint16_t ordinal, IopCpuState &cpu)
+     {
+         const auto setV0 = [&](uint32_t value)
+@@ -45,9 +92,15 @@
+         };
+         switch (ordinal)
+         {
+-        case 4: // sceSifDma2Init
+-        case 5: // sceSifInit
+-            m_sifInitialized = true;
++        case 4: // sceSifDma2Init does not complete the SIF handshake.
++            setV0(0u);
++            return true;
++        case 5: // The executor suspends this import until the EE's MSFLAG is ready.
++            if (!m_sifInitialized) {
++                m_sifInitialized = true;
++                const auto found = m_sifRegisters.find(4);
++                m_sifRegisters[4] = (found == m_sifRegisters.end() ? 0u : found->second) | kSifInit;
++            }
+             setV0(0u);
+             return true;
+         case 7: // sceSifSetDma
+@@ -451,10 +504,23 @@
+             if (!m_host.readGuest(packet[4], receive.data(), receive.size())) return;
+             m_eeCommandBuffer = packet[4];
+             m_sifInitialized = true;
++            m_sifRegisters[3] = readSifRegister(3) & ~kCommandInit;
++            IopCpuState status{};
++            if (!m_kernel.dispatchThreadImport(41, status, 0) ||
++                !m_kernel.setInternalEventFlag(static_cast<int>(status.gpr[2]), 0x100u))
++                throw std::runtime_error("Cannot signal IOP command initialization");
++            for (const auto id : m_commandInitWaiters)
++                if (auto* thread = m_kernel.findThread(id); thread && thread->state == IopThreadState::Sleep)
++                    thread->state = IopThreadState::Ready;
++            m_commandInitWaiters.clear();
+             return;
+         }
+         if (command == 0x80000002u && option == 1 && m_eeCommandBuffer)
+         {
++            IopCpuState status{};
++            if (!m_kernel.dispatchThreadImport(41, status, 0) ||
++                !m_kernel.setInternalEventFlag(static_cast<int>(status.gpr[2]), 0x800u))
++                throw std::runtime_error("Cannot signal IOP RPC initialization");
+             // RPC is supplied by this same kernel/service bridge. Acknowledge
+             // through the EE command interrupt; the original handler sets SREG.
+             const uint32_t response[] = {24u, 0u, 0x80000001u, 0u, 0u, 1u};
+@@ -510,6 +576,12 @@
+         if (reg == 3u) value |= previous;      // EE sets MSFLAG; IOP clears it.
+         else if (reg == 4u) value = previous & ~value; // EE clears SMFLAG; IOP sets it.
+         m_sifRegisters.insert_or_assign(reg, value);
++        if (reg == 3u && (value & kSifInit)) {
++            for (const auto id : m_sifInitWaiters)
++                if (auto* thread = m_kernel.findThread(id); thread && thread->state == IopThreadState::Sleep)
++                    thread->state = IopThreadState::Ready;
++            m_sifInitWaiters.clear();
++        }
+         return previous;
+     }
+ 
+--- a/ps2xIOP/src/emulator/services/iop_rpc.h
++++ b/ps2xIOP/src/emulator/services/iop_rpc.h
+@@ -62,6 +62,9 @@
+         void flushSifCommands();
+         std::optional<std::string> takeResetRequest();
+         void holdBootEnd(bool hold) { m_holdBootEnd = hold; }
++        void beginBoot();
++        bool waitForSifInit(IopCpuState& cpu);
++        bool waitForCommandInit(IopCpuState& cpu);
+         uint32_t readSifRegister(uint32_t reg);
+         uint32_t writeSifRegister(uint32_t reg, uint32_t value);
+         void removeServersInRange(uint32_t base, uint32_t size);
+@@ -91,6 +94,9 @@
+         uint32_t m_nextDmaId = 1u;
+         bool m_sifInitialized = false;
+         bool m_holdBootEnd = false;
++        bool m_requireSifHandshake = false;
++        std::vector<int> m_sifInitWaiters;
++        std::vector<int> m_commandInitWaiters;
+         std::optional<std::string> m_resetRequest;
+         uint32_t m_commandBuffer = 0;
+         uint32_t m_eeCommandBuffer = 0;
+--- a/ps2xIOP/src/iop_subsystem.cpp
++++ b/ps2xIOP/src/iop_subsystem.cpp
+@@ -85,6 +85,53 @@
+             host.log(hle ? LogLevel::Info : LogLevel::Warning, message);
+         }
+ 
++        void completeBootstrapModule(const ModuleLoadResult& result, const std::string& path, bool hle)
++        {
++            if (result.moduleId <= 0 || result.startResult < 0 || result.startResult > 2)
++                throw std::runtime_error("[IOP-BOOT] bootstrap incomplete at " + path);
++            if (result.startResult == 1) {
++                if (hle || !emulator.stopModule(result.moduleId, nullptr))
++                    throw std::runtime_error("[IOP-BOOT] could not release non-resident module " + path);
++                host.log(LogLevel::Info, "[IOP-BOOT] non-resident completion " + path);
++            } else if (!hle) moduleManager.observePhysicalLoad(result.moduleId, path);
++            rebuildRoutes();
++        }
++
++        void advanceBootstrap()
++        {
++            if (!bootActive) return;
++            while (bootIndex < bootModules.size())
++            {
++                const auto& module = bootModules[bootIndex];
++                const auto path = "rom0:" + module;
++                if (bootModulePending) {
++                    const auto result = emulator.pollBootstrapModule();
++                    if (!result) return;
++                    bootModulePending = false;
++                    completeBootstrapModule(*result, path, false);
++                } else {
++                    constexpr std::string_view kernel[] = {"SYSMEM", "LOADCORE", "SYSCLIB", "HEAPLIB",
++                        "VBLANK", "IOMAN", "STDIO", "SIFMAN", "SIFCMD", "SIFINIT", "MODLOAD"};
++                    const bool hle = std::find(std::begin(kernel), std::end(kernel), module) != std::end(kernel);
++                    host.log(LogLevel::Info, "[IOP-BOOT] starting " + path + (hle ? " HLE" : " AOT"));
++                    if (hle) completeBootstrapModule(moduleManager.loadHle(path), path, true);
++                    else {
++                        emulator.beginBootstrapModule(path);
++                        bootModulePending = true;
++                        return;
++                    }
++                }
++                ++bootIndex;
++            }
++            if (!emulator.advanceBootstrapCallbacks()) return;
++            emulator.holdBootEnd(false);
++            bootActive = false;
++            host.log(LogLevel::Info, (emulator.readSifRegister(4) & 0x40000u)
++                ? "[IOP-BOOT] original module bootstrap completed"
++                : "[IOP-BOOT] modules started; waiting for original EESYNC completion");
++            bootModules.clear();
++        }
++
+         IopHost &host;
+         detail::ServiceList coreServices;
+         std::unordered_map<uint32_t, detail::IopService *> routes;
+@@ -93,6 +140,10 @@
+         std::string lastError;
+         detail::IopModuleManager moduleManager;
+         detail::IopEmulator emulator;
++        std::vector<std::string> bootModules;
++        size_t bootIndex = 0;
++        bool bootActive = false, bootModulePending = false;
++        std::string bootError;
+     };
+ 
+     IopSubsystem::IopSubsystem(IopHost &host)
+@@ -106,6 +157,10 @@
+ 
+     void IopSubsystem::reset()
+     {
++        m_impl->bootModules.clear();
++        m_impl->bootIndex = 0;
++        m_impl->bootActive = m_impl->bootModulePending = false;
++        m_impl->bootError.clear();
+         m_impl->moduleManager.reset();
+         m_impl->loadOutcomes.clear();
+         m_impl->loggedLoadPaths.clear();
+@@ -174,7 +229,20 @@
+ 
+     void IopSubsystem::runEeCycles(uint64_t eeCycles) noexcept
+     {
+-        m_impl->emulator.runEeCycles(eeCycles);
++        if (!m_impl->bootError.empty()) return;
++        try {
++            m_impl->advanceBootstrap();
++            m_impl->emulator.runEeCycles(eeCycles);
++            m_impl->advanceBootstrap();
++        } catch (const std::exception& error) {
++            m_impl->bootError = error.what();
++            m_impl->bootActive = false;
++            m_impl->host.log(LogLevel::Error, m_impl->bootError);
++        } catch (...) {
++            m_impl->bootError = "[IOP-BOOT] unknown bootstrap failure";
++            m_impl->bootActive = false;
++            m_impl->host.log(LogLevel::Error, m_impl->bootError);
++        }
+     }
+ 
+     RpcAbi IopSubsystem::selectRpcAbi(const RpcAbiRequest &request) const
+@@ -235,6 +303,7 @@
+ 
+     uint32_t IopSubsystem::readSifRegister(uint32_t reg)
+     {
++        if (!m_impl->bootError.empty()) throw std::runtime_error(m_impl->bootError);
+         return m_impl->emulator.readSifRegister(reg);
+     }
+ 
+@@ -255,39 +324,17 @@
+         m_impl->emulator.onSifTransfer(transfer);
+         const auto request = m_impl->emulator.takeResetRequest();
+         if (!request) return;
+-        const auto modules = detail::IopModuleLoader::readBootModules(m_impl->host, *request);
++        auto modules = detail::IopModuleLoader::readBootModules(m_impl->host, *request);
+         m_impl->host.log(LogLevel::Info, "[IOP-BOOT] RESET accepted; original IOPBTCONF modules=" + std::to_string(modules.size()));
+         m_impl->moduleManager.reset();
+         for (auto& service : m_impl->coreServices) service->reset();
+         m_impl->emulator.reboot();
++        m_impl->bootModules = std::move(modules);
++        m_impl->bootIndex = 0;
++        m_impl->bootActive = true;
++        m_impl->bootModulePending = false;
++        m_impl->bootError.clear();
+         m_impl->rebuildRoutes();
+-        for (const auto& module : modules)
+-        {
+-            const auto path = "rom0:" + module;
+-            // Only the kernel libraries implemented by this same IOP are HLE.
+-            // Device drivers and unknown libraries must execute their original AOT.
+-            constexpr std::string_view kernel[] = {"SYSMEM", "LOADCORE", "SYSCLIB", "HEAPLIB",
+-                "VBLANK", "IOMAN", "STDIO", "SIFMAN", "SIFCMD", "SIFINIT", "MODLOAD"};
+-            const bool hle = std::find(std::begin(kernel), std::end(kernel), module) != std::end(kernel);
+-            m_impl->host.log(LogLevel::Info, "[IOP-BOOT] starting " + path + (hle ? " HLE" : " AOT"));
+-            const auto result = hle ? m_impl->moduleManager.loadHle(path)
+-                                   : m_impl->emulator.loadModule(path, nullptr, 0);
+-            if (result.moduleId <= 0 || result.startResult < 0 || result.startResult > 2)
+-                throw std::runtime_error("[IOP-BOOT] bootstrap incomplete at " + path);
+-            if (result.startResult == 1) {
+-                // MODULE_NO_RESIDENT_END: the original initializer completed without staying loaded.
+-                if (hle || !m_impl->emulator.stopModule(result.moduleId, nullptr))
+-                    throw std::runtime_error("[IOP-BOOT] could not release non-resident module " + path);
+-                m_impl->host.log(LogLevel::Info, "[IOP-BOOT] non-resident completion " + path);
+-            } else if (!hle) m_impl->moduleManager.observePhysicalLoad(result.moduleId, path);
+-            m_impl->rebuildRoutes();
+-        }
+-        m_impl->emulator.finishBootstrap();
+-        // EESYNC must actually publish BOOTEND; a loaded-module count is not completion.
+-        m_impl->emulator.holdBootEnd(false);
+-        m_impl->host.log(LogLevel::Info, (m_impl->emulator.readSifRegister(4) & 0x40000u)
+-            ? "[IOP-BOOT] original module bootstrap completed"
+-            : "[IOP-BOOT] modules started; waiting for original EESYNC completion");
+     }
+ 
+     uint32_t IopSubsystem::allocateMemory(uint32_t size, uint32_t alignment)
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -1,5 +1,6 @@
+ #include "runtime/ps2_memory.h"
+ #include "ps2_transfer_state.h"
++#include "ps2x/iop/iop_subsystem.h"
+ #include "runtime/ps2_address.h"
+ #include "runtime/gs/gs_frontend.h"
+ #include "ps2_log.h"
+@@ -340,7 +341,9 @@
+     m_path3MaskedFifo.clear();
+     m_vif1PendingPath2ImageQwc = 0u;
+     m_vif1PendingPath2DirectHl = false;
++    auto* const iop = transferState()->iop;
+     *transferState() = TransferState{};
++    transferState()->iop = iop;
+     resetEeTimers();
+ 
+     try
+@@ -1137,6 +1140,15 @@
+ 
+ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+ {
++    if (address >= 0x1000f200u && address <= 0x1000f230u && !(address & 0xfu)) {
++        const auto reg = (address - 0x1000f200u) / 16u + 1u;
++        if (reg == 2u) return true; // SMCOM is written by the IOP.
++        if (auto* iop = transferState()->iop) iop->writeSifRegister(reg, value);
++        else if (reg == 3u) m_ioRegisters[address] |= value;
++        else if (reg == 4u) m_ioRegisters[address] &= ~value;
++        else m_ioRegisters[address] = value;
++        return true;
++    }
+     size_t timerIndex = 0u;
+     uint32_t timerOffset = 0u;
+     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
+@@ -2545,9 +2557,11 @@
+ 
+         if (address >= 0x1000F200 && address <= 0x1000F260)
+         {
+-            if (address == 0x1000F230)
+-            {
+-                return 0x60000;
++            if (address <= 0x1000f230u && !(address & 0xfu)) {
++                if (auto* iop = transferState()->iop)
++                    return iop->readSifRegister((address - 0x1000f200u) / 16u + 1u);
++                const auto found = m_ioRegisters.find(address);
++                return found == m_ioRegisters.end() ? 0u : found->second;
+             }
+             if (address == 0x1000F240)
+             {
+--- a/ps2xRuntime/src/lib/ps2_transfer_state.h
++++ b/ps2xRuntime/src/lib/ps2_transfer_state.h
+@@ -1,6 +1,8 @@
+ #pragma once
+ 
+ #include "runtime/ps2_memory.h"
++
++namespace ps2x::iop { class IopSubsystem; }
+ 
+ // Owned by PS2Memory and used only by the EE executor. Kept out of the public ABI.
+ struct PS2Memory::TransferState
+@@ -8,6 +10,8 @@
+     std::array<std::vector<uint8_t>, 2> vif;
+     std::vector<uint8_t> gif;
+     std::vector<uint8_t> path3; // PATH3 bytes of a GIF tag whose payload has not arrived yet
++    ps2x::iop::IopSubsystem* iop = nullptr; // Registers share the runtime IOP state; no duplicate SIF flags.
++    bool eeSifInitialized = false;
+     uint32_t mode = 0;
+     bool consumerActive = false;
+     bool tagLoaded = false;
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1,3 +1,4 @@
++#include "ps2_transfer_state.h"
+ #include "ps2_runtime.h"
+ #include "vu_pcsx2/pcsx2_vu1_bridge.h"
+ #include "ps2_log.h"
+@@ -496,6 +497,7 @@
+ {
+     m_iopHost = std::make_unique<PS2IopHostAdapter>(*this);
+     m_iopSubsystem = std::make_unique<ps2x::iop::IopSubsystem>(*m_iopHost);
++    m_memory.transferState()->iop = m_iopSubsystem.get();
+ 
+     m_eeScheduler = std::make_unique<EeScheduler>(*this);
+ 
+@@ -544,6 +546,7 @@
+     try
+     {
+         requestStop();
++        m_memory.transferState()->iop = nullptr;
+         m_iopSubsystem.reset();
+         m_iopHost.reset();
+ #if defined(PLATFORM_VITA)
+@@ -627,6 +630,7 @@
+ 
+ void PS2Runtime::resetIop()
+ {
++    m_memory.transferState()->eeSifInitialized = false;
+     m_iopSubsystem->reset();
+ }
+ 
+@@ -667,6 +671,7 @@
+ 
+ bool PS2Runtime::syncCoreSubsystems()
+ {
++    m_memory.transferState()->iop = m_iopSubsystem.get();
+     uint8_t *const rdram = m_memory.getRDRAM();
+     uint8_t *const gsVram = m_memory.getGSVRAM();
+     if (!rdram || !gsVram)
+@@ -1044,7 +1049,7 @@
+         return false;
+     }
+ 
+-    m_iopSubsystem->reset();
++    resetIop();
+ 
+     ps2_game_overrides::applyMatching(*this,
+                                       elfPath,
+--- a/ps2xIOP/src/emulator/services/iop_module_loader.cpp
++++ b/ps2xIOP/src/emulator/services/iop_module_loader.cpp
+@@ -522,7 +522,12 @@
+         }
+         else
+         {
+-            base = minVaddr;
++            // Fixed-address images must reserve sysmem too; writes alone do not keep thread stacks out.
++            base = memory.allocate(span, 0x100u, minVaddr);
++            if (base == 0u) {
++                result.error = IopImageLoadError::ArenaExhausted;
++                return result;
++            }
+         }
+ 
+         if (hasLoad)
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
+@@ -2,6 +2,7 @@
+ #include "SIF.h"
+ #include "../Syscalls/RPC.h"
+ #include "../../ps2_iop_transport.h"
++#include "../../ps2_transfer_state.h"
+ #include "runtime/ps2_address.h"
+ #include "runtime/ee_scheduler.h"
+ 
+@@ -627,7 +628,16 @@
+         (void)rdram;
+         // SIF0 receives a chain with tag interrupts. The IOP transport completes
+         // packets and clears STR; the original EE handler re-arms after copying.
+-        if (runtime) runtime->memory().writeIORegister(0x1000c000u, (1u << 8) | (1u << 7) | (1u << 2));
++        if (runtime) {
++            if (!runtime->memory().getRDRAM()) throw std::runtime_error("SIF receive DMA requires initialized EE RAM");
++            runtime->memory().writeIORegister(0x1000c000u, (1u << 8) | (1u << 7) | (1u << 2));
++            auto& state = *runtime->memory().transferState();
++            if (!state.eeSifInitialized) {
++                // HLE EE kernel transport is now operational; PS2SDK SIF_STAT_SIFINIT is 0x10000.
++                PS2IopTransport::writeSifRegister(runtime, 3, 0x10000u);
++                state.eeSifInitialized = true;
++            }
++        }
+         setReturnS32(ctx, 0);
+     }
+ 

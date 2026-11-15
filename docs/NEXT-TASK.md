@@ -10,8 +10,25 @@ Contrato e estado vigentes: `docs/ARCHITECTURE.md`, seção Diretriz.
    FINISH/IRQ quando a thread GS o alcançar, sem relógio acelerado.
 2. paraLLEl-GS: comandos e VRAM já iguais ao CPU; corrigir o scanout preto
    das telas iniciais e a perda de dispositivo após readback local→host.
-3. BIOS: completar o bootstrap IOP por HLE (RESET `rom0:UDNL rom0:OSDCNF`)
-   e sinalizar BOOTEND só após conclusão real.
+3. BIOS (15/11): RESET `rom0:UDNL rom0:OSDCNF` inicia os 39 módulos,
+   com kernel/HLE compartilhado e dispositivos originais AOT. PRId 0x1F,
+   descarte de módulos não residentes e alias HEAPLIB superaram os bloqueios
+   anteriores. Callbacks `loadcore:20` preservam GP/prioridade/ordem/reset;
+   o [EESYNC original](https://github.com/ps2dev/ps2sdk/blob/master/iop/system/eesync/src/eesync.c)
+   agora publica BOOTEND por `sifman:24`, com semântica SMFLAG de set e
+   MSFLAG de clear. `GetSystemStatusFlag` fornece um evento real; REBOOT
+   deixa de chamar `modload:4` sem pedido. Testes AOT de callbacks, falha e
+   primitivas SIF passam. Corrigida a escrita EE de SMFLAG (clear):
+   Bootstrap retomável usa threads/relógio IOP existentes; SIFINIT espera
+   MSFLAG 0x10000 e CMDINIT espera o pacote EE real. O HLE EE anuncia prontidão
+   após armar SIF0 com RAM válida, preservada no reboot apenas do IOP.
+   Sessão BIOS de 30 s: os 39 módulos concluem, EESYNC publica BOOTEND,
+   SifIopSync e CMDINIT avançam. Próxima fronteira: pacote RPC_BIND
+   `0x80000009` chega ao bridge, que ainda não trata o protocolo RPC nativo;
+   completar essa cobertura HLE ou executar handlers originais requer decisão.
+   Referência: [PS2SDK sifrpc.c](https://github.com/ps2dev/ps2sdk/blob/master/ee/kernel/src/sifrpc.c).
+   Sem imagem/navegação do Browser.
+   `ioman:7`/write permanece sem tratamento.
 4. God of War (14/11, Windows x64/GS CPU): o patch 0061 descobre callbacks em
    `.data` executável sem dividir delay slots. O 0068 implementa `sceSifSetDmaIntr`
    (sifman:32), pelo qual o DBCMAN entrega o estado do Pad2 ao EE: o aviso de

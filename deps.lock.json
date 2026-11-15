@@ -1401,6 +1401,35 @@
           "ps2xIOP/src/emulator/services/iop_rpc.cpp": "a20ceb5560d7354caee1a141f6db821fb1edf9c6a4fe89d3e2688a0174ddae5c"
         },
         "hash_format": "utf8-lf"
+      },
+      {
+        "file": "patches/ps2recomp/0099-iop-resumable-firmware-bootstrap.patch",
+        "sha256": "e2609be2203d04eb470fe01bd78f1b2a9fe0203c83a0068b51f30da08f2deabd",
+        "base_files": {
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "5a0afff1564636262231ba05cbcbb36135a5a13876a42a2d75afe2169e47e2bc",
+          "ps2xIOP/src/emulator/iop_emulator.h": "0feb1174d412a9cee629761c2f2d46028e5a216e3a3f22d5108737ef5bb1847f",
+          "ps2xIOP/src/emulator/services/iop_rpc.cpp": "a20ceb5560d7354caee1a141f6db821fb1edf9c6a4fe89d3e2688a0174ddae5c",
+          "ps2xIOP/src/emulator/services/iop_rpc.h": "762dcf3abc47b034d08c1ae7a5128bcfe2e3058ad34618210f5b96f6dcc6c6e2",
+          "ps2xIOP/src/iop_subsystem.cpp": "cbe49c6f89d575094d44425ecc56735a9964653b6a345491c3602fd765543983",
+          "ps2xRuntime/src/lib/ps2_memory.cpp": "6730e34e8dcb6cee0c9d94e02c6b55e8cd17a30ed3d98a1cafac04f2072f4d47",
+          "ps2xRuntime/src/lib/ps2_transfer_state.h": "60c5c878c471a0b24818bfab59f6737299c895138980c46c86da8d36c7f49686",
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "b779d5263bc5224acbdf7a61f8e827386a8532862a5d9f0b8e8db47469bc7ddc",
+          "ps2xIOP/src/emulator/services/iop_module_loader.cpp": "2b0a845d916c94c9ffaadae5d861ba457a47945a2887d2fd7cd6abba4eab8ca8",
+          "ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp": "ef418b6490febb492e4fc2ee59e6552ffbaf6f20009911cbb9260ddb6226f3e9"
+        },
+        "files": {
+          "ps2xIOP/src/emulator/iop_emulator.cpp": "2b7b1d4029c615ba97193b00c65edfac45ed780c7c452895b28b5405b8f29015",
+          "ps2xIOP/src/emulator/iop_emulator.h": "a936a98a8a05778b88c782ecd339718b8435e84bbd3d2ab911ee4d63c268c66e",
+          "ps2xIOP/src/emulator/services/iop_rpc.cpp": "fbbc5a4ad7d983b7d6ae1286a7f460472a36ac0eccfe0998726842bcf65e085d",
+          "ps2xIOP/src/emulator/services/iop_rpc.h": "775e1431d1ff8ba2dbfe3bc4c463db2d7ee9b5c36ff60e1bfd5164b03aa8243f",
+          "ps2xIOP/src/iop_subsystem.cpp": "92ab601bd2e473d782437aaae9df2f3041a0c9de2547080061e8da4a94d377e5",
+          "ps2xRuntime/src/lib/ps2_memory.cpp": "d1c1d6a564170654320d871b05c60d32712e7aa89f3c0b99a0f65152a1f2053e",
+          "ps2xRuntime/src/lib/ps2_transfer_state.h": "abf9ce308c75c80887e0707c90cecaa0edcce440c29412206fe122f90bda5a48",
+          "ps2xRuntime/src/lib/ps2_runtime.cpp": "9cce6ad4ab7249da2f055f223dfb762857945af0698698cdd329dc01d17935aa",
+          "ps2xIOP/src/emulator/services/iop_module_loader.cpp": "f5fbbfd478b52fe8aa235d01c9d3ebab5319f0f05727f604fe5d0a88cc7ba251",
+          "ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp": "096f71e0a4b219eea85841d073fc3aa448ee8586c26ecb006756f9a80064b56b"
+        },
+        "hash_format": "utf8-lf"
       }
     ]
   },

@@ -485,6 +485,11 @@ static void sif_command_irq(uint8_t* ram, R5900Context* context, PS2Runtime* run
 static void native_sif_command_test() {
     auto runtime = std::make_unique<PS2Runtime>();
     auto other = std::make_unique<PS2Runtime>();
+    bool rejected = false;
+    try { ps2_stubs::sceSifSetDChain(nullptr,&runtime->cpu(),runtime.get()); }
+    catch(const std::runtime_error&) { rejected = true; }
+    require(rejected && PS2IopTransport::readSifRegister(runtime.get(),3)==0,
+            "EE transport advertised initialization without valid RAM");
     require(runtime->memory().initialize() && other->memory().initialize(), "SIF fixture RAM initialization");
     auto* ram = runtime->memory().getRDRAM();
     auto& context = runtime->cpu();
@@ -496,6 +501,16 @@ static void native_sif_command_test() {
         function(ram, &context, runtime.get());
         return getRegU32(&context, 2);
     };
+    require(runtime->memory().read32(0x1000f230)==call(ps2_stubs::sceSifGetReg,4) &&
+            !(runtime->memory().read32(0x1000f230)&0x40000),"SIF MMIO fabricated a separate BOOTEND");
+    runtime->memory().write32(0x1000f220,0x20000);
+    require(PS2IopTransport::readSifRegister(runtime.get(),3)==0x20000 &&
+            runtime->memory().read32(0x1000f220)==0x20000 && other->memory().read32(0x1000f220)==0,
+            "SIF MMIO and IOP flags are not shared or leaked across consoles");
+    runtime->memory().write32(0x1000f230,0x20000);
+    require(call(ps2_stubs::sceSifGetReg,4)==0,"EE MMIO clear did not reach the IOP SIF register");
+    PS2IopTransport::reset(runtime.get());
+    require(runtime->memory().read32(0x1000f220)==0,"IOP session reset retained stale SIF MMIO flags");
     require((call(ps2_stubs::sceSifGetReg, 4) & 0x20000) != 0, "IOP SIF command service did not initialize");
     const auto mailbox = call(ps2_stubs::sceSifGetReg, 2);
     require(mailbox && runtime->isIopMemoryRange(mailbox, 128), "Ready SIF endpoint has no physical IOP buffer");
@@ -514,6 +529,9 @@ static void native_sif_command_test() {
         const auto handler = scheduler.addIrqHandler(true, 5, 0x3000, false, 0, 0, 0);
         require(handler > 0 && scheduler.setIrqCauseEnabled(true, 5, true) >= 0, "Cannot register SIF0 interrupt fixture");
         call(ps2_stubs::sceSifSetDChain, 0);
+        require((runtime->memory().read32(0x1000f220)&0x10000) &&
+                (runtime->memory().readIORegister(0x1000c000)&0x100),
+                "EE SIFINIT was not backed by the armed receive DMA");
         require((runtime->memory().readIORegister(0x1000c000) & 0x100) != 0,
                 "SIF0 status read completed an unreceived DMA");
     };
@@ -556,6 +574,11 @@ static void native_sif_command_test() {
     require(sifIrqCalls == 2 && flag == 1, "Native command handler lost a queued handshake response");
     PS2IopTransport::reset(runtime.get());
     require(call(ps2_stubs::sceSifGetReg, 0x80000001) == 0, "IOP reset retained another session's SIF registers");
+    require(!(runtime->memory().read32(0x1000f220) & 0x10000), "Session reset retained EE transport readiness");
+    call(ps2_stubs::sceSifSetDChain, 0);
+    require((runtime->memory().read32(0x1000f220) & 0x10000) &&
+            !(runtime->memory().read32(0x1000f230) & 0x40000),
+            "New session did not reinitialize EE SIF or fabricated BOOTEND");
 }
 
 int main() {

@@ -60,7 +60,24 @@ static void post_boot_test() {
     IopEmulator iop(host);
     const auto word = [&](uint32_t address) { uint32_t v; require(iop.readMemory(address,&v,4),"Cannot read callback result"); return v; };
     const auto install = [&] { image.install(host); require(iop.loadModuleBuffer(0x1000,nullptr,0).startResult == 0,"Callback initializer failed"); };
-    iop.reboot(); install();
+    iop.reboot();
+    host.file = image.bytes;
+    iop.beginBootstrapModule("rom0:CALLBACK-TEST");
+    require(!iop.pollBootstrapModule(),"Prepared initializer was reported complete before running");
+    bool initialized = false;
+    for (unsigned i=0;i<1000;++i) {
+        iop.runEeCycles(8);
+        if (const auto result=iop.pollBootstrapModule()) {
+            require(result->startResult==0,"Resumable initializer returned the wrong result");
+            initialized=true; break;
+        }
+    }
+    require(initialized,"Resumable initializer did not progress on the IOP clock");
+    const auto allocation=iop.allocateMemory(32);
+    require(allocation>=0x10500 && iop.freeMemory(allocation),"Shared sysmem allocated over a fixed native module");
+    bool overlap=false;
+    try { iop.beginBootstrapModule("rom0:OVERLAP"); } catch(const std::runtime_error&) { overlap=true; }
+    require(overlap,"Overlapping fixed-address module replaced live native code");
     require(word(0x10400) == 0 && word(0x10440) == 0xaabbccdd,"Callback ran before boot completed or changed deferred status");
     iop.finishBootstrap();
     require(word(0x10400) == 0x1234,"Post-boot callbacks did not run in priority order");
@@ -84,6 +101,72 @@ static void post_boot_test() {
     failed=false;
     try { iop.finishBootstrap(); } catch(const std::runtime_error&) { failed=true; }
     require(failed,"Failed callback boot was treated as complete on retry");
+
+    Irx handshake;
+    IopAotModule handshakeModule;
+    boot_code<0x27bdfff0,0xafbf000c,0x0c004025,0,0x24080001,0x3c090001,
+        0xad280400,0x8fbf000c,0x24020000,0x27bd0010,0x03e00008,0>(handshake,handshakeModule,0);
+    handshake.words(0x80,{0x41e00000,0,0x101,0x6d666973,0x00006e61,0x03e00008,0x24000005,0,0});
+    handshakeModule.image=handshake.bytes;
+    registerIopAotModule(std::move(handshakeModule));
+    iop.reset(); iop.reboot(); host.file=handshake.bytes;
+    iop.beginBootstrapModule("rom0:SIF-TEST");
+    iop.runEeCycles(8000);
+    require(!iop.pollBootstrapModule() && word(0x10400)==0 && !(iop.readSifRegister(4)&0x10000),
+            "SIF initializer ran past the missing EE handshake");
+    // PS2SDK SIFINIT is 0x10000; CMDINIT alone must not satisfy the transport handshake.
+    iop.writeSifRegister(3,0x20000);
+    iop.runEeCycles(8000);
+    require(!iop.pollBootstrapModule() && word(0x10400)==0,"CMDINIT incorrectly satisfied SIFINIT");
+    iop.writeSifRegister(3,0x10000);
+    initialized=false;
+    for(unsigned i=0;i<1000;++i) {
+        iop.runEeCycles(8);
+        if(const auto result=iop.pollBootstrapModule()) {
+            require(result->startResult==0,"Resumed SIF initializer returned the wrong result");
+            initialized=true;break;
+        }
+    }
+    require(initialized && word(0x10400)==1 && (iop.readSifRegister(4)&0x10000),
+            "EE handshake did not resume the original SIF initializer");
+    iop.reboot();
+    require((iop.readSifRegister(3)&0x10000)!=0,"IOP reboot erased EE-owned MSFLAG");
+    iop.reset();iop.reboot();
+    iop.beginBootstrapModule("rom0:SIF-TEST");iop.runEeCycles(8000);
+    iop.reboot();
+    failed=false;
+    try { (void)iop.pollBootstrapModule(); } catch(const std::runtime_error&) {failed=true;}
+    require(failed && iop.threadCount()==0 && !(iop.readSifRegister(4)&0x40000),
+            "Reset retained a suspended initializer or fabricated BOOTEND");
+
+    Irx commands;
+    IopAotModule commandModule;
+    boot_code<0x27bdfff0,0xafbf000c,0x0c004025,0,0x0c004035,0,
+        0x24080001,0x3c090001,0xad280400,0x8fbf000c,0x24020000,0x27bd0010,0x03e00008,0>(commands,commandModule,0);
+    commands.words(0x80,{0x41e00000,0,0x101,0x6d666973,0x00006e61,0x03e00008,0x24000005,0,0});
+    commands.words(0xc0,{0x41e00000,0,0x101,0x63666973,0x0000646d,0x03e00008,0x24000004,0,0});
+    commandModule.image=commands.bytes;
+    registerIopAotModule(std::move(commandModule));
+    iop.reset();iop.reboot();iop.writeSifRegister(3,0x10000);host.file=commands.bytes;
+    iop.beginBootstrapModule("rom0:CMD-TEST");iop.runEeCycles(8000);
+    require(!iop.pollBootstrapModule() && word(0x10400)==0 && (iop.readSifRegister(4)&0x30000)==0x30000,
+            "Command initializer did not advertise its real endpoint while waiting for the EE address");
+    const uint32_t packet[]={20,0,0x80000002,0,0x800};
+    host.fill(0x800,112,0);
+    const auto mailbox=iop.readSifRegister(2);
+    require(iop.writeMemory(mailbox,packet,sizeof packet),"Cannot deliver command initialization packet");
+    SifTransfer transfer{};transfer.kind=SifTransferKind::SetDma;transfer.phase=SifTransferPhase::AfterCopy;
+    transfer.destinationAddress=mailbox;transfer.size=sizeof packet;
+    iop.onSifTransfer(transfer);
+    initialized=false;
+    for(unsigned i=0;i<1000;++i) {
+        iop.runEeCycles(8);
+        if(const auto result=iop.pollBootstrapModule()) {
+            require(result->startResult==0,"Command initializer returned the wrong result");
+            initialized=true;break;
+        }
+    }
+    require(initialized && word(0x10400)==1,"EE command packet did not resume the original initializer");
 }
 
 static void boot_primitives_test() {
@@ -192,15 +275,22 @@ static void boot_contract_test() {
         try { sendReset(mode, terminated); } catch (const std::runtime_error&) { failed = true; }
         require(failed && iop.debugSnapshot().emulatorCycles == cycles, "Malformed RESET altered live IOP state");
     }
+    sendReset(0, true);
+    require(iop.debugSnapshot().emulatorCycles == cycles, "IOP reboot restarted the shared hardware clock");
     bool incomplete = false;
-    try { sendReset(0, true); }
-    catch (const std::runtime_error& error) {
-        incomplete = std::string(error.what()).find("bootstrap incomplete at rom0:EXCEPMAN") != std::string::npos;
+    for(unsigned i=0;i<16 && !incomplete;++i) {
+        iop.runEeCycles(8);
+        try { require(!(iop.readSifRegister(4)&0x40000),"Pending bootstrap exposed BOOTEND"); }
+        catch(const std::runtime_error& error) {
+            incomplete=std::string(error.what()).find("rom0:EXCEPMAN")!=std::string::npos;
+            if(!incomplete) throw;
+        }
     }
     require(incomplete, "Missing original module falsely completed bootstrap");
-    require(iop.debugSnapshot().emulatorCycles == cycles, "IOP reboot restarted the shared hardware clock");
     iop.writeSifRegister(4, 0x60000);
-    require(!(iop.readSifRegister(4) & 0x40000), "Failed bootstrap exposed premature BOOTEND");
+    bool failedRead=false;
+    try { (void)iop.readSifRegister(4); } catch(const std::runtime_error&) {failedRead=true;}
+    require(failedRead,"Failed bootstrap error did not propagate to the EE boundary");
     // Original BIOS execution must never fall back to the SDK interpreter.
     ps2x::iop::detail::IopEmulator nativeOnly(host);
     nativeOnly.reboot();
