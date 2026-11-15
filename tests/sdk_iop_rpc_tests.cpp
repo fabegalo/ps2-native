@@ -10,6 +10,18 @@
 
 using namespace iop_test;
 
+struct WireHost : Host {
+    std::vector<std::array<uint32_t,16>> commands;
+    bool receiveReady = true;
+    bool sendSifCommand(uint32_t command, const void* packet, size_t size) override {
+        if (!receiveReady) return false;
+        require(command == 0x80000008u && size == 64u, "Unexpected native RPC response framing");
+        commands.emplace_back();
+        std::memcpy(commands.back().data(), packet, size);
+        return true;
+    }
+};
+
 // Small offline-compiled fixture; no runtime instruction decoder is used after reboot.
 template <uint32_t Word>
 static bool boot_instruction(ps2x::iop::detail::IopCpuState& cpu,
@@ -330,7 +342,7 @@ int main() {
         boot_primitives_test();
         boot_contract_test();
         constexpr uint32_t sid = 0xA11CE055u;
-        Host host;
+        WireHost host;
         IopSubsystem iop(host);
         const auto heaplib = iop.loadModule("rom0:HEAPLIB");
         require(heaplib.moduleId > 0 && heaplib.startResult == 0 &&
@@ -424,6 +436,65 @@ int main() {
         require(deviceRejected,"Invalid device operation did not raise the expected fault");
         require(iop.handleRpc(threadedRequest).handled&&host.word(0x800)==1,
             "Device exception left a stale active CPU and moved RPC execution outside its IOP thread");
+        const auto mailbox = iop.readSifRegister(2);
+        const uint32_t init[] = {20,0,0x80000002,0,0x800};
+        require(iop.writeMemory(mailbox,init,sizeof(init)), "Cannot initialize native RPC command endpoint");
+        SifTransfer transfer{};
+        transfer.kind=SifTransferKind::SetDma;transfer.phase=SifTransferPhase::AfterCopy;
+        transfer.destinationAddress=mailbox;transfer.size=sizeof(init);
+        iop.onSifTransfer(transfer);
+        std::array<uint32_t,16> packet{64,0,0x80000009,0,5,0xa00,9,0xb00,threadedSid};
+        const auto send = [&] {
+            require(host.writeGuest(packet[5],packet.data(),sizeof(packet)) &&
+                    iop.writeMemory(mailbox,packet.data(),sizeof(packet)), "Cannot deliver native RPC request");
+            transfer.size=sizeof(packet);iop.onSifTransfer(transfer);
+        };
+        host.receiveReady=false;send();iop.runEeCycles(8192);
+        require(host.commands.empty(), "RPC_END ignored SIF receive backpressure");
+        host.receiveReady=true;iop.runEeCycles(8);
+        require(host.commands.size()==1 && host.commands.back()[7]==0xb00 &&
+                host.commands.back()[8]==0x80000009 && host.commands.back()[9]==0x10440 &&
+                host.commands.back()[10]==0x10400, "Native bind did not return the registered physical server");
+        packet[8]=0xf00d;send();iop.runEeCycles(8);
+        require(host.commands.size()==2 && host.commands.back()[9]==0 && host.commands.back()[10]==0,
+                "Missing RPC server fabricated a binding");
+        packet[0]=63;send();iop.runEeCycles(8);
+        require(host.commands.size()==2,"Malformed native bind size produced a completion");
+        packet[0]=64;
+        packet[2]=0x8000000a;packet[8]=0;packet[9]=0;packet[10]=0xc00;packet[11]=4;packet[12]=1;packet[13]=0x10440;
+        const uint32_t marker=0xaabbccdd;host.writeGuest(0xc00,&marker,4);
+        send();
+        require(host.word(0xc00)==marker && host.commands.size()==2,"Native RPC returned before its IOP server ran");
+        iop.runEeCycles(8192);
+        require(host.word(0xc00)==1 && host.commands.size()==3 && host.commands.back()[8]==0x8000000a,
+                "Native call did not run on its registered thread or deliver RPC_END");
+        packet[12]=0;send();iop.runEeCycles(8192);
+        require(host.commands.size()==3 && host.word(0xa10)==0 && host.word(0xa18)==0,
+                "Polling RPC fabricated an interrupt or retained its allocation token");
+        packet[12]=1;packet[13]=0xdeadbeef;
+        bool invalidServer=false;try {send();} catch(const std::runtime_error&) {invalidServer=true;}
+        require(invalidServer && host.commands.size()==3,"Unregistered native server was acknowledged");
+        packet[13]=0x10440;packet[10]=0xfffffffe;
+        bool invalidReceive=false;try {send();} catch(const std::runtime_error&) {invalidReceive=true;}
+        require(invalidReceive && host.commands.size()==3,"Overflowing native receive buffer was acknowledged");
+        packet[10]=0xc00;
+        packet[2]=0x80000009;packet[8]=0x80000003;send();iop.runEeCycles(8);
+        const auto heap=host.commands.back();
+        require(heap[9] && heap[10],"Existing HLE heap service has no native endpoint");
+        packet[2]=0x8000000a;packet[8]=1;packet[9]=4;packet[10]=0xc00;packet[11]=4;packet[12]=1;packet[13]=heap[9];
+        packet[0]=64|(4u<<8);packet[1]=heap[10];
+        uint32_t argument=256;require(iop.writeMemory(heap[10],&argument,4),"Cannot write native heap argument");
+        const auto heapReplies=host.commands.size();
+        send();iop.runEeCycles(8);argument=host.word(0xc00);
+        require(argument!=0 && host.commands.size()==heapReplies+1,"Native heap call with extra DMA data was discarded");
+        packet[8]=2;require(iop.writeMemory(heap[10],&argument,4),"Cannot write native heap release");
+        send();iop.runEeCycles(8);require(host.word(0xc00)==0,"Native heap release failed");
+        packet[8]=0;packet[9]=0;packet[13]=0x10440;
+        send();iop.runEeCycles(8);
+        bool busy=false;try { (void)iop.handleRpc(threadedRequest); } catch(const std::runtime_error&) {busy=true;}
+        require(busy,"HLE RPC bypassed an active native server thread");
+        iop.reset();const auto replies=host.commands.size();iop.runEeCycles(8192);
+        require(host.commands.size()==replies,"Reset delivered a stale native RPC completion");
         // A firmware dependency must own even the callback-registration exports, and reload after reset.
         Irx firmware(0x18000);
         firmware.words(0,{0x27bdffe0,0xafbf001c,0x3c040001,0x34848200,0x0c006025,0,
@@ -447,7 +518,7 @@ int main() {
         try { (void)iop.loadModuleBuffer(0x1000); }
         catch(const std::runtime_error& error) { firmwareRejected=std::string(error.what()).find("Original SECRMAN is unavailable")!=std::string::npos; }
         require(firmwareRejected,"Missing firmware dependency falsely acknowledged callback registration");
-        std::cout << "PASS synchronous IOP RPC, load delay, context restoration and firmware dependency\n";
+        std::cout << "PASS native/API RPC, resumable boot, load delay, reset and firmware dependency\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

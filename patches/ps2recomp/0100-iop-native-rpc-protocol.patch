@@ -1,0 +1,348 @@
+Native SIF RPC bind/call/end through the existing IOP bridge, registered queues and console clock.
+The EE original completion handler receives RPC_END over the real SIF0 transport.
+Reference: ps2dev/ps2sdk common/include/sifrpc-common.h and iop/system/sifcmd/src/sifrpc.c.
+Maintainer approved this HLE protocol coverage on 2026-11-15.
+
+--- a/ps2xIOP/src/emulator/services/iop_rpc.cpp
++++ b/ps2xIOP/src/emulator/services/iop_rpc.cpp
+@@ -42,6 +42,8 @@
+         m_eeCommandBuffer = 0;
+         m_sifRegisters.clear();
+         m_pendingCommands.clear();
++        m_pendingRpc.clear();
++        m_nativeCall.reset();
+         m_queueThreads.clear();
+         m_call = {};
+     }
+@@ -371,10 +373,27 @@
+     {
+         RpcResult result{};
+         const auto serverIt = m_servers.find(request.sid);
++        if (request.sid == 0x80000003u && (serverIt == m_servers.end() || !serverIt->second.function))
++        {
++            uint32_t argument = 0u, previous = 0u;
++            if (request.send.size != sizeof(argument) || request.receive.size < sizeof(argument) ||
++                !m_host.readGuest(request.send.address, &argument, sizeof(argument)))
++                throw std::runtime_error("Invalid IOP heap RPC buffers");
++            if (!m_host.readGuest(request.receive.address, &previous, sizeof(previous)))
++                throw std::runtime_error("Invalid IOP heap RPC reply destination");
++            const uint32_t reply = heapRpc(request.function, argument);
++            if (!m_host.writeGuest(request.receive.address, &reply, sizeof(reply)))
++                throw std::runtime_error("Failed IOP heap RPC reply");
++            result.handled = result.signalCompletion = result.signalNowaitCompletion = true;
++            result.resultAddress = request.receive.address;
++            result.serverDispatchPolicy = ServerDispatchPolicy::Suppress;
++            return result;
++        }
+         if (serverIt == m_servers.end() || serverIt->second.function == 0u)
+             return result;
+-
+-        RpcServer &server = serverIt->second;
++        if (m_call.active) throw std::runtime_error("IOP RPC server is already executing a request");
++
++        const RpcServer server = serverIt->second;
+         if (request.send.size != 0u && server.buffer != 0u)
+         {
+             const uint32_t copySize = std::min<uint32_t>(request.send.size, IopMemory::RamSize - std::min(server.buffer, IopMemory::RamSize));
+@@ -390,27 +409,8 @@
+         // sceSifRpcLoop, under the IOP priority scheduler, so its semaphores
+         // and locks exclude the module's other threads as on the console.
+         uint32_t returnPointer = 0u;
+-        IopThread *loop = nullptr;
+-        if (const auto queue = m_queueThreads.find(server.queue); queue != m_queueThreads.end())
+-            loop = m_kernel.findThread(queue->second);
+-        if (loop != nullptr && loop->state == IopThreadState::Sleep && !m_call.active && executor.canRunThreads())
+-        {
+-            m_call = {};
+-            m_call.active = true;
+-            m_call.thread = loop->id;
+-            m_call.savedCpu = loop->cpu;
+-            IopCpuState &cpu = loop->cpu;
+-            cpu.pc = server.function;
+-            cpu.gpr[4] = request.function;
+-            cpu.gpr[5] = server.buffer;
+-            cpu.gpr[6] = request.send.size;
+-            cpu.gpr[7] = 0u;
+-            cpu.gpr[28] = server.gp;
+-            cpu.gpr[29] = (m_call.savedCpu.gpr[29] - 64u) & ~15u;
+-            cpu.gpr[31] = kRpcReturnSentinel;
+-            cpu.branchPending = cpu.pendingLoad = false;
+-            cpu.stopped = cpu.yielded = cpu.exception = false;
+-            loop->state = IopThreadState::Ready;
++        if (executor.canRunThreads() && startServerCall(server, request.function, request.send.size))
++        {
+             constexpr uint64_t kSlice = 4096u;
+             for (uint64_t ran = 0u; !m_call.done && ran < kIopClockHz; ran += kSlice)
+                 executor.runThreads(kSlice);
+@@ -453,6 +453,122 @@
+         result.signalNowaitCompletion = true;
+         result.signalCompletion = true;
+         return result;
++    }
++
++    bool IopRpcBridge::startServerCall(const RpcServer& server, uint32_t function, uint32_t size)
++    {
++        const auto queue = m_queueThreads.find(server.queue);
++        auto* loop = queue == m_queueThreads.end() ? nullptr : m_kernel.findThread(queue->second);
++        if (!loop || loop->state != IopThreadState::Sleep || m_call.active) return false;
++        m_call = {};
++        m_call.active = true;
++        m_call.thread = loop->id;
++        m_call.savedCpu = loop->cpu;
++        auto& cpu = loop->cpu;
++        cpu.pc = server.function;
++        cpu.gpr[4] = function;
++        cpu.gpr[5] = server.buffer;
++        cpu.gpr[6] = size;
++        cpu.gpr[7] = 0u;
++        cpu.gpr[28] = server.gp;
++        cpu.gpr[29] = (m_call.savedCpu.gpr[29] - 64u) & ~15u;
++        cpu.gpr[31] = kRpcReturnSentinel;
++        cpu.branchPending = cpu.pendingLoad = false;
++        cpu.stopped = cpu.yielded = cpu.exception = false;
++        loop->state = IopThreadState::Ready;
++        return true;
++    }
++
++    uint32_t IopRpcBridge::heapRpc(uint32_t function, uint32_t argument)
++    {
++        if (function == 1u) return m_memory.allocate(argument, 64u);
++        if (function == 2u) return m_memory.freeAllocation(argument) ? 0u : 0xFFFFFFFFu;
++        throw std::runtime_error("Unsupported IOP heap RPC function");
++    }
++
++    void IopRpcBridge::ensureHeapServer()
++    {
++        if (m_servers.contains(0x80000003u)) return;
++        // The existing HLE heap service shares sysmem; expose its real IOP endpoint to native clients.
++        const uint32_t data = m_memory.allocate(68u, 16u);
++        const uint32_t buffer = data ? m_memory.allocate(16u, 16u) : 0u;
++        if (!buffer) {
++            if (data) (void)m_memory.freeAllocation(data);
++            throw std::runtime_error("Cannot allocate IOP heap RPC endpoint");
++        }
++        (void)m_memory.zeroRam(data, 68u);
++        m_memory.write32(data, 0x80000003u);
++        m_memory.write32(data + 8u, buffer);
++        RpcServer server{};
++        server.sid = 0x80000003u;
++        server.serverData = data;
++        server.buffer = buffer;
++        m_servers.emplace(server.sid, server);
++    }
++
++    void IopRpcBridge::queueRpcReply(const RpcPacket& request, const RpcServer* server, uint32_t dataSize)
++    {
++        // PS2SDK sifrpc-common.h: RPC_END preserves the client and identifies the completed command.
++        RpcPacket response{};
++        response[0] = sizeof(response) | (dataSize << 8);
++        response[1] = dataSize ? request[10] : 0u;
++        response[2] = 0x80000008u;
++        response[4] = request[4];
++        response[5] = request[5];
++        response[6] = request[6];
++        response[7] = request[7];
++        response[8] = request[2];
++        if (server) {
++            response[9] = server->serverData;
++            response[10] = server->buffer;
++            response[11] = server->callbackBuffer;
++        }
++        if (request[2] == 0x8000000au && !request[12]) {
++            response[4] = response[6] = 0u;
++            if (!m_host.writeGuest(request[5], response.data(), sizeof(response)))
++                throw std::runtime_error("Invalid native RPC polling completion address");
++            return;
++        }
++        if (m_pendingCommands.size() >= 64u) throw std::runtime_error("IOP SIF command queue exhausted");
++        const auto* begin = reinterpret_cast<const uint8_t*>(response.data());
++        m_pendingCommands.emplace_back(begin, begin + sizeof(response));
++    }
++
++    void IopRpcBridge::advanceNativeRpc()
++    {
++        if (m_pendingCommands.size() >= 64u) return;
++        if (m_nativeCall) {
++            if (!m_call.done) return;
++            const RpcPacket request = *m_nativeCall;
++            if (m_call.result && request[11]) {
++                if (!m_memory.ownsRamRange(m_call.result, request[11]) ||
++                    !m_host.writeGuest(request[10], m_memory.ram().data() + IopMemory::physicalAddress(m_call.result), request[11]))
++                    throw std::runtime_error("Invalid native RPC result buffer");
++            }
++            queueRpcReply(request, nullptr, m_call.result ? request[11] : 0u);
++            m_nativeCall.reset();
++            m_call = {};
++        }
++        if (m_call.active || m_pendingRpc.empty()) return;
++        const auto request = m_pendingRpc.front();
++        const auto server = std::find_if(m_servers.begin(), m_servers.end(), [&](const auto& item) {
++            return item.second.serverData == request[13];
++        });
++        if (server == m_servers.end()) throw std::runtime_error("Native RPC call references an unregistered server");
++        const auto& target = server->second;
++        if (request[9] && !m_memory.ownsRamRange(target.buffer, request[9]))
++            throw std::runtime_error("Invalid native RPC argument buffer");
++        if (target.sid == 0x80000003u && !target.function) {
++            if (request[9] != 4u || request[11] < 4u) throw std::runtime_error("Invalid native IOP heap RPC buffers");
++            const auto reply = heapRpc(request[8], m_memory.read32(target.buffer));
++            if (!m_host.writeGuest(request[10], &reply, sizeof(reply)))
++                throw std::runtime_error("Invalid native IOP heap RPC reply address");
++            queueRpcReply(request, nullptr, sizeof(reply));
++        } else {
++            if (!startServerCall(target, request[8], request[9])) return;
++            m_nativeCall = request;
++        }
++        m_pendingRpc.pop_front();
+     }
+ 
+     void IopRpcBridge::onSifTransfer(const SifTransfer &transfer)
+@@ -466,8 +582,10 @@
+         std::array<uint32_t, 28> packet{};
+         if (!m_memory.readRam(transfer.destinationAddress, packet.data(), transfer.size)) return;
+         const uint32_t bytes = packet[0] & 0xffu;
+-        if (bytes < 16 || bytes > transfer.size || (packet[0] >> 8) != 0) return;
++        if (bytes < 16 || bytes > transfer.size) return;
+         const uint32_t command = packet[2], option = packet[3];
++        // RPC data was transferred by the preceding DMA; its header may retain dsize on reuse.
++        if ((packet[0] >> 8) != 0 && command != 0x80000009u && command != 0x8000000au) return;
+         if (const char* trace = std::getenv("PS2N_DEVICE_TRACE"); trace && trace[0] && trace[0] != '0')
+         {
+             std::ostringstream message;
+@@ -479,7 +597,45 @@
+                 message << " reset-mode=" << packet[5] << " arg=";
+                 message.write(reinterpret_cast<const char*>(packet.data()) + 24, count);
+             }
++            if (command == 0x80000009u && bytes == 64) message << " sid=0x" << std::hex << packet[8];
+             m_host.log(LogLevel::Debug, message.str());
++        }
++        if (command == 0x80000009u || command == 0x8000000au) {
++            if (bytes != 64u) return;
++            RpcPacket request{};
++            std::copy_n(packet.begin(), request.size(), request.begin());
++            RpcPacket original{};
++            uint32_t client = 0u;
++            if (!request[5] || !request[7] || !m_eeCommandBuffer ||
++                !m_host.readGuest(request[5], original.data(), sizeof(original)) ||
++                !m_host.readGuest(request[7], &client, sizeof(client)))
++                throw std::runtime_error("Invalid native RPC packet/client address");
++            if (command == 0x80000009u) {
++                if (request[8] == 0x80000003u) ensureHeapServer();
++                const auto server = m_servers.find(request[8]);
++                queueRpcReply(request, server == m_servers.end() ? nullptr : &server->second);
++            } else {
++                if (request[9] > IopMemory::RamSize || request[11] > IopMemory::RamSize || request[12] > 1u)
++                    throw std::runtime_error("Invalid native RPC packet sizes/mode");
++                uint32_t first = 0u, last = 0u;
++                if (request[11] && (request[10] > UINT32_MAX - (request[11] - 1u) ||
++                    !m_host.normalizeGuestAddress(request[10], first) ||
++                    !m_host.normalizeGuestAddress(request[10] + request[11] - 1u, last) ||
++                    last < first || last - first != request[11] - 1u))
++                    throw std::runtime_error("Invalid native RPC receive address");
++                const auto server = std::find_if(m_servers.begin(), m_servers.end(), [&](const auto& item) {
++                    return item.second.serverData == request[13];
++                });
++                if (server == m_servers.end()) throw std::runtime_error("Native RPC call references an unregistered server");
++                if (request[9] && !m_memory.ownsRamRange(server->second.buffer, request[9]))
++                    throw std::runtime_error("Invalid native RPC argument buffer");
++                if (server->second.sid == 0x80000003u && !server->second.function &&
++                    (request[9] != 4u || request[11] < 4u))
++                    throw std::runtime_error("Invalid native IOP heap RPC buffers");
++                if (m_pendingRpc.size() >= 64u) throw std::runtime_error("IOP native RPC queue exhausted");
++                m_pendingRpc.push_back(request);
++            }
++            return;
+         }
+         if (command == 0x80000003u)
+         {
+--- a/ps2xIOP/src/emulator/services/iop_rpc.h
++++ b/ps2xIOP/src/emulator/services/iop_rpc.h
+@@ -4,6 +4,7 @@
+ #include "../core/iop_cpu.h"
+ 
+ #include <cstddef>
++#include <array>
+ #include <cstdint>
+ #include <deque>
+ #include <optional>
+@@ -60,6 +61,7 @@
+         [[nodiscard]] RpcResult handleRpc(const RpcRequest &request, IopGuestExecutor &executor);
+         void onSifTransfer(const SifTransfer &transfer);
+         void flushSifCommands();
++        void advanceNativeRpc();
+         std::optional<std::string> takeResetRequest();
+         void holdBootEnd(bool hold) { m_holdBootEnd = hold; }
+         void beginBoot();
+@@ -87,6 +89,12 @@
+             uint32_t queue = 0;
+         };
+ 
++        using RpcPacket = std::array<uint32_t, 16>;
++        void queueRpcReply(const RpcPacket& request, const RpcServer* server = nullptr, uint32_t dataSize = 0u);
++        bool startServerCall(const RpcServer& server, uint32_t function, uint32_t size);
++        uint32_t heapRpc(uint32_t function, uint32_t argument);
++        void ensureHeapServer();
++
+         IopHost &m_host;
+         IopMemory &m_memory;
+         IopKernel &m_kernel;
+@@ -102,6 +110,8 @@
+         uint32_t m_eeCommandBuffer = 0;
+         std::unordered_map<uint32_t, uint32_t> m_sifRegisters;
+         std::deque<std::vector<uint8_t>> m_pendingCommands;
++        std::deque<RpcPacket> m_pendingRpc;
++        std::optional<RpcPacket> m_nativeCall;
+         std::unordered_map<uint32_t, int> m_queueThreads; // RPC queue -> server thread
+         struct ServerCall
+         {
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -875,6 +875,7 @@
+                 const uint64_t target = totalCycles + cycles;
+                 while (totalCycles < target)
+                 {
++                    rpc.advanceNativeRpc();
+                     rpc.flushSifCommands();
+                     serviceSpu2();
+                     servicePendingDmaInterrupts();
+--- a/ps2xIOP/src/iop_subsystem.cpp
++++ b/ps2xIOP/src/iop_subsystem.cpp
+@@ -277,27 +277,6 @@
+ 
+         RpcResult emulated = m_impl->emulator.handleRpc(request);
+         if (emulated.handled) return emulated;
+-        if (request.sid == 0x80000003u)
+-        {
+-            uint32_t argument = 0u;
+-            if (request.send.size != sizeof(argument) || request.receive.size < sizeof(argument) ||
+-                !m_impl->host.readGuest(request.send.address, &argument, sizeof(argument)))
+-                throw std::runtime_error("Invalid IOP heap RPC buffers");
+-            uint32_t previous = 0u;
+-            if (!m_impl->host.readGuest(request.receive.address, &previous, sizeof(previous)))
+-                throw std::runtime_error("Invalid IOP heap RPC reply destination");
+-            uint32_t reply;
+-            if (request.function == 1u) reply = m_impl->emulator.allocateMemory(argument, 64u);
+-            else if (request.function == 2u) reply = m_impl->emulator.freeMemory(argument) ? 0u : 0xFFFFFFFFu;
+-            else throw std::runtime_error("Unsupported IOP heap RPC function");
+-            if (!m_impl->host.writeGuest(request.receive.address, &reply, sizeof(reply)))
+-                throw std::runtime_error("Failed IOP heap RPC reply");
+-            RpcResult result{};
+-            result.handled = result.signalCompletion = result.signalNowaitCompletion = true;
+-            result.resultAddress = request.receive.address;
+-            result.serverDispatchPolicy = ServerDispatchPolicy::Suppress;
+-            return result;
+-        }
+         return hle ? hle->handleRpc(request) : emulated;
+     }
+ 
+--- a/ps2xIOP/tests/iop_compat_test_support.h
++++ b/ps2xIOP/tests/iop_compat_test_support.h
+@@ -22,7 +22,7 @@
+             throw std::runtime_error(message);
+     }
+ 
+-    class Host final : public IopHost
++    class Host : public IopHost
+     {
+     public:
+         explicit Host(size_t bytes = 0x20000u) : guest(bytes, 0xCCu) {}

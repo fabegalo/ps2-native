@@ -23,9 +23,13 @@ Contrato e estado vigentes: `docs/ARCHITECTURE.md`, seção Diretriz.
    MSFLAG 0x10000 e CMDINIT espera o pacote EE real. O HLE EE anuncia prontidão
    após armar SIF0 com RAM válida, preservada no reboot apenas do IOP.
    Sessão BIOS de 30 s: os 39 módulos concluem, EESYNC publica BOOTEND,
-   SifIopSync e CMDINIT avançam. Próxima fronteira: pacote RPC_BIND
-   `0x80000009` chega ao bridge, que ainda não trata o protocolo RPC nativo;
-   completar essa cobertura HLE ou executar handlers originais requer decisão.
+   SifIopSync e CMDINIT avançam. Protocolo RPC nativo no HLE aprovado:
+   bind/call/end usam filas/servidores originais e SIF0 real, com regressões
+   de ausência de servidor, payload, polling, backpressure, falha e reset.
+   BIOS real executa bind e primeira chamada do CDVD; callback RPC_END EE
+   `0x270548` preparado. Próxima fronteira: tabela de saltos do formatador
+   do firmware (JR em `0x268EE0`, tabela em `0x2C7CB0`, 89 entradas) não
+   descoberta pela preparação; destino `0x268FD4` permanece sem entrada AOT.
    Referência: [PS2SDK sifrpc.c](https://github.com/ps2dev/ps2sdk/blob/master/ee/kernel/src/sifrpc.c).
    Sem imagem/navegação do Browser.
    `ioman:7`/write permanece sem tratamento.
