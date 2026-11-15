@@ -295,12 +295,18 @@ void install_loaded_code_capture(const std::filesystem::path& content) {
             if (!entry) continue;  // no reachable function in this section
             for (const auto& site : loaded->live)
                 if (inside(site.address)) live += std::to_string(site.address) + ' ' + std::to_string(site.type) + '\n';
+            // Untranslated functions of registered images this module calls: ps2n declares them in one round.
+            std::string imports;
+            for (const auto address : loaded->imports)
+                if (!inside(address) && runtime.memory().isCodeAddress(address) && !runtime.hasFunction(address))
+                    imports += std::to_string(address) + '\n';
             const auto text = [](const std::string& value) {
                 return std::span(reinterpret_cast<const uint8_t*>(value.data()), value.size());
             };
             ps2native::write_file_atomically(directory / (identity + ".bin"), image);
             ps2native::write_file_atomically(directory / (identity + ".functions"), text(functions));
             ps2native::write_file_atomically(directory / (identity + ".live"), text(live));
+            ps2native::write_file_atomically(directory / (identity + ".imports"), text(imports));
             const auto receipt = "ps2n-loaded-image-v1\nsha256=" + identity + "\nload_address=" +
                 std::to_string(section.address) + "\nsize=" + std::to_string(section.size) +
                 "\nentry=" + std::to_string(entry) + "\n";
@@ -308,7 +314,8 @@ void install_loaded_code_capture(const std::filesystem::path& content) {
             std::cerr << "[guest-load:captured] sha256=" << identity << " base=0x" << std::hex << section.address
                       << " size=0x" << section.size << " entry=0x" << entry << std::dec << " functions="
                       << std::count(functions.begin(), functions.end(), '\n') << " live="
-                      << std::count(live.begin(), live.end(), '\n') << '\n';
+                      << std::count(live.begin(), live.end(), '\n') << " imports="
+                      << std::count(imports.begin(), imports.end(), '\n') << '\n';
         }
         return false;
     });

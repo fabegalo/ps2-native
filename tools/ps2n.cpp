@@ -516,6 +516,8 @@ void prepare_module(const ExecModule& module) {
     if (!generation_current(module.game)) recompile(module.game);
 }
 
+bool add_entry_points(const Game& game, const std::set<std::string>& targets);
+
 void ensure_prepared(Game& game, bool configure = false) {
     configure = attach_console_firmware(game) || configure;
     if (game.browser()) {
@@ -524,15 +526,39 @@ void ensure_prepared(Game& game, bool configure = false) {
         if (sha256_file(game.dir / "cd" / from_utf8(game.elf)) != sha256_hex(firmware.program.bytes))
             throw std::runtime_error("Prepared OSDSYS differs from the selected ROM0");
     }
+    const auto prepare_modules = [&] {
+        if (game.browser()) {
+            const auto firmware = load_browser_firmware(read_file(from_utf8(game.rom0)), game.console_profile,
+                read_file(from_utf8(game.nvm)), {game.rom0_sha256}, {game.nvm_sha256});
+            if (auto module = exec_module(game, firmware)) prepare_module(*module);
+        }
+        for (const auto& module : loaded_modules(game)) prepare_module(module);
+    };
     apply_build_environment();
+    // Configuring requires every captured module translated, and building the tools configures.
+    if (fs::exists(fs::path(PS2N_RECOMP_EXE))) prepare_modules();
     run_tool(PS2N_CMAKE_COMMAND, {"--build", fs::path(PS2N_BINARY_DIR).string(), "--target", "ps2recomp_tools"},
              PS2N_BINARY_DIR, game.dir / "build.log");
-    if (game.browser()) {
-        const auto firmware = load_browser_firmware(read_file(from_utf8(game.rom0)), game.console_profile,
-            read_file(from_utf8(game.nvm)), {game.rom0_sha256}, {game.nvm_sha256});
-        if (auto module = exec_module(game, firmware)) prepare_module(*module);
+    prepare_modules();  // a rebuilt recompiler regenerates; unchanged inputs are skipped
+    // Functions of the game's own image that captured modules import: declared together instead of
+    // one learning round (session, recompile, build) per first call.
+    std::set<std::string> imports;
+    const auto modules = loaded_modules(game);
+    for (const auto& module : modules) {
+        const auto list = game.dir / "ee-load" / (module.game.id + ".imports");
+        if (!fs::exists(list)) continue;
+        std::istringstream lines(read_text(list));
+        for (std::string line; std::getline(lines, line);) {
+            const auto address = std::stoull(line);
+            if (std::none_of(modules.begin(), modules.end(), [&](const ExecModule& m) {
+                    return address >= m.base && address < uint64_t(m.base) + m.size; })) {
+                std::ostringstream target;
+                target << "0x" << std::hex << address;
+                imports.insert(target.str());
+            }
+        }
     }
-    for (const auto& module : loaded_modules(game)) prepare_module(module);
+    if (add_entry_points(game, imports)) std::cout << "Declared entry points imported by captured modules\n";
     restore_heuristic_stores(game);
     ps2native::create_directories(game.dir / "generated");
     run_tool(PS2N_RECOMP_EXE, {"config.toml", "--describe-inputs", "generation.inputs"},

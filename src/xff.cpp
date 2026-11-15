@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 // Layout facts (header fields, 32-byte section headers, 28-byte REL descriptors) follow the
@@ -74,13 +75,24 @@ LoadedXffModule read_module(const Ram& ram, std::uint32_t header) {
     const auto symbol = [&](std::uint32_t index) { return symbols + index * 16ull; };
     for (std::uint32_t i = 0; i < symbolCount; ++i) {
         const auto shndx = ram.u16(symbol(i) + 14);
-        if ((ram.u8(symbol(i) + 12) & 0xfu) != 2 || shndx >= sectionCount || !code[shndx]) continue;  // STT_FUNC
-        const auto value = ram.u32(symbol(i));
-        if (value >= size[shndx] || (value & 3u)) throw std::runtime_error("xff2 function symbol is outside its section");
-        module.functions.push_back(base[shndx] + value);
+        if ((ram.u8(symbol(i) + 12) & 0xfu) != 2) continue;  // STT_FUNC
+        // Elf32_Sym is st_name, st_value, st_size, st_info; in RAM the loader has made st_value absolute.
+        const auto value = ram.u32(symbol(i) + 4) & kPhysical;
+        if (shndx == 0xfff1u) {  // SHN_ABS
+            if (value & 3u) throw std::runtime_error("xff2 imported function is not word aligned");
+            module.imports.push_back(value);
+            continue;
+        }
+        if (shndx >= sectionCount || !code[shndx]) continue;
+        if (value - base[shndx] >= size[shndx] || (value & 3u))
+            throw std::runtime_error("xff2 function symbol " + std::to_string(i) + " at " + std::to_string(value) +
+                " is outside its section " + std::to_string(shndx));
+        module.functions.push_back(value);
     }
     std::sort(module.functions.begin(), module.functions.end());
     module.functions.erase(std::unique(module.functions.begin(), module.functions.end()), module.functions.end());
+    std::sort(module.imports.begin(), module.imports.end());
+    module.imports.erase(std::unique(module.imports.begin(), module.imports.end()), module.imports.end());
 
     for (std::uint32_t i = 0; i < relocationCount; ++i) {
         const auto at = relocations + i * 28ull;

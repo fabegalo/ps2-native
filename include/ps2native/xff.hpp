@@ -16,6 +16,7 @@ struct LoadedXffModule {
     std::uint32_t header = 0, entry = 0;
     std::vector<Section> code;              // allocated executable PROGBITS sections
     std::vector<std::uint32_t> functions;   // defined STT_FUNC symbols inside code
+    std::vector<std::uint32_t> imports;     // absolute STT_FUNC symbols: functions of the program it links against
     std::vector<LiveSite> live;             // inside code, sorted by address
 };
 
