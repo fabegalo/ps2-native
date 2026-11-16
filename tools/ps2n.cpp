@@ -171,6 +171,10 @@ int run(const std::string& id) {
     ps2native::create_directories(console / "mc0");
     ps2native::create_directories(console / "quick" / from_utf8(id));
     const auto log = dir / "run.log";
+    // shortcut: vector programs compiled during play (engine vu_live) drew God of War's rain from garbage
+    // while the same programs from the build drew it right; ps2n compiles what play recorded at the next
+    // start instead. Lift this when vu_live matches the build (deterministic replay of a window session).
+    if (env("PS2_VU_LIVE").empty()) set_env("PS2_VU_LIVE", "0");
     std::cout << "Starting " << id << " (log: " << path_utf8(log) << ")" << std::endl;
     // One console state: slot 1 holds the console's card, the same file for every game.
     return run_process(runner(id), {"--disc", arg(iso), "--window", "--game-dir", arg(dir),
