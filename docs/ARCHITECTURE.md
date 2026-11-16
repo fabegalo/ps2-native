@@ -84,14 +84,83 @@ options. Separate synthetic regressions compare VU0/VU1 native/interpreted regis
 data and stalls at matched boundaries, interleaving real IOP stores and EE memory access;
 they also reject changed code and preserve pending loads across IOP context switches.
 
-Original firmware boot, IRX native export linking/loader service calls, IOP hardware
-interrupt/exception dispatch, running-unit VU reset/control, VU D/T interrupt delivery,
-GIF/XGKICK consumption, timer
-IRQ delivery, guest TLB exceptions, GS/SPU2 integration, BIOS and gameplay remain gaps.
+**Graphics decision approved 16/11/2026: prefer isolated exoteric33 compute GS.**
+The maintainer selected MIT exoteric33 GS at the existing `a50471a` pin after comparison:
+
+| Candidate | Evidence and tradeoff |
+| --- | --- |
+| [exoteric33 compute](https://github.com/exoteric33/ps2-native-recomp/tree/a50471a823c64e0e2893329527820a7c4deed608) | Same pinned VIF/GIF/VU contracts, WebGPU D3D12/Vulkan, MIT. Selected and adapted; current evidence is bounded device/guest diagnostics, not upstream game claims. |
+| [paraLLEl-GS](https://github.com/Arntzen-Software/parallel-gs) | Mature Vulkan GS, LGPL-3.0-or-later; upstream documents interpolation/AA1 limitations. The older local bridge reached equal VRAM but black scanout/device loss (history below). No comparative game benchmark in this engine. |
+| Previous CPU GS | PS2Recomp GPL GS reached Super title/menu/gameplay at about 62% speed in another runtime. Behavioral reference; its runtime is not imported. |
+
+`third_party/ps2-native-gs` adapts GS/VIF/GIF and the required host contracts; external
+runtime, kernel, scheduler and GS command worker are excluded. Original compute shaders,
+transfers and CLUT logic are reused. All retained sources/shaders/licenses are hash-locked.
+`wgpu-native v29.0.1.1` supplies the graphics API, not another console runtime. Reproduce
+its Windows GNU package with `python scripts/fetch-engine-graphics.py`. LLVM-MinGW's
+portable recovery pin/hash is also recorded in `deps.lock.json`; binary dependencies stay
+in ignored `out/dependencies`. Other hosts must supply the matching WebGPU library.
+
+Console owns VIF/GIF streams/masks, VU data/code, graphics DMA and GS drawing/privileged
+registers, FINISH/field state and readback memory. GPU VRAM serves that same logical GS;
+local-to-host reads and FINISH fence compute completion. MPG/UNPACK/MSCAL/FLUSH use the
+existing VU native-pair scheduler. Real VU1 XGKICK feeds PATH1, DIRECT feeds PATH2 and
+channel 2/FIFO feeds PATH3. Normal/source-chain DMA, CALL/RET, TTE/TIE and SPR interleave
+share EE RAM/scratchpad and DMAC. The standalone ELF HLE profile starts with DMAE enabled,
+not power-on firmware state. MFIFO/stall control, reverse VIF1 chain and SPR destination
+chain remain explicit errors; buffers/traversals are bounded.
+
+FINISH and deterministic NTSC/PAL fields share the EE/IOP/VU clock. The existing original
+EE AOT interrupt path now serves INTC/DMAC, including handler ordering, arguments, chain
+cancellation, acknowledgement and shared VU0 preservation. Normal execution requires
+compute primary; initialization failure is explicit. CPU raster is only a synthetic
+fidelity oracle. Capture reads real GPU scanout into BMP. `--present-ms 1..5000` attaches
+a real WebGPU Win32 surface and presents the final guest framebuffer after ELF exit;
+it does not certify a running-game UI. Other native presentation adapters remain open.
+
+Device regressions: build `ps2n-engine-graphics-tests`, then run `ctest --test-dir
+out/engine-build -R engine-graphics --output-on-failure` (real GPU required). Seven
+synthetic cases compare all 4 MiB VRAM for PSMCT32/24/16/16S, alpha/frame masks, depth
+and indexed texture/CLUT. Further cases compare interpreted/native VU1 XGKICK, PATH2
+DIRECT and PATH3 DMA at matched boundaries, and verify VBlank/field events.
+
+Windows x64 Release evidence (RTX 4070, D3D12/FXC): the 43 existing official tests
+remain passing; all 13 locked DMA/GS tests and `kernel/ee/interrupt/dmac_order` add up
+to 57 exact-output official passes. The affected graphics/VU tests also pass with the
+original `kernel/iop/thread/stat` IRX executing concurrently. All five engine CTests
+pass, including the separate real-GPU fidelity target. A lifecycle regression found
+in the broad run was fixed: final EE thread retirement ends the ELF session while
+preserving a still-running VU or periodic GS events; waiting EE threads still advance
+all shared devices. Failed pre-fix evidence is retained separately from passing reruns.
+
+`python scripts/test-engine.py graphics-guest --with-iop kernel/iop/thread/stat
+--present-ms 1500 --report graphics-guest-results.json` plus the established toolchain
+options reproduces original diagnostic EE code -> DMA1 -> VIF DIRECT -> GIF PATH2 ->
+GS compute -> capture/native presentation. The 32x32 RGBA pixels are all checked, hash
+`4ab589b8423c13f8f33994356d5b696d9b3b56d968e1939f2088c53b5149e6cf`.
+IOP starts at tick 8 before EE finishes at 1008 and retires at 275856. This is a tiny
+original synthetic guest diagnostic, not a commercial game or proof of gameplay.
+
+The existing read-only Super Bust-A-Move ELF (SHA-256
+`eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`) was prepared and
+run through this AOT. It reaches the 100-million logical-cost bound before GS use;
+observed EE continuation is `001D3224`, IOP PC is zero and no GS frame exists. Original
+code/trace shows repeated RPC initialization/binding (requested server `80000592`);
+that service is absent from the limited current profile. Native IOP module startup/RPC
+service coverage is the next boundary, not a renderer failure or playable-game claim.
+No fake endpoint, title-specific override, original-content mutation or second runtime
+was introduced. Vulkan, other GPUs/hosts, original firmware boot and gameplay remain
+untested in this graphics integration.
+
+Original firmware boot, IRX native export linking/loader services, IOP hardware
+interrupt/exception dispatch, running-unit VU reset/control, VU D/T interrupts, timer
+IRQs, guest TLB exceptions, SPU2, complete graphics timing and gameplay remain gaps.
+Transient transfer caches/GPU resources do not implement checkpoints; no enhanced-mode
+or hardware-cycle fidelity certification is claimed.
 Unsupported paths stop explicitly. These tests certify neither physical cycle accuracy
 nor gameplay. Headless OSD settings still require the matched profile/NVM before firmware
-sessions; the next integration should exercise native module dependencies and VIF/GIF
-contracts against original code, retaining this single console state.
+sessions; the next integration should exercise native module dependencies and original
+startup against this graphics path, retaining the single console state.
 
 **Decisões vigentes do mantenedor.** Aqui só o contrato e o estado; medições de ensaio ficam nas mensagens de commit e nas evidências locais.
 

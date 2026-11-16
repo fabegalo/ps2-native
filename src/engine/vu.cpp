@@ -21,10 +21,10 @@ void Console::start_vu(unsigned n,std::uint32_t address) {
     if(n>1 || (address&7))throw std::runtime_error("Invalid VU start");
     account();
     if(vu[n].busy)throw std::runtime_error("VU start while already running");
-    const auto cmsar=vu[n].cmsar;vu[n]={};auto& v=vu[n];v.cmsar=cmsar;
+    const auto cmsar=vu[n].cmsar,top=vu[n].unit.top,itop=vu[n].unit.itop;vu[n]={};auto& v=vu[n];v.cmsar=cmsar;
     auto& r=n ? vu1_regs : ee.vu0;
     v.unit={&r,n ? vu1_code.data() : vu0_code.data(),n ? vu1_memory.data() : vu0_memory.data(),
-        n ? 16383u : 4095u,n ? 1024u : 256u,0,0,n,&v.pipe};
+        n ? 16383u : 4095u,n ? 1024u : 256u,top,itop,n,&v.pipe};
     v.pc=address&v.unit.code_mask;v.entry=v.pc;v.npc=(v.pc+8)&v.unit.code_mask;
     v.busy=true;v.next_tick=ticks+1;v.pipe.start(r);vu_selected[n]=nullptr;
     for(auto* program:vu_programs)if(program->unit==n && std::equal(program->image,program->image+program->bytes,v.unit.code)) {vu_selected[n]=program;break;}
@@ -64,7 +64,23 @@ void Console::wait_vu(unsigned n) {
 }
 }
 namespace ps2::vu {
-void kick(int unit,std::uint32_t address) {throw std::runtime_error(std::format("VU{} GIF XGKICK at {:04X}: GPU packet consumer is not integrated",unit,address));}
+void kick(int unit,std::uint32_t address) {
+    auto& c=ps2native::engine::active_console();
+    if(unit!=1)throw std::runtime_error("XGKICK is only available on VU1");
+    c.initialize_graphics();
+    const auto start=(address&0x3ff)*16;
+    std::vector<std::uint8_t> packet;packet.reserve(16384);
+    unsigned at=start,used=0;
+    while(used<1024) {
+        const auto* tag=c.vu1_memory.data()+at;const auto value=ps2::load<std::uint64_t>(tag);
+        const auto loops=value&0x7fff,format=(value>>58)&3,nreg=((value>>60)&15) ? ((value>>60)&15) : 16;
+        const auto payload=format==0 ? loops*nreg : format==1 ? (loops*nreg+1)/2 : loops;
+        if(payload+1>1024-used)throw std::runtime_error("XGKICK packet exceeds one VU1 memory traversal");
+        for(unsigned n=0;n<payload+1;++n){packet.insert(packet.end(),c.vu1_memory.begin()+at,c.vu1_memory.begin()+at+16);at=(at+16)&0x3fff;++used;}
+        if(value&0x8000){ps2::gif::transfer(1,packet.data(),packet.size()/16);return;}
+    }
+    throw std::runtime_error("XGKICK packet did not terminate within VU1 memory");
+}
 std::uint32_t top() {return ps2native::engine::active_console().vu[1].unit.top;}
 std::uint32_t itop() {return itop(1);}
 std::uint32_t itop(int unit) {return ps2native::engine::active_console().vu.at(unit).unit.itop;}

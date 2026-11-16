@@ -41,10 +41,14 @@ void Console::load(const std::filesystem::path& path) {
     iop_threads.clear(); iop_semas.clear(); iop_events.clear(); iop_mailboxes.clear();
     iop_current=0; iop_next_thread=1; iop_next_object=1; iop_dispatch_depth=0; iop_order=0; iop_reschedule=false;iop_module_returned=false;
     iop_heap_top=0x10000; iop_imports.clear(); iop_output.clear(); iop_result=0; iop_strtok_next=0;
-    threads.clear(); semaphores.clear(); handlers.clear();
+    threads.clear(); semaphores.clear(); handlers.clear();interrupt_order.clear();in_interrupt=false;
     aot.clear(); aot_modules.clear(); code_words.clear(); syscall_handlers.clear(); dma_registers.clear(); sif_registers.clear();
+    dma_registers[0x1000e000]=1; // Standalone ELF kernel environment starts with DMA enabled.
     output.clear(); current=1; order=0; ticks=0; stack_base=0; heap_end=0;
     exited=false; exit_code=0; intc_mask=0; intc_status=0; dmac_status=0;
+    vif_state={};gif_paths={};gif_scans={};gif_held={};gif_status=0;graphic_dma={};graphics_events.clear();
+    graphics_initialized=false;graphics_frames=0;gs_state={};gs_private={};gs_display={};gs_buffers={};gs_finish_pending=gs_finish_queued=0;gs_odd_field=false;
+    std::fill(gs_vram.begin(),gs_vram.end(),0);
     for (auto& timer : timers) timer = {};
     for (auto& entry : tlb) entry = {};
     ps2::g_live_tlb_enabled=false;
@@ -90,18 +94,27 @@ std::uint32_t Console::translate(std::uint32_t address, std::size_t size, bool w
     throw std::runtime_error("TLB refill exception is not integrated");
 }
 std::uint64_t Console::now() const { return ticks + static_cast<std::uint64_t>(100000ll - ee.budget); }
+std::uint64_t Console::next_event_tick() const {
+    std::uint64_t event=~0ull;
+    if(iop_work_pending())event=iop_next_tick;
+    for(const auto& [id,e]:graphics_events)event=std::min(event,e.first);
+    for(const auto& v:vu)if(v.busy)event=std::min(event,v.next_tick);
+    return event;
+}
 void Console::advance_to(std::uint64_t target) {
     if (target<ticks) throw std::runtime_error("Logical clock cannot move backwards");
     if (target>100000000) throw std::runtime_error("Console execution limit reached");
     advancing=true;
     try {
         for (;;) {
-            auto event=~0ull;
-            if(iop_work_pending())event=iop_next_tick;
-            for(const auto& v:vu)if(v.busy)event=std::min(event,v.next_tick);
+            const auto event=next_event_tick();
             if(event>target)break;
             if(event<ticks)throw std::runtime_error("Console event moved backwards");
             ticks=event;
+            for(auto it=graphics_events.begin();it!=graphics_events.end();) {
+                if(it->second.first!=event){++it;continue;}
+                auto action=std::move(it->second.second);it=graphics_events.erase(it);action();
+            }
             for(const auto& timer:timers)if(timer.due<=ticks)throw std::runtime_error("Timer IRQ delivery is not integrated");
             if(iop_work_pending() && iop_next_tick==event) {step_iop();iop_next_tick+=8;}
             for(unsigned n=0;n<2;++n)if(vu[n].busy && vu[n].next_tick==event)step_vu(n);
@@ -132,13 +145,14 @@ void Console::schedule() {
                 std::pair(it->second.priority,it->second.order)<std::pair(best->second.priority,best->second.order))) best=it;
         return best;
     };
+    const auto retired=[&]{return std::all_of(threads.begin(),threads.end(),[](const auto& item){return item.second.state==ThreadState::Dormant;});};
     auto best=ready();
-    while (best==threads.end() && iop_work_pending()) {
-        advance_to(std::max(ticks,iop_next_tick));
-        service_sif_irq();
+    while (best==threads.end() && !retired() && next_event_tick()!=~0ull) {
+        advance_to(std::max(ticks,next_event_tick()));
+        service_interrupts();
         best=ready();
     }
-    if (best == threads.end() && std::all_of(threads.begin(),threads.end(),[](const auto& item) { return item.second.state==ThreadState::Dormant; })) {
+    if (best == threads.end() && retired()) {
         // The ELF has retired every runnable thread; the host session may end.
         exited=true; exit_code=0; return;
     }
@@ -158,7 +172,7 @@ void Console::run() {
         ee.pc &= ~ps2::kUnwind;
         ps2::dispatch(ee, 0, 0);
         ee.pc &= ~ps2::kUnwind;
-        service_sif_irq();
+        service_interrupts();
         if (!exited && reschedule_requested) schedule();
         else account();
     }
@@ -221,6 +235,10 @@ static bool dma_register(std::uint32_t a) {
 static std::uint32_t read32_physical(std::uint32_t a) {
     auto& s = active_console();
     if(a>=0x11000000 && a<0x11010000)s.account();
+    if(a>=0x12000000 && a<0x12002000){s.account();s.initialize_graphics();return static_cast<std::uint32_t>(gs::read_privileged(a&~7u)>>((a&4)*8));}
+    if(a>=0x10003800 && a<0x10004000){s.account();return vif::read(a>=0x10003c00,a&0x3ff);}
+    if(a>=0x10003000 && a<0x10003100){s.account();return gif::read(a);}
+    if(a==0x1000f520)return s.dma_registers[a];
     if (a == 0x1000e010) return s.dmac_status;
     if (a == 0x1000f000) return s.intc_status;
     if (a == 0x1000f010) return s.intc_mask;
@@ -243,6 +261,8 @@ static std::uint32_t read32_physical(std::uint32_t a) {
 std::uint32_t slow_ld32(std::uint32_t a) { return read32_physical(active_console().translate(a,4,false)); }
 std::uint64_t slow_ld64(std::uint32_t a) {
     a=active_console().translate(a,8,false);
+    if(a>=0x12000000 && a<0x12002000){auto& c=active_console();c.account();c.initialize_graphics();return gs::read_privileged(a);}
+
     if ((a >= 0x10000000 && a < 0x10002000) || dma_register(a) || a == 0x1000f000 || a == 0x1000f010) return read32_physical(a);
     if(a>=0x11000000 && a<0x11010000)active_console().account();
     return load<std::uint64_t>(mapped_physical(a,8));
@@ -258,10 +278,24 @@ static void write32_physical(std::uint32_t a, std::uint32_t v) {
     if (a == 0x1000e010) { s.dmac_status &= ~(v & 0xffff); s.dmac_status ^= v & 0xffff0000; return; }
     if (a == 0x1000f000) { s.intc_status &= ~v; return; }
     if (a == 0x1000f010) { s.intc_mask ^= v & 0x7fff; return; }
+    if(a>=0x12000000 && a<0x12002000){s.account();s.initialize_graphics();gs::write_privileged32(a,v);return;}
+    if(a>=0x10003800 && a<0x10004000){s.account();vif::write(a>=0x10003c00,a&0x3ff,v);return;}
+    if(a>=0x10003000 && a<0x10003100){s.account();gif::write(a,v);return;}
+    if(a==0x1000f590){s.account();s.dma_registers[0x1000f520]=v;for(unsigned ch:{0u,1u,2u,8u,9u})s.graphics_dma_resume(ch);return;}
     if (dma_register(a)) {
-        if (a < 0x1000e000 && !(a & 0xff) && (v & 0x100)) unsupported("DMA transfer", a);
+        s.account();
+        const std::uint32_t bases[]={0x10008000,0x10009000,0x1000a000,0x1000b000,0x1000b400,0x1000c000,0x1000c400,0x1000c800,0x1000d000,0x1000d400};
+        for(unsigned ch=0;ch<10;++ch)if(a==bases[ch] && (v&0x100)) {
+            s.dma_registers[a]=v;s.graphics_dma(ch);return;
+        }
         if ((a & 0xff) == 0x20 && a < 0x1000e000) v &= 0xffff;
-        s.dma_registers[a] = v; return;
+        for(unsigned ch:{8u,9u}) {
+            if(a==bases[ch]+0x80)v&=0x3ff0;
+            if(a==bases[ch]+0x10)v&=0x7fffffffu;
+        }
+        s.dma_registers[a] = v;
+        if(a==0x1000e000 && (v&1))for(unsigned ch:{0u,1u,2u,8u,9u})s.graphics_dma_resume(ch);
+        return;
     }
     if (a >= 0x10000000 && a < 0x10002000 && !(a & 15) && (a & 0x7ff) < 0x40) {
         auto& t = active_console().timers[(a >> 11) & 3];
@@ -295,6 +329,8 @@ void slow_st32(std::uint32_t a, std::uint32_t v) {
 }
 void slow_st64(std::uint32_t a, std::uint64_t v) {
     a=active_console().translate(a,8,true);
+    if(a>=0x12000000 && a<0x12002000){auto& c=active_console();c.account();c.initialize_graphics();gs::write_privileged(a,v);return;}
+
     if ((a >= 0x10000000 && a < 0x10002000) || dma_register(a) || a == 0x1000f000 || a == 0x1000f010) { write32_physical(a, static_cast<std::uint32_t>(v)); return; }
     if(a>=0x11000000 && a<0x11010000) {
         active_console().account();
@@ -303,7 +339,13 @@ void slow_st64(std::uint32_t a, std::uint64_t v) {
     store(mapped_physical(a,8), v);
 }
 #undef STORE
-void slow_st128(std::uint32_t a, const Reg128& v) { std::memcpy(mapped(a,16,true), &v, 16); }
+void slow_st128(std::uint32_t a, const Reg128& v) {
+    auto& c=active_console();const auto p=c.translate(a,16,true);
+    if(p==0x10004000 || p==0x10005000){c.account();vif::transfer(p==0x10005000,reinterpret_cast<const std::uint8_t*>(&v),1);return;}
+    if(p==0x10006000){c.account();c.initialize_graphics();gif::transfer(3,reinterpret_cast<const std::uint8_t*>(&v),1);return;}
+    if(p>=0x12000000 && p<0x12002000){c.account();c.initialize_graphics();gs::write_privileged(p,v.d[0]);return;}
+    std::memcpy(mapped(a,16,true), &v, 16);
+}
 void register_units(const UnitInfo* units, std::uint32_t count) {
     auto& table = active_console().aot;
     for (std::uint32_t i = 0; i < count; ++i) {
@@ -373,7 +415,7 @@ void bad_entry(Cpu& c, std::uint32_t) { unsupported("AOT unit entry", c.pc); }
 bool preempt(Cpu& c) {
     active_console().account();
     c.budget = 100000;
-    return active_console().sif_irq_ready();
+    return active_console().interrupt_ready();
 }
 void syscall(Cpu& c, std::uint32_t pc) {
     auto& s = active_console();
@@ -404,14 +446,22 @@ void syscall(Cpu& c, std::uint32_t pc) {
     case 0x10: case 0x12: {
         if (a0 >= 15 || !s.aot.contains(a1)) { result = -1; break; }
         std::uint32_t id = 1; while(s.handlers.contains(id)) ++id;
-        s.handlers.emplace(id, ps2native::engine::Console::InterruptHandler{a0 | (n == 0x12 ? 0x100u : 0u),a1,c.r[28].w[0]});
+        auto position=s.interrupt_order.end();
+        const auto next=static_cast<std::int32_t>(a2);
+        if(next==0)position=s.interrupt_order.begin();
+        else if(next!=-1) {
+            position=std::find(s.interrupt_order.begin(),s.interrupt_order.end(),a2);
+            if(position==s.interrupt_order.end()){result=-1;break;}
+        }
+        s.interrupt_order.insert(position,id);
+        s.handlers.emplace(id, ps2native::engine::Console::InterruptHandler{a0 | (n == 0x12 ? 0x100u : 0u),a1,c.r[28].w[0],c.r[7].w[0]});
         result = id; break;
     }
     case 0x11: case 0x13: {
         const auto it=s.handlers.find(a1);
         const auto cause=a0 | (n == 0x13 ? 0x100u : 0u);
         if (it == s.handlers.end() || it->second.cause != cause) { result=-1; break; }
-        s.handlers.erase(it); result=a1; break;
+        s.handlers.erase(it);std::erase(s.interrupt_order,a1);result=a1;break;
     }
     case 0x14: case 0x15: {
         if (a0 >= 15) { result = -1; break; }
@@ -474,7 +524,7 @@ void syscall(Cpu& c, std::uint32_t pc) {
             t.state=ps2native::engine::Console::ThreadState::Ready; t.order=++s.order;
         }
         s.semaphores.erase(it); result=a0;
-        if (!s.sif.in_interrupt) { s.reschedule_requested=true; c.pc |= kUnwind; }
+        if (!s.in_interrupt) { s.reschedule_requested=true; c.pc |= kUnwind; }
         break;
     }
     case 0x42: case 0x44: case 0x45: {
@@ -487,7 +537,7 @@ void syscall(Cpu& c, std::uint32_t pc) {
                 sema.waiters.erase(sema.waiters.begin());
                 t.context.r[2].sd[0] = a0; t.wait = 0;
                 t.state = ps2native::engine::Console::ThreadState::Ready; t.order = ++s.order;
-                if (!s.sif.in_interrupt) { s.reschedule_requested=true; c.pc |= kUnwind; }
+                if (!s.in_interrupt) { s.reschedule_requested=true; c.pc |= kUnwind; }
             } else if (sema.count < sema.maximum) ++sema.count;
             else { result = -420; break; }
         } else if (sema.count) --sema.count;
@@ -531,7 +581,7 @@ void syscall(Cpu& c, std::uint32_t pc) {
     default: throw std::runtime_error(std::format("Unsupported syscall 0x{:02X} at 0x{:08X} args {:08X} {:08X} {:08X}", n, pc, a0, a1, a2));
     }
     c.r[2].sd[0] = result;
-    if (s.sif_irq_ready()) c.pc |= kUnwind;
+    if (s.interrupt_ready()) c.pc |= kUnwind;
 }
 void stop(Cpu&, std::uint32_t pc, const char* what) { unsupported(what, pc); }
 void trap(Cpu&, std::uint32_t pc) { unsupported("trap", pc); }
@@ -635,6 +685,7 @@ bool vu0_busy(Cpu&) {active_console().account();return active_console().vu[0].bu
 void vu0_wait(Cpu&) {active_console().wait_vu(0);}
 std::uint8_t* vu0_data() { return active_console().vu0_memory.data(); }
 
+bool cpcond0(Cpu&) {auto& c=active_console();const auto selected=c.dma_registers[0x1000e020]&0x3ff;return (c.dmac_status&selected)==selected;}
 std::uint32_t mfc0(Cpu& c, std::uint32_t reg, std::uint32_t sel) { if (sel) unsupported("COP0 select", reg); return c.cop0[reg]; }
 void mtc0(Cpu& c, std::uint32_t reg, std::uint32_t value) { c.cop0[reg] = value; }
 // FCR aliases and masks from exoteric33 cop.cpp at the pinned MIT revision.

@@ -3,6 +3,9 @@
 #include "iop_cpu.h"
 #include "iop_memory.h"
 #include "ps2native/engine/vu.hpp"
+#include "gs/gs.hpp"
+#include "vif.hpp"
+#include "gs/gif.hpp"
 #include <map>
 #include <deque>
 #include <span>
@@ -91,6 +94,28 @@ public:
     std::uint64_t now() const;
     void account();
     std::uint32_t translate(std::uint32_t address, std::size_t size, bool write) const;
+    std::array<ps2::vif::Unit,2> vif_state{};
+    std::array<ps2::gif::Path,4> gif_paths{},gif_scans{};
+    ps2::gif::Held gif_held{};
+    std::uint32_t gif_status{};
+    struct GraphicDma {bool tag_end{},paused{};};
+    std::array<GraphicDma,10> graphic_dma{};
+    std::array<std::uint64_t,32> gs_private{};
+    std::array<std::uint64_t,2> gs_display{},gs_buffers{};
+    bool graphics_initialized{};
+    void initialize_graphics();
+    void graphics_vblank();
+    std::uint64_t next_event_tick() const;
+    void graphics_dma(unsigned channel);
+    void graphics_dma_resume(unsigned channel);
+    ps2::gs::State gs_state{};
+    std::vector<std::uint8_t> gs_vram=std::vector<std::uint8_t>(4u<<20);
+    ps2::GsHostOptions gs_options{};
+    std::uint32_t gs_crt_mode{},host_video_options{};
+    std::uint64_t graphics_frames{};
+    std::uint32_t gs_finish_pending{},gs_finish_queued{};
+    bool gs_odd_field{};
+    std::map<int,std::pair<std::uint64_t,std::function<void()>>> graphics_events;
     ps2::Cpu ee{};
     std::vector<std::uint8_t> ram, scratchpad, iop_ram;
     std::array<std::uint8_t,4096> vu0_memory{};
@@ -119,8 +144,10 @@ public:
     Timer timers[4];
     struct TlbEntry { std::uint32_t page_mask{}, entry_hi{}, entry_lo0{}, entry_lo1{}; bool defined{}; };
     TlbEntry tlb[48];
-    struct InterruptHandler { std::uint32_t cause{}, function{}, gp{}; };
+    struct InterruptHandler { std::uint32_t cause{}, function{}, gp{}, argument{}; };
     std::map<std::uint32_t, InterruptHandler> handlers;
+    std::vector<std::uint32_t> interrupt_order;
+    bool in_interrupt{};
     std::uint32_t intc_mask{}, intc_status{}, dmac_status{};
     std::map<std::uint32_t,std::uint32_t> dma_registers;
     std::map<std::uint32_t,std::uint32_t> sif_registers;
@@ -134,7 +161,7 @@ public:
         std::deque<std::pair<IopHandler,std::vector<std::uint8_t>>> iop_commands;
         std::array<std::uint32_t,32> iop_sregs{};
         std::map<std::uint32_t,std::uint32_t> tty_descriptors{{0,1},{1,2},{2,2}};
-        bool armed{}, interrupt{}, in_interrupt{}, rpc_ready{};
+        bool armed{}, interrupt{}, rpc_ready{};
         std::deque<std::vector<std::uint32_t>> replies;
     } sif;
     void initialize_sif();
@@ -143,8 +170,8 @@ public:
     std::uint32_t sif_dma(std::uint32_t descriptors, std::uint32_t count);
     void sif_command(std::span<const std::uint8_t> packet);
     void sif_pump();
-    bool sif_irq_ready() const;
-    void service_sif_irq();
+    bool interrupt_ready() const;
+    void service_interrupts();
     bool reschedule_requested{};
     bool exited{};
     int exit_code{};

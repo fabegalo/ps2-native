@@ -15,6 +15,7 @@ static std::int64_t syscall(Console& s, std::uint32_t n, std::uint32_t a=0, std:
     ps2::syscall(s.ee, 0x1000);
     return s.ee.r[2].sd[0];
 }
+static void irq(ps2::Cpu& c,std::uint32_t,std::uint32_t){ps2::st32(0x9800,c.r[4].w[0]);ps2::st32(0x9804,c.r[5].w[0]);c.vu0.vf[2].w[0]=77;c.r[2].sw[0]=-1;c.pc=c.r[31].w[0];}
 static void unit(ps2::Cpu& c, std::uint32_t, std::uint32_t) { c.r[2].w[0] = 123; c.pc = c.r[31].w[0]; }
 int main() {
     try {
@@ -53,6 +54,14 @@ int main() {
         require(s.ee.r[2].w[0] == 123 && s.ee.pc == 0x1004, "AOT dispatch executes native unit");
         rejects([&] { ps2::dispatch(s.ee,0,0); });
         rejects([&] { syscall(s,0xff); });
+        static const ps2::UnitInfo irq_units[]={{0x1010,4,irq,entries}};ps2::register_units(irq_units,1);
+        s.ee.pc=0x1234;s.ee.cop0[12]|=0x10000;s.ee.r[6].sw[0]=-1;s.ee.r[7].w[0]=0x12345678;
+        const auto irq_id=syscall(s,0x10,2,0x1010);
+        s.intc_mask=4;s.intc_status=4;
+        require(s.interrupt_ready(),"Graphics INTC shares original EE handler delivery");
+        s.service_interrupts();
+        require(ps2::ld32(0x9800)==2 && ps2::ld32(0x9804)==0x12345678 && !s.intc_status && s.ee.pc==0x1234 && s.ee.vu0.vf[2].w[0]==77,"Interrupt arguments, acknowledgement, continuation and shared VU0 state survive callback");
+        syscall(s,0x11,2,irq_id);s.intc_mask=0;s.ee.cop0[12]=0;
         s.code_words[0x1000]=0xabcdef01;
         syscall(s,0x64);
         ps2::st32(0x1000,0);
@@ -97,9 +106,9 @@ int main() {
         require(s.sif.replies.size()==1 && ps2::ld32(0x6000)==0, "Reply waits for armed SIF0 DMA");
         syscall(s,0x78);
         require(ps2::ld32(0x6008)==0x80000001 && (s.dmac_status&32), "SIF0 copies actual SetSreg packet and raises DMA status");
-        require(!s.sif_irq_ready(), "Masked SIF0 IRQ is not delivered");
+        require(!s.interrupt_ready(), "Masked SIF0 IRQ is not delivered");
         s.dmac_status |= 1u<<21; s.ee.cop0[12] |= 0x10000;
-        require(s.sif_irq_ready(), "SIF0 IRQ becomes deliverable after mask and EI");
+        require(s.interrupt_ready(), "SIF0 IRQ becomes deliverable after mask and EI");
         syscall(s,0x6b);
         require(!s.sif.armed, "StopDma cancels rather than arms reception");
         s.initialize_sif(); s.sif.rpc_ready=true;
@@ -196,7 +205,8 @@ int main() {
         rejects([&]{s.schedule();});
         require(!s.exited,"Waiting threads must remain a deadlock, not success");
         s.threads[1].state=Console::ThreadState::Dormant;
-        s.schedule();require(s.exited,"Retired final EE thread ends the host session");
+        s.vu[1].busy=true;s.vu[1].next_tick=s.ticks+1;
+        s.schedule();require(s.exited && s.vu[1].busy,"Retired final EE thread ends the session without waiting for or fabricating a device halt");
         const std::uint8_t bad[] = {0,1,2};
         rejects([&] { (void)ps2native::parse_ee_elf(bad); });
         std::puts("engine: memory, bounds, AOT, invalidation, semaphores and scheduling PASS");

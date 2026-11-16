@@ -16,6 +16,8 @@ import shutil
 import subprocess
 import tempfile
 import time
+import struct
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 EE = ("lsudelay", "branchdelay", "alu", "branch", "lsu", "muldiv")
@@ -57,7 +59,9 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--prepare-only", action="store_true")
     mode.add_argument("--build-only", action="store_true")
+    parser.add_argument("--present-ms",type=int,default=0,help="Bounded native presentation of graphics-guest (0..5000 ms)")
     options = parser.parse_args()
+    if not 0<=options.present_ms<=5000:parser.error("--present-ms must be in 0..5000")
     if not all((options.cmake, options.cxx, options.cc, options.ninja)):
         parser.error("Provide CMake, Ninja, clang++ and clang paths")
     components = json.loads((ROOT / "deps.lock.json").read_text(encoding="utf-8"))["ps2native_engine"]
@@ -66,6 +70,8 @@ def main():
             data = (ROOT / "third_party" / directory / name).read_bytes().replace(b"\r\n", b"\n")
             if hashlib.sha256(data).hexdigest() != expected:
                 raise RuntimeError(component + " component hash mismatch: " + name)
+    gpu_spec=importlib.util.spec_from_file_location("engine_graphics_fetch",ROOT/"scripts/fetch-engine-graphics.py")
+    gpu_fetch=importlib.util.module_from_spec(gpu_spec);gpu_spec.loader.exec_module(gpu_fetch);gpu_fetch.fetch()
     spec = importlib.util.spec_from_file_location("engine_fetch", ROOT / "scripts/fetch-engine-tests.py")
     fetcher = importlib.util.module_from_spec(spec); spec.loader.exec_module(fetcher)
     tests = fetcher.fetch() / "tests"
@@ -91,14 +97,19 @@ def main():
     if Path(options.report).name != options.report:
         parser.error("--report must be a filename")
     for requested in options.tests or EE:
+        graphics_guest=requested=="graphics-guest"
         relative = "cpu/ee/" + requested if requested in EE else requested
         extension = ".elf" if "tests/" + relative + ".elf" in locked else ".irx"
-        if "tests/" + relative + extension not in locked:
+        if not graphics_guest and "tests/" + relative + extension not in locked:
             parser.error("Not a hash-verified ELF/IRX: " + relative)
-        if extension == ".irx" and options.with_iop:
+        if extension == ".irx" and options.with_iop and not graphics_guest:
             parser.error("--with-iop requires EE primary tests")
         name = requested.replace("/", "-")
         elf = tests / (relative + extension)
+        if graphics_guest:
+            guest_spec=importlib.util.spec_from_file_location("graphics_guest",ROOT/"tests/engine_graphics_guest.py")
+            guest_module=importlib.util.module_from_spec(guest_spec);guest_spec.loader.exec_module(guest_module)
+            elf=build/"graphics-guest.elf";elf.write_bytes(guest_module.make_guest());extension=".elf"
         identity = hashlib.sha256(elf.read_bytes()).hexdigest()
         generated = build / "aot" / identity
         manifest = generated / "captured.json"
@@ -135,7 +146,10 @@ def main():
             joint_output = build / "joint-iop.actual"
             if options.with_iop:
                 command += ["--iop", tests / (options.with_iop + ".irx"), "--iop-output", joint_output]
-            code, actual, diagnostic = run(command, timeout=15, env=environment)
+            if graphics_guest:
+                command += ["--capture",build/"graphics-guest.bmp"]
+                if options.present_ms:command += ["--present-ms",options.present_ms]
+            code, actual, diagnostic = run(command, timeout=30 if graphics_guest else 15, env=environment)
             if code==0 and len(list(vu_capture.glob("vu[01]-*.bin")))>vu_count and attempt<32:
                 print(name+": preparing captured VU AOT",flush=True)
                 continue
@@ -163,8 +177,19 @@ def main():
             continue
         # Only host text-mode CRLF conversion is normalized; all guest text is compared.
         actual = actual.replace(b"\r\n", b"\n")
-        expected = (tests / (relative + ".expected")).read_bytes().replace(b"\r\n", b"\n")
+        expected = b"" if graphics_guest else (tests / (relative + ".expected")).read_bytes().replace(b"\r\n", b"\n")
         passed = code == 0 and actual == expected
+        frame = {}
+        if graphics_guest and code==0:
+            bmp=(build/"graphics-guest.bmp").read_bytes()
+            width,height=struct.unpack_from("<ii",bmp,18)
+            if width!=32 or height!=-32 or len(bmp)!=54+4096:raise RuntimeError("Invalid diagnostic guest framebuffer")
+            bgra=bmp[54:];rgba=b"".join(bytes((bgra[i+2],bgra[i+1],bgra[i],bgra[i+3])) for i in range(0,len(bgra),4))
+            passed = passed and rgba==bytes((255,0,0,255))*1024
+            def png_chunk(kind,data):return struct.pack(">I",len(data))+kind+data+struct.pack(">I",zlib.crc32(kind+data))
+            png=b"\x89PNG\r\n\x1a\n"+png_chunk(b"IHDR",struct.pack(">2I5B",32,32,8,6,0,0,0))+png_chunk(b"IDAT",zlib.compress(b"".join(b"\0"+rgba[y*128:(y+1)*128] for y in range(32))))+png_chunk(b"IEND",b"")
+            (build/"graphics-guest.png").write_bytes(png)
+            frame={"width":32,"height":32,"rgba_sha256":hashlib.sha256(rgba).hexdigest(),"synthetic_guest_diagnostic":True,"gameplay":False}
         joint = {}
         if options.with_iop and code == 0:
             observed_iop = joint_output.read_bytes().replace(b"\r\n",b"\n")
@@ -178,7 +203,7 @@ def main():
                          "captured_aot_entries": len(modules),
                          "stdout_sha256": hashlib.sha256(actual).hexdigest(), "expected_sha256": hashlib.sha256(expected).hexdigest(),
                          "diagnostic": diagnostic.decode(errors="replace")[:2000],
-                         "vu_aot_images": vu_count if extension==".elf" else 0, **joint}
+                         "vu_aot_images": vu_count if extension==".elf" else 0, **joint,**frame}
         (build / (name + ".actual")).write_bytes(actual)
         print(f"{name}: {'PASS' if passed else 'FAIL'} ({len(actual)}/{len(expected)} bytes)", flush=True)
         if not passed:

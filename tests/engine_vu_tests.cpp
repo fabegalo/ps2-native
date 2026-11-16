@@ -19,7 +19,9 @@ static Result run(unsigned n,bool native) {
     // A real IOP store occurs while VU load/arithmetic/store pairs wait on dependencies.
     c.iop_write(0x1000,0xac040900,4);c.iop_write(0x1004,0x03e00008,4);c.iop_write(0x1008,0,4);
     c.iop.pc=0x1000;c.iop.gpr[4]=0x55;c.iop.gpr[31]=0xfffffff0;c.iop_active=true;c.iop_next_tick=8;
+    c.vu[n].unit.top=37;c.vu[n].unit.itop=91;
     c.start_vu(n,0);c.wait_vu(n);
+    check(c.vu[n].unit.top==37 && c.vu[n].unit.itop==91,"Starting a microprogram preserves VIF TOP/ITOP latches");
     check(c.iop_read(0x900,4)==0x55,"IOP progresses on the common clock during VU execution");
     Result out{};for(unsigned k=0;k<4;++k)out.data[k]=ps2::ld32(data+16+4*k);
     const std::array<std::uint32_t,4> expected={0x40000000,0x40800000,0x40c00000,0x41000000};

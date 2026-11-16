@@ -20,6 +20,7 @@ std::span<std::uint8_t> memory(std::vector<std::uint8_t>& bytes, std::uint32_t a
 }
 void Console::initialize_sif() {
     sif = {};
+    dmac_status &= ~(1u<<5);
     sif.command_buffer = static_cast<std::uint32_t>(iop_ram.size()) - 0x10000;
     std::fill(iop_ram.begin() + sif.command_buffer, iop_ram.end(), 0);
     // The HLE SIF manager and CMD receiver are now registered; no original IOP BOOTEND is claimed.
@@ -158,7 +159,7 @@ void Console::iop_send_command(std::uint32_t cid,std::uint32_t packet,std::uint3
     sif_pump();
 }
 void Console::sif_pump() {
-    if (!sif.armed || sif.interrupt || sif.in_interrupt || !sif.ee_receive || sif.replies.empty()) return;
+    if (!sif.armed || sif.interrupt || in_interrupt || !sif.ee_receive || sif.replies.empty()) return;
     const auto& reply=sif.replies.front();
     const auto target=memory(ram,sif.ee_receive,reply.size()*4);
     std::memcpy(target.data(),reply.data(),target.size());
@@ -168,31 +169,39 @@ void Console::sif_pump() {
     sif.replies.pop_front(); sif.armed=false; sif.interrupt=true;
     dmac_status |= 1u<<5;
 }
-bool Console::sif_irq_ready() const {
-    return sif.interrupt && !sif.in_interrupt && (dmac_status & (1u<<21)) && (ee.cop0[12] & 0x10000);
+bool Console::interrupt_ready() const {
+    return !in_interrupt && (ee.cop0[12] & 0x10000) &&
+        ((intc_status & intc_mask) || (dmac_status & (dmac_status >> 16) & 0x3ff));
 }
-void Console::service_sif_irq() {
-    if (!sif_irq_ready()) return;
+void Console::service_interrupts() {
+    if (!interrupt_ready()) return;
     account();
     const auto saved = ee;
-    sif.in_interrupt=true; sif.interrupt=false; dmac_status &= ~(1u<<5);
-    bool served=false;
+    in_interrupt=true;
+    const auto restore=[&] {const auto live_vu0=ee.vu0;ee=saved;ee.vu0=live_vu0;ee.budget=100000;in_interrupt=false;};
     try {
-        const auto registered=handlers;
-        for (const auto& [id,handler] : registered) {
-            if (handler.cause != 0x105 || !handlers.contains(id)) continue;
-            served=true;
-            ee=saved; ee.pc=handler.function; ee.r[4].w[0]=5;
-            ee.r[28].w[0]=handler.gp; ee.r[31].w[0]=0xffffffe0;
-            do {
-                ee.pc &= ~ps2::kUnwind;
-                ps2::dispatch(ee,0,0);
-            } while ((ee.pc & ~ps2::kUnwind) != 0xffffffe0);
-            account();
+        const auto intc=intc_status & intc_mask;
+        const auto dma=dmac_status & (dmac_status >> 16) & 0x3ff;
+        for(unsigned source=0;source<2;++source)for(unsigned cause=0;cause<(source ? 10u : 15u);++cause) {
+            if(!((source ? dma : intc)&(1u<<cause)))continue;
+            if(source){dmac_status &= ~(1u<<cause);if(cause==5)sif.interrupt=false;}
+            else intc_status &= ~(1u<<cause);
+            bool served=false;
+            const auto registered=interrupt_order;
+            for(const auto id:registered) {
+                const auto it=handlers.find(id);
+                if(it==handlers.end() || it->second.cause!=(cause | (source ? 0x100u : 0u)))continue;
+                const auto handler=it->second;served=true;
+                const auto live_vu0=ee.vu0;ee=saved;ee.vu0=live_vu0;
+                ee.r[4].w[0]=cause;ee.r[5].w[0]=handler.argument;
+                ee.pc=handler.function;ee.r[28].w[0]=handler.gp;ee.r[31].w[0]=0xffffffe0;
+                do {ee.pc &= ~ps2::kUnwind;ps2::dispatch(ee,0,0);} while((ee.pc & ~ps2::kUnwind)!=0xffffffe0);
+                account();
+                if(ee.r[2].sw[0]<0)break;
+            }
+            if(!served)throw std::runtime_error("Enabled EE interrupt has no original handler");
         }
-        if (!served) throw std::runtime_error("No original EE handler for SIF0 IRQ");
-    } catch (...) { ee=saved; sif.in_interrupt=false; throw; }
-    ee=saved; ee.budget=100000; sif.in_interrupt=false;
-    sif_pump();
+    } catch(...) {restore();throw;}
+    restore();sif_pump();
 }
 }

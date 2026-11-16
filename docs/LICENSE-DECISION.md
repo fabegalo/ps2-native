@@ -133,3 +133,16 @@ same `a50471a` pin. `third_party/ps2-native-vu/LICENSE` and `deps.lock.json` ret
 license, source identity and result hashes. Its AOT pair emitter and shared scheduler
 belong to the engine. This MIT component does not change the GPL-3.0 obligations of the
 combined engine that already includes the isolated PS2Recomp IOP CPU.
+
+The graphics continuation approved 16/11/2026 selects the isolated MIT exoteric33
+GS/VIF/GIF compute component at `a50471a`. Samir Nuri/exoteric33 credits remain in
+`third_party/ps2-native-gs/LICENSE`; adapted sources/shaders are hash-locked. Host
+adapters replace runtime/queue ownership. CPU raster is a regression oracle; no
+paraLLEl-GS code is linked by `PS2N_ENGINE_ONLY`.
+
+The graphics API dependency gfx-rs/wgpu-native `v29.0.1.1` is MIT OR Apache-2.0, with
+upstream texts in `third_party/wgpu-native`. Release archive and extracted Windows GNU
+package hashes are locked. Binary distribution must preserve applicable dependency
+notices and source obligations; this local integration is not a release. The combined
+engine retains its GPL-3.0 obligations. Original games/firmware, commercial generated
+AOT sources, frames and private state are not committed.

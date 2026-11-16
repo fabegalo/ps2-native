@@ -1796,6 +1796,84 @@
         "include/ps2/vu_semantics.hpp": "0ed66d18c84a9484f456fdef8ba28e50c03a4d4e77f7cc91347f30e279fa0311",
         "LICENSE": "e1b41e544ac8e9b4812ef77e558815cb8251129b5b4473fa202cbcad18fe39bb"
       }
+    },
+    "gs": {
+      "repository": "https://github.com/exoteric33/ps2-native-recomp.git",
+      "commit": "a50471a823c64e0e2893329527820a7c4deed608",
+      "license": "MIT",
+      "hash_format": "utf8-lf",
+      "files": {
+        "dmac.hpp": "f45b398abf2226f0dcfbe0bb16be898c93e6dcffd977ba633a14f056e2aeb7b9",
+        "embed.cmake": "f9c00947753f7ab2a2740c026bb555ae5eac5d2b8bdb46a4167b461f509347e1",
+        "gs/gif.cpp": "9c9b6ef5ca28d94139a14ba6c3827767da3f743f0bd9021143d972888c1514e8",
+        "gs/gif.hpp": "be963df854e744feaea605c876e6f36f14ef156fc84a334490f73e35852271ac",
+        "gs/gpu/blit.wgsl": "d21f9937c7a9b81b8e4232eb0d4a652c1c58a8caa7acc36951d0dc1538481876",
+        "gs/gpu/gpu.cpp": "bfb4a07647b669307436d0ea62c14db0d8c8d31be950c0f3bf46696896957fe1",
+        "gs/gpu/gpu.hpp": "ae87231d03489109eefc7c7bfa59dde7ef564c735bac180e26d99eb8896be5af",
+        "gs/gpu/gs.wgsl": "e673fd0a4cb70606e78c806e55105b1173cc260b88d966d0703b7f1104333c75",
+        "gs/gpu/hwcache.cpp": "de0bcd8d138f52899fe283b7bc869f200568382f2b59e875d40a3a89388aeed6",
+        "gs/gpu/hwcache.hpp": "c31dcf5b0c52b62521c06d8adce593f885b71ddd1931eb4f54bf611f862c2c95",
+        "gs/gpu/hwcache.wgsl": "a01bfe9a29a9432791739c2db7143bc2bfb97acec59ac000484f75fb10fc2300",
+        "gs/gpu/hwdraw.cpp": "7c262708166a15e8ab9c57512cfad3820428f1039f6dee569446934708568974",
+        "gs/gpu/hwdraw.hpp": "a5d3a897d42256ee478a7d2ed1793301ac5067f957f7afe0be9dcf1d13620e2f",
+        "gs/gpu/hwdraw.wgsl": "2efd2063e2bed382b6cafea7b11d8df0964e92ef96305ec88dbc44f2e8e1cabb",
+        "gs/gpu/hwdraw_sync.wgsl": "9d49c56e01cea6ef5f1a92fe42a1b9e9f99dfe5907354bcaa5271f99f892dc9d",
+        "gs/gpu/hwstat.cpp": "d30c9b58843f7a7099ceeebf4f5f06b80868420eb3aa2ad6120a7e76bd2fe9b2",
+        "gs/gpu/hwstat.hpp": "3a05bd50cecd16431cddf219fc51a836b76a1c8d01646cbf6857eed94f5a5779",
+        "gs/gpu/overlay.hpp": "8de2e445485f3210c603086206a52954bbe3571ec5623f56987e90b2eca4ed95",
+        "gs/gpu/setup.hpp": "d58b2d1ce0613fd4188af62a43a9c4b998d44199cb465d7584dc13f4b7241038",
+        "gs/gpu/tiles.cpp": "1bf5daf38947514bb021c1e7da897819de659ee009f047105c1b9de45db00a55",
+        "gs/gpu/tiles.hpp": "c8b2d9dc99d95735a67cc0042317955895b93258867864a49b49299e290ba748",
+        "gs/gpu/trusted.hpp": "db96e97fe4a6e4562a91f7d18b2a3ef26181d8f1dbab40a93f1df0eeb3691ef3",
+        "gs/gs.cpp": "a144a267c07e2ebd088df6e21f3287baddfb003c5fc7934b287b96859ed8dfb9",
+        "gs/gs.hpp": "39c31e2a527590ed2ac649902a1c898f1a4c7fd9f657d8558c292b51dda00194",
+        "gs/queue.hpp": "2704cbadc65789351a526791d56125a53b3f5a1ec2aa671a42a979e0d01a786b",
+        "gs/raster.cpp": "eac6eaf8c9ecbec2e4d6489150994ae34b7ed87b3e613d712a11df4957a172f6",
+        "gs/raster.hpp": "0bdef4539f0958194b6d68fb250ba06f3d992be1306f246c92e5a9547ef588d8",
+        "hw.hpp": "ccf559fe557490cf2ffe3fa94fcdf48efbe3e0a0a4fa47608e596558e9c364e8",
+        "include/ps2/hitch.hpp": "7195750de4c67afff8f4bbffa810e5e511883941cfbac5b84f64afa7e79b9e15",
+        "include/ps2/system.hpp": "5e7ecb0649c1bb80aa88d859fd7e0562c386dd6a35395b4bf510f07e0bc3ff2b",
+        "include/ps2/video.hpp": "987747c4dd2ed64acd06ae9367e2d9227d4a7ebab8790c6d09bf12429d9f9a15",
+        "kernel.hpp": "b3adf106d95b8934f690943f2921308b90be5b766c4c8ba250c792de56400201",
+        "LICENSE": "e1b41e544ac8e9b4812ef77e558815cb8251129b5b4473fa202cbcad18fe39bb",
+        "vif.cpp": "4a8f5f6ff9a0b525102c081ca39145c0fad1cbe3c483953a82c3d2d8eb65d7e8",
+        "vif.hpp": "64427d0d461ebafde0497ef9aff3e6d0c918077c21f21369977591152fc31db2",
+        "vu_micro.hpp": "37d52057e70dfa03f30eb3ca983dc6479d05f1360c461ddbc0d7b70792233b15"
+      }
+    },
+    "wgpu": {
+      "version": "v29.0.1.1",
+      "repository": "https://github.com/gfx-rs/wgpu-native",
+      "license": "MIT OR Apache-2.0",
+      "windows_x64_gnu": {
+        "url": "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-windows-x86_64-gnu-release.zip",
+        "archive": "out/dependencies/wgpu-v29.0.1.1-windows-gnu.zip",
+        "directory": "out/dependencies/wgpu-v29.0.1.1-windows-gnu",
+        "archive_bytes": 15532029,
+        "source_bytes": 52066949,
+        "sha256": "d471e3614733c1d4ddd61bfd19868356477d0d37bf531bf8c6cb64a7f579bd2a",
+        "files": {
+          "include/webgpu/webgpu.h": "2516cf5a7bec4385bf76ecc550d45015c1e3df77962211f3cef3f57507b2f2c8",
+          "include/webgpu/wgpu.h": "873faa1c1b63d48e4d866000fc51a163e85d0f7c6c01425c687d3f12d073ff74",
+          "lib/libwgpu_native.a": "0b5206ac8313a33d5f276417328ed8d077e1c0cc1b25f3a700da6dd0f284b326",
+          "lib/libwgpu_native.dll.a": "30644b06048c0f95a26dc9690eb9ce3839481f469b9ef7829545d400da34c14e",
+          "lib/wgpu_native.dll": "61da1bec4f888a20253d42b535f2952c51d8e9fd24efbc687318c2d20d139262",
+          "wgpu-native-meta/webgpu.yml": "7c6a591979e7241c6f72a42a60205096522a147de472d769d48067b29c75c1d3",
+          "wgpu-native-meta/wgpu-native-git-tag": "390263a8ff03ba3577a2d161b36b5bceb3efa9b668b9dd8aa225aa308aefd03a"
+        }
+      },
+      "notices": {
+        "LICENSE.APACHE": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+        "LICENSE.MIT": "c7fea58d1cfe49634cd92e54fc10a9d871f4b275321a4cd8c09e449122caaeb4"
+      }
+    },
+    "toolchains": {
+      "windows_x64": {
+        "version": "llvm-mingw-20260908-ucrt-x86_64",
+        "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260908/llvm-mingw-20260908-ucrt-x86_64.zip",
+        "sha256": "1bcf74d06b724aeecaa6412ca85f5b26fb1da770e7cdcefa9263c9c5c3ad34b6",
+        "archive_bytes": 190677197
+      }
     }
   }
 }
