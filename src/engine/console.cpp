@@ -33,7 +33,7 @@ void Console::reset_iop() {
     iop_pending_irqs=0;iop_irq_cause=0;
     iop_bus_registers.clear();
     iop_vblank_handlers.clear();iop_vblank_jobs.clear();iop_vblank_active.reset();iop_vblank_pending=0;iop_in_vblank=false;
-    iop_timers={};for(auto& t:iop_timers)t.base=ticks;iop_modload_callbacks={};iop_sio2_send={};iop_sio2_control=0x3bc;iop_sio2_status=0x1d100;iop_sio2_interrupt=iop_sio2_command=0;iop_sio2_input.clear();iop_sio2_output.clear();iop_module_waiters.clear();
+    iop_timers={};for(auto& t:iop_timers)t.base=ticks;iop_modload_callbacks={};iop_sio2_send={};iop_sio2_control=0x3bc;iop_sio2_status=0x1d100;iop_sio2_interrupt=iop_sio2_command=iop_sio2_received=iop_sio2_block_size=0;iop_sio2_dma_due={~0ull,~0ull};iop_sio2_input.clear();iop_sio2_output.clear();iop_module_waiters.clear();
     iop_boot_modules.clear();iop_boot_waiting=0;iop_boot_active=false;
     std::fill(iop_ram.begin(),iop_ram.end(),0);
     iop={}; iop_suspended={}; iop_active=false;
@@ -136,6 +136,7 @@ void Console::refresh_ee_timer(unsigned index) {
 std::uint64_t Console::now() const { return ticks + static_cast<std::uint64_t>(100000ll - ee.budget); }
 std::uint64_t Console::next_event_tick() const {
     std::uint64_t event=std::min(cdvd->due,audio_next_tick());
+    for(const auto due:iop_sio2_dma_due)event=std::min(event,due);
     for(const auto& [id,a]:iop_alarms)if(!a.pending)event=std::min(event,std::max(ticks,a.target));
     for(const auto& t:timers)event=std::min(event,t.due);
     if(iop_work_pending() || iop_boot_active)event=std::min(event,iop_next_tick);
@@ -158,6 +159,7 @@ void Console::advance_to(std::uint64_t target) {
             const bool boot_event=iop_boot_active && iop_next_tick==event;
             for(auto& [id,a]:iop_alarms)if(!a.pending && a.target<=event){const bool idle=!iop_work_pending();a.pending=true;if(idle)iop_next_tick=std::max(iop_next_tick,ticks+8);}
             if(cdvd->due==event)cdvd->complete();
+            for(unsigned n=0;n<2;++n)if(iop_sio2_dma_due[n]==event)complete_sio2_dma(n);
             for(auto it=graphics_events.begin();it!=graphics_events.end();) {
                 if(it->second.first!=event){++it;continue;}
                 auto action=std::move(it->second.second);it=graphics_events.erase(it);action();
@@ -670,7 +672,7 @@ void syscall(Cpu& c, std::uint32_t pc) {
     case 0x79: s.sif_setreg(a0,a1); break;
     case 0x7a: result=s.sif_getreg(a0); break;
     case 0x77: result=s.sif_dma(a0,a1); break;
-    case 0x76: result=(a0 && a0 <= s.sif.completed_id) ? -1 : 0; break;
+    case 0x76: result=s.sif.dma_status(a0); break;
     case 0x78:
         s.sif.armed=true; s.dma_registers[0x1000c000]=0x184; s.sif_pump(); break;
     case 0x6b:

@@ -37,7 +37,32 @@ int main() {
         check(c.iop.gpr[2]==0 && c.iop_read(0x9800,4)==Console::iop_alarm_min,"Alarm minimum wait follows threadman's 100 us clock conversion");
         c.iop.gpr[4]=0x7400;c.iop.gpr[5]=123;c.iop_import("thbase",37);
         check(c.iop.gpr[2]==0 && c.iop_alarms.empty(),"CancelAlarm removes the exact pending handler/argument pair");
-        c.ticks=0;c.iop_instructions=0;c.iop={};c.iop_next_tick=0;
+        const std::uint32_t dma_irq[]={0x8c087a00,0,0x25080001,0xac087a00,0x03e00008,0x24020001};
+        for(unsigned i=0;i<std::size(dma_irq);++i)c.iop_write(0x7600+i*4,dma_irq[i],4);
+        for(const auto irq:{44u,45u}){c.iop.gpr[4]=irq;c.iop.gpr[5]=1;c.iop.gpr[6]=0x7600;c.iop.gpr[7]=0;c.iop_import("intrman",4);c.iop.gpr[4]=irq;c.iop_import("intrman",6);}
+        c.iop.gpr[29]=0x1eff00;
+        const auto slice=[&](unsigned channel,unsigned address,unsigned direction){
+            c.iop.gpr[4]=channel;c.iop.gpr[5]=address;c.iop.gpr[6]=4;c.iop.gpr[7]=1;c.iop_write(c.iop.gpr[29]+16,direction,4);c.iop_import("dmacman",28);
+            check(c.iop.gpr[2]==1,"Slice DMA configuration uses the real DMACMAN fifth argument");c.iop.gpr[4]=channel;c.iop_import("dmacman",32);
+        };
+        c.iop_write(0xbf808200,(3u<<18)|(3u<<8),4);
+        for(unsigned i=0;i<16;++i)c.iop_write(0x6400+i,i==0?1:i==1?0x42:i==2?0:0xa5,1);
+        slice(12,0x6500,0);slice(11,0x6400,1);c.advance_to(c.ticks+16);
+        check(c.iop_read(0xbf801540,4)==0x6400 && c.iop_read(0xbf801550,4)==0x6500 && c.iop_sio2_output.empty(),"Disabled serial DMA retains its descriptors and a receiver waits for actual FIFO data");
+        c.iop_write(0xbf801570,0x880000,4);
+        check(c.iop_sio2_dma_due[0]>c.ticks && c.iop_sio2_dma_due[1]>c.ticks && c.iop_read(0x7a00,4)==0,"SIO2 DMA cannot fabricate inline completion interrupts");
+        c.run_iop();check(c.iop_read(0x7a00,4)==2 && !(c.iop_read(0xbf801548,4)&0x1000000) && !(c.iop_read(0xbf801558,4)&0x1000000),"Both SIO2 DMA deadlines invoke their actual R3000A handlers and retire channel STR");
+        check(c.iop_read(0xbf801540,4)==0x6410 && c.iop_read(0xbf801550,4)==0x6510,"Serial DMA uses the shared IOP RAM and advances both addresses");
+        for(unsigned i=0;i<16;++i)check(c.iop_read(0x6500+i,1)==(i<3?0xff:0),"Open-bus wire replies and DMA block padding remain distinct");
+        c.reset_iop();c.initialize_sif();c.ticks=0;c.iop_instructions=0;c.iop={};c.iop_next_tick=0;
+        c.sif.transfer_id=2;c.sif.completed_id=1;
+        for(const auto id:{0u,1u,3u}){c.iop.gpr[4]=id;c.iop_import("sifman",8);check(static_cast<std::int32_t>(c.iop.gpr[2])==-1,"Unknown, zero and completed DMA identifiers cannot fabricate a busy transfer");}
+        c.iop.gpr[4]=2;c.iop_import("sifman",8);check(c.iop.gpr[2]==0,"The actual in-flight DMA remains busy");
+        c.ee.r[3].w[0]=0x76;c.ee.r[4].w[0]=0;ps2::syscall(c.ee,0x1000);
+        check(c.ee.r[2].sw[0]==-1,"EE and IOP query the same SIF transfer state");c.initialize_sif();
+        const std::string kernel_tty="kernel %d\n";for(unsigned i=0;i<=kernel_tty.size();++i)c.iop_write(0x6600+i,i==kernel_tty.size()?0:kernel_tty[i],1);
+        c.iop.gpr[4]=0x6600;c.iop.gpr[5]=static_cast<std::uint32_t>(-112);c.iop_import("sysmem",14);
+        check(c.iop_output=="kernel -112\n" && c.iop.gpr[2]==12,"Kprintf and stdio use the same real bounded IOP TTY service");c.iop_output.clear();
         c.iop_write(0x100,0x12345678,4);
         check(c.iop_read(0xa0000100,4)==0x12345678,"IOP aliases use Console RAM");
         rejects([&]{c.iop_read(0,8);});rejects([&]{c.iop_read(0x1f801000,4);});

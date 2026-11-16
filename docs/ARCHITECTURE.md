@@ -236,7 +236,11 @@ actual counts, waiters and original metadata. Context switches preserve processo
 COP0/interrupt and performance state, correcting the deadlock when a new EE thread
 previously replaced those registers with zero. A negative regression reproduced the
 loss before the correction. SIO2 PIO/IRQ probing follows patches 0062/0065 and reports
-the actual open bus: no host controller/card is attached, and serial DMA remains explicit.
+the actual open bus: no host controller/card is attached. Serial DMA11/12 now consume
+that same FIFO and IOP RAM, retain disabled descriptors and receiver-first waits, and
+complete on the shared clock through native IRQ44/45. DMACMAN slice/start imports reuse
+patch 0062's register contract. Invalid/zero SIF DMA IDs now report no transfer rather
+than fabricated busy state; EE and IOP call the same status query. Kprintf reuses TTY.
 
 CD reads now accept the original driver's CAV mode 0x85, using PCSX2's radial-rate model
 and updating sector deadlines on the shared clock. This is an approximate device timing
@@ -246,11 +250,15 @@ pending deadlines and repeat from the previous target until the callback returns
 Their minimum delay follows PS2SDK threadman's 100 us clock conversion.
 
 Super boots its original SIO2MAN, PADMAN, RSPU2DRV, MCMAN and MCSERV; sound initialization
-completes and the original CDVD read path advances. At tick 99994420 the RTX 4070/D3D12
-compute GS has an active display (PMODE 0x66), permitting a real 640x448 framebuffer
-capture, SHA-256 `a399b3d821b9b78d91d66b0e666b65544c96eb7b6236282e1dc36cfac1e77e9e`.
-That capture is entirely black; VBlank counts and an active display do not establish
-visible game rendering or gameplay. Continue the original execution beyond this boundary.
+completes and the original CDVD read path advances. The RTX 4070/D3D12 compute GS
+renders the original memory-card autoload warning in 640x448 (16 observed colors),
+SHA-256 `4d0133c7f791dcd4f1490dbf9d6db46cee07c2f3da15ef883d4a9132fe65a990`.
+Earlier and later captures are black; GS traces show the guest palette/texture uploads
+and textured sprites. A bounded continuation reaches tick 4999999168 / 1016 VBlanks
+without another unsupported call, with original PADMAN still seeing disconnected ports.
+These are real guest pixels, not gameplay evidence. DS2 protocol/host-input integration
+was proposed for maintainer validation; preserve original PADMAN and this Console's
+state, DMA, callbacks and SIF when connecting input.
 
 The optional original-module regression now exercises the complete four-service IOPRP
 boot, the original SECRMAN dependency, a native CDVDMAN CAV read with exact supplied

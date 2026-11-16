@@ -61,7 +61,8 @@ std::uint32_t IopCdvd::read(std::uint32_t a,unsigned bytes){
 }
 void IopCdvd::write(std::uint32_t a,std::uint32_t value,unsigned bytes){
     if(auto it=dma.find(a);it!=dma.end()){if(bytes!=4)throw std::runtime_error("IOP DMA requires word access");if(a==0x1f8010f4 || a==0x1f801574){it->second=(value&0xffffff)|((it->second&0x7f000000)&~value);update_dicr();}else it->second=value;
-        if(a==0x1f8010c8 || a==0x1f801508 || a==0x1f8010f0 || a==0x1f801570){console.start_audio_dma(0);console.start_audio_dma(1);}return;}
+        if(a==0x1f8010c8 || a==0x1f801508 || a==0x1f8010f0 || a==0x1f801570){console.start_audio_dma(0);console.start_audio_dma(1);}
+        if(a==0x1f801548 || a==0x1f801558 || a==0x1f801570){console.start_sio2_dma(0);console.start_sio2_dma(1);}return;}
     if(bytes!=1)throw std::runtime_error("CDVD requires byte access");
     switch(a){
     case 0x1f402008:irq&=~value;return;

@@ -2,6 +2,7 @@
 #include "ps2native/engine/graphics_output.hpp"
 #include "iop_cdvd.hpp"
 #include <cstdio>
+#include <algorithm>
 #include "ps2/os.hpp"
 #include "aot_image.hpp"
 #include "ps2native/sha256.hpp"
@@ -23,7 +24,7 @@ int main(int argc,char** argv) {
             else if(option=="--disc")disc=ps2::os::path(argv[n]);
             else if(option=="--disc-type"){const std::string type=argv[n];if(type=="cd")medium=ps2native::engine::IopCdvd::Medium::Cd;else if(type=="dvd")medium=ps2native::engine::IopCdvd::Medium::Dvd;else throw std::runtime_error("Invalid physical disc type");}
             else if(option=="--profile")profile=argv[n];
-            else if(option=="--max-ticks"){max_ticks=std::stoull(argv[n]);if(!max_ticks || max_ticks>1000000000)throw std::runtime_error("Logical run limit must be in 1..1000000000");}
+            else if(option=="--max-ticks"){max_ticks=std::stoull(argv[n]);if(!max_ticks || max_ticks>10000000000ull)throw std::runtime_error("Logical run limit must be in 1..10000000000");}
             else if(option=="--cdvd-modules"){const std::string family=argv[n];if(family!="legacy" && family!="extended")throw std::runtime_error("Unknown original CDVD module family");extended=family=="extended";}
             else if(option=="--rom0")rom0=ps2::os::path(argv[n]);
             else if(option=="--audio-output"){const std::string mode=argv[n];if(mode!="on" && mode!="off")throw std::runtime_error("Audio output must be on or off");audio_output=mode=="on";}
@@ -79,6 +80,14 @@ int main(int argc,char** argv) {
             for(const auto& [id,t]:console.iop_threads)if(t.status!=16)
                 std::fprintf(stderr,"[engine-iop-thread] id=%u status=%u priority=%u pc=%08X wait=%u object=%u\n",id,t.status,t.priority,id==console.iop_current?console.iop.pc:t.context.pc,t.wait,t.wait_id);
             std::fprintf(stderr,"[engine-registers] ee_ra=%08X a0=%08X a1=%08X v0=%08X pmode=%016llX rpc_active=%zu\n",console.ee.r[31].w[0],console.ee.r[4].w[0],console.ee.r[5].w[0],console.ee.r[2].w[0],static_cast<unsigned long long>(console.gs_private[0]),console.rpc_calls.size());
+            std::fprintf(stderr,"[engine-irq-state] status=%08X intc=%08X mask=%08X dmac=%08X\n",console.ee.cop0[12],console.intc_status,console.intc_mask,console.dmac_status);
+            for(const auto& [id,h]:console.handlers)std::fprintf(stderr,"[engine-irq-handler] id=%u cause=%u function=%08X\n",id,h.cause,h.function);
+            for(const auto& [id,sema]:console.semaphores)std::fprintf(stderr,"[engine-sema] id=%u count=%d maximum=%d waiters=%zu\n",id,sema.count,sema.maximum,sema.waiters.size());
+            if(!console.iop_output.empty()){
+                const auto size=std::min<std::size_t>(4096,console.iop_output.size());
+                std::fprintf(stderr,"[engine-iop-tty] %s\n",size==console.iop_output.size()?"complete":"last 4096 bytes; truncated observation");
+                std::fwrite(console.iop_output.data()+console.iop_output.size()-size,1,size,stderr);
+            }
             std::fwrite(console.output.data(),1,console.output.size(),stdout);throw;
         }
         if(!capture.empty()) {

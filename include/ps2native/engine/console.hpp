@@ -45,6 +45,11 @@ public:
     std::uint32_t iop_sio2_control=0x3bc,iop_sio2_status=0x1d100,iop_sio2_interrupt=0,iop_sio2_command=0;
     std::vector<std::uint8_t> iop_sio2_input;
     std::deque<std::uint8_t> iop_sio2_output;
+    std::uint32_t iop_sio2_block_size{},iop_sio2_received{};
+    std::array<std::uint64_t,2> iop_sio2_dma_due{~0ull,~0ull};
+    void sio2_input_byte(std::uint8_t);
+    void start_sio2_dma(unsigned);
+    void complete_sio2_dma(unsigned);
     std::uint32_t sio2_read(std::uint32_t,unsigned);
     void sio2_write(std::uint32_t,std::uint32_t,unsigned);
     std::map<std::uint32_t,std::uint32_t> iop_bus_registers;
@@ -239,6 +244,7 @@ public:
     struct Sif {
         std::uint32_t command_buffer{}, main_address{}, ee_receive{}, msflag{}, smflag{};
         std::uint32_t transfer_id{}, completed_id{};
+        std::int32_t dma_status(std::uint32_t id) const {return id && id>completed_id && id<=transfer_id?0:-1;}
         struct IopHandler { std::uint32_t entry{},argument{},gp{}; };
         std::map<std::uint32_t,IopHandler> iop_handlers;
         std::deque<std::pair<IopHandler,std::vector<std::uint8_t>>> iop_commands;

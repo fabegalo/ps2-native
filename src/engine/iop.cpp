@@ -88,7 +88,7 @@ std::string Console::iop_format(std::uint32_t address,unsigned first) {
 }
 void Console::iop_import(const std::string& library,std::uint32_t ordinal,std::uint32_t version) {
     if (iop_services_import(library,ordinal) || iop_rpc_import(library,ordinal) || iop_loader_import(library,ordinal,version) || iop_thread_import(library,ordinal)) return;
-    if (library=="stdio" && ordinal==4) {
+    if ((library=="stdio" && ordinal==4) || (library=="sysmem" && ordinal==14)) {
         const auto text=iop_format(iop_arg(0),1);
         tty_write(true,text); iop.gpr[2]=static_cast<std::uint32_t>(text.size()); return;
     }
@@ -243,7 +243,7 @@ void Console::step_iop() {
 
 }
 void Console::run_iop() {
-    while(iop_work_pending() || iop_boot_active || cdvd->due!=~0ull || std::any_of(iop_alarms.begin(),iop_alarms.end(),[](const auto& item){return !item.second.pending;}) || (audio && (audio->dmaBusy(0) || audio->dmaBusy(1)))) advance_to(next_event_tick());
+    while(iop_work_pending() || iop_boot_active || cdvd->due!=~0ull || iop_sio2_dma_due[0]!=~0ull || iop_sio2_dma_due[1]!=~0ull || std::any_of(iop_alarms.begin(),iop_alarms.end(),[](const auto& item){return !item.second.pending;}) || (audio && (audio->dmaBusy(0) || audio->dmaBusy(1)))) advance_to(next_event_tick());
     for (const auto& [id,t] : iop_threads)
         if (t.status!=16 && !iop_module_returned) throw std::runtime_error("IOP scheduler deadlock: waiting without an event");
 }

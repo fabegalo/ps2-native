@@ -69,6 +69,15 @@ bool Console::iop_services_import(const std::string& lib,std::uint32_t ordinal){
         }
         return false;
     }
+    // Shared-register adapter reused from patch 0062, following the PS2SDK DMACMAN ABI.
+    if(lib=="dmacman" && (ordinal==28 || ordinal==32)){
+        if(a>=13 || (ordinal==28 && a==6))return result(0);
+        const auto base=a<7?0x1f801080u+a*16:0x1f801500u+(a-7)*16;
+        if(!cdvd->dma.contains(base+8))throw std::runtime_error("IOP slice DMA channel is not integrated");
+        if(ordinal==32){iop_write(base+8,iop_read(base+8,4)|0x1000000,4);return true;}
+        const auto direction=iop_arg(4);iop_write(base,b&0xffffff,4);iop_write(base+4,(c&65535)|(iop_arg(3)<<16),4);
+        iop_write(base+8,0x200|(direction&1)|(direction==0?0x40000000u:0),4);return result(1);
+    }
     if(lib=="dmacman" && ordinal>=33 && ordinal<=35){
         if(a>=13)throw std::runtime_error("IOP DMA channel not integrated");
         const auto reg=a<7?0x1f8010f0u:0x1f801570u,shift=4*(a<7?a:a-7);
@@ -110,7 +119,7 @@ bool Console::iop_services_import(const std::string& lib,std::uint32_t ordinal){
             for(const auto& t:transfers){std::copy_n(iop_ram.data()+t.src,t.size,ram.data()+t.dst);if(t.attr&4)sif.replies.emplace_back();}
             const auto id=++sif.transfer_id;sif.completed_id=id;sif_pump();return result(id);
         }
-        if(ordinal==8)return result(a && a<=sif.completed_id ? -1:0);
+        if(ordinal==8)return result(sif.dma_status(a));
         if(ordinal==29)return result(sif.command_buffer!=0);
     }
     if(lib=="sysclib"){
