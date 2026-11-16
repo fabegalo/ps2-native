@@ -49,9 +49,9 @@ void slow_st64(std::uint32_t a, std::uint64_t v);
 void slow_st128(std::uint32_t a, const Reg128 &v);
 
 template <typename T>
-inline T *fast(std::uint32_t a) {
-    if (a < kRamSize) [[likely]] return reinterpret_cast<T *>(PS2_RAM + a);
-    if ((a >> 14) == (kScratchpadBase >> 14)) return reinterpret_cast<T *>(PS2_SPR + (a & (kScratchpadSize - 1)));
+inline T *fast(std::uint32_t a, std::size_t bytes = sizeof(T)) {
+    if (a < kRamSize && bytes <= kRamSize - a) [[likely]] return reinterpret_cast<T *>(PS2_RAM + a);
+    if ((a >> 14) == (kScratchpadBase >> 14) && bytes <= kScratchpadSize - (a & (kScratchpadSize - 1))) return reinterpret_cast<T *>(PS2_SPR + (a & (kScratchpadSize - 1)));
     return nullptr;
 }
 
@@ -71,22 +71,22 @@ inline std::uint8_t ld8(std::uint32_t a) {
 }
 
 inline std::uint16_t ld16(std::uint32_t a) {
-    if (auto *p = fast<std::uint8_t>(a)) return load<std::uint16_t>(p);
+    if (auto *p = fast<std::uint8_t>(a, 2)) return load<std::uint16_t>(p);
     return slow_ld16(a);
 }
 
 inline std::uint32_t ld32(std::uint32_t a) {
-    if (auto *p = fast<std::uint8_t>(a)) return load<std::uint32_t>(p);
+    if (auto *p = fast<std::uint8_t>(a, 4)) return load<std::uint32_t>(p);
     return slow_ld32(a);
 }
 
 inline std::uint64_t ld64(std::uint32_t a) {
-    if (auto *p = fast<std::uint8_t>(a)) return load<std::uint64_t>(p);
+    if (auto *p = fast<std::uint8_t>(a, 8)) return load<std::uint64_t>(p);
     return slow_ld64(a);
 }
 
 inline void ld128(std::uint32_t a, Reg128 &out) {
-    if (auto *p = fast<std::uint8_t>(a)) { std::memcpy(&out, p, 16); return; }
+    if (auto *p = fast<std::uint8_t>(a, 16)) { std::memcpy(&out, p, 16); return; }
     slow_ld128(a, out);
 }
 
@@ -100,25 +100,25 @@ inline void st8(std::uint32_t a, std::uint8_t v) {
 
 inline void st16(std::uint32_t a, std::uint16_t v) {
     watched<std::uint16_t>(a, v);
-    if (auto *p = fast<std::uint8_t>(a)) { store(p, v); return; }
+    if (auto *p = fast<std::uint8_t>(a, 2)) { store(p, v); return; }
     slow_st16(a, v);
 }
 
 inline void st32(std::uint32_t a, std::uint32_t v) {
     watched<std::uint32_t>(a, v);
-    if (auto *p = fast<std::uint8_t>(a)) { store(p, v); return; }
+    if (auto *p = fast<std::uint8_t>(a, 4)) { store(p, v); return; }
     slow_st32(a, v);
 }
 
 inline void st64(std::uint32_t a, std::uint64_t v) {
     watched<std::uint32_t>(a, static_cast<std::uint32_t>(v));
-    if (auto *p = fast<std::uint8_t>(a)) { store(p, v); return; }
+    if (auto *p = fast<std::uint8_t>(a, 8)) { store(p, v); return; }
     slow_st64(a, v);
 }
 
 inline void st128(std::uint32_t a, const Reg128 &v) {
     watched<std::uint32_t>(a, v.w[0]);
-    if (auto *p = fast<std::uint8_t>(a)) { std::memcpy(p, &v, 16); return; }
+    if (auto *p = fast<std::uint8_t>(a, 16)) { std::memcpy(p, &v, 16); return; }
     slow_st128(a, v);
 }
 #else

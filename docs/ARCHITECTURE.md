@@ -2,6 +2,23 @@
 
 ## Diretriz
 
+**16/11/2026 — PS2Native Engine (`engine/ps2native-core`), requested by the maintainer.**
+The project-owned core preserves the seven boundaries; `main` and `migration/exoteric-runtime`
+remain separate. The exoteric33 EE AOT translator is an MIT component, with no external
+runtime linked. The previous PCSX2 SPU2 integration is preserved on the migration branch.
+`PS2N_ENGINE_ONLY=ON` builds the focused core. `scripts/test-engine.py` verifies 55 public
+ELF/expected pairs by pinned hashes, prepares and compiles the six EE tests, and compares
+the complete guest stdout with `.expected`. Existing ELF loading and SHA-256 are reused;
+EE/IOP RAM, scratchpad, thread contexts, semaphores and AOT registrations belong to the
+project-owned console. Missing entries/services/devices and changed translated instructions fail
+explicitly. Instruction costs are deterministic execution limits, not certified hardware
+cycles. Core regressions pass; all six original ELFs compile/link and enter startup.
+Four stop at SIFGetReg(4); lsu/muldiv stop earlier at GetOsdConfigParam (0x4B).
+No reference output matches yet: M1/M2 remain incomplete. Extending HLE to SIF/CMD and
+TTY awaits maintainer validation. Executable IOP, timer IRQ delivery, integrated GS/SPU2,
+BIOS and gameplay remain unproven. Reproduce with `python scripts/test-engine.py`
+(provide `--cmake`, `--cxx`, `--cc`, `--ninja` if tools are outside PATH).
+
 **Decisões vigentes do mantenedor.** Aqui só o contrato e o estado; medições de ensaio ficam nas mensagens de commit e nas evidências locais.
 
 - **10/11/2026 — execução (substitui o runtime próprio descrito adiante).** PS2Recomp fixado em `deps.lock.json` pelo submódulo `external/ps2recomp`, com patches versionados e verificados por hash, no modelo ReXGlue do x360-native. `ps2xAnalyzer`/`ps2xRecomp` preparam cada jogo; `ps2_runtime`/`ps2xIOP` o executam (HLE de kernel/IOP, GS, SPU2, controles, memory cards). `ps2n prepare|run|play <disco>` extrai, gera `config.toml`, recompila, compila `ps2n-game-<id>` e executa; destinos ausentes viram `entry_points` e o jogo é recompilado. O launcher executa `ps2n play`. Patches: `scripts/apply-sdk-patches.ps1 [-Check|-Revert]`.

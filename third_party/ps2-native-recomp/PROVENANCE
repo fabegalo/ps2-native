@@ -1,1 +1,3 @@
-exoteric33/ps2-native-recomp a50471a (MIT): EE AOT translator and the generated-code ABI headers, unmodified.
+exoteric33/ps2-native-recomp a50471a823c64e0e2893329527820a7c4deed608 (MIT): EE AOT translator and generated-code ABI headers.
+Local adaptation: memory.hpp validates the full width of RAM/scratchpad accesses before taking the inline fast path.
+Console-owned register masks for timers/DMAC in src/engine/console.cpp follow runtime/src/hw.cpp and dmac.cpp from the same upstream revision; the external runtime is not linked.

@@ -9,6 +9,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+option(PS2N_ENGINE_ONLY "Build the independent PS2Native Engine AOT path" OFF)
+if(PS2N_ENGINE_ONLY)
+    include(cmake/PS2NativeEngine.cmake)
+    return()
+endif()
+
 # Execution: PS2Recomp, unmodified (recompiler, analyzer, runtime, IOP).
 include(cmake/PS2Recomp.cmake)
 include(cmake/PCSX2Components.cmake)
