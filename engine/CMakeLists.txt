@@ -88,13 +88,29 @@ else()
         runtime/src/iop/kernel.cpp
         runtime/src/iop/libs.cpp
         runtime/src/iop/hw.cpp
-        runtime/src/iop/spu2.cpp
+        runtime/src/iop/spu2_pcsx2.cpp
         runtime/src/iop/sio2.cpp
         runtime/src/iop/io.cpp
         runtime/src/iop/cdvd.cpp
         runtime/src/iop/sif.cpp
         runtime/src/iop/cdvdfsv.cpp)
     target_compile_options(ps2runtime PRIVATE -Wall -Wextra)
+    # The SPU2 is PCSX2's, through kzspu2 (GPL-3.0+, ../docs/LICENSE-DECISION.md), at the revisions of ../deps.lock.json
+    # (scripts/fetch-pcsx2-components.py). Its objects go into this library, so a game that links libps2runtime.a has them.
+    if(EMSCRIPTEN)
+        message(FATAL_ERROR "The SPU2 (PCSX2's, kzspu2) has no WebAssembly build; the browser build is not supported.")
+    endif()
+    get_filename_component(_ps2n_root "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+    set(_pcsx2 "${_ps2n_root}/external/pcsx2")
+    set(_kzspu2 "${_ps2n_root}/external/pcsx2-components/kzspu2")
+    if(NOT EXISTS "${_pcsx2}/pcsx2/SPU2/spu2sys.cpp" OR NOT EXISTS "${_kzspu2}/src/kzspu2.cpp")
+        message(FATAL_ERROR "PCSX2's SPU2 sources are missing: run python scripts/fetch-pcsx2-components.py in ${_ps2n_root}")
+    endif()
+    set(KZSPU2_LIBRARY_TYPE OBJECT)
+    include("${_ps2n_root}/cmake/Kzspu2.cmake")
+    target_sources(kzspu2 PRIVATE "${_pcsx2}/pcsx2/SPU2/spu2freeze.cpp" runtime/src/iop/kzspu2_state.cpp)
+    target_sources(ps2runtime PRIVATE $<TARGET_OBJECTS:kzspu2>)
+    target_include_directories(ps2runtime PRIVATE "${_kzspu2}/include")
     if(NOT EMSCRIPTEN)
         # Vector programs the build does not know are compiled while the game runs (runtime/src/vu_live.cpp, docs/vu-live.md): the
         # generator is the one of the vurecomp tool, and the headers its output includes are embedded in the runner.
@@ -310,13 +326,6 @@ if(NOT EMSCRIPTEN)
     target_link_libraries(ps2talestest PRIVATE ps2runtime)
     if(WIN32)
         target_link_libraries(ps2talestest PRIVATE synchronization)
-    endif()
-    # the sound lines of the F9 problem report, no game needed: ninja ps2spu2summarytest
-    add_executable(ps2spu2summarytest EXCLUDE_FROM_ALL tests/spu2_summary.cpp)
-    target_include_directories(ps2spu2summarytest PRIVATE runtime/src)
-    target_link_libraries(ps2spu2summarytest PRIVATE ps2runtime)
-    if(WIN32)
-        target_link_libraries(ps2spu2summarytest PRIVATE synchronization)
     endif()
     # the thread lists of the F9 problem report, no game needed: ninja ps2threadreporttest
     add_executable(ps2threadreporttest EXCLUDE_FROM_ALL tests/thread_report.cpp)

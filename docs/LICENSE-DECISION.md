@@ -1,5 +1,9 @@
 # Decisão de licença — 2026-11-03
 
+## PS2Native Engine — 15/11/2026
+
+O código de `engine/` vem de [exoteric33/ps2-native-recomp](https://github.com/exoteric33/ps2-native-recomp) (MIT, exoteric33 e Samir Nuri/ps2-web-recomp; aviso em `engine/LICENSE`); as tabelas VLC do IPU vêm do Play! (BSD, `engine/runtime/src/ipu/NOTICE`). `libps2runtime.a` e todo `ps2run` ligam o SPU2 do PCSX2 `646df006` pelo kzspu2 de KillzoneRecomp `a81c3309` (GPL-3.0-or-later): o executável combinado só é distribuível sob a GPL-3.0-or-later, com código correspondente e avisos; `spu2_pcsx2.cpp` e `kzspu2_state.*` são GPL-3.0+. Os arquivos MIT continuam MIT. O launcher e `ps2n` não ligam o runtime. Não houve distribuição.
+
 ## PS2Recomp como camada de execução — 10/11/2026
 
 Cada `ps2n-game-<id>` liga o `ps2_runtime`/`ps2xIOP` do PS2Recomp (GPL-3.0)

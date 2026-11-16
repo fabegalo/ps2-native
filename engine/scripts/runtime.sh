@@ -27,6 +27,11 @@ runtime_lock() {
 # Configures the folder if needed and builds the library; the lock is held.
 runtime_build() {
   local dir="$1"
+  # the SPU2 is PCSX2's (CMakeLists.txt): its sources come once, hash-checked, at the revisions of ps2-native's deps.lock.json
+  if [ ! -f "$ROOT/../external/pcsx2/pcsx2/SPU2/spu2sys.cpp" ] || [ ! -f "$ROOT/../external/pcsx2-components/kzspu2/src/kzspu2.cpp" ]; then
+    echo "runtime: fetching PCSX2's SPU2 sources (deps.lock.json)"
+    "${py[@]}" -I "$ROOT/../scripts/fetch-pcsx2-components.py" || return 1
+  fi
   if [ ! -f "$dir/build.ninja" ]; then
     mkdir -p "$dir"
     cmake -S "$ROOT" -B "$dir" -G Ninja -DCMAKE_BUILD_TYPE="$build_type" "${cxx_flags[@]}" > "$dir/cmake.log" 2>&1 || { tail -30 "$dir/cmake.log"; return 1; }

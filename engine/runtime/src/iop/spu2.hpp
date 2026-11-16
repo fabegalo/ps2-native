@@ -20,6 +20,8 @@ std::uint32_t read(std::uint32_t a, unsigned size);
 void write(std::uint32_t a, std::uint32_t v, unsigned size);
 void dma(int core, std::uint32_t madr, std::uint32_t words, bool to_spu, int channel);
 void dma_stop(int core);
+// Brings the SPU2 up to now and the IOP's MADR of channels 4/7 to where the SPU2's transfer has got (read by libsd's BlockTransStatus).
+void sync_dma();
 void dump_audio(const char *path);
 void dump_voices();
 // The sound lines of the F9 problem report: voices started, sound data loaded, the stream, volumes, loudness, and a

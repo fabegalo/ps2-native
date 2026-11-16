@@ -317,6 +317,7 @@ std::uint32_t read(std::uint32_t a, unsigned size) {
     std::uint32_t reg = 0;
     const int ch = dma_channel(a, reg);
     if (ch >= 0) {
+        if ((ch == 4 || ch == 7) && reg == 0 && (g_dma[ch].chcr & 0x01000000u)) spu2::sync_dma();
         const Dma &d = g_dma[ch];
         static const bool trace_regs = std::getenv("PS2_TRACE_DMA_REGS") != nullptr;  // porting work: reads of the sound DMA channels' registers
         static std::uint32_t last_madr = 0, last_bcr = 0;
