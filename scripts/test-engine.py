@@ -46,11 +46,13 @@ def checked(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tests", nargs="*", choices=EE)
+    parser.add_argument("tests", nargs="*", help="EE short names or locked paths such as cpu/ee_fpu/transfer")
     parser.add_argument("--cmake", default=shutil.which("cmake"))
     parser.add_argument("--cxx", default=shutil.which("clang++"))
     parser.add_argument("--cc", default=shutil.which("clang"))
     parser.add_argument("--ninja", default=shutil.which("ninja"))
+    parser.add_argument("--with-iop", help="Run this locked IRX concurrently with an EE ELF")
+    parser.add_argument("--report", default="results.json", help="Summary filename inside the build directory")
     parser.add_argument("--build", type=Path, default=ROOT / "out/engine-build")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--prepare-only", action="store_true")
@@ -58,14 +60,15 @@ def main():
     options = parser.parse_args()
     if not all((options.cmake, options.cxx, options.cc, options.ninja)):
         parser.error("Provide CMake, Ninja, clang++ and clang paths")
-    component = json.loads((ROOT / "deps.lock.json").read_text(encoding="utf-8"))["ps2native_engine"]["aot"]
-    for name, expected in component["files"].items():
-        data = (ROOT / "third_party/ps2-native-recomp" / name).read_bytes().replace(b"\r\n", b"\n")
-        if hashlib.sha256(data).hexdigest() != expected:
-            raise RuntimeError("AOT component hash mismatch: " + name)
+    components = json.loads((ROOT / "deps.lock.json").read_text(encoding="utf-8"))["ps2native_engine"]
+    for component, directory in (("aot","ps2-native-recomp"),("iop","ps2recomp-iop")):
+        for name, expected in components[component]["files"].items():
+            data = (ROOT / "third_party" / directory / name).read_bytes().replace(b"\r\n", b"\n")
+            if hashlib.sha256(data).hexdigest() != expected:
+                raise RuntimeError(component + " component hash mismatch: " + name)
     spec = importlib.util.spec_from_file_location("engine_fetch", ROOT / "scripts/fetch-engine-tests.py")
     fetcher = importlib.util.module_from_spec(spec); spec.loader.exec_module(fetcher)
-    tests = fetcher.fetch() / "tests/cpu/ee"
+    tests = fetcher.fetch() / "tests"
     build = options.build.resolve()
     build.mkdir(parents=True, exist_ok=True)
     configure = [options.cmake, "-S", ROOT, "-B", build, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
@@ -74,12 +77,25 @@ def main():
     checked(configure)
     checked([options.cmake, "--build", build, "--target", "ps2n-ee-recomp", "--parallel", "2"])
     suffix = ".exe" if os.name == "nt" else ""
-    checked([options.cmake, "--build", build, "--target", "ps2n-engine-tests", "ps2n-engine-aot-tests", "--parallel", "2"])
+    checked([options.cmake, "--build", build, "--target", "ps2n-engine-tests", "ps2n-engine-aot-tests", "ps2n-engine-iop-tests", "ps2n-iop-run", "--parallel", "2"])
     checked([build / ("ps2n-engine-tests" + suffix)])
     checked([build / ("ps2n-engine-aot-tests" + suffix)])
+    checked([build / ("ps2n-engine-iop-tests" + suffix)])
     summary = {}
-    for name in options.tests or EE:
-        elf = tests / (name + ".elf")
+    locked = json.loads((ROOT / "deps.lock.json").read_text(encoding="utf-8"))["ps2native_engine"]["ps2autotests"]["files"]
+    if options.with_iop and "tests/" + options.with_iop + ".irx" not in locked:
+        parser.error("--with-iop must select a locked IRX")
+    if Path(options.report).name != options.report:
+        parser.error("--report must be a filename")
+    for requested in options.tests or EE:
+        relative = "cpu/ee/" + requested if requested in EE else requested
+        extension = ".elf" if "tests/" + relative + ".elf" in locked else ".irx"
+        if "tests/" + relative + extension not in locked:
+            parser.error("Not a hash-verified ELF/IRX: " + relative)
+        if extension == ".irx" and options.with_iop:
+            parser.error("--with-iop requires EE primary tests")
+        name = requested.replace("/", "-")
+        elf = tests / (relative + extension)
         identity = hashlib.sha256(elf.read_bytes()).hexdigest()
         generated = build / "aot" / identity
         manifest = generated / "captured.json"
@@ -88,6 +104,11 @@ def main():
             raise RuntimeError("Captured AOT module limit exceeded")
         missing = build / "missing"
         for attempt in range(33):
+            if extension == ".irx":
+                if options.prepare_only or options.build_only:
+                    print(name + ": interpreter component linked (not executed)", flush=True); break
+                code, actual, diagnostic = run([build / ("ps2n-iop-run" + suffix), elf], timeout=15)
+                break
             prepare = [build / ("ps2n-ee-recomp" + suffix), elf, "--out", generated]
             for module in modules:
                 if module["file"] != module["sha256"] + ".bin" or not re.fullmatch(r"[0-9a-f]{64}", module["sha256"]):
@@ -105,7 +126,11 @@ def main():
             if options.build_only:
                 print(name + ": native AOT linked (not executed)", flush=True); break
             environment = dict(os.environ, PS2N_ENGINE_AOT_MISSING_DIR=str(missing))
-            code, actual, diagnostic = run([build / ("ps2n-engine-run" + suffix)], timeout=15, env=environment)
+            command = [build / ("ps2n-engine-run" + suffix)]
+            joint_output = build / "joint-iop.actual"
+            if options.with_iop:
+                command += ["--iop", tests / (options.with_iop + ".irx"), "--iop-output", joint_output]
+            code, actual, diagnostic = run(command, timeout=15, env=environment)
             if code != 86 or attempt == 32:
                 break
             address = re.search(rb"(?m)^\[engine-aot-missing\] ([0-9A-F]{8})", diagnostic)
@@ -130,19 +155,28 @@ def main():
             continue
         # Only host text-mode CRLF conversion is normalized; all guest text is compared.
         actual = actual.replace(b"\r\n", b"\n")
-        expected = (tests / (name + ".expected")).read_bytes().replace(b"\r\n", b"\n")
+        expected = (tests / (relative + ".expected")).read_bytes().replace(b"\r\n", b"\n")
         passed = code == 0 and actual == expected
+        joint = {}
+        if options.with_iop and code == 0:
+            observed_iop = joint_output.read_bytes().replace(b"\r\n",b"\n")
+            expected_iop = (tests / (options.with_iop + ".expected")).read_bytes().replace(b"\r\n",b"\n")
+            timing = re.search(rb"\[joint\] ee_finish=(\d+) iop_first=(\d+) iop_last=(\d+) iop_instructions=(\d+)",diagnostic)
+            interleaved = bool(timing and int(timing[2]) < int(timing[1]) and int(timing[4]) > 0)
+            passed = passed and observed_iop == expected_iop and interleaved
+            joint = {"iop_test": options.with_iop, "iop_stdout_sha256": hashlib.sha256(observed_iop).hexdigest(),
+                     "iop_expected_sha256": hashlib.sha256(expected_iop).hexdigest(), "interleaved": interleaved}
         summary[name] = {"passed": passed, "exit_code": code, "elf_sha256": identity,
                          "captured_aot_entries": len(modules),
                          "stdout_sha256": hashlib.sha256(actual).hexdigest(), "expected_sha256": hashlib.sha256(expected).hexdigest(),
-                         "diagnostic": diagnostic.decode(errors="replace")[:2000]}
+                         "diagnostic": diagnostic.decode(errors="replace")[:2000], **joint}
         (build / (name + ".actual")).write_bytes(actual)
         print(f"{name}: {'PASS' if passed else 'FAIL'} ({len(actual)}/{len(expected)} bytes)", flush=True)
         if not passed:
             print(diagnostic.decode(errors="replace"))
             print("".join(list(difflib.unified_diff(expected.decode().splitlines(True), actual.decode(errors="replace").splitlines(True)))[:30]))
     if summary:
-        (build / "results.json").write_text(json.dumps(summary, indent=2) + "\n")
+        (build / options.report).write_text(json.dumps(summary, indent=2) + "\n")
     return int(any(not r["passed"] for r in summary.values()))
 
 if __name__ == "__main__":

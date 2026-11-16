@@ -14,7 +14,7 @@ mapping/permission logic reuses the pre-migration implementation at `0ac9651`.
 
 **M1 and the six-test EE milestone demonstrated on Windows x64, Release, headless HLE.**
 `lsudelay`, `branchdelay`, `alu`, `branch`, `lsu`, `muldiv` all exit successfully with exact
-reference text (only host CRLF conversion is normalized). The 55 public ELF/reference
+reference text (only host CRLF conversion is normalized). The 78 public ELF/IRX reference
 pairs and ISC license are revision/hash verified; none of their binaries are committed.
 The shared analyzer follows nested delay-slot targets. Copied kernel code is captured
 in bounded 64 KiB windows, compiled through the same translator and registered as fixed
@@ -26,8 +26,33 @@ semaphores, native callbacks, worker return and nested delay analysis.
 
 Reproduce with `python scripts/test-engine.py` (`--cmake`, `--cxx`, `--cc`, `--ninja` accept
 explicit tool paths); `PS2N_ENGINE_ONLY=ON` isolates the focused build. Instruction costs
-are deterministic limits, not certified hardware cycles. Original IOP execution, timer
-IRQ delivery, guest TLB exceptions, integrated GS/SPU2, BIOS and gameplay remain gaps;
+are deterministic limits, not certified hardware cycles.
+
+The maintainer approved the isolated PS2Recomp IOP CPU component on 16/11 (GPL-3.0,
+`e5636981`, including the locked CPU fixes; hashes in `deps.lock.json`). Its interpreter
+borrows six memory accesses from Console; no external memory, runtime or scheduler is
+linked. IRX relocation/import discovery adapts the pinned MIT loader. EE remains AOT.
+The single scheduler advances IOP instructions every eight logical EE ticks, including
+while EE threads wait. EE's IOP RAM window, IOP aliases and SIF/DMA share the same backing
+RAM and event/completion state. Registered R3000A CMD handlers execute actual instructions
+and supersede their corresponding HLE route; replies use the existing SIF0/EE AOT handler.
+TTY is one bounded service, with separate observation buffers for the two CPU origins.
+
+Reproduce the concurrent official workload with `python scripts/test-engine.py lsudelay
+--with-iop cpu/iop/alu --report joint-results.json` and the same toolchain options.
+Both outputs are compared exactly; the report checks that IOP starts before EE completes.
+Windows x64 Release/headless evidence: 32 exact official passes (6 EE, 9 FPU, 6 MMI,
+1 COP0, 1 VU0 integer, 7 IOP CPU, 2 IOP libc); the original six caches remain verified.
+The joint run starts IOP at tick 8 before EE completes at tick 34122; IOP finishes at
+tick 84336. These are logical costs, not hardware performance measurements.
+Other tests accept locked paths, e.g. `cpu/iop/lsudelay`, `cpu/ee_fpu/transfer`,
+`cpu/ee_simd/shuffle`, `cpu/ee_cop0/performance`, `cpu/vu0_macro/integer` and
+`kernel/iop/libc/strtok`. FCR masks, performance register access and VU register/data RAM
+reuse the pinned MIT implementation's behavior; counters measure logical instruction cost.
+
+IOP kernel threading/interrupt dispatch and original firmware boot, VU microprogram
+execution (`vu0_macro/transfer` first needs microcode RAM), timer IRQ delivery, guest TLB
+exceptions, integrated GS/SPU2, BIOS and gameplay remain gaps;
 none is certified by these CPU tests. Headless OSD settings must be replaced by the matched
 profile/NVM state before firmware sessions; hardware boot must replace the ELF HLE mappings.
 

@@ -14,10 +14,11 @@ Console& active_console() {
     if (!active) throw std::runtime_error("No active console");
     return *active;
 }
-Console::Console() : ram(ps2::kRamSize), scratchpad(ps2::kScratchpadSize), iop_ram(2u << 20) {
+Console::Console() : ram(ps2::kRamSize), scratchpad(ps2::kScratchpadSize), iop_ram(2u << 20), iop_bus(*this), iop_core(iop_bus) {
     if (active) throw std::runtime_error("The AOT ABI supports one active console per process");
     active = this;
     ps2::g_live_tlb_enabled=false;
+    ee.vu0.vf[0].w[3]=0x3f800000;
     ee.budget = 100000;
     ps2::g_live_ram = ram.data();
     ps2::g_live_spr = scratchpad.data();
@@ -29,8 +30,14 @@ void Console::load(const std::filesystem::path& path) {
     std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(file), {}};
     const auto elf = parse_ee_elf(bytes);
     std::fill(ram.begin(), ram.end(), 0);
+    std::fill(iop_ram.begin(), iop_ram.end(), 0);
     for (const auto& s : elf.segments) std::copy_n(bytes.data() + s.file_offset, s.file_size, ram.data() + s.vaddr);
     ee = {};
+    vu0_memory.fill(0); vu_vi24=0;
+    iop={}; iop_suspended={}; iop_active=false; advancing=false;
+    iop_callback_active=false; iop_suspended_active=false; iop_import_slot=0;
+    iop_instructions=0; iop_next_tick=0; iop_first_tick=0; iop_last_tick=0;
+    iop_heap_top=0x10000; iop_imports.clear(); iop_output.clear(); iop_result=0; iop_strtok_next=0;
     threads.clear(); semaphores.clear(); handlers.clear();
     aot.clear(); aot_modules.clear(); code_words.clear(); syscall_handlers.clear(); dma_registers.clear(); sif_registers.clear();
     output.clear(); current=1; order=0; ticks=0; stack_base=0; heap_end=0;
@@ -40,6 +47,7 @@ void Console::load(const std::filesystem::path& path) {
     ps2::g_live_tlb_enabled=false;
     initialize_sif();
     ee.pc = elf.entry;
+    ee.vu0.vf[0].w[3]=0x3f800000;
     ee.budget = 100000;
     ee.r[29].w[0] = ps2::kRamSize - 4096;
 }
@@ -79,15 +87,29 @@ std::uint32_t Console::translate(std::uint32_t address, std::size_t size, bool w
     throw std::runtime_error("TLB refill exception is not integrated");
 }
 std::uint64_t Console::now() const { return ticks + static_cast<std::uint64_t>(100000ll - ee.budget); }
+void Console::advance_to(std::uint64_t target) {
+    if (target<ticks) throw std::runtime_error("Logical clock cannot move backwards");
+    if (target>100000000) throw std::runtime_error("Console execution limit reached");
+    advancing=true;
+    try {
+        while ((iop_active || !sif.iop_commands.empty()) && iop_next_tick<=target) {
+            ticks=iop_next_tick;
+            for (const auto& timer : timers)
+                if (timer.due<=ticks) throw std::runtime_error("Timer IRQ delivery is not integrated");
+            step_iop();
+            iop_next_tick+=8;
+        }
+        ticks=target;
+        for (const auto& timer : timers)
+            if (timer.due<=ticks) throw std::runtime_error("Timer IRQ delivery is not integrated");
+    } catch (...) { advancing=false; throw; }
+    advancing=false;
+}
 void Console::account() {
-    const auto before=ticks;
-    ticks = now();
-    if (std::getenv("PS2N_ENGINE_TRACE") && ticks/1000000 != before/1000000)
-        std::fprintf(stderr,"[cost] t%u pc=%08X cost=%llu\n",current,ee.pc,static_cast<unsigned long long>(ticks));
-    ee.budget = 100000;
-    if (ticks > 100000000) throw std::runtime_error("EE execution limit reached");
-    for (const auto& timer : timers)
-        if (timer.due <= ticks) throw std::runtime_error("Timer IRQ delivery is not integrated");
+    if (advancing) return;
+    const auto target=now();
+    ee.budget=100000;
+    advance_to(target);
 }
 void Console::schedule() {
     account();
@@ -96,10 +118,23 @@ void Console::schedule() {
     ee.pc &= ~ps2::kUnwind;
     old.context = ee;
     if (old.state == ThreadState::Running) { old.state = ThreadState::Ready; old.order = ++order; }
-    auto best = threads.end();
-    for (auto it = threads.begin(); it != threads.end(); ++it)
-        if (it->second.state == ThreadState::Ready && (best == threads.end() ||
-            std::pair(it->second.priority, it->second.order) < std::pair(best->second.priority, best->second.order))) best = it;
+    const auto ready=[&] {
+        auto best=threads.end();
+        for (auto it=threads.begin();it!=threads.end();++it)
+            if (it->second.state==ThreadState::Ready && (best==threads.end() ||
+                std::pair(it->second.priority,it->second.order)<std::pair(best->second.priority,best->second.order))) best=it;
+        return best;
+    };
+    auto best=ready();
+    while (best==threads.end() && (iop_active || !sif.iop_commands.empty())) {
+        advance_to(std::max(ticks,iop_next_tick));
+        service_sif_irq();
+        best=ready();
+    }
+    if (best == threads.end() && std::all_of(threads.begin(),threads.end(),[](const auto& item) { return item.second.state==ThreadState::Dormant; })) {
+        // The ELF has retired every runnable thread; the host session may end.
+        exited=true; exit_code=0; return;
+    }
     if (best == threads.end()) {
         std::string detail="EE scheduler deadlock:";
         for (const auto& [id,t] : threads) detail += std::format(" t{} state={} pc={:08X} wait={}",id,static_cast<int>(t.state),t.context.pc,t.wait);
@@ -141,6 +176,13 @@ static std::uint8_t* mapped_physical(std::uint32_t physical, std::size_t size) {
     if (physical < c.ram.size() && size <= c.ram.size()-physical) return c.ram.data()+physical;
     if (physical>=kScratchpadBase && physical-kScratchpadBase<c.scratchpad.size() && size<=c.scratchpad.size()-(physical-kScratchpadBase))
         return c.scratchpad.data()+physical-kScratchpadBase;
+    if (physical>=0x11004000 && physical-0x11004000<c.vu0_memory.size() && size<=c.vu0_memory.size()-(physical-0x11004000))
+        return c.vu0_memory.data()+physical-0x11004000;
+    if (physical>=0x1c000000 && physical-0x1c000000<0x800000) {
+        const auto offset=(physical-0x1c000000)&0x1fffff;
+        c.account();
+        if (size<=c.iop_ram.size()-offset) return c.iop_ram.data()+offset;
+    }
     unsupported("memory/MMIO",physical);
 }
 static std::uint8_t* mapped(std::uint32_t address, std::size_t size, bool write=false) {
@@ -374,6 +416,7 @@ void syscall(Cpu& c, std::uint32_t pc) {
         auto& t = it->second;
         t.context = {};
         t.context.pc = t.entry; t.context.budget = 100000;
+        t.context.vu0.vf[0].w[3]=0x3f800000;
         t.context.r[4].w[0] = a1; t.context.r[28].w[0] = t.gp;
         t.context.r[29].w[0] = (t.stack + t.size - context_reserve) & ~15u;
         t.context.r[31].w[0] = 0xfffffff0u;
@@ -474,8 +517,95 @@ void tlbwi(Cpu& c) {
     g_live_tlb_enabled=true;
 }
 void set_interrupts(Cpu& c, bool enabled) { c.cop0[12] = (c.cop0[12] & ~0x10000u) | (enabled ? 0x10000u : 0); }
+// Performance counter behavior adapted from exoteric33 a50471a (MIT).
+// PCCR (COP0 register 25) holds CTE (bit 31) and, for counter n, the modes EXL, K, S and U (bits 1 to 4, 11 to 14) and
+// the event (bits 5 to 9, 15 to 19); everything else reads 0. The counters are not stepped: every access first adds the
+// cycles that passed since the last one (now(), the clock of the Count register) to the counters that are running.
+// A cycle is also an instruction here, so the events "processor cycle" (1) and "instruction completed" (12, 13) count
+// them all; event 16 counts nothing. Other enabled event sources are explicit gaps.
+constexpr std::uint32_t kPccrWritable = 0x800FFBFEu;
+
+namespace {
+
+bool perf_running(const Cpu &c, std::uint32_t n) {
+    const std::uint32_t pccr = c.cop0[25], status = c.cop0[12], modes = (pccr >> (n * 10)) & 0x1Eu, event = (pccr >> (5 + n * 10)) & 31u;
+    if (modes && event!=1 && event!=12 && event!=13 && event!=16)
+        unsupported("performance counter event",event);
+    // Exception level, else kernel (also at error level), supervisor or user mode.
+    const std::uint32_t mode = status & 2u ? 2u : status & 4u ? 4u : 4u << ((status >> 3) & 3u);
+    return (modes & mode) && (event == 1 || event == 12 || event == 13);
+}
+
+void perf_update(Cpu &c) {
+    const std::uint64_t at = active_console().now();
+    const std::uint32_t cycles = static_cast<std::uint32_t>(at - c.pcr_at);
+    c.pcr_at = at;
+    if (!(c.cop0[25] >> 31)) return;
+    for (std::uint32_t n = 0; cycles && n < 2; ++n)
+        if (perf_running(c, n)) c.pcr[n] += cycles;
+}
+
+}
+
+// The low bits of the instruction word: bit 0 picks the counters (mfpc, mtpc) over PCCR (mfps, mtps), bits 5 to 1 are
+// the register number, of which only the lowest bit matters for a counter and only 0 for writing PCCR.
+std::uint32_t mfperf(Cpu &c, std::uint32_t spec) {
+    if (!(spec & 1u)) return c.cop0[25];
+    perf_update(c);
+    return c.pcr[(spec >> 1) & 1u];
+}
+
+void mtperf(Cpu &c, std::uint32_t spec, std::uint32_t value) {
+    perf_update(c);
+    if (spec & 1u) c.pcr[(spec >> 1) & 1u] = value;
+    else if (!(spec >> 1)) c.cop0[25] = value & kPccrWritable;
+}
+
+// Register masks adapted from exoteric33 a50471a (MIT); micro execution stays explicit.
+std::uint32_t cfc2(Cpu &c, std::uint32_t reg) {
+    Vu0Regs &v = c.vu0;
+    switch (reg) {
+    case 16: return v.status;
+    case 17: return v.mac;
+    case 18: return v.clip;
+    case 19: return 0x2E30u;
+    case 20: return v.r;
+    case 21: return v.i;
+    case 22: return v.q;
+    case 24: return active_console().vu_vi24;
+    case 26: return v.tpc >> 3;
+    case 27: return v.cmsar0;
+    // Neither unit is ever busy: a microprogram runs to its end inside the instruction that starts it.
+    case 29: return 0; // No microprogram start is accepted by this engine yet.
+    case 31: unsupported("VU1 CMSAR1 read",reg);
+    default: return 0;
+    }
+}
+
+void ctc2(Cpu &c, std::uint32_t reg, std::uint32_t value) {
+    Vu0Regs &v = c.vu0;
+    switch (reg) {
+    case 16: v.status = (v.status & 0x3Fu) | (value & 0xFC0u); break;
+    case 18: v.clip = value & 0xFFFFFFu; break;
+    case 20: v.r = value & 0x7FFFFFu; break;
+    case 21: v.i = value; break;
+    case 22: v.q = value; break;
+    case 24: active_console().vu_vi24 = value & 0x0C0Cu; break;
+    case 27: v.cmsar0 = value & 0xFFFFu; break;
+    case 31: unsupported("VU1 microprogram start",value);
+    // MAC (17), the constant in 19, TPC (26) and VPU_STAT (29) are read only; the reserved registers
+    // (23, 25, 30) and FBRST (28) take no value.
+    default: break;
+    }
+}
+
+void vcallms(Cpu&,std::uint32_t address) { unsupported("VU0 microprogram execution",address); }
+std::uint8_t* vu0_data() { return active_console().vu0_memory.data(); }
+
 std::uint32_t mfc0(Cpu& c, std::uint32_t reg, std::uint32_t sel) { if (sel) unsupported("COP0 select", reg); return c.cop0[reg]; }
 void mtc0(Cpu& c, std::uint32_t reg, std::uint32_t value) { c.cop0[reg] = value; }
-std::uint32_t cfc1(Cpu& c, std::uint32_t reg) { if(reg != 31) unsupported("CFC1", reg); return c.fcr31; }
-void ctc1(Cpu& c, std::uint32_t reg, std::uint32_t v) { if(reg != 31) unsupported("CTC1", reg); c.fcr31 = v; }
+// FCR aliases and masks from exoteric33 cop.cpp at the pinned MIT revision.
+std::uint32_t cfc1(Cpu& c, std::uint32_t reg) { return reg<16 ? 0x2e30u : c.fcr31|0x01000001u; }
+void ctc1(Cpu& c, std::uint32_t reg, std::uint32_t v) { if (reg==31) c.fcr31=v&0x0083c078u; }
+
 }

@@ -27,6 +27,7 @@ void Console::initialize_sif() {
     reschedule_requested = false;
 }
 std::uint32_t Console::sif_getreg(std::uint32_t reg) {
+    account();
     switch(reg) {
     case 1: return sif.main_address;
     case 2: return sif.command_buffer;
@@ -38,6 +39,7 @@ std::uint32_t Console::sif_getreg(std::uint32_t reg) {
     }
 }
 void Console::sif_setreg(std::uint32_t reg, std::uint32_t value) {
+    account();
     if (reg == 1) sif.main_address = value;
     else if (reg == 3) sif.msflag |= value;
     else if (reg == 4) sif.smflag &= ~value;
@@ -49,6 +51,12 @@ void Console::sif_command(std::span<const std::uint8_t> packet) {
         throw std::runtime_error("Invalid SIF command packet length");
     const auto cid = ps2::load<std::uint32_t>(packet.data() + 8);
     const auto opt = ps2::load<std::uint32_t>(packet.data() + 12);
+    if (const auto native=sif.iop_handlers.find(cid); native!=sif.iop_handlers.end()) {
+        if (sif.iop_commands.size()>=32) throw std::runtime_error("IOP SIF command queue full");
+        sif.iop_commands.emplace_back(native->second,std::vector<std::uint8_t>(packet.begin(),packet.end()));
+        if (!iop_active && !iop_callback_active) iop_next_tick=std::max(iop_next_tick,now()+8);
+        return;
+    }
     if (cid == 0x80000000 || (cid == 0x80000002 && opt == 0)) {
         if (packet.size() < 20) throw std::runtime_error("Truncated SIF receive-address command");
         const auto address = ps2::load<std::uint32_t>(packet.data()+16);
@@ -99,7 +107,7 @@ void Console::sif_command(std::span<const std::uint8_t> packet) {
                 if (descriptor != sif.tty_descriptors.end() && (descriptor->second&2)) {
                     if (size > (1u<<20) || output.size() > (1u<<20)-size) throw std::runtime_error("TTY output limit exceeded");
                     const auto bytes=memory(ram,pointer,size);
-                    output.append(reinterpret_cast<const char*>(bytes.data()),bytes.size());
+                    tty_write(false,{reinterpret_cast<const char*>(bytes.data()),bytes.size()});
                     result=static_cast<std::int32_t>(size);
                 }
             } else throw std::runtime_error(std::format("Unsupported FILEIO/TTY method {}",method));
@@ -109,6 +117,7 @@ void Console::sif_command(std::span<const std::uint8_t> packet) {
     } else throw std::runtime_error(std::format("Unsupported SIF command 0x{:08X}",cid));
 }
 std::uint32_t Console::sif_dma(std::uint32_t descriptors, std::uint32_t count) {
+    account();
     if (!count || count > 32) throw std::runtime_error("Invalid SIF DMA descriptor count");
     const auto list = memory(ram,descriptors,static_cast<std::size_t>(count)*16);
     struct Transfer { std::uint32_t destination, size, attr; std::span<std::uint8_t> source; };
@@ -132,6 +141,21 @@ std::uint32_t Console::sif_dma(std::uint32_t descriptors, std::uint32_t count) {
     sif.completed_id=id;
     sif_pump();
     return id;
+}
+void Console::iop_send_command(std::uint32_t cid,std::uint32_t packet,std::uint32_t size,
+                               std::uint32_t source,std::uint32_t destination,std::uint32_t extra) {
+    if (size<16 || size>128 || (size&3) || sif.replies.size()>=32) throw std::runtime_error("Invalid/full IOP SIF command");
+    const auto bytes=memory(iop_ram,packet,size);
+    if (extra) {
+        if (extra>1u<<20) throw std::runtime_error("IOP SIF extra data exceeds bound");
+        const auto from=memory(iop_ram,source,extra),to=memory(ram,destination,extra);
+        std::copy(from.begin(),from.end(),to.begin());
+    }
+    ps2::store(bytes.data(),size|(extra<<8)); ps2::store(bytes.data()+4,destination); ps2::store(bytes.data()+8,cid);
+    std::vector<std::uint32_t> words(size/4);
+    std::memcpy(words.data(),bytes.data(),size); sif.replies.push_back(std::move(words));
+    ++sif.transfer_id; sif.completed_id=sif.transfer_id;
+    sif_pump();
 }
 void Console::sif_pump() {
     if (!sif.armed || sif.interrupt || sif.in_interrupt || !sif.ee_receive || sif.replies.empty()) return;

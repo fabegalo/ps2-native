@@ -1,0 +1,3 @@
+ran-j/PS2Recomp e5636981a1c9de368f6b71e819c3dc188dfedbf4, GPL-3.0. CPU only; no runtime, memory, devices or scheduler imported.
+CPU files include this repository's locked IOP fixes (branch delay tracking, JALR source/link ordering, BLTZAL/BGEZAL ordering, load merge forwarding and read-only PRId). Their source/result hashes were verified against the main SDK patch lock before extraction.
+The engine supplies iop_memory.h and owns the only CPU state/RAM/clock.

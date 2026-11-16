@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch the pinned public ELFs, expected output and ISC license; never execute archive scripts."""
+"""Fetch the pinned public ELFs/IRXs, expected output and ISC license; never execute archive scripts."""
 import hashlib
 import io
 import json
@@ -42,7 +42,7 @@ def fetch():
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
-    print(f"Verified {sum(n.endswith('.elf') for n in verified)} ELF/expected pairs and ISC license at {lock['commit']}")
+    print(f"Verified {sum(n.endswith(('.elf','.irx')) for n in verified)} ELF/IRX reference pairs and ISC license at {lock['commit']}")
     return target
 
 if __name__ == "__main__":

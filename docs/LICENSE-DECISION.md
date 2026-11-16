@@ -113,3 +113,16 @@ O payload R3000A próprio desta etapa não implementa o formato/linker IRX e nã
 O código `ps2sdk/iop/system/sifman/src/sifman.c` foi consultado como fonte adicional de pesquisa;
 seu cabeçalho declara AFL-2.0 e referência a SDK SCE. Nenhum trecho foi incorporado ou usado como
 base de implementação; esta consulta não é aprovação de reutilização de seus arquivos.
+
+## PS2Native Engine IOP component — 16/11/2026
+
+The maintainer approved reuse of only PS2Recomp's GPL-3.0 `iop_cpu.cpp/.h`, from
+`e5636981a1c9de368f6b71e819c3dc188dfedbf4` with the hash-locked CPU fixes. Source,
+license and provenance are retained in `third_party/ps2recomp-iop`; the engine supplies
+its own memory adapter, scheduler and services. The combined engine binary incorporates
+GPL-3.0 code: distribution must satisfy GPL-3.0, including corresponding source and notices.
+The repository's existing BSD-3-Clause notices remain attached to its original files.
+The IRX loader/formatter and COP/FCR/VU register behavior adapt MIT exoteric33 code at
+`a50471a823c64e0e2893329527820a7c4deed608`, whose license is preserved in
+`third_party/ps2-native-recomp/LICENSE`. No proprietary IRX/firmware or second runtime
+is included. The official test archive remains an external, hash-verified ISC input.
