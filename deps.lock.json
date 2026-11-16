@@ -1,5 +1,13 @@
 {
   "schema_version": 2,
+  "engine": {
+    "url": "https://github.com/exoteric33/ps2-native-recomp.git",
+    "commit": "a50471a823c64e0e2893329527820a7c4deed608",
+    "license": "MIT",
+    "directory": "engine",
+    "credits": "exoteric33; Samir Nuri (ps2-web-recomp)",
+    "import": "git archive of the commit; later engine/ changes are ps2-native commits"
+  },
   "ps2recomp": {
     "url": "https://github.com/ran-j/PS2Recomp.git",
     "commit": "e5636981a1c9de368f6b71e819c3dc188dfedbf4",
