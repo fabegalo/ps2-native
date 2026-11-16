@@ -1,0 +1,903 @@
+--- a/ps2xRuntime/src/lib/vu_pcsx2/VUops.cpp
++++ b/ps2xRuntime/src/lib/vu_pcsx2/VUops.cpp
+@@ -1948,7 +1948,7 @@
+ #define GET_VF0_FLAG(reg) (((reg) == 0) ? (1 << REG_VF0_FLAG) : 0)
+ 
+ #define VUREGS_FDFSI(OP, ACC) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_FMAC; \
+ 	VUregsn->VFwrite = _Fd_; \
+ 	VUregsn->VFwxyzw = _XYZW; \
+@@ -1960,7 +1960,7 @@
+ }
+ 
+ #define VUREGS_FDFSQ(OP, ACC) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_FMAC; \
+ 	VUregsn->VFwrite = _Fd_; \
+ 	VUregsn->VFwxyzw = _XYZW; \
+@@ -1972,7 +1972,7 @@
+ }
+ 
+ #define VUREGS_FDFSFT(OP, ACC) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_FMAC; \
+ 	VUregsn->VFwrite = _Fd_; \
+ 	VUregsn->VFwxyzw = _XYZW; \
+@@ -1985,7 +1985,7 @@
+ }
+ 
+ #define VUREGS_FDFSFTxyzw(OP, xyzw, ACC) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_FMAC; \
+ 	VUregsn->VFwrite = _Fd_; \
+ 	VUregsn->VFwxyzw = _XYZW; \
+@@ -2004,7 +2004,7 @@
+ 
+ 
+ #define VUREGS_ACCFSI(OP, readacc) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_FMAC; \
+ 	VUregsn->VFwrite = 0; \
+ 	VUregsn->VFwxyzw= _XYZW; \
+@@ -2016,7 +2016,7 @@
+ }
+ 
+ #define VUREGS_ACCFSQ(OP, readacc) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_FMAC; \
+ 	VUregsn->VFwrite = 0; \
+ 	VUregsn->VFwxyzw= _XYZW; \
+@@ -2028,7 +2028,7 @@
+ }
+ 
+ #define VUREGS_ACCFSFT(OP, readacc) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_FMAC; \
+ 	VUregsn->VFwrite = 0; \
+ 	VUregsn->VFwxyzw= _XYZW; \
+@@ -2041,7 +2041,7 @@
+ }
+ 
+ #define VUREGS_ACCFSFTxyzw(OP, xyzw, readacc) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_FMAC; \
+ 	VUregsn->VFwrite = 0; \
+ 	VUregsn->VFwxyzw= _XYZW; \
+@@ -2059,7 +2059,7 @@
+ #define VUREGS_ACCFSFTw(OP, readacc) VUREGS_ACCFSFTxyzw(OP, 1, readacc)
+ 
+ #define VUREGS_FTFS(OP) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_FMAC; \
+ 	VUregsn->VFwrite = _Ft_; \
+ 	VUregsn->VFwxyzw = _XYZW; \
+@@ -2072,7 +2072,7 @@
+ }
+ 
+ #define VUREGS_IDISIT(OP) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_IALU; \
+ 	VUregsn->VFwrite = 0; \
+ 	VUregsn->VFread0 = 0; \
+@@ -2083,7 +2083,7 @@
+ }
+ 
+ #define VUREGS_ITIS(OP) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_IALU; \
+ 	VUregsn->VFwrite = 0; \
+ 	VUregsn->VFread0 = 0; \
+@@ -2094,7 +2094,7 @@
+ }
+ 
+ #define VUREGS_PFS_xyzw(OP, _cycles) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_EFU; \
+ 	VUregsn->VFwrite = 0; \
+ 	VUregsn->VFread0 = _Fs_; \
+@@ -2106,7 +2106,7 @@
+ }
+ 
+ #define VUREGS_PFS_fsf(OP, _cycles) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_EFU; \
+ 	VUregsn->VFwrite = 0; \
+ 	VUregsn->VFread0 = _Fs_; \
+@@ -2152,7 +2152,7 @@
+ VUREGS_ACCFSFTw(SUBAw, 0);
+ 
+ #define VUREGS_FDFSFTxyzw_MUL(OP, ACC, xyzw) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 		VUregsn->pipe = VUPIPE_FMAC; \
+ 		VUregsn->VFwrite = (ACC)?0:_Fd_; \
+ 		VUregsn->VFwxyzw = _XYZW; \
+@@ -2185,7 +2185,7 @@
+ VUREGS_FDFSQ(MADDq, 1);
+ 
+ #define VUREGS_FDFSFT_0_xyzw(OP, xyzw) \
+-static __ri void _vuRegs##OP(const VURegs* VU, _VURegsNum *VUregsn) { \
++static constexpr void _vuRegs##OP(const auto* VU, _VURegsNum *VUregsn) { \
+ 	VUregsn->pipe = VUPIPE_FMAC; \
+ 	VUregsn->VFwrite = _Fd_; \
+ 	VUregsn->VFwxyzw = _XYZW; \
+@@ -2201,7 +2201,7 @@
+ VUREGS_FDFSFT_0_xyzw(MADDy, 4);
+ VUREGS_FDFSFT_0_xyzw(MADDz, 2);
+ 
+-static __ri void _vuRegsMADDw(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsMADDw(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+ 	VUregsn->VFwrite = _Fd_;
+@@ -2245,19 +2245,19 @@
+ VUREGS_FDFSFTz(MAXz_, 0);
+ VUREGS_FDFSFTw(MAXw_, 0);
+ 
+-static __ri void _vuRegsMAXx(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsMAXx(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	_vuRegsMAXx_(VU, VUregsn);
+ }
+-static __ri void _vuRegsMAXy(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsMAXy(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	_vuRegsMAXy_(VU, VUregsn);
+ }
+-static __ri void _vuRegsMAXz(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsMAXz(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	_vuRegsMAXz_(VU, VUregsn);
+ }
+-static __ri void _vuRegsMAXw(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsMAXw(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	_vuRegsMAXw_(VU, VUregsn);
+ }
+@@ -2269,7 +2269,7 @@
+ VUREGS_FDFSFTz(MINIz, 0);
+ VUREGS_FDFSFTw(MINIw, 0);
+ 
+-static __ri void _vuRegsOPMULA(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsOPMULA(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+ 	VUregsn->VFwrite = 0;
+@@ -2282,7 +2282,7 @@
+ 	VUregsn->VIread  = GET_VF0_FLAG(_Fs_)|GET_VF0_FLAG(_Ft_)|(1<<REG_ACC_FLAG);
+ }
+ 
+-static __ri void _vuRegsOPMSUB(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsOPMSUB(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+ 	VUregsn->VFwrite = _Fd_;
+@@ -2295,7 +2295,7 @@
+ 	VUregsn->VIread  = GET_VF0_FLAG(_Fs_)|GET_VF0_FLAG(_Ft_)|(1<<REG_ACC_FLAG);
+ }
+ 
+-static __ri void _vuRegsNOP(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsNOP(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_NONE;
+     VUregsn->VFwrite = 0;
+@@ -2314,7 +2314,7 @@
+ VUREGS_FTFS(ITOF12);
+ VUREGS_FTFS(ITOF15);
+ 
+-static __ri void _vuRegsCLIP(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsCLIP(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2330,7 +2330,7 @@
+ /*   VU Lower instructions    */
+ /******************************/
+ 
+-static __ri void _vuRegsDIV(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsDIV(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FDIV;
+     VUregsn->VFwrite = 0;
+@@ -2343,7 +2343,7 @@
+ 	VUregsn->cycles  = 7;
+ }
+ 
+-static __ri void _vuRegsSQRT(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsSQRT(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FDIV;
+     VUregsn->VFwrite = 0;
+@@ -2356,7 +2356,7 @@
+ 	VUregsn->cycles  = 7;
+ }
+ 
+-static __ri void _vuRegsRSQRT(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsRSQRT(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FDIV;
+     VUregsn->VFwrite = 0;
+@@ -2377,7 +2377,7 @@
+ VUREGS_IDISIT(ISUB);
+ VUREGS_ITIS(ISUBIU);
+ 
+-static __ri void _vuRegsMOVE(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsMOVE(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = _Ft_ == 0 ? VUPIPE_NONE : VUPIPE_FMAC;
+ 	VUregsn->VFwrite = _Ft_;
+@@ -2389,7 +2389,7 @@
+ 	VUregsn->VIwrite = 0;
+ 	VUregsn->VIread = (_Ft_ ? GET_VF0_FLAG(_Fs_) : 0);
+ }
+-static __ri void _vuRegsMFIR(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsMFIR(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = _Ft_;
+@@ -2400,7 +2400,7 @@
+     VUregsn->VIread  = 1 << _Is_;
+ }
+ 
+-static __ri void _vuRegsMTIR(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsMTIR(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2411,7 +2411,7 @@
+     VUregsn->VIread  = GET_VF0_FLAG(_Fs_);
+ }
+ 
+-static __ri void _vuRegsMR32(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsMR32(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+ 	VUregsn->VFwrite = _Ft_;
+@@ -2424,7 +2424,7 @@
+ 	VUregsn->VIread  = (_Ft_ ? GET_VF0_FLAG(_Fs_) : 0);
+ }
+ 
+-static __ri void _vuRegsLQ(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsLQ(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = _Ft_;
+@@ -2435,7 +2435,7 @@
+     VUregsn->VIread  = 1 << _Is_;
+ }
+ 
+-static __ri void _vuRegsLQD(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsLQD(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = _Ft_;
+@@ -2446,7 +2446,7 @@
+     VUregsn->VIread  = 1 << _Is_;
+ }
+ 
+-static __ri void _vuRegsLQI(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsLQI(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = _Ft_;
+@@ -2457,7 +2457,7 @@
+     VUregsn->VIread  = 1 << _Is_;
+ }
+ 
+-static __ri void _vuRegsSQ(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsSQ(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2468,7 +2468,7 @@
+     VUregsn->VIread  = 1 << _It_;
+ }
+ 
+-static __ri void _vuRegsSQD(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsSQD(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2479,7 +2479,7 @@
+     VUregsn->VIread  = 1 << _It_;
+ }
+ 
+-static __ri void _vuRegsSQI(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsSQI(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2490,7 +2490,7 @@
+     VUregsn->VIread  = 1 << _It_;
+ }
+ 
+-static __ri void _vuRegsILW(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsILW(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_IALU;
+     VUregsn->VFwrite = 0;
+@@ -2501,7 +2501,7 @@
+ 	VUregsn->cycles  = 4;
+ }
+ 
+-static __ri void _vuRegsISW(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsISW(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_IALU;
+     VUregsn->VFwrite = 0;
+@@ -2511,7 +2511,7 @@
+     VUregsn->VIread  = (1 << _Is_) | (1 << _It_);
+ }
+ 
+-static __ri void _vuRegsILWR(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsILWR(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_IALU;
+     VUregsn->VFwrite = 0;
+@@ -2522,7 +2522,7 @@
+ 	VUregsn->cycles  = 4;
+ }
+ 
+-static __ri void _vuRegsISWR(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsISWR(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_IALU;
+     VUregsn->VFwrite = 0;
+@@ -2532,7 +2532,7 @@
+     VUregsn->VIread  = (1 << _Is_) | (1 << _It_);
+ }
+ 
+-static __ri void _vuRegsRINIT(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsRINIT(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2543,7 +2543,7 @@
+     VUregsn->VIread  = GET_VF0_FLAG(_Fs_);
+ }
+ 
+-static __ri void _vuRegsRGET(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsRGET(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = _Ft_;
+@@ -2554,7 +2554,7 @@
+     VUregsn->VIread  = 1 << REG_R;
+ }
+ 
+-static __ri void _vuRegsRNEXT(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsRNEXT(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = _Ft_;
+@@ -2565,7 +2565,7 @@
+     VUregsn->VIread  = 1 << REG_R;
+ }
+ 
+-static __ri void _vuRegsRXOR(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsRXOR(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2576,7 +2576,7 @@
+     VUregsn->VIread  = (1 << REG_R)|GET_VF0_FLAG(_Fs_);
+ }
+ 
+-static __ri void _vuRegsWAITQ(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsWAITQ(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FDIV;
+     VUregsn->VFwrite = 0;
+@@ -2586,7 +2586,7 @@
+     VUregsn->VIread  = 0;
+ }
+ 
+-static __ri void _vuRegsFSAND(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsFSAND(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2596,7 +2596,7 @@
+     VUregsn->VIread  = 1 << REG_STATUS_FLAG;
+ }
+ 
+-static __ri void _vuRegsFSEQ(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsFSEQ(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2606,7 +2606,7 @@
+     VUregsn->VIread  = 1 << REG_STATUS_FLAG;
+ }
+ 
+-static __ri void _vuRegsFSOR(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsFSOR(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2616,7 +2616,7 @@
+     VUregsn->VIread  = 1 << REG_STATUS_FLAG;
+ }
+ 
+-static __ri void _vuRegsFSSET(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsFSSET(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2626,7 +2626,7 @@
+ 	VUregsn->VIread  = 0;
+ }
+ 
+-static __ri void _vuRegsFMAND(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsFMAND(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2636,7 +2636,7 @@
+     VUregsn->VIread  = (1 << REG_MAC_FLAG) | (1 << _Is_);
+ }
+ 
+-static __ri void _vuRegsFMEQ(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsFMEQ(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2646,7 +2646,7 @@
+     VUregsn->VIread  = (1 << REG_MAC_FLAG) | (1 << _Is_);
+ }
+ 
+-static __ri void _vuRegsFMOR(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsFMOR(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2656,7 +2656,7 @@
+     VUregsn->VIread  = (1 << REG_MAC_FLAG) | (1 << _Is_);
+ }
+ 
+-static __ri void _vuRegsFCAND(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsFCAND(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2666,7 +2666,7 @@
+     VUregsn->VIread  = 1 << REG_CLIP_FLAG;
+ }
+ 
+-static __ri void _vuRegsFCEQ(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsFCEQ(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2676,7 +2676,7 @@
+     VUregsn->VIread  = 1 << REG_CLIP_FLAG;
+ }
+ 
+-static __ri void _vuRegsFCOR(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsFCOR(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2686,7 +2686,7 @@
+     VUregsn->VIread  = 1 << REG_CLIP_FLAG;
+ }
+ 
+-static __ri void _vuRegsFCSET(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsFCSET(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2696,7 +2696,7 @@
+     VUregsn->VIread  = 0;
+ }
+ 
+-static __ri void _vuRegsFCGET(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsFCGET(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = 0;
+@@ -2706,7 +2706,7 @@
+     VUregsn->VIread  = 1 << REG_CLIP_FLAG;
+ }
+ 
+-static __ri void _vuRegsIBEQ(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsIBEQ(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_BRANCH;
+     VUregsn->VFwrite = 0;
+@@ -2716,7 +2716,7 @@
+     VUregsn->VIread  = (1 << _Is_) | (1 << _It_);
+ }
+ 
+-static __ri void _vuRegsIBGEZ(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsIBGEZ(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_BRANCH;
+     VUregsn->VFwrite = 0;
+@@ -2726,7 +2726,7 @@
+ 	VUregsn->VIread  = 1 << _Is_;
+ }
+ 
+-static __ri void _vuRegsIBGTZ(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsIBGTZ(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_BRANCH;
+     VUregsn->VFwrite = 0;
+@@ -2736,7 +2736,7 @@
+ 	VUregsn->VIread  = 1 << _Is_;
+ }
+ 
+-static __ri void _vuRegsIBLEZ(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsIBLEZ(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_BRANCH;
+     VUregsn->VFwrite = 0;
+@@ -2746,7 +2746,7 @@
+ 	VUregsn->VIread  = 1 << _Is_;
+ }
+ 
+-static __ri void _vuRegsIBLTZ(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsIBLTZ(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_BRANCH;
+     VUregsn->VFwrite = 0;
+@@ -2756,7 +2756,7 @@
+ 	VUregsn->VIread  = 1 << _Is_;
+ }
+ 
+-static __ri void _vuRegsIBNE(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsIBNE(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_BRANCH;
+     VUregsn->VFwrite = 0;
+@@ -2766,7 +2766,7 @@
+     VUregsn->VIread  = (1 << _Is_) | (1 << _It_);
+ }
+ 
+-static __ri void _vuRegsB(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsB(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_BRANCH;
+     VUregsn->VFwrite = 0;
+@@ -2776,7 +2776,7 @@
+     VUregsn->VIread  = 0;
+ }
+ 
+-static __ri void _vuRegsBAL(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsBAL(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_BRANCH;
+     VUregsn->VFwrite = 0;
+@@ -2786,7 +2786,7 @@
+     VUregsn->VIread  = 0;
+ }
+ 
+-static __ri void _vuRegsJR(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsJR(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_BRANCH;
+     VUregsn->VFwrite = 0;
+@@ -2796,7 +2796,7 @@
+ 	VUregsn->VIread  = 1 << _Is_;
+ }
+ 
+-static __ri void _vuRegsJALR(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsJALR(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_BRANCH;
+     VUregsn->VFwrite = 0;
+@@ -2806,7 +2806,7 @@
+ 	VUregsn->VIread  = 1 << _Is_;
+ }
+ 
+-static __ri void _vuRegsMFP(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsMFP(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_FMAC;
+     VUregsn->VFwrite = _Ft_;
+@@ -2817,7 +2817,7 @@
+ 	VUregsn->VIread  = 1 << REG_P;
+ }
+ 
+-static __ri void _vuRegsWAITP(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsWAITP(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_EFU;
+     VUregsn->VFwrite = 0;
+@@ -2842,7 +2842,7 @@
+ VUREGS_PFS_fsf(EATAN, 54);
+ VUREGS_PFS_fsf(EEXP, 44);
+ 
+-static __ri void _vuRegsXITOP(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsXITOP(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_IALU;
+     VUregsn->VFwrite = 0;
+@@ -2853,7 +2853,7 @@
+ 	VUregsn->cycles  = 0;
+ }
+ 
+-static __ri void _vuRegsXGKICK(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsXGKICK(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_XGKICK;
+     VUregsn->VFwrite = 0;
+@@ -2863,7 +2863,7 @@
+     VUregsn->VIread  = 1 << _Is_;
+ }
+ 
+-static __ri void _vuRegsXTOP(const VURegs* VU, _VURegsNum* VUregsn)
++static constexpr void _vuRegsXTOP(const auto* VU, _VURegsNum* VUregsn)
+ {
+ 	VUregsn->pipe = VUPIPE_IALU;
+     VUregsn->VFwrite = 0;
+@@ -3611,7 +3611,7 @@
+ // --------------------------------------------------------------------------------------
+ 
+ #define _vuTablesMess(PREFIX, FNTYPE) \
+-alignas(16) static const FNTYPE PREFIX##LowerOP_T3_00_OPCODE[32] = { \
++alignas(16) static constexpr FNTYPE PREFIX##LowerOP_T3_00_OPCODE[32] = { \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown, \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown,  \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown,  \
+@@ -3622,7 +3622,7 @@
+ 	PREFIX##MI_ESADD , PREFIX##MI_EATANxy, PREFIX##MI_ESQRT, PREFIX##MI_ESIN,  \
+ }; \
+  \
+-alignas(16) static const FNTYPE PREFIX##LowerOP_T3_01_OPCODE[32] = { \
++alignas(16) static constexpr FNTYPE PREFIX##LowerOP_T3_01_OPCODE[32] = { \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown, \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown,  \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown,  \
+@@ -3633,7 +3633,7 @@
+ 	PREFIX##MI_ERSADD, PREFIX##MI_EATANxz, PREFIX##MI_ERSQRT, PREFIX##MI_EATAN, \
+ }; \
+  \
+-alignas(16) static const FNTYPE PREFIX##LowerOP_T3_10_OPCODE[32] = { \
++alignas(16) static constexpr FNTYPE PREFIX##LowerOP_T3_10_OPCODE[32] = { \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown, \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown,  \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown,  \
+@@ -3644,7 +3644,7 @@
+ 	PREFIX##MI_ELENG , PREFIX##MI_ESUM  , PREFIX##MI_ERCPR, PREFIX##MI_EEXP,  \
+ }; \
+  \
+-alignas(16) static const FNTYPE PREFIX##LowerOP_T3_11_OPCODE[32] = { \
++alignas(16) static constexpr FNTYPE PREFIX##LowerOP_T3_11_OPCODE[32] = { \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown, \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown,  \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown,  \
+@@ -3655,7 +3655,7 @@
+ 	PREFIX##MI_ERLENG, PREFIX##unknown  , PREFIX##MI_WAITP, PREFIX##unknown,  \
+ }; \
+  \
+-alignas(16) static const FNTYPE PREFIX##LowerOP_OPCODE[64] = { \
++alignas(16) static constexpr FNTYPE PREFIX##LowerOP_OPCODE[64] = { \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown, \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown,  \
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown,  \
+@@ -3674,7 +3674,7 @@
+ 	PREFIX##LowerOP_T3_00, PREFIX##LowerOP_T3_01, PREFIX##LowerOP_T3_10, PREFIX##LowerOP_T3_11,  \
+ }; \
+  \
+-alignas(16) const FNTYPE PREFIX##_LOWER_OPCODE[128] = { \
++alignas(16) constexpr FNTYPE PREFIX##_LOWER_OPCODE[128] = { \
+ 	PREFIX##MI_LQ    , PREFIX##MI_SQ    , PREFIX##unknown , PREFIX##unknown,  \
+ 	PREFIX##MI_ILW   , PREFIX##MI_ISW   , PREFIX##unknown , PREFIX##unknown,  \
+ 	PREFIX##MI_IADDIU, PREFIX##MI_ISUBIU, PREFIX##unknown , PREFIX##unknown,  \
+@@ -3709,7 +3709,7 @@
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown , PREFIX##unknown,  \
+ }; \
+  \
+-alignas(16) static const FNTYPE PREFIX##_UPPER_FD_00_TABLE[32] = { \
++alignas(16) static constexpr FNTYPE PREFIX##_UPPER_FD_00_TABLE[32] = { \
+ 	PREFIX##MI_ADDAx, PREFIX##MI_SUBAx , PREFIX##MI_MADDAx, PREFIX##MI_MSUBAx, \
+ 	PREFIX##MI_ITOF0, PREFIX##MI_FTOI0, PREFIX##MI_MULAx , PREFIX##MI_MULAq , \
+ 	PREFIX##MI_ADDAq, PREFIX##MI_SUBAq, PREFIX##MI_ADDA  , PREFIX##MI_SUBA  , \
+@@ -3720,7 +3720,7 @@
+ 	PREFIX##unknown , PREFIX##unknown , PREFIX##unknown  , PREFIX##unknown  , \
+ }; \
+  \
+-alignas(16) static const FNTYPE PREFIX##_UPPER_FD_01_TABLE[32] = { \
++alignas(16) static constexpr FNTYPE PREFIX##_UPPER_FD_01_TABLE[32] = { \
+ 	PREFIX##MI_ADDAy , PREFIX##MI_SUBAy  , PREFIX##MI_MADDAy, PREFIX##MI_MSUBAy, \
+ 	PREFIX##MI_ITOF4 , PREFIX##MI_FTOI4 , PREFIX##MI_MULAy , PREFIX##MI_ABS   , \
+ 	PREFIX##MI_MADDAq, PREFIX##MI_MSUBAq, PREFIX##MI_MADDA , PREFIX##MI_MSUBA , \
+@@ -3731,7 +3731,7 @@
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown  , \
+ }; \
+  \
+-alignas(16) static const FNTYPE PREFIX##_UPPER_FD_10_TABLE[32] = { \
++alignas(16) static constexpr FNTYPE PREFIX##_UPPER_FD_10_TABLE[32] = { \
+ 	PREFIX##MI_ADDAz , PREFIX##MI_SUBAz  , PREFIX##MI_MADDAz, PREFIX##MI_MSUBAz, \
+ 	PREFIX##MI_ITOF12, PREFIX##MI_FTOI12, PREFIX##MI_MULAz , PREFIX##MI_MULAi , \
+ 	PREFIX##MI_ADDAi, PREFIX##MI_SUBAi , PREFIX##MI_MULA  , PREFIX##MI_OPMULA, \
+@@ -3742,7 +3742,7 @@
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown  , \
+ }; \
+  \
+-alignas(16) static const FNTYPE PREFIX##_UPPER_FD_11_TABLE[32] = { \
++alignas(16) static constexpr FNTYPE PREFIX##_UPPER_FD_11_TABLE[32] = { \
+ 	PREFIX##MI_ADDAw , PREFIX##MI_SUBAw  , PREFIX##MI_MADDAw, PREFIX##MI_MSUBAw, \
+ 	PREFIX##MI_ITOF15, PREFIX##MI_FTOI15, PREFIX##MI_MULAw , PREFIX##MI_CLIP  , \
+ 	PREFIX##MI_MADDAi, PREFIX##MI_MSUBAi, PREFIX##unknown  , PREFIX##MI_NOP   , \
+@@ -3753,7 +3753,7 @@
+ 	PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown  , PREFIX##unknown  , \
+ }; \
+  \
+-alignas(16) const FNTYPE PREFIX##_UPPER_OPCODE[64] = { \
++alignas(16) constexpr FNTYPE PREFIX##_UPPER_OPCODE[64] = { \
+ 	PREFIX##MI_ADDx  , PREFIX##MI_ADDy  , PREFIX##MI_ADDz  , PREFIX##MI_ADDw, \
+ 	PREFIX##MI_SUBx  , PREFIX##MI_SUBy  , PREFIX##MI_SUBz  , PREFIX##MI_SUBw, \
+ 	PREFIX##MI_MADDx , PREFIX##MI_MADDy , PREFIX##MI_MADDz , PREFIX##MI_MADDw, \
+--- a/ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_aot_step.h
++++ b/ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_aot_step.h
+@@ -54,11 +54,94 @@
+ #include "VUflags.cpp"
+ #include "VUops.cpp"
+ 
++
++    // Resolve every level of the original tables at C++ translation time, including special opcodes.
++    template <u32 Word, bool Upper>
++    consteval FnPtr_VuVoid operation()
++    {
++        if constexpr (Upper)
++        {
++            constexpr u32 op = Word & 0x3fu;
++            constexpr u32 sub = (Word >> 6) & 0x1fu;
++            if constexpr (op == 0x3cu) return VU1_UPPER_FD_00_TABLE[sub];
++            else if constexpr (op == 0x3du) return VU1_UPPER_FD_01_TABLE[sub];
++            else if constexpr (op == 0x3eu) return VU1_UPPER_FD_10_TABLE[sub];
++            else if constexpr (op == 0x3fu) return VU1_UPPER_FD_11_TABLE[sub];
++            else return VU1_UPPER_OPCODE[op];
++        }
++        else
++        {
++            constexpr u32 op = Word >> 25;
++            constexpr u32 sub = (Word >> 6) & 0x1fu;
++            if constexpr (op != 0x40u) return VU1_LOWER_OPCODE[op];
++            else if constexpr ((Word & 0x3fu) == 0x3cu) return VU1LowerOP_T3_00_OPCODE[sub];
++            else if constexpr ((Word & 0x3fu) == 0x3du) return VU1LowerOP_T3_01_OPCODE[sub];
++            else if constexpr ((Word & 0x3fu) == 0x3eu) return VU1LowerOP_T3_10_OPCODE[sub];
++            else if constexpr ((Word & 0x3fu) == 0x3fu) return VU1LowerOP_T3_11_OPCODE[sub];
++            else return VU1LowerOP_OPCODE[Word & 0x3fu];
++        }
++    }
++
++    template <u32 Word, FnPtr_VuVoid Op>
++    consteval _VURegsNum dependencies()
++    {
++        struct Instruction { u32 code; };
++        const Instruction input{Word};
++        _VURegsNum result{};
++#define VU_AOT_DEPENDENCIES(Name) if constexpr (Op == &VU1MI_##Name) _vuRegs##Name(&input, &result); else
++        VU_AOT_DEPENDENCIES(ABS) VU_AOT_DEPENDENCIES(ADD) VU_AOT_DEPENDENCIES(ADDi) VU_AOT_DEPENDENCIES(ADDq)
++        VU_AOT_DEPENDENCIES(ADDx) VU_AOT_DEPENDENCIES(ADDy) VU_AOT_DEPENDENCIES(ADDz) VU_AOT_DEPENDENCIES(ADDw)
++        VU_AOT_DEPENDENCIES(ADDA) VU_AOT_DEPENDENCIES(ADDAi) VU_AOT_DEPENDENCIES(ADDAq) VU_AOT_DEPENDENCIES(ADDAx)
++        VU_AOT_DEPENDENCIES(ADDAy) VU_AOT_DEPENDENCIES(ADDAz) VU_AOT_DEPENDENCIES(ADDAw) VU_AOT_DEPENDENCIES(SUB)
++        VU_AOT_DEPENDENCIES(SUBi) VU_AOT_DEPENDENCIES(SUBq) VU_AOT_DEPENDENCIES(SUBx) VU_AOT_DEPENDENCIES(SUBy)
++        VU_AOT_DEPENDENCIES(SUBz) VU_AOT_DEPENDENCIES(SUBw) VU_AOT_DEPENDENCIES(SUBA) VU_AOT_DEPENDENCIES(SUBAi)
++        VU_AOT_DEPENDENCIES(SUBAq) VU_AOT_DEPENDENCIES(SUBAx) VU_AOT_DEPENDENCIES(SUBAy) VU_AOT_DEPENDENCIES(SUBAz)
++        VU_AOT_DEPENDENCIES(SUBAw) VU_AOT_DEPENDENCIES(MUL) VU_AOT_DEPENDENCIES(MULi) VU_AOT_DEPENDENCIES(MULq)
++        VU_AOT_DEPENDENCIES(MULx) VU_AOT_DEPENDENCIES(MULy) VU_AOT_DEPENDENCIES(MULz) VU_AOT_DEPENDENCIES(MULw)
++        VU_AOT_DEPENDENCIES(MULA) VU_AOT_DEPENDENCIES(MULAi) VU_AOT_DEPENDENCIES(MULAq) VU_AOT_DEPENDENCIES(MULAx)
++        VU_AOT_DEPENDENCIES(MULAy) VU_AOT_DEPENDENCIES(MULAz) VU_AOT_DEPENDENCIES(MULAw) VU_AOT_DEPENDENCIES(MADD)
++        VU_AOT_DEPENDENCIES(MADDi) VU_AOT_DEPENDENCIES(MADDq) VU_AOT_DEPENDENCIES(MADDx) VU_AOT_DEPENDENCIES(MADDy)
++        VU_AOT_DEPENDENCIES(MADDz) VU_AOT_DEPENDENCIES(MADDw) VU_AOT_DEPENDENCIES(MADDA) VU_AOT_DEPENDENCIES(MADDAi)
++        VU_AOT_DEPENDENCIES(MADDAq) VU_AOT_DEPENDENCIES(MADDAx) VU_AOT_DEPENDENCIES(MADDAy) VU_AOT_DEPENDENCIES(MADDAz)
++        VU_AOT_DEPENDENCIES(MADDAw) VU_AOT_DEPENDENCIES(MSUB) VU_AOT_DEPENDENCIES(MSUBi) VU_AOT_DEPENDENCIES(MSUBq)
++        VU_AOT_DEPENDENCIES(MSUBx) VU_AOT_DEPENDENCIES(MSUBy) VU_AOT_DEPENDENCIES(MSUBz) VU_AOT_DEPENDENCIES(MSUBw)
++        VU_AOT_DEPENDENCIES(MSUBA) VU_AOT_DEPENDENCIES(MSUBAi) VU_AOT_DEPENDENCIES(MSUBAq) VU_AOT_DEPENDENCIES(MSUBAx)
++        VU_AOT_DEPENDENCIES(MSUBAy) VU_AOT_DEPENDENCIES(MSUBAz) VU_AOT_DEPENDENCIES(MSUBAw) VU_AOT_DEPENDENCIES(MAX)
++        VU_AOT_DEPENDENCIES(MAXi) VU_AOT_DEPENDENCIES(MAXx) VU_AOT_DEPENDENCIES(MAXy) VU_AOT_DEPENDENCIES(MAXz)
++        VU_AOT_DEPENDENCIES(MAXw) VU_AOT_DEPENDENCIES(MINI) VU_AOT_DEPENDENCIES(MINIi) VU_AOT_DEPENDENCIES(MINIx)
++        VU_AOT_DEPENDENCIES(MINIy) VU_AOT_DEPENDENCIES(MINIz) VU_AOT_DEPENDENCIES(MINIw) VU_AOT_DEPENDENCIES(OPMULA)
++        VU_AOT_DEPENDENCIES(OPMSUB) VU_AOT_DEPENDENCIES(NOP) VU_AOT_DEPENDENCIES(FTOI0) VU_AOT_DEPENDENCIES(FTOI4)
++        VU_AOT_DEPENDENCIES(FTOI12) VU_AOT_DEPENDENCIES(FTOI15) VU_AOT_DEPENDENCIES(ITOF0) VU_AOT_DEPENDENCIES(ITOF4)
++        VU_AOT_DEPENDENCIES(ITOF12) VU_AOT_DEPENDENCIES(ITOF15) VU_AOT_DEPENDENCIES(CLIP) VU_AOT_DEPENDENCIES(DIV)
++        VU_AOT_DEPENDENCIES(SQRT) VU_AOT_DEPENDENCIES(RSQRT) VU_AOT_DEPENDENCIES(IADD) VU_AOT_DEPENDENCIES(IADDI)
++        VU_AOT_DEPENDENCIES(IADDIU) VU_AOT_DEPENDENCIES(IAND) VU_AOT_DEPENDENCIES(IOR) VU_AOT_DEPENDENCIES(ISUB)
++        VU_AOT_DEPENDENCIES(ISUBIU) VU_AOT_DEPENDENCIES(MOVE) VU_AOT_DEPENDENCIES(MFIR) VU_AOT_DEPENDENCIES(MTIR)
++        VU_AOT_DEPENDENCIES(MR32) VU_AOT_DEPENDENCIES(LQ) VU_AOT_DEPENDENCIES(LQD) VU_AOT_DEPENDENCIES(LQI)
++        VU_AOT_DEPENDENCIES(SQ) VU_AOT_DEPENDENCIES(SQD) VU_AOT_DEPENDENCIES(SQI) VU_AOT_DEPENDENCIES(ILW)
++        VU_AOT_DEPENDENCIES(ISW) VU_AOT_DEPENDENCIES(ILWR) VU_AOT_DEPENDENCIES(ISWR) VU_AOT_DEPENDENCIES(RINIT)
++        VU_AOT_DEPENDENCIES(RGET) VU_AOT_DEPENDENCIES(RNEXT) VU_AOT_DEPENDENCIES(RXOR) VU_AOT_DEPENDENCIES(WAITQ)
++        VU_AOT_DEPENDENCIES(FSAND) VU_AOT_DEPENDENCIES(FSEQ) VU_AOT_DEPENDENCIES(FSOR) VU_AOT_DEPENDENCIES(FSSET)
++        VU_AOT_DEPENDENCIES(FMAND) VU_AOT_DEPENDENCIES(FMEQ) VU_AOT_DEPENDENCIES(FMOR) VU_AOT_DEPENDENCIES(FCAND)
++        VU_AOT_DEPENDENCIES(FCEQ) VU_AOT_DEPENDENCIES(FCOR) VU_AOT_DEPENDENCIES(FCSET) VU_AOT_DEPENDENCIES(FCGET)
++        VU_AOT_DEPENDENCIES(IBEQ) VU_AOT_DEPENDENCIES(IBGEZ) VU_AOT_DEPENDENCIES(IBGTZ) VU_AOT_DEPENDENCIES(IBLTZ)
++        VU_AOT_DEPENDENCIES(IBLEZ) VU_AOT_DEPENDENCIES(IBNE) VU_AOT_DEPENDENCIES(B) VU_AOT_DEPENDENCIES(BAL)
++        VU_AOT_DEPENDENCIES(JR) VU_AOT_DEPENDENCIES(JALR) VU_AOT_DEPENDENCIES(MFP) VU_AOT_DEPENDENCIES(WAITP)
++        VU_AOT_DEPENDENCIES(ESADD) VU_AOT_DEPENDENCIES(ERSADD) VU_AOT_DEPENDENCIES(ELENG) VU_AOT_DEPENDENCIES(ERLENG)
++        VU_AOT_DEPENDENCIES(EATANxy) VU_AOT_DEPENDENCIES(EATANxz) VU_AOT_DEPENDENCIES(ESUM) VU_AOT_DEPENDENCIES(ERCPR)
++        VU_AOT_DEPENDENCIES(ESQRT) VU_AOT_DEPENDENCIES(ERSQRT) VU_AOT_DEPENDENCIES(ESIN) VU_AOT_DEPENDENCIES(EATAN)
++        VU_AOT_DEPENDENCIES(EEXP) VU_AOT_DEPENDENCIES(XITOP) VU_AOT_DEPENDENCIES(XGKICK) VU_AOT_DEPENDENCIES(XTOP)
++        { static_assert(Op != Op, "Unsupported VU1 AOT opcode"); }
++#undef VU_AOT_DEPENDENCIES
++        return result;
++    }
++
+     template <u32 Upper, u32 Lower>
+     inline void step(VURegs *VU)
+     {
+-        _VURegsNum lregs;
+-        _VURegsNum uregs;
++        constexpr auto upperOp = operation<Upper, true>();
++        constexpr auto upperRegs = dependencies<Upper, upperOp>();
++        auto uregs = upperRegs;
++        _VURegsNum lregs{};
+ 
+         VU->VI[REG_TPC].UL += 8;
+ 
+@@ -83,8 +166,8 @@
+             }
+         }
+ 
+-        VU->code = Upper;
+-        VU1regs_UPPER_OPCODE[Upper & 0x3f](&uregs);
++        VU1.code = Upper;
++        // Dependencies and pair conflicts are constants; only incoming pipeline state is dynamic.
+ 
+         u32 cyclesBeforeOp = VU1.cycle - 1;
+ 
+@@ -97,8 +180,8 @@
+             if (VU->VIBackupCycles > 0)
+                 VU->VIBackupCycles -= std::min((u8)(VU1.cycle - cyclesBeforeOp), VU->VIBackupCycles);
+ 
+-            VU->code = Upper;
+-            VU1_UPPER_OPCODE[Upper & 0x3f]();
++            VU1.code = Upper;
++            upperOp();
+ 
+             VU->VI[REG_I].UL = Lower;
+             memset(&lregs, 0, sizeof(lregs));
+@@ -113,9 +196,11 @@
+             int vireg = 0;
+             int discard = 0;
+ 
+-            VU->code = Lower;
++            VU1.code = Lower;
+             lregs.cycles = 0;
+-            VU1regs_LOWER_OPCODE[Lower >> 25](&lregs);
++            constexpr auto lowerOp = operation<Lower, false>();
++            constexpr auto lowerRegs = dependencies<Lower, lowerOp>();
++            lregs = lowerRegs;
+ 
+             _vuTestLowerStalls(VU, &lregs);
+             _vuTestPipes(VU);
+@@ -144,8 +229,8 @@
+                 }
+             }
+ 
+-            VU->code = Upper;
+-            VU1_UPPER_OPCODE[Upper & 0x3f]();
++            VU1.code = Upper;
++            upperOp();
+ 
+             if (discard == 0)
+             {
+@@ -160,8 +245,8 @@
+                     VU->VI[vireg] = _VI;
+                 }
+ 
+-                VU->code = Lower;
+-                VU1_LOWER_OPCODE[Lower >> 25]();
++                VU1.code = Lower;
++                lowerOp();
+ 
+                 if (vfreg)
+                     VU->VF[vfreg] = _VFc;

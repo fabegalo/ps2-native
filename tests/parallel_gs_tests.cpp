@@ -10,6 +10,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+#include <filesystem>
+#include <fstream>
 #include <thread>
 
 static void require(bool value, const char* message) {
@@ -107,6 +109,10 @@ static void frontendCommands(Vulkan::Device& device) {
     frontend.writeRegister(GS_REG_RGBAQ, 0x3f800000ff112233ull);
     require(backend.registers == 1, "direct register command was suppressed");
     unsigned fidelityWidth = 0, fidelityHeight = 0;
+    // A corrupt cache must be replaced, not trusted; each backend saves its pipelines on shutdown.
+    const auto pipelineCache = std::filesystem::temp_directory_path() / "ps2n-parallel-gs-test-pipelines.bin";
+    std::ofstream(pipelineCache, std::ios::binary) << "not a pipeline cache, long enough to pass the size check";
+    const auto corruptSize = std::filesystem::file_size(pipelineCache);
     for (bool enhanced : {false, true}) {
         GSRegisters registers{};
         ParallelGS::Reg64<ParallelGS::SMODE1Bits> smode{};
@@ -119,7 +125,7 @@ static void frontendCommands(Vulkan::Device& device) {
         std::vector<uint8_t> vram(vramSize);
         GS host;
         host.init(vram.data(), vramSize, &registers);
-        host.setRasterBackend(ps2n_parallel_gs(registers, enhanced));
+        host.setRasterBackend(ps2n_parallel_gs(registers, enhanced, pipelineCache));
         host.processGIFPacket(bytes, size);
         host.refreshDisplaySnapshot();
         uint32_t mappedSize = 0;
@@ -182,6 +188,8 @@ static void frontendCommands(Vulkan::Device& device) {
         std::cout << "PASS production host scanout " << width << 'x' << height
                   << ", VRAM, FIFO, recycled contexts, enhanced=" << enhanced << std::endl;
     }
+    require(std::filesystem::file_size(pipelineCache) > corruptSize, "paraLLEl-GS pipeline cache was not saved");
+    std::filesystem::remove(pipelineCache);
     device.wait_idle();
     std::cout << "PASS original GIF/packed command boundary, full CPU/GPU VRAM, rejection and recovery" << std::endl;
 }

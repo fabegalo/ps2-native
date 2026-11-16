@@ -1,0 +1,14 @@
+--- a/ps2xRuntime/src/lib/vu_pcsx2/VU1microInterp.cpp
++++ b/ps2xRuntime/src/lib/vu_pcsx2/VU1microInterp.cpp
+@@ -31,8 +31,9 @@
+ 
+ static void _vu1Exec(VURegs* VU)
+ {
+-	_VURegsNum lregs;
+-	_VURegsNum uregs;
++	// Unused lane masks are copied into FMAC entries too; keep their state deterministic.
++	_VURegsNum lregs{};
++	_VURegsNum uregs{};
+ 	u32* ptr;
+ 
+ 	ptr = (u32*)&VU->Micro[VU->VI[REG_TPC].UL];

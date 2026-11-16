@@ -1,0 +1,239 @@
+Track native RPC calls per sceSifRpcLoop thread instead of one call for the whole IOP.
+A server that blocks by design (the CDVD power-off monitor waits for the POFF interrupt)
+no longer stalls every later RPC; each server keeps FIFO order for its own requests.
+
+--- a/ps2xIOP/src/emulator/services/iop_rpc.cpp
++++ b/ps2xIOP/src/emulator/services/iop_rpc.cpp
+@@ -43,9 +43,8 @@ namespace ps2x::iop::detail
+         m_sifRegisters.clear();
+         m_pendingCommands.clear();
+         m_pendingRpc.clear();
+-        m_nativeCall.reset();
+         m_queueThreads.clear();
+-        m_call = {};
++        m_calls.clear();
+     }
+ 
+     void IopRpcBridge::beginBoot()
+@@ -391,8 +390,6 @@ namespace ps2x::iop::detail
+         }
+         if (serverIt == m_servers.end() || serverIt->second.function == 0u)
+             return result;
+-        if (m_call.active) throw std::runtime_error("IOP RPC server is already executing a request");
+-
+         const RpcServer server = serverIt->second;
+         if (request.send.size != 0u && server.buffer != 0u)
+         {
+@@ -409,20 +406,25 @@ namespace ps2x::iop::detail
+         // sceSifRpcLoop, under the IOP priority scheduler, so its semaphores
+         // and locks exclude the module's other threads as on the console.
+         uint32_t returnPointer = 0u;
+-        if (executor.canRunThreads() && startServerCall(server, request.function, request.send.size))
++        if (const auto queue = m_queueThreads.find(server.queue);
++            queue != m_queueThreads.end() && m_calls.contains(queue->second))
++            throw std::runtime_error("IOP RPC server is already executing a request");
++        const int callThread = executor.canRunThreads() ? startServerCall(server, request.function, request.send.size) : 0;
++        if (callThread)
+         {
+             constexpr uint64_t kSlice = 4096u;
+-            for (uint64_t ran = 0u; !m_call.done && ran < kIopClockHz; ran += kSlice)
++            for (uint64_t ran = 0u; !m_calls.at(callThread).done && ran < kIopClockHz; ran += kSlice)
+                 executor.runThreads(kSlice);
+-            m_call.active = false;
+-            if (!m_call.done)
++            const ServerCall call = m_calls.at(callThread);
++            m_calls.erase(callThread);
++            if (!call.done)
+             {
+                 std::ostringstream out;
+                 out << "[IOP] RPC server thread did not reply: sid=0x" << std::hex << request.sid
+                     << " function=0x" << request.function;
+                 throw std::runtime_error(out.str());
+             }
+-            returnPointer = m_call.result;
++            returnPointer = call.result;
+         }
+         else
+         {
+@@ -455,15 +457,13 @@ namespace ps2x::iop::detail
+         return result;
+     }
+ 
+-    bool IopRpcBridge::startServerCall(const RpcServer& server, uint32_t function, uint32_t size)
++    int IopRpcBridge::startServerCall(const RpcServer& server, uint32_t function, uint32_t size)
+     {
+         const auto queue = m_queueThreads.find(server.queue);
+         auto* loop = queue == m_queueThreads.end() ? nullptr : m_kernel.findThread(queue->second);
+-        if (!loop || loop->state != IopThreadState::Sleep || m_call.active) return false;
+-        m_call = {};
+-        m_call.active = true;
+-        m_call.thread = loop->id;
+-        m_call.savedCpu = loop->cpu;
++        if (!loop || loop->state != IopThreadState::Sleep || m_calls.contains(loop->id)) return 0;
++        ServerCall &call = m_calls[loop->id];
++        call.savedCpu = loop->cpu;
+         auto& cpu = loop->cpu;
+         cpu.pc = server.function;
+         cpu.gpr[4] = function;
+@@ -471,12 +471,12 @@ namespace ps2x::iop::detail
+         cpu.gpr[6] = size;
+         cpu.gpr[7] = 0u;
+         cpu.gpr[28] = server.gp;
+-        cpu.gpr[29] = (m_call.savedCpu.gpr[29] - 64u) & ~15u;
++        cpu.gpr[29] = (call.savedCpu.gpr[29] - 64u) & ~15u;
+         cpu.gpr[31] = kRpcReturnSentinel;
+         cpu.branchPending = cpu.pendingLoad = false;
+         cpu.stopped = cpu.yielded = cpu.exception = false;
+         loop->state = IopThreadState::Ready;
+-        return true;
++        return loop->id;
+     }
+ 
+     uint32_t IopRpcBridge::heapRpc(uint32_t function, uint32_t argument)
+@@ -536,39 +536,51 @@ namespace ps2x::iop::detail
+ 
+     void IopRpcBridge::advanceNativeRpc()
+     {
+-        if (m_pendingCommands.size() >= 64u) return;
+-        if (m_nativeCall) {
+-            if (!m_call.done) return;
+-            const RpcPacket request = *m_nativeCall;
+-            if (m_call.result && request[11]) {
+-                if (!m_memory.ownsRamRange(m_call.result, request[11]) ||
+-                    !m_host.writeGuest(request[10], m_memory.ram().data() + IopMemory::physicalAddress(m_call.result), request[11]))
++        // Answer finished calls in server-thread order, each from its own result buffer.
++        std::vector<int> finished;
++        for (const auto &[thread, call] : m_calls)
++            if (call.done && call.request) finished.push_back(thread);
++        std::sort(finished.begin(), finished.end());
++        for (const int thread : finished) {
++            if (m_pendingCommands.size() >= 64u) return;
++            const ServerCall call = m_calls.at(thread);
++            const RpcPacket &request = *call.request;
++            if (call.result && request[11]) {
++                if (!m_memory.ownsRamRange(call.result, request[11]) ||
++                    !m_host.writeGuest(request[10], m_memory.ram().data() + IopMemory::physicalAddress(call.result), request[11]))
+                     throw std::runtime_error("Invalid native RPC result buffer");
+             }
+-            queueRpcReply(request, nullptr, m_call.result ? request[11] : 0u);
+-            m_nativeCall.reset();
+-            m_call = {};
++            queueRpcReply(request, nullptr, call.result ? request[11] : 0u);
++            m_calls.erase(thread);
+         }
+-        if (m_call.active || m_pendingRpc.empty()) return;
+-        const auto request = m_pendingRpc.front();
+-        const auto server = std::find_if(m_servers.begin(), m_servers.end(), [&](const auto& item) {
+-            return item.second.serverData == request[13];
+-        });
+-        if (server == m_servers.end()) throw std::runtime_error("Native RPC call references an unregistered server");
+-        const auto& target = server->second;
+-        if (request[9] && !m_memory.ownsRamRange(target.buffer, request[9]))
+-            throw std::runtime_error("Invalid native RPC argument buffer");
+-        if (target.sid == 0x80000003u && !target.function) {
+-            if (request[9] != 4u || request[11] < 4u) throw std::runtime_error("Invalid native IOP heap RPC buffers");
+-            const auto reply = heapRpc(request[8], m_memory.read32(target.buffer));
+-            if (!m_host.writeGuest(request[10], &reply, sizeof(reply)))
+-                throw std::runtime_error("Invalid native IOP heap RPC reply address");
+-            queueRpcReply(request, nullptr, sizeof(reply));
+-        } else {
+-            if (!startServerCall(target, request[8], request[9])) return;
+-            m_nativeCall = request;
++        // Start each request whose server thread is free; a busy server keeps its FIFO order.
++        std::vector<uint32_t> busyServers;
++        for (auto it = m_pendingRpc.begin(); it != m_pendingRpc.end();) {
++            if (m_pendingCommands.size() >= 64u) return;
++            const RpcPacket request = *it;
++            if (std::find(busyServers.begin(), busyServers.end(), request[13]) != busyServers.end()) { ++it; continue; }
++            const auto server = std::find_if(m_servers.begin(), m_servers.end(), [&](const auto& item) {
++                return item.second.serverData == request[13];
++            });
++            if (server == m_servers.end()) throw std::runtime_error("Native RPC call references an unregistered server");
++            const auto& target = server->second;
++            if (request[9] && !m_memory.ownsRamRange(target.buffer, request[9]))
++                throw std::runtime_error("Invalid native RPC argument buffer");
++            if (target.sid == 0x80000003u && !target.function) {
++                if (request[9] != 4u || request[11] < 4u) throw std::runtime_error("Invalid native IOP heap RPC buffers");
++                const auto reply = heapRpc(request[8], m_memory.read32(target.buffer));
++                if (!m_host.writeGuest(request[10], &reply, sizeof(reply)))
++                    throw std::runtime_error("Invalid native IOP heap RPC reply address");
++                queueRpcReply(request, nullptr, sizeof(reply));
++            } else if (const int thread = startServerCall(target, request[8], request[9])) {
++                m_calls.at(thread).request = request;
++            } else {
++                busyServers.push_back(request[13]);
++                ++it;
++                continue;
++            }
++            it = m_pendingRpc.erase(it);
+         }
+-        m_pendingRpc.pop_front();
+     }
+ 
+     void IopRpcBridge::onSifTransfer(const SifTransfer &transfer)
+@@ -743,12 +755,14 @@ namespace ps2x::iop::detail
+ 
+     bool IopRpcBridge::finishServerCall(IopThread &thread)
+     {
+-        if (!m_call.active || m_call.done || thread.id != m_call.thread)
++        const auto found = m_calls.find(thread.id);
++        if (found == m_calls.end() || found->second.done)
+             return false;
+-        m_call.result = thread.cpu.gpr[2];
+-        thread.cpu = m_call.savedCpu; // back to sceSifRpcLoop
++        ServerCall &call = found->second;
++        call.result = thread.cpu.gpr[2];
++        thread.cpu = call.savedCpu; // back to sceSifRpcLoop
+         thread.state = IopThreadState::Sleep;
+-        m_call.done = true;
++        call.done = true;
+         return true;
+     }
+ 
+--- a/ps2xIOP/src/emulator/services/iop_rpc.h
++++ b/ps2xIOP/src/emulator/services/iop_rpc.h
+@@ -62,7 +62,13 @@ namespace ps2x::iop::detail
+         void onSifTransfer(const SifTransfer &transfer);
+         void flushSifCommands();
+         // No queued command, RPC request or finished native call: polling cannot change state.
+-        bool quiescent() const { return m_pendingCommands.empty() && m_pendingRpc.empty() && !m_nativeCall; }
++        bool quiescent() const
++        {
++            if (!m_pendingCommands.empty() || !m_pendingRpc.empty()) return false;
++            for (const auto &[thread, call] : m_calls)
++                if (call.done) return false;
++            return true;
++        }
+         void advanceNativeRpc();
+         std::optional<std::string> takeResetRequest();
+         void holdBootEnd(bool hold) { m_holdBootEnd = hold; }
+@@ -93,7 +99,7 @@ namespace ps2x::iop::detail
+ 
+         using RpcPacket = std::array<uint32_t, 16>;
+         void queueRpcReply(const RpcPacket& request, const RpcServer* server = nullptr, uint32_t dataSize = 0u);
+-        bool startServerCall(const RpcServer& server, uint32_t function, uint32_t size);
++        int startServerCall(const RpcServer& server, uint32_t function, uint32_t size);
+         uint32_t heapRpc(uint32_t function, uint32_t argument);
+         void ensureHeapServer();
+ 
+@@ -113,15 +119,16 @@ namespace ps2x::iop::detail
+         std::unordered_map<uint32_t, uint32_t> m_sifRegisters;
+         std::deque<std::vector<uint8_t>> m_pendingCommands;
+         std::deque<RpcPacket> m_pendingRpc;
+-        std::optional<RpcPacket> m_nativeCall;
+         std::unordered_map<uint32_t, int> m_queueThreads; // RPC queue -> server thread
++        // Each sceSifRpcLoop thread serves its own queue, so one server may block
++        // (a power-off monitor waits forever) while the others keep replying.
+         struct ServerCall
+         {
+-            bool active = false;
+             bool done = false;
+-            int thread = 0;
+             uint32_t result = 0;
+             IopCpuState savedCpu{};
+-        } m_call;
++            std::optional<RpcPacket> request; // native SIF call to answer when done
++        };
++        std::unordered_map<int, ServerCall> m_calls; // server thread -> call in progress
+     };
+ }

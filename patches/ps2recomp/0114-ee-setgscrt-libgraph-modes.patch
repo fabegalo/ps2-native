@@ -1,0 +1,17 @@
+Accept the original OSD libgraph NTSC/PAL encoding in SetGsCrt: sceGsResetGraph passes
+mode | 0x70 (0x72/0x73) for modes 2 and 3, so SMODE1 kept no video standard and paraLLEl-GS
+scanned out nothing.
+
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+@@ -19,6 +19,10 @@ namespace ps2_syscalls
+             gs.smode2 = smode2;
+             // NTSC/PAL scanout fields, documented by ps2sdk graph_mode.c and
+             // gs_privileged.h. PLL programming and full sync timings remain unmodeled.
++            // The original OSD's libgraph (sceGsResetGraph) passes NTSC/PAL as 0x72/0x73:
++            // mode | 0x70 for modes 2 and 3 (OSDSYS 0x26f410), which the kernel accepts as 2/3.
++            if (videoMode == 0x72 || videoMode == 0x73)
++                videoMode &= 0xf;
+             if (videoMode == 2 || videoMode == 3)
+             {
+                 constexpr uint64_t scanoutMask = (0x7full << 3) | (3ull << 13) | (0xfull << 21);

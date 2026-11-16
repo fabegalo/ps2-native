@@ -1,0 +1,24 @@
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index bac0ce5..a234a1b 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -943,11 +943,16 @@ namespace ps2x::iop::detail
+ 
+     void IopEmulator::runEeCycles(uint64_t eeCycles) noexcept
+     {
++        // The EE reports cycles at every translated loop edge; a scheduler pass per report cost more than
++        // the guest code. Catch up one slice at a time, as PCSX2 syncs the IOP at EE event tests.
+         const uint64_t total = m_impl->eeCycleCarry + eeCycles;
+-        const uint64_t iopCycles = total / 8u;
++        if (total < 8u * kDefaultSlice)
++        {
++            m_impl->eeCycleCarry = total;
++            return;
++        }
+         m_impl->eeCycleCarry = total % 8u;
+-        if (iopCycles)
+-            m_impl->runCycles(iopCycles);
++        m_impl->runCycles(total / 8u);
+     }
+ 
+     RpcResult IopEmulator::handleRpc(const RpcRequest &request)

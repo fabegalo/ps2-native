@@ -121,6 +121,15 @@ if(BUILD_TESTING)
     target_link_libraries(ps2n-sdk-gs-presentation-tests PRIVATE ps2_runtime)
     add_test(NAME sdk-gs-presentation COMMAND ps2n-sdk-gs-presentation-tests)
     add_executable(ps2n-sdk-gs-thread-tests tests/sdk_gs_thread_tests.cpp)
+    add_executable(ps2n-sdk-vu1-aot-tests tests/sdk_vu1_aot_tests.cpp
+        "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/vu_pcsx2/VUops.cpp"
+        "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/vu_pcsx2/VUflags.cpp"
+        "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/vu_pcsx2/VU1microInterp.cpp"
+        "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_bridge.cpp")
+    target_include_directories(ps2n-sdk-vu1-aot-tests PRIVATE
+        "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/vu_pcsx2"
+        "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib")
+    add_test(NAME sdk-vu1-aot COMMAND ps2n-sdk-vu1-aot-tests)
     target_link_libraries(ps2n-sdk-gs-thread-tests PRIVATE ps2_runtime)
     target_include_directories(ps2n-sdk-gs-thread-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/gs")
     add_test(NAME sdk-gs-thread COMMAND ps2n-sdk-gs-thread-tests)
@@ -237,9 +246,11 @@ if(BUILD_TESTING)
     add_executable(ps2n-sdk-memory-tests tests/sdk_memory_tests.cpp
         "${PS2N_PS2RECOMP_DIR}/ps2xTest/src/test_function_table.cpp")
     target_link_libraries(ps2n-sdk-memory-tests PRIVATE ps2_runtime)
+    ps2x_stage_ffmpeg_runtime_dlls(ps2n-sdk-memory-tests)
     target_include_directories(ps2n-sdk-memory-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
     target_include_directories(ps2n-sdk-memory-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib")
     add_test(NAME sdk-memory COMMAND ps2n-sdk-memory-tests)
+    set_tests_properties(sdk-memory PROPERTIES TIMEOUT 30)
     add_executable(ps2n-sdk-call-tests tests/sdk_call_tests.cpp)
     target_include_directories(ps2n-sdk-call-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/include")
     add_test(NAME sdk-calls COMMAND ps2n-sdk-call-tests)

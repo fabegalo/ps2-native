@@ -1,0 +1,70 @@
+Compile Deci2Call in Release and complete reqsend without a host debugger.
+The empty Release syscall left v0 stale, so OSDSYS TTY output waited forever for its busy
+word. As PCSX2 __Deci2Call does, reqsend shows the packet text and clears word 3 of opt.
+
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Deci2.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Deci2.cpp
+@@ -125,7 +125,7 @@ namespace ps2_syscalls
+ {
+     void Deci2Call(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-#if defined(_DEBUG) || defined(RUNTIME_DECI2CALL)
++        // Compiled in every build: an empty Release syscall left v0 stale and hung DECI2 clients.
+         const int32_t code = static_cast<int32_t>(getRegU32(ctx, 4));
+         const uint32_t argsAddr = getRegU32(ctx, 5);
+ 
+@@ -151,8 +151,45 @@ namespace ps2_syscalls
+             setReturnS32(ctx, closeDeci2Socket(socket) ? KE_OK : KE_ERROR);
+             return;
+         }
+-        // WE dont need to do thouses
+-        case 3:  // sceDeci2ReqSend(socket, dest)
++        case 3: // sceDeci2ReqSend(socket, dest)
++        {
++            // No host debugger is attached. As PCSX2's __Deci2Call does on reqsend, show the
++            // packet text and complete the request in the client's area (opt): word 3 is the
++            // client's busy word, word 1 the packet length and word 4 the packet address.
++            uint32_t area = 0u;
++            {
++                std::lock_guard<std::mutex> lock(g_deci2Mutex);
++                const auto session = g_deci2Sessions.find(static_cast<int32_t>(args[0]));
++                if (session == g_deci2Sessions.end())
++                {
++                    setReturnS32(ctx, KE_ERROR);
++                    return;
++                }
++                area = session->second.opt;
++            }
++            uint32_t length = 0u, packet = 0u;
++            if (area != 0u && readDeci2U32(rdram, area + 4u, length) && readDeci2U32(rdram, area + 16u, packet) &&
++                length > 12u && packet != 0u)
++            {
++                const uint32_t textLength = std::min<uint32_t>(length - 12u, 255u);
++                std::string text;
++                for (uint32_t i = 0; i < textLength; ++i)
++                {
++                    const uint8_t *byte = getConstMemPtr(rdram, packet + 12u + i);
++                    if (!byte || *byte == 0u)
++                        break;
++                    text.push_back(static_cast<char>(*byte));
++                }
++                logDeci2Text("[Deci2Call:tty] ", text);
++            }
++            if (area != 0u)
++            {
++                if (uint8_t *busy = getMemPtr(rdram, area + 12u))
++                    std::memset(busy, 0, sizeof(uint32_t));
++            }
++            setReturnS32(ctx, KE_OK);
++            return;
++        }
+         case 4:  // sceDeci2Poll(socket)
+         case -7: // sceDeci2ExReqSend(socket, dest)
+         {
+@@ -230,6 +267,5 @@ namespace ps2_syscalls
+             return;
+         }
+         }
+-#endif
+     }
+ }

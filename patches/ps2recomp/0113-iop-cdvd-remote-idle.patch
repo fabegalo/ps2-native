@@ -1,0 +1,15 @@
+Answer sceRemote2Read (S-command 0x1E, 0:5) as an idle IR receiver, status 0 and code 0x14
+with no key, as PCSX2 CDVD.cpp cdvdWrite16 does; the OSD polls it during boot.
+
+--- a/ps2xIOP/src/emulator/core/iop_magicgate.cpp
++++ b/ps2xIOP/src/emulator/core/iop_magicgate.cpp
+@@ -124,6 +124,9 @@ bool IopMagicGate::mecha(IopHost& host,uint8_t command,std::span<const uint8_t>
+     case 0x15: // sceCdForbidDVDP (0:1): PCSX2 and console report 5
+         if(!input.empty())return fail();
+         output={5};return true;
++    case 0x1e: // sceRemote2Read (0:5): status, then the IR code; 0x14 with no key = idle remote (PCSX2)
++        if(!input.empty())return fail();
++        output={0,0x14,0,0,0};return true;
+     case 0x32: // sceCdGetMediumRemoval (0:2)
+         if(!input.empty())return fail();
+         output={0,0};return true;

@@ -16,6 +16,7 @@
 #include <new>
 #include <memory>
 #include <span>
+#include <sstream>
 
 int device_boundary_test() {
     struct Spu final : ps2x::iop::IopSpu2Backend {
@@ -414,6 +415,35 @@ void dispatcher_resume_test() {
     g_ps2RecompiledFunctionTable[0x1000u >> 2u] = nullptr;
 }
 
+// A thread entry the recompiler missed is reported for learning, not silently refused.
+void missing_thread_entry_test() {
+    auto runtime = std::make_unique<PS2Runtime>();
+    require(runtime->memory().initialize(), "Thread entry fixture RAM initialization");
+    uint8_t* ram = runtime->memory().getRDRAM();
+    auto& context = runtime->cpu();
+    runtime->eeScheduler().reset(ram, context);
+    constexpr uint32_t param = 0x8000, entry = 0x123450;
+    const uint32_t words[9] = {0, entry, 0x9000, 0x1000, 0, 3, 3, 0, 0};
+    std::memcpy(ram + param, words, sizeof(words));
+    const auto call = [&](uint32_t syscall, uint32_t a0, uint32_t a1) {
+        context.pc = 0x100100;
+        context.r[4] = _mm_set_epi32(0, 0, 0, static_cast<int>(a0));
+        context.r[5] = _mm_set_epi32(0, 0, 0, static_cast<int>(a1));
+        ps2_syscalls::dispatchNumericSyscall(syscall, ram, &context, runtime.get());
+        return static_cast<int32_t>(_mm_extract_epi32(context.r[2], 0));
+    };
+    const int id = call(0x20, param, 0);
+    require(id > 0 && !runtime->hasFunction(entry), "Thread fixture was not created without a native entry");
+    std::ostringstream report;
+    auto* const previous = std::cerr.rdbuf(report.rdbuf());
+    const int started = call(0x22, static_cast<uint32_t>(id), 0x77);
+    std::cerr.rdbuf(previous);
+    require(started < 0 && context.pc == 0x100100, "Missing thread entry changed the caller or started");
+    require(report.str().find("[guest-branch:missing-target]") != std::string::npos &&
+            report.str().find("target=0x123450") != std::string::npos,
+            "StartThread did not report the missing entry for learning");
+}
+
 void unsupported_exec_test() {
     auto runtime = std::make_unique<PS2Runtime>();
     auto& context = runtime->cpu();
@@ -583,6 +613,7 @@ static void native_sif_command_test() {
 
 int main() {
     try {
+        missing_thread_entry_test();
         require(device_boundary_test() == 0, "SPU2 DMA/register boundary regression");
         require(csr_test() == 0, "CSR regression");
         vif_stream_test();

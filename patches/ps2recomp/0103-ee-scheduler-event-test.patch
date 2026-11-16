@@ -1,0 +1,33 @@
+Skip the EE event pass when no event, timer interrupt or deadline is pending.
+Every producer already raises m_checkpointPending or lowers m_nextDeadlineCycle; the pass
+otherwise cost a mutex, a host clock read and a deque allocation per dispatched block.
+
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -2063,6 +2063,17 @@ void EeScheduler::applyPendingPreemption()
+ void EeScheduler::processPendingEvents()
+ {
+     assertExecutor();
++    // Event test, as in PCSX2: every producer raises m_checkpointPending or lowers the next
++    // deadline cycle, so a dispatch with neither has no event, timer IRQ or deadline to handle.
++    if (!m_checkpointPending.load(std::memory_order_acquire) && m_pendingEeTimerInterrupts == 0u)
++    {
++        const uint64_t nextEventCycle = m_nextDeadlineCycle.load(std::memory_order_acquire);
++        if (nextEventCycle == 0u || m_eeCycle < nextEventCycle)
++        {
++            applyPendingPreemption();
++            return;
++        }
++    }
+     processDueDeadlines();
+     const uint32_t timerInterrupts = m_pendingEeTimerInterrupts;
+     m_pendingEeTimerInterrupts = 0u;
+@@ -2382,6 +2393,8 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
+         std::lock_guard lock(m_eventMutex);
+         m_deadlines.push_back(ScheduledEvent{deadlineCycle, hostDeadline, event, ++m_eventSequence});
+         updateNextDeadline();
++        // A deadline at cycle 0 is indistinguishable from "none" in m_nextDeadlineCycle.
++        m_checkpointPending.store(true, std::memory_order_release);
+     }
+     m_eventCv.notify_one();
+ }

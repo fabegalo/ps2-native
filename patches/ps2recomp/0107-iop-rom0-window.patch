@@ -1,0 +1,127 @@
+Map the original ROM0 read-only at IOP 0x1FC00000, rebuilt from the ROMDIR files at
+their console offsets, so ROMDRV finds RESET/ROMDIR and rom0:OSDVER/ROMVER open.
+A PS2 card gives no PS1-protocol response (0x81 0x52/0x53/0x57/0x58), as on hardware,
+so mcman rejects the PS1 probe; truncated-packet errors name the command and sizes.
+
+--- a/ps2xIOP/src/emulator/core/iop_memory.cpp
++++ b/ps2xIOP/src/emulator/core/iop_memory.cpp
+@@ -101,6 +101,11 @@ namespace ps2x::iop::detail
+             return m_ram[phys];
+         if (phys >= ScratchBase && phys < ScratchBase + ScratchSize)
+             return m_scratch[phys - ScratchBase];
++        if (phys >= Rom0Base)
++        {
++            const auto &rom = rom0();
++            return phys - Rom0Base < rom.size() ? rom[phys - Rom0Base] : 0u;
++        }
+         const uint32_t value = readHardware32(phys & ~3u);
+         return static_cast<uint8_t>(value >> ((phys & 3u) * 8u));
+     }
+@@ -272,6 +277,55 @@ namespace ps2x::iop::detail
+                (phys >= SifBase && phys < SifEnd);
+     }
+ 
++    // ROM0 as the IOP sees it at 0x1FC00000: each ROMDIR file at its console offset (16-byte
++    // aligned, in directory order), so the original ROMDRV finds RESET/ROMDIR and its files.
++    const std::vector<uint8_t>& IopMemory::rom0() const
++    {
++        if (m_rom0Loaded || !m_host)
++            return m_rom0;
++        m_rom0Loaded = true;
++        const auto readFile = [&](const std::string &name, std::vector<uint8_t> &bytes)
++        {
++            const uint64_t handle = m_host->openHostFile("rom0:" + name);
++            if (!handle)
++                return false;
++            uint64_t size = 0u;
++            size_t got = 0u;
++            bool ok = m_host->hostFileSize(handle, size) && size <= Rom0Size;
++            if (ok)
++            {
++                bytes.resize(static_cast<size_t>(size));
++                ok = size == 0u || (m_host->readHostFile(handle, 0u, bytes.data(), bytes.size(), got) && got == size);
++            }
++            m_host->closeHostFile(handle);
++            return ok;
++        };
++        std::vector<uint8_t> directory;
++        if (!readFile("ROMDIR", directory))
++            return m_rom0;
++        std::vector<uint8_t> image(Rom0Size, 0u);
++        uint32_t offset = 0u;
++        for (size_t at = 0; at + 16u <= directory.size() && offset < Rom0Size; at += 16u)
++        {
++            const uint8_t *entry = directory.data() + at;
++            if (std::all_of(entry, entry + 16, [](uint8_t byte) { return byte == 0u; }))
++                break;
++            size_t length = 0u;
++            while (length < 10u && entry[length])
++                ++length;
++            uint32_t size;
++            std::memcpy(&size, entry + 12, sizeof(size));
++            if (size > Rom0Size - offset)
++                return m_rom0;
++            std::vector<uint8_t> bytes;
++            if (size && readFile(std::string(reinterpret_cast<const char *>(entry), length), bytes) && bytes.size() == size)
++                std::memcpy(image.data() + offset, bytes.data(), size);
++            offset += (size + 15u) & ~15u;
++        }
++        m_rom0 = std::move(image);
++        return m_rom0;
++    }
++
+     uint32_t IopMemory::readHardware32(uint32_t address) const
+     {
+         switch (address) {
+@@ -425,7 +479,9 @@ namespace ps2x::iop::detail
+         std::fill(reply.begin(), reply.end(), 0);
+         const auto require = [&](size_t size) {
+             if (input.size() < size || reply.size() < size)
+-                throw std::runtime_error("Truncated SIO2 memory-card packet");
++                throw std::runtime_error("Truncated SIO2 memory-card packet: command " + std::to_string(input[1]) +
++                                         " sent " + std::to_string(input.size()) + " bytes, " +
++                                         std::to_string(reply.size()) + " reply bytes, " + std::to_string(size) + " needed");
+         };
+         const auto end = [&](size_t size, bool ready = true) {
+             require(size); reply[size - 2] = 0x2b;
+@@ -485,6 +541,11 @@ namespace ps2x::iop::detail
+                 throw std::runtime_error("Memory-card NAND erase failed");
+             end(4, valid); break;
+         }
++        case 0x52: // PS1 protocol read/state/write/PDA: a PS2 card gives no PS1 response,
++        case 0x53: // so mcman sees no 0x5a, rejects the PS1 probe (r < -9) and keeps it a PS2 card.
++        case 0x57:
++        case 0x58:
++            std::fill(reply.begin(), reply.end(), 0xff); break;
+         case 0xbf: end(5); break;
+         case 0xf0: {
+             require(5); const uint8_t mode=input[2]; MgBlock bytes{},output{};
+--- a/ps2xIOP/src/emulator/core/iop_memory.h
++++ b/ps2xIOP/src/emulator/core/iop_memory.h
+@@ -27,6 +27,8 @@ namespace ps2x::iop::detail
+         static constexpr uint32_t HardwareEnd = 0x1F900000u;
+         static constexpr uint32_t Spu2Base = 0x1F900000u;
+         static constexpr uint32_t Spu2End = 0x1FA00000u;
++        static constexpr uint32_t Rom0Base = 0x1FC00000u;
++        static constexpr uint32_t Rom0Size = 4u * 1024u * 1024u;
+         static constexpr uint32_t SifBase = 0x1D000000u;
+         static constexpr uint32_t SifEnd = 0x1D001000u;
+         static constexpr uint32_t HeapBase = 0x00010000u;
+@@ -94,6 +96,7 @@ namespace ps2x::iop::detail
+ 
+     private:
+         IopAotRegistry* m_aot = nullptr;
++        [[nodiscard]] const std::vector<uint8_t>& rom0() const;
+         [[nodiscard]] uint32_t readHardware32(uint32_t address) const;
+         void writeHardware32(uint32_t address, uint32_t value);
+         void markOwned(uint32_t address, size_t size);
+@@ -127,6 +130,9 @@ namespace ps2x::iop::detail
+         std::vector<uint8_t> m_ram;
+         std::vector<uint8_t> m_owned;
+         std::vector<uint8_t> m_scratch;
++        // Read-only console ROM0 window, rebuilt on first access from the host's rom0: files.
++        mutable std::vector<uint8_t> m_rom0;
++        mutable bool m_rom0Loaded = false;
+         std::unordered_map<uint32_t, uint32_t> m_hardware;
+         std::vector<Allocation> m_allocations;
+         uint32_t m_heapCursor = HeapBase;

@@ -1,0 +1,77 @@
+Discover bounds-checked word tables whose BEQZ delay slot is an unrelated ALU instruction
+(the table base is built after it); the slot must write none of the switch registers.
+All cases are then translated at once instead of one entry-point learning round each.
+
+--- a/ps2xRecomp/src/lib/elf_parser.cpp
++++ b/ps2xRecomp/src/lib/elf_parser.cpp
+@@ -2335,15 +2335,20 @@ namespace ps2recomp
+             }
+         };
+         R5900Decoder decoder;
+-        const auto enqueueWordTable = [&](uint32_t pc) {
+-            // A bounds-checked switch: SLTIU/BEQZ/LUI/SLL/ADDIU/ADDU/LW/JR.
+-            // Include the branch delay slot, which can construct the table base.
+-            if (pc < base + 28u) return;
++        // A bounds-checked switch: SLTIU/BEQZ/LUI/SLL/ADDIU/ADDU/LW/JR. The branch delay slot
++        // either constructs the table base or (independentDelay) is an unrelated ALU instruction
++        // that runs on both paths and writes none of the switch registers.
++        const auto matchWordTable = [&](uint32_t pc, bool independentDelay) {
++            const uint32_t span = independentDelay ? 32u : 28u;
++            if (pc < base + span) return;
+             std::array<Instruction, 8> pattern;
+-            for (uint32_t i = 0; i < pattern.size(); ++i) {
+-                const uint32_t address = pc - 28u + i * 4u;
++            Instruction delay{};
++            for (uint32_t i = 0, slot = 0; slot <= span / 4u; ++slot) {
++                const uint32_t address = pc - span + slot * 4u;
+                 if (!m_rawReachable[(address - base) / 4]) return;
+-                pattern[i] = decoder.decodeInstruction(address, readWord(address), false);
++                const Instruction decoded = decoder.decodeInstruction(address, readWord(address), false);
++                if (independentDelay && slot == 2u) delay = decoded;
++                else pattern[i++] = decoded;
+             }
+             const auto& bound = pattern[0]; const auto& guard = pattern[1];
+             const auto& high = pattern[2]; const auto& shift = pattern[3];
+@@ -2361,8 +2366,30 @@ namespace ps2recomp
+                 load.opcode != OPCODE_LW || load.rs != sum.rd || !load.rt ||
+                 jump.opcode != OPCODE_SPECIAL || jump.function != SPECIAL_JR || jump.rs != load.rt)
+                 return;
++            if (independentDelay) {
++                uint32_t written = 0u;
++                if (delay.opcode == OPCODE_SPECIAL) {
++                    switch (delay.function) {
++                    case SPECIAL_SLL: case SPECIAL_SRL: case SPECIAL_SRA: case SPECIAL_DSLL:
++                    case SPECIAL_ADDU: case SPECIAL_SUBU: case SPECIAL_DADDU: case SPECIAL_DSUBU:
++                    case SPECIAL_AND: case SPECIAL_OR: case SPECIAL_XOR: case SPECIAL_NOR:
++                    case SPECIAL_SLT: case SPECIAL_SLTU: written = delay.rd; break;
++                    default: return;
++                    }
++                } else if (delay.opcode == OPCODE_ADDIU || delay.opcode == OPCODE_DADDIU ||
++                           delay.opcode == OPCODE_ANDI || delay.opcode == OPCODE_ORI ||
++                           delay.opcode == OPCODE_XORI || delay.opcode == OPCODE_LUI ||
++                           delay.opcode == OPCODE_SLTI || delay.opcode == OPCODE_SLTIU) {
++                    written = delay.rt;
++                } else {
++                    return;
++                }
++                if (written && (written == bound.rs || written == bound.rt || written == high.rt ||
++                                written == shift.rd || written == sum.rd || written == load.rt))
++                    return;
++            }
+             const uint32_t fallback = decoder.getBranchTarget(guard);
+-            if (fallback >= pc - 28u && fallback <= pc + 4u) return;
++            if (fallback >= pc - span && fallback <= pc + 4u) return;
+             const int64_t table = (uint32_t(high.immediate) << 16) + int64_t(int16_t(low.immediate)) + int16_t(load.immediate);
+             const uint64_t tableSize = uint64_t(bound.immediate) * 4u;
+             if (table < base || (table & 3) || uint64_t(table) + tableSize > uint64_t(base) + bytes.size()) return;
+@@ -2371,6 +2398,10 @@ namespace ps2recomp
+             for (uint32_t i = 0; i < bound.immediate; ++i)
+                 enqueue(readWord(uint32_t(table) + i * 4u), true);
+         };
++        const auto enqueueWordTable = [&](uint32_t pc) {
++            matchWordTable(pc, false);
++            matchWordTable(pc, true);
++        };
+         while (!pending.empty())
+         {
+             uint32_t pc = pending.back(); pending.pop_back();

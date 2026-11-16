@@ -1,0 +1,180 @@
+Serve IOMAN open/close/read/write/lseek/ioctl/dir/stat/format through the guest drivers.
+As ps2sdk ioman.c: a 16-entry iop_io_file_t table in IOP RAM, "dev[unit]:path" parsing,
+fd = table index and -EBADF/-ENODEV/-EMFILE/-EINVAL, replacing the missing-import v0=0.
+
+--- a/ps2xIOP/src/emulator/imports/iop_ioman.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_ioman.cpp
+@@ -16,6 +16,27 @@
+     void IopIoman::reset()
+     {
+         m_devices.clear();
++        m_files = 0u;
++    }
++
++    // As IOMAN find_iop_device: skip spaces, split "name[unit]:path" at the first colon.
++    const IopIoman::Device *IopIoman::findDevice(uint32_t path, uint32_t &unit, uint32_t &rest) const
++    {
++        while (m_memory.read8(path) == ' ')
++            ++path;
++        const std::string text = m_memory.readString(path, 256u);
++        const size_t colon = text.find(':');
++        if (colon == std::string::npos)
++            return nullptr;
++        size_t digits = colon;
++        while (digits > 0u && text[digits - 1u] >= '0' && text[digits - 1u] <= '9')
++            --digits;
++        unit = digits < colon ? static_cast<uint32_t>(std::stoul(text.substr(digits, colon - digits))) : 0u;
++        const std::string name = text.substr(0, digits);
++        rest = path + static_cast<uint32_t>(colon) + 1u;
++        const auto device = std::find_if(m_devices.begin(), m_devices.end(),
++                                         [&](const Device &candidate) { return candidate.name == name; });
++        return device == m_devices.end() ? nullptr : &*device;
+     }
+ 
+     bool IopIoman::dispatchImport(uint16_t ordinal, IopCpuState &cpu, IopGuestExecutor &executor)
+@@ -85,7 +106,127 @@
+             return true;
+         }
+         default:
++            break;
++        }
++
++        // File services (ps2sdk ioman exports 4-18): run the registered guest driver's operation.
++        if (ordinal < 4u || ordinal > 18u)
+             return false;
++        constexpr uint32_t kEBADF = 9u, kENODEV = 19u, kEINVAL = 22u, kEMFILE = 24u;
++        constexpr uint32_t kRead = 1u, kWrite = 2u;
++        const auto fail = [&](uint32_t error) { setV0(0u - error); return true; };
++        if (m_files == 0u)
++        {
++            m_files = m_memory.allocate(kMaxFiles * kFileSize, 16u);
++            if (m_files == 0u)
++                return fail(kEMFILE);
++            for (uint32_t offset = 0; offset < kMaxFiles * kFileSize; offset += 4u)
++                m_memory.write32(m_files + offset, 0u);
++        }
++        const auto deviceOf = [&](uint32_t file) -> const Device *
++        {
++            const uint32_t address = m_memory.read32(file + 8u);
++            const auto device = std::find_if(m_devices.begin(), m_devices.end(),
++                                             [&](const Device &candidate) { return candidate.address == address; });
++            return device == m_devices.end() ? nullptr : &*device;
++        };
++        const auto operation = [&](const Device &device, uint32_t index)
++        { return m_memory.read32(m_memory.read32(device.address + 16u) + index * 4u); };
++        const auto call = [&](const Device &device, uint32_t index, uint32_t b0, uint32_t b1, uint32_t b2, uint32_t b3)
++        {
++            const uint32_t function = operation(device, index);
++            return function == 0u ? 0u - kENODEV : executor.executeGuestFunction(function, b0, b1, b2, b3, device.gp);
++        };
++        // An open record: a valid index whose device is still registered (IOMAN get_file).
++        const auto openFile = [&](uint32_t fd) -> uint32_t
++        {
++            if (fd >= kMaxFiles) return 0u;
++            const uint32_t file = fileRecord(fd);
++            return m_memory.read32(file + 8u) != 0u && deviceOf(file) ? file : 0u;
++        };
++        const auto freeSlot = [&]() -> uint32_t
++        {
++            for (uint32_t fd = 0; fd < kMaxFiles; ++fd)
++                if (m_memory.read32(fileRecord(fd) + 8u) == 0u) return fd;
++            return kMaxFiles;
++        };
++        // open/remove/mkdir/rmdir/dopen/getstat/chstat/format resolve a path into a new record.
++        const auto withPath = [&](uint32_t mode, uint32_t index, uint32_t b2, uint32_t b3, bool keep) -> bool
++        {
++            const uint32_t fd = freeSlot();
++            if (fd == kMaxFiles) return fail(kEMFILE);
++            uint32_t unit = 0u, rest = 0u;
++            const Device *device = findDevice(a0, unit, rest);
++            if (!device) return fail(kENODEV);
++            const uint32_t file = fileRecord(fd);
++            m_memory.write32(file + 0u, mode);
++            m_memory.write32(file + 4u, unit);
++            m_memory.write32(file + 8u, device->address);
++            m_memory.write32(file + 12u, 0u);
++            const uint32_t result = index == 2u ? call(*device, index, file, 0u, 0u, 0u)
++                                                : call(*device, index, file, rest, b2, b3);
++            if (static_cast<int32_t>(result) < 0 || !keep)
++            {
++                m_memory.write32(file + 0u, 0u);
++                m_memory.write32(file + 8u, 0u);
++                setV0(result);
++                return true;
++            }
++            setV0(fd);
++            return true;
++        };
++
++        const uint32_t a1 = cpu.gpr[5], a2 = cpu.gpr[6], a3 = cpu.gpr[7];
++        switch (ordinal)
++        {
++        case 4: return withPath(a1, 3u, a1, 0u, true);       // open(name, mode) -> fd
++        case 13: return withPath(0u, 12u, 0u, 0u, true);     // dopen(name) -> fd
++        case 10: return withPath(0u, 9u, 0u, 0u, false);     // remove(name)
++        case 11: return withPath(0u, 10u, 0u, 0u, false);    // mkdir(name)
++        case 12: return withPath(0u, 11u, 0u, 0u, false);    // rmdir(name)
++        case 16: return withPath(0u, 15u, a1, 0u, false);    // getstat(name, stat)
++        case 17: return withPath(0u, 16u, a1, a2, false);    // chstat(name, stat, mask)
++        case 18: return withPath(0u, 2u, 0u, 0u, false);     // format(dev)
++        default:
++            break;
++        }
++
++        const uint32_t file = openFile(a0);
++        if (file == 0u) return fail(kEBADF);
++        const Device &device = *deviceOf(file);
++        const uint32_t mode = m_memory.read32(file);
++        switch (ordinal)
++        {
++        case 5:  // close(fd)
++        case 14: // dclose(fd)
++        {
++            const uint32_t result = call(device, ordinal == 5u ? 4u : 13u, file, 0u, 0u, 0u);
++            m_memory.write32(file + 0u, 0u);
++            m_memory.write32(file + 8u, 0u);
++            setV0(static_cast<int32_t>(result) < 0 ? result : 0u);
++            return true;
++        }
++        case 6: // read(fd, buffer, size)
++            if (!(mode & kRead)) return fail(kEBADF);
++            setV0(call(device, 5u, file, a1, a2, 0u));
++            return true;
++        case 7: // write(fd, buffer, size)
++            if (!(mode & kWrite)) return fail(kEBADF);
++            setV0(call(device, 6u, file, a1, a2, 0u));
++            return true;
++        case 8: // lseek(fd, offset, whence)
++            if (a2 > 2u) return fail(kEINVAL);
++            setV0(call(device, 7u, file, a1, a2, 0u));
++            return true;
++        case 9: // ioctl(fd, command, argument)
++            setV0(call(device, 8u, file, a1, a2, 0u));
++            return true;
++        case 15: // dread(fd, dirent)
++            setV0(call(device, 14u, file, a1, 0u, 0u));
++            return true;
++        default:
++            (void)a3;
++            return false;
+         }
+     }
+ }
+--- a/ps2xIOP/src/emulator/imports/iop_ioman.h
++++ b/ps2xIOP/src/emulator/imports/iop_ioman.h
+@@ -26,7 +26,15 @@
+             std::string name;
+         };
+ 
++        // Original IOMAN file table: iop_io_file_t {mode, unit, device, privdata} in IOP RAM,
++        // so the guest drivers own and update the same records as on the console.
++        static constexpr uint32_t kMaxFiles = 16u;
++        static constexpr uint32_t kFileSize = 16u;
++        const Device *findDevice(uint32_t path, uint32_t &unit, uint32_t &rest) const;
++        uint32_t fileRecord(uint32_t fd) const { return m_files + fd * kFileSize; }
++
+         IopMemory &m_memory;
+         std::vector<Device> m_devices;
++        uint32_t m_files = 0u;
+     };
+ }

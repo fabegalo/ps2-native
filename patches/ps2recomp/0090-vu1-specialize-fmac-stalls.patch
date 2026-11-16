@@ -1,0 +1,46 @@
+--- a/ps2xRuntime/src/lib/vu_pcsx2/VUops.cpp
++++ b/ps2xRuntime/src/lib/vu_pcsx2/VUops.cpp
+@@ -9,7 +9,7 @@
+ 
+ #include <cmath>
+ 
+-#if !defined(_MSC_VER)
++#if !defined(_MSC_VER) && !defined(PS2N_VU1_AOT_TRANSLATION)
+ // GOW-Port (Linux): _vuTestPipes se llama desde otros archivos (VUops.h la declara extern). Con GCC/Clang una función
+ // `inline` no se emite si su archivo no la usa: definición normal (con LTO se sigue integrando donde convenga).
+ #undef __fi
+@@ -214,7 +214,12 @@
+ 	}
+ }
+ 
+-static void _vuFMACTestStall(VURegs* VU, u32 reg, u32 xyzw)
++#ifdef PS2N_VU1_AOT_TRANSLATION
++static __fi void _vuFMACTestStall(
++#else
++static void _vuFMACTestStall(
++#endif
++VURegs* VU, u32 reg, u32 xyzw)
+ {
+ 	u32 i = 0;
+ 
+--- a/ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_aot_step.h
++++ b/ps2xRuntime/src/lib/vu_pcsx2/pcsx2_vu1_aot_step.h
+@@ -52,7 +52,18 @@
+     void _vuFlushAll(VURegs *VU);
+ 
+ #include "VUflags.cpp"
++// Specialize native FMAC dependency tests with the pair's constant registers and lane masks.
++#pragma push_macro("__fi")
++#undef __fi
++#ifdef _MSC_VER
++#define __fi __forceinline
++#else
++#define __fi inline __attribute__((always_inline))
++#endif
++#define PS2N_VU1_AOT_TRANSLATION
+ #include "VUops.cpp"
++#undef PS2N_VU1_AOT_TRANSLATION
++#pragma pop_macro("__fi")
+ 
+ 
+     // Resolve every level of the original tables at C++ translation time, including special opcodes.

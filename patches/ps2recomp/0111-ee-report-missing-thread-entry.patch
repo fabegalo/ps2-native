@@ -1,0 +1,19 @@
+Report a StartThread entry the recompiler did not emit as a [guest-branch:missing-target]
+(from a copy of the caller's context), as the EE scheduler does, so the learning run adds it.
+The OSD's XDEV9 loader thread entry is only address-taken; StartThread refused it silently and
+the boot waited on its semaphore forever.
+
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Thread.cpp
+@@ -272,6 +272,11 @@ namespace ps2_syscalls
+         }
+         if (!runtime->hasFunction(target->entry))
+         {
++            // Report the entry the recompiler missed (often only address-taken), as the
++            // scheduler does, so it is learned instead of the thread silently never running.
++            R5900Context report = *ctx; // the report retargets pc; the caller keeps its own
++            runtime->reportMissingFunction(rdram, &report, target->entry, ctx->pc,
++                                           PS2Runtime::GuestBranchKind::DirectCall, "StartThread");
+             setReturnS32(ctx, KE_ERROR);
+             return;
+         }

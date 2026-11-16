@@ -1,0 +1,133 @@
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -143,4 +143,5 @@
+             totalNativeInstructions = totalDecodedInstructions = 0;
+             eeCycleCarry = 0;
++            idleUntil = 0;
+             activeCpu = nullptr;
+             lastError.clear();
+@@ -567,4 +568,5 @@
+                               bool requireReturn = false)
+         {
++            idleUntil = 0;
+             struct CallDepthGuard
+             {
+@@ -725,6 +727,8 @@
+             try
+             {
++                const uint64_t target = totalCycles + cycles;
++                if (idleFastPath && target < idleUntil) { totalCycles = target; return; }
++                idleUntil = 0;
+                 memory.attachSpu2(host.spu2Backend(), &totalCycles);
+-                const uint64_t target = totalCycles + cycles;
+                 while (totalCycles < target)
+                 {
+@@ -737,5 +741,5 @@
+                     if (!next)
+                     {
+-                        uint64_t nextWake = kernel.nextWakeCycle(target);
++                        uint64_t nextWake = kernel.nextWakeCycle(UINT64_MAX);
+                         for (const auto &[irq, completionCycle] : pendingDmaInterrupts)
+                             nextWake = std::min(nextWake, completionCycle);
+@@ -744,7 +748,10 @@
+                         nextWake = timrman.nextEventCycle(nextWake);
+                         nextWake = std::min(nextWake, memory.nextSpu2Event());
++                        // Advance the console clock immediately; skip polling only before the next real event.
++                        idleUntil = rpc.hasPendingCommands() ? 0 : nextWake;
+                         totalCycles = std::max(totalCycles + 1u, std::min(target, nextWake));
+                         continue;
+                     }
++                    idleUntil = 0;
+                     const uint64_t before = totalCycles;
+                     runCpu(next->cpu, static_cast<uint32_t>(std::min<uint64_t>(kDefaultSlice, target - totalCycles)));
+@@ -911,4 +918,7 @@
+         uint64_t totalNativeInstructions = 0, totalDecodedInstructions = 0;
+         uint64_t eeCycleCarry = 0;
++        uint64_t idleUntil = 0;
++        // Synchronous polling control for differential tests and paired measurements.
++        const bool idleFastPath = [] { const char* v = std::getenv("PS2N_IOP_IDLE_SYNC"); return !v || v[0] != '1'; }();
+         CpuState *activeCpu = nullptr;
+         std::string lastError;
+@@ -942,4 +952,5 @@
+     ModuleLoadResult IopEmulator::loadModule(std::string_view path, const void *arguments, uint32_t argumentSize)
+     {
++        m_impl->idleUntil = 0;
+         return m_impl->loadModule(path, arguments, argumentSize);
+     }
+@@ -947,4 +958,5 @@
+     ModuleLoadResult IopEmulator::loadModuleBuffer(uint32_t guestAddress, const void *arguments, uint32_t argumentSize)
+     {
++        m_impl->idleUntil = 0;
+         return m_impl->loadModuleBuffer(guestAddress, arguments, argumentSize);
+     }
+@@ -952,4 +964,5 @@
+     bool IopEmulator::stopModule(int32_t moduleId, int32_t *result)
+     {
++        m_impl->idleUntil = 0;
+         return m_impl->stopModule(moduleId, result);
+     }
+@@ -966,4 +979,5 @@
+     RpcResult IopEmulator::handleRpc(const RpcRequest &request)
+     {
++        m_impl->idleUntil = 0;
+         return m_impl->rpc.handleRpc(request, *m_impl);
+     }
+@@ -976,4 +990,5 @@
+     uint32_t IopEmulator::readSifRegister(uint32_t reg)
+     {
++        m_impl->idleUntil = 0;
+         return m_impl->rpc.readSifRegister(reg);
+     }
+@@ -981,4 +996,5 @@
+     uint32_t IopEmulator::writeSifRegister(uint32_t reg, uint32_t value)
+     {
++        m_impl->idleUntil = 0;
+         return m_impl->rpc.writeSifRegister(reg, value);
+     }
+@@ -1006,4 +1022,5 @@
+     void IopEmulator::onSifTransfer(const SifTransfer &transfer)
+     {
++        m_impl->idleUntil = 0;
+         m_impl->rpc.onSifTransfer(transfer);
+     }
+@@ -1011,4 +1028,5 @@
+     uint32_t IopEmulator::allocateMemory(uint32_t size, uint32_t alignment)
+     {
++        m_impl->idleUntil = 0;
+         return m_impl->memory.allocate(size, alignment);
+     }
+@@ -1016,4 +1034,5 @@
+     bool IopEmulator::freeMemory(uint32_t address)
+     {
++        m_impl->idleUntil = 0;
+         return m_impl->memory.freeAllocation(address);
+     }
+@@ -1027,4 +1046,5 @@
+     bool IopEmulator::writeMemory(uint32_t address, const void *source, size_t size)
+     {
++        m_impl->idleUntil = 0;
+         return isMemoryRange(address, size) &&
+                m_impl->memory.writeRam(address, source, size);
+@@ -1033,4 +1053,5 @@
+     bool IopEmulator::zeroMemory(uint32_t address, size_t size)
+     {
++        m_impl->idleUntil = 0;
+         return isMemoryRange(address, size) &&
+                m_impl->memory.zeroRam(address, size);
+--- a/ps2xIOP/src/emulator/services/iop_rpc.h
++++ b/ps2xIOP/src/emulator/services/iop_rpc.h
+@@ -61,4 +61,5 @@
+         void onSifTransfer(const SifTransfer &transfer);
+         void flushSifCommands();
++        bool hasPendingCommands() const { return !m_pendingCommands.empty(); }
+         std::optional<std::string> takeResetRequest();
+         void holdBootEnd(bool hold) { m_holdBootEnd = hold; }
+--- a/ps2xIOP/tests/iop_compat_test_support.h
++++ b/ps2xIOP/tests/iop_compat_test_support.h
+@@ -27,4 +27,6 @@
+     public:
+         explicit Host(size_t bytes = 0x20000u) : guest(bytes, 0xCCu) {}
++        IopSpu2Backend* spu2 = nullptr;
++        IopSpu2Backend* spu2Backend() const override { return spu2; }
+ 
+         bool readGuest(uint32_t address, void *destination, size_t size) const override

@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <cstdint>
+#include <filesystem>
 #include <vector>
 class GSRasterBackend;
 struct GSRegisters;
@@ -9,7 +10,9 @@ struct GSPresentationRequest;
 
 // Selection is host-only; unavailable devices fail explicitly.
 bool ps2n_parallel_gs_available();
-std::unique_ptr<GSRasterBackend> ps2n_parallel_gs(const GSRegisters& registers, bool enhanced);
+// pipelineCache: VkPipelineCache file, loaded before shader precompilation and saved on shutdown.
+std::unique_ptr<GSRasterBackend> ps2n_parallel_gs(const GSRegisters& registers, bool enhanced,
+                                                  const std::filesystem::path& pipelineCache);
 void ps2n_trace_scanout(const PresentationFrame& frame, const GSPresentationRequest& request);
 // GIF packet framing shared with the frontend's per-packet parser.
 uint32_t ps2n_gif_payload_bytes(uint64_t tag);             // payload bytes a tag announces

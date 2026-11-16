@@ -111,4 +111,15 @@ with tempfile.TemporaryDirectory(dir=sys.argv[2] if len(sys.argv) > 2 else None)
     bad[2], bad[4], bad[5] = 0x3c040020, 0x24840100, 0x00641821
     cases = table(bad)
     assert not any(name.endswith('_0x200080.cpp') for name in cases), 'Clobbered switch index retained a stale bound'
+    # The delay slot can instead hold an unrelated ALU instruction that runs on both paths.
+    independent = switch.copy()
+    independent[2:10] = [0x00a0802d, 0x3c020020, 0x00041880, 0x24420100,
+                         0x00621821, 0x8c640000, 0x00800008, 0]
+    cases = table(independent)
+    assert all(any(name.endswith(f'_0x{pc:x}.cpp') for name in cases)
+               for pc in (0x200080, 0x200090)), 'Switch with an independent delay slot left its cases untranslated'
+    bad = independent.copy()
+    bad[2] = 0x00a0202d  # The delay slot overwrites the switch index.
+    cases = table(bad)
+    assert not any(name.endswith('_0x200080.cpp') for name in cases), 'Delay slot clobbering the index was accepted'
 print('PASS raw EE identity, guarded tables, dispatch isolation, delay guards, cache and invalid inputs')

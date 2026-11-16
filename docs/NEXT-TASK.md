@@ -63,6 +63,21 @@ Contrato e estado vigentes: `docs/ARCHITECTURE.md`, seção Diretriz.
    vopmula/vopmsub, vftoi0, vmulq, vabs, vmove, máscaras, ps2_frsqrt/fdiv.
    Próximo: dump com a memória de microcódigo (patch temporário) e seguir o vértice.
    Killzone SCUS-97402 conserva objetos de uma compilação interrompida; reutilizá-los.
+   Referência revisada em 15/11: [gow-native-pc, revisão 4152d910](https://github.com/Vnnc1/gow-native-pc/tree/4152d910a67564436db94f4c1b23f7ec4afce9db).
+   O patch 43 gera operações vetoriais e conserva VF/ACC em locais; o runtime
+   Tobiichi fixado em `engine/runtime.toml` resolve timing por bloco a partir
+   das dependências de entrada. Adaptar esses mecanismos ao VURegs/pipeline
+   existente, com comparação integral de estado/flags/tempos, dentro do AOT
+   nível 2 aprovado. Consultar também o registro de experiências negativas
+   (`docs/research/performance-experiments.md` da referência): encadeamento
+   com MSVC, inlining e AVX2 não têm ganho presumido. O patch zzz-316 separa
+   instrumentação da execução normal sem retirar bookkeeping do console.
+   Medição local ainda inconclusiva: a dupla GoW `gow-scheduled-{control,native}-1`
+   (mesmo executável `1b04c34d...`, paraLLEl-GS, 90 s; EE 1–1,5 bilhões)
+   foi 30,4996 → 35,6792 s (throughput −14,52%). Ela combina AOT e polling IOP,
+   portanto não atribuir o resultado a um deles nem tratar o ganho preliminar
+   de outra dupla como aceitação. Isolar as mudanças e repetir em ordem alternada;
+   +50%, gameplay e equivalência visual continuam sem demonstração.
 
 ## Pré-requisito após a remoção do interpretador — 08/11/2026
 

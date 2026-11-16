@@ -57,16 +57,38 @@ public:
     void audioCommand(uint32_t s, uint32_t f, GuestBuffer a, GuestBuffer b) override { storage.audioCommand(s, f, a, b); }
     std::string hostPath(HostPathKind k) const override { return storage.hostPath(k); }
     std::string translateGuestPath(std::string_view p) const override { return storage.translateGuestPath(p); }
-    uint64_t openHostFile(std::string_view p) override { return storage.openHostFile(p); }
-    bool hostFileSize(uint64_t h, uint64_t& n) const override { return storage.hostFileSize(h, n); }
-    bool readHostFile(uint64_t h, uint64_t a, void* p, size_t n, size_t& r) override { return storage.readHostFile(h, a, p, n, r); }
-    void closeHostFile(uint64_t h) override { storage.closeHostFile(h); }
+    // rom0: files served by name, as the runtime ROM device does.
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> rom;
+    static constexpr uint64_t RomHandle = 0x7000;
+    uint64_t openHostFile(std::string_view p) override {
+        for (size_t i = 0; i < rom.size(); ++i)
+            if (p == "rom0:" + rom[i].first) return RomHandle + i;
+        return storage.openHostFile(p);
+    }
+    bool hostFileSize(uint64_t h, uint64_t& n) const override {
+        if (h >= RomHandle && h < RomHandle + rom.size()) { n = rom[h - RomHandle].second.size(); return true; }
+        return storage.hostFileSize(h, n);
+    }
+    bool readHostFile(uint64_t h, uint64_t a, void* p, size_t n, size_t& r) override {
+        if (h < RomHandle || h >= RomHandle + rom.size()) return storage.readHostFile(h, a, p, n, r);
+        const auto& bytes = rom[h - RomHandle].second;
+        r = a < bytes.size() ? std::min<size_t>(n, bytes.size() - a) : 0;
+        std::copy_n(bytes.begin() + a, r, static_cast<uint8_t*>(p)); return true;
+    }
+    void closeHostFile(uint64_t h) override { if (h < RomHandle || h >= RomHandle + rom.size()) storage.closeHostFile(h); }
     int32_t memoryCard(const MemoryCardRequest& r) override { return storage.memoryCard(r); }
     bool hasGuestFunction(uint32_t a) const override { return storage.hasGuestFunction(a); }
     bool invokeGuestFunction(uint64_t t, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t* r) override {
         return storage.invokeGuestFunction(t, a, b, c, d, e, r);
     }
     void log(LogLevel, std::string_view) override {}
+    // Console NVM: empty until a test selects one (S-commands must then refuse to read it).
+    std::vector<uint8_t> nvm;
+    bool mechaconNvm(ps2x::iop::IopMechaconNvm& view) const override {
+        if (nvm.empty()) return false;
+        view = {nvm.data(), nvm.size(), {0x270, 0x2b0, 0x200}, {4, 2, 7}, {2, 6, 2, 0}, 0x1a0, 0x1e0, 0x1f0};
+        return true;
+    }
 };
 void rejects(const std::function<void()>& operation) {
     bool rejected = false;
@@ -151,7 +173,84 @@ int main() try {
     memory.write32(0x1f801540, 0x1ffffc);
     rejects([&] { memory.write32(0x1f801548, 0x01000201); });
     rejects([&] { packet(memory, {1, 0x99, 0, 0, 0}); });
+    {
+        // ROM0 at 0x1FC00000: every ROMDIR file at its 16-byte aligned console offset.
+        PadHost romHost;
+        const std::vector<uint8_t> reset{0x11, 0x22, 0x33, 0x44, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
+        std::vector<uint8_t> directory(64, 0);
+        const auto entry = [&](size_t index, const char* name, uint32_t size) {
+            std::memcpy(directory.data() + index * 16, name, std::strlen(name));
+            std::memcpy(directory.data() + index * 16 + 12, &size, 4);
+        };
+        entry(0, "RESET", 20); entry(1, "ROMDIR", 64); entry(2, "OSDVER", 5);
+        romHost.rom = {{"RESET", reset}, {"ROMDIR", directory}, {"OSDVER", {'0', '2', '0', '0', 'E'}}};
+        IopMemory rom;
+        rom.attachHost(&romHost);
+        require(rom.read32(0xbfc00000) == 0x44332211 && rom.read8(0x1fc00020) == 'R' &&
+                rom.read16(0xbfc0003c) == 64 && rom.read8(0xbfc00060) == '0' && rom.read8(0xbfc00064) == 'E' &&
+                rom.read8(0xbfc00065) == 0, "IOP ROM0 window does not place ROMDIR files at their console offsets");
+        IopMemory detached;
+        require(detached.read32(0xbfc00000) == 0, "IOP ROM0 window fabricated bytes without a ROM device");
+
+        // CDVD S-command port as XCDVDMAN drives it: params at SDATAIN, command, drain SDATAOUT.
+        require(rom.read8(0xbf402017) == 0x40, "Idle S-command port reports a pending result");
+        rom.write8(0xbf402016, 0x15);
+        require(rom.read8(0xbf402016) == 0x15 && rom.read8(0xbf402017) == 0 && rom.read8(0xbf402018) == 5 &&
+                rom.read8(0xbf402017) == 0x40, "sceCdForbidDVDP S-command result differs");
+        for (const uint8_t byte : {'1', '0', 'E', 'C'}) rom.write8(0xbf402017, byte);
+        rom.write8(0xbf402016, 0x1a);
+        require(rom.read8(0xbf402018) == 1 && rom.read8(0xbf402017) == 0x40, "BootCertify S-command was refused");
+        rom.write8(0xbf402016, 0x08);
+        uint8_t clock[8];
+        for (auto &byte : clock) byte = rom.read8(0xbf402018);
+        require(rom.read8(0xbf402017) == 0x40 && clock[0] == 0 && clock[4] == 0 && clock[6] >= 1 && clock[6] <= 0x12,
+                "sceCdReadClock S-command result differs");
+        bool refused = false;
+        try { rom.write8(0xbf402016, 0x0f); } catch (const std::runtime_error &) { refused = true; }
+        require(refused, "Unimplemented S-command answered instead of failing");
+
+        // NVM-backed S-commands read the user's NVM, and refuse without one.
+        const auto scmd = [&](uint8_t command, std::vector<uint8_t> input, size_t size) {
+            for (const uint8_t byte : input) rom.write8(0xbf402017, byte);
+            rom.write8(0xbf402016, command);
+            std::vector<uint8_t> output;
+            while (!(rom.read8(0xbf402017) & 0x40)) output.push_back(rom.read8(0xbf402018));
+            require(output.size() == size, "S-command result size differs");
+            return output;
+        };
+        refused = false;
+        try { scmd(0x0a, {0, 1}, 3); } catch (const std::runtime_error &) { refused = true; }
+        require(refused, "sceCdReadNVM answered without a console NVM");
+        romHost.nvm.resize(1024);
+        for (size_t i = 0; i < romHost.nvm.size(); ++i) romHost.nvm[i] = uint8_t(i * 7);
+        require(scmd(0x0a, {0x01, 0x58}, 3) == std::vector<uint8_t>({0, uint8_t(0x2b1 * 7), uint8_t(0x2b0 * 7)}),
+                "sceCdReadNVM word order differs");
+        require(scmd(0x1e, {}, 5) == std::vector<uint8_t>({0, 0x14, 0, 0, 0}), "Idle remote S-command reply differs");
+        require(scmd(0x03, {0x00}, 4) == std::vector<uint8_t>({2, 6, 2, 0}), "MECHACON version differs from the console's");
+        const auto field = [&](size_t offset) {
+            std::vector<uint8_t> expected(9, 0);
+            for (unsigned i = 0; i < 8; ++i) expected[1 + i] = uint8_t((offset + i) * 7);
+            return expected;
+        };
+        require(scmd(0x17, {8}, 9) == field(0x1a8) && scmd(0x12, {}, 9) == field(0x1e0) &&
+                scmd(0x03, {0x45}, 9) == field(0x1f0), "NVM identity S-commands read the wrong bytes");
+        require(scmd(0x0a, {0x02, 0x00}, 1) == std::vector<uint8_t>({0xff}), "sceCdReadNVM accepted a word past the NVM");
+        require(scmd(0x40, {0, 1, 3}, 1) == std::vector<uint8_t>({0}), "sceCdOpenConfig refused a read session");
+        for (unsigned block = 0; block < 3; ++block) {
+            const auto config = scmd(0x41, {}, 16);
+            const bool inArea = block < 2;
+            require(config[0] == (inArea ? uint8_t((0x2b0 + block * 16) * 7) : 0) &&
+                    config[15] == (inArea ? uint8_t((0x2b0 + block * 16 + 15) * 7) : 0),
+                    "sceCdReadConfig did not read the area's blocks in order");
+        }
+        require(scmd(0x43, {}, 1) == std::vector<uint8_t>({0}) && scmd(0x41, {}, 16)[0] == 0x80,
+                "sceCdReadConfig read after sceCdCloseConfig");
+    }
     require(packet(memory,{0x81,0x11,0,0})==std::vector<uint8_t>({0,0,0x2b,0x55}),"Memory-card probe response differs");
+    // mcman probes PS1 after a failed first PS2 probe; a PS2 card must not answer it (no 0x5a).
+    require(packet(memory,{0x81,0x52,0})==std::vector<uint8_t>({0xff,0xff,0xff}),"PS2 card answered the PS1 probe");
+    require(packet(memory,{0x81,0x57,0,0,0,0})==std::vector<uint8_t>(6,0xff)&&host.card[0]==0xff,
+        "PS2 card accepted a PS1 sector write");
     require(packet(memory,{0x81,0x26,0,0,0,0,0,0,0,0,0,0,0})==
         std::vector<uint8_t>({0,0,0x2b,0,2,16,0,0,0x40,0,0,0x52,0x55}),"Memory-card geometry differs");
     packet(memory,{0x81,0x22,1,0,0,0,1,0,0});

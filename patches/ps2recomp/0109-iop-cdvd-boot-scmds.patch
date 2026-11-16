@@ -1,0 +1,65 @@
+Answer sceCdSC(-25) with the S-command lock event flag (ps2sdk cdvdman g_scmd_evfid,
+created multi with bit 0 set); XCDVDFSV waited on id 0 forever, so its RPC never replied.
+Serve sceCdBootCertify (XCDVDMAN export 70) through mechacon S-command 0x1A, which accepts
+the 4-byte ROM name as PCSX2 does, instead of the original export polling absent CDVD registers.
+
+--- a/ps2xIOP/src/emulator/core/iop_magicgate.cpp
++++ b/ps2xIOP/src/emulator/core/iop_magicgate.cpp
+@@ -100,6 +100,10 @@ bool IopMagicGate::mecha(IopHost& host,uint8_t command,std::span<const uint8_t>
+         if(input.size()!=1 || input[0]>1)return fail();
+         m={};m.port=input[0];(void)identity(host,m.port);m.phase=1;return true;
+     }
++    if(command==0x1a) { // BootCertify(romname[4]): the mechacon accepts the console's own ROM (PCSX2: 1 = success)
++        if(input.size()!=4)return fail();
++        output={1};return true;
++    }
+     if(command<0x81 || command>0x88) {
+         if(command==0x8f) { if(!input.empty() || m.phase<4)return fail();return true; }
+         return false;
+--- a/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
+@@ -196,6 +196,7 @@ namespace ps2x::iop::detail
+             streamFlag = 0u;
+             lastReadTimeout = 0u;
+             interruptEventFlagId = 0;
++            scmdEventFlagId = 0;
+             virtualIsoBuilt = false;
+             virtualIsoValid = false;
+             completionCallback.reset();
+@@ -294,6 +295,14 @@ namespace ps2x::iop::detail
+                 cpu.gpr[2]=1;return true;
+             }
+ 
++            case 70: // sceCdBootCertify(romname): S-command 0x1A with the 4-byte ROM name (XCDVDMAN export 70)
++            {
++                std::vector<uint8_t> input(4), output;
++                if(!memory.ownsRamRange(a0,4) || !memory.readRam(a0,input.data(),input.size()) ||
++                   !memory.applyScmd(0x1a,input,output) || output.empty()) {cpu.gpr[2]=0;return true;}
++                cpu.gpr[2]=output[0]==1 ? 1u : 0u;return true;
++            }
++
+             case 28: // sceCdStatus
+                 cpu.gpr[2] = kCdvdStatusPause;
+                 return true;
+@@ -311,6 +320,13 @@ namespace ps2x::iop::detail
+                 const int32_t code = static_cast<int32_t>(a0);
+                 switch (code)
+                 {
++                case -25:
++                    // S-command lock (ps2sdk cdvdman g_scmd_evfid): bit 0 set while the mechacon is free;
++                    // XCDVDFSV waits on it before issuing its own S-commands.
++                    if (scmdEventFlagId == 0)
++                        scmdEventFlagId = kernel.createInternalEventFlag(kEventFlagMulti, 0u, 1u);
++                    cpu.gpr[2] = static_cast<uint32_t>(scmdEventFlagId);
++                    return true;
+                 case -23: // Translate a logical sector for a dual-layer disc.
+                     // The host image exposes one continuous LSN space, so no layer offset is required.
+                     cpu.gpr[2] = a1 != 0u ? memory.read32(a1) : 0u;
+@@ -826,6 +842,7 @@ namespace ps2x::iop::detail
+         uint32_t streamFlag = 0u;
+         uint32_t lastReadTimeout = 0u;
+         int interruptEventFlagId = 0;
++        int scmdEventFlagId = 0;
+         uint64_t imageHandle = 0u;
+         bool virtualIsoBuilt = false;
+         bool virtualIsoValid = false;

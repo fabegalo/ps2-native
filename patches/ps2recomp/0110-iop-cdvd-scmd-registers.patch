@@ -1,0 +1,180 @@
+Emulate the CDVD S-command registers (0x1F402016 SCOMMAND, 0x1F402017 SREADY/SDATAIN,
+0x1F402018 SDATAOUT) on the MECHACON model, as PCSX2 CDVD.cpp does, so the original XCDVDMAN
+send routine completes instead of polling absent registers. Add the boot front-panel and
+drive-control S-commands (0x05, 0x08 clock, 0x14-0x16, 0x19, 0x1B, 0x1C, 0x24, 0x29, 0x31,
+0x32); any other command fails naming its parameters.
+
+--- a/ps2xIOP/src/emulator/core/iop_magicgate.cpp
++++ b/ps2xIOP/src/emulator/core/iop_magicgate.cpp
+@@ -1,5 +1,6 @@
+ #include "iop_magicgate.h"
+ #include <algorithm>
++#include <chrono>
+ #include <stdexcept>
+ namespace ps2x::iop::detail {
+ namespace {
+@@ -104,6 +105,42 @@ bool IopMagicGate::mecha(IopHost& host,uint8_t command,std::span<const uint8_t>
+         if(input.size()!=4)return fail();
+         output={1};return true;
+     }
++    // Front-panel and drive-control S-commands (in:out sizes and replies from PCSX2 CDVD.cpp
++    // cdvdWrite16; ps2sdk cdvdman names). Each replies its status byte: 0 = done.
++    switch(command) {
++    case 0x05: // sceCdTrayReqState (0:1)
++    case 0x19: // sceCdForbidRead (0:1)
++    case 0x1b: // sceCdCancelPOffRdy (0:1)
++        if(!input.empty())return fail();
++        return true;
++    case 0x14: // sceCdCtrlADout (1:1)
++    case 0x16: // sceCdAutoAdjustCtrl (1:1)
++    case 0x1c: // sceCdBlueLEDCtl (1:1)
++    case 0x24: // sceCdRcBypassCtl (1:1)
++    case 0x29: // sceCdNoticeGameStart (1:1)
++    case 0x31: // sceCdSetMediumRemoval (1:1)
++        if(input.size()!=1)return fail();
++        return true;
++    case 0x15: // sceCdForbidDVDP (0:1): PCSX2 and console report 5
++        if(!input.empty())return fail();
++        output={5};return true;
++    case 0x32: // sceCdGetMediumRemoval (0:2)
++        if(!input.empty())return fail();
++        output={0,0};return true;
++    case 0x08: { // sceCdReadClock (0:8): status, BCD sec, min, hour, 0, day, month, year (JST, as PCSX2)
++        if(!input.empty())return fail();
++        using namespace std::chrono;
++        const auto now=floor<seconds>(system_clock::now())+hours(9);
++        const auto day=floor<days>(now);const year_month_day date{day};const hh_mm_ss time{now-day};
++        const auto bcd=[](unsigned value) { return uint8_t(((value/10)%10)<<4|(value%10)); };
++        output={0,bcd(unsigned(time.seconds().count())),bcd(unsigned(time.minutes().count())),
++                bcd(unsigned(time.hours().count())),0,bcd(unsigned(date.day())),bcd(unsigned(date.month())),
++                bcd(unsigned(int(date.year())%100))};
++        return true;
++    }
++    default:
++        break;
++    }
+     if(command<0x81 || command>0x88) {
+         if(command==0x8f) { if(!input.empty() || m.phase<4)return fail();return true; }
+         return false;
+--- a/ps2xIOP/src/emulator/core/iop_memory.cpp
++++ b/ps2xIOP/src/emulator/core/iop_memory.cpp
+@@ -49,6 +49,9 @@ namespace ps2x::iop::detail
+         m_sio2Command = m_sio2Received = m_sio2BlockSize = 0;
+         m_sio2Status = 0x1d100;
+         m_sio2Interrupt = 0;
++        m_scmdParams.clear();
++        m_scmdResults.clear();
++        m_scmdCommand = 0;
+         std::fill(m_ram.begin(), m_ram.end(), uint8_t{0});
+         std::fill(m_owned.begin(), m_owned.end(), uint8_t{0});
+         std::fill(m_scratch.begin(), m_scratch.end(), uint8_t{0});
+@@ -101,6 +104,8 @@ namespace ps2x::iop::detail
+             return m_ram[phys];
+         if (phys >= ScratchBase && phys < ScratchBase + ScratchSize)
+             return m_scratch[phys - ScratchBase];
++        if (phys >= CdvdScmd && phys < CdvdScmd + 3u)
++            return readScmd(phys);
+         if (phys >= Rom0Base)
+         {
+             const auto &rom = rom0();
+@@ -168,6 +173,11 @@ namespace ps2x::iop::detail
+             m_scratch[phys - ScratchBase] = value;
+             return;
+         }
++        if (phys >= CdvdScmd && phys < CdvdScmd + 3u)
++        {
++            writeScmd(phys, value);
++            return;
++        }
+         const uint32_t aligned = phys & ~3u;
+         uint32_t current = readHardware32(aligned);
+         const uint32_t shift = (phys & 3u) * 8u;
+@@ -205,7 +215,7 @@ namespace ps2x::iop::detail
+             std::memcpy(m_scratch.data() + (phys - ScratchBase), &value, sizeof(value));
+             return;
+         }
+-        if ((phys & 3u) == 0u)
++        if ((phys & 3u) == 0u && (phys + 3u < CdvdScmd || phys >= CdvdScmd + 3u))
+         {
+             writeHardware32(phys, value);
+             return;
+@@ -269,6 +279,48 @@ namespace ps2x::iop::detail
+         std::fill(m_owned.begin() + address, m_owned.begin() + address + size, uint8_t{1});
+     }
+ 
++    // CDVD S-command registers, checked against PCSX2 CDVD.cpp cdvdRead/cdvdWrite (0x16-0x18) and
++    // ps2sdk cdvdman cdvdman_send_scmd2: SREADY bit 0x80 = busy, bit 0x40 = no result byte left.
++    uint8_t IopMemory::readScmd(uint32_t phys) const
++    {
++        if (phys == CdvdScmd)
++            return m_scmdCommand;
++        if (phys == CdvdScmd + 1u)
++            return m_scmdResults.empty() ? 0x40u : 0u;
++        if (m_scmdResults.empty())
++            return 0u;
++        const uint8_t value = m_scmdResults.front();
++        m_scmdResults.pop_front();
++        return value;
++    }
++
++    void IopMemory::writeScmd(uint32_t phys, uint8_t value)
++    {
++        if (phys == CdvdScmd + 1u)
++        {
++            if (m_scmdParams.size() >= 16u) // PCSX2: SDATAIN overflow restarts the parameter buffer
++                m_scmdParams.clear();
++            m_scmdParams.push_back(value);
++            return;
++        }
++        if (phys != CdvdScmd)
++            return; // SDATAOUT is read-only
++        m_scmdCommand = value;
++        std::vector<uint8_t> output;
++        const std::vector<uint8_t> input = std::move(m_scmdParams);
++        m_scmdParams.clear();
++        if (!applyScmd(value, input, output))
++        {
++            static constexpr char hex[] = "0123456789abcdef";
++            std::string bytes;
++            for (const uint8_t byte : input)
++                bytes += std::string(" ") + hex[byte >> 4u] + hex[byte & 15u];
++            throw std::runtime_error(std::string("Unsupported CDVD S-command 0x") + hex[value >> 4u] +
++                                     hex[value & 15u] + " (parameters:" + (bytes.empty() ? " none" : bytes) + ")");
++        }
++        m_scmdResults.assign(output.begin(), output.end());
++    }
++
+     bool IopMemory::isHardwareAddress(uint32_t address) const
+     {
+         const uint32_t phys = physicalAddress(address);
+--- a/ps2xIOP/src/emulator/core/iop_memory.h
++++ b/ps2xIOP/src/emulator/core/iop_memory.h
+@@ -27,6 +27,7 @@ namespace ps2x::iop::detail
+         static constexpr uint32_t HardwareEnd = 0x1F900000u;
+         static constexpr uint32_t Spu2Base = 0x1F900000u;
+         static constexpr uint32_t Spu2End = 0x1FA00000u;
++        static constexpr uint32_t CdvdScmd = 0x1F402016u; // SCOMMAND, then SREADY/SDATAIN, SDATAOUT
+         static constexpr uint32_t Rom0Base = 0x1FC00000u;
+         static constexpr uint32_t Rom0Size = 4u * 1024u * 1024u;
+         static constexpr uint32_t SifBase = 0x1D000000u;
+@@ -104,6 +105,8 @@ namespace ps2x::iop::detail
+         void finishSio2Packet();
+         void memoryCardPacket(unsigned port, std::vector<uint8_t>& reply);
+         void startSio2Dma(uint32_t address, uint32_t value);
++        uint8_t readScmd(uint32_t phys) const;
++        void writeScmd(uint32_t phys, uint8_t value);
+ 
+         struct SerialPad {
+             uint8_t mode = 0x41;
+@@ -124,6 +127,11 @@ namespace ps2x::iop::detail
+         mutable std::deque<uint8_t> m_sio2Output;
+         uint32_t m_sio2Command = 0, m_sio2Received = 0, m_sio2BlockSize = 0;
+         uint32_t m_sio2Status = 0x1d100, m_sio2Interrupt = 0;
++        // MECHACON S-command port: parameters queued at SDATAIN, the command runs at once
++        // (never busy) and its result drains from SDATAOUT (PCSX2 CDVD.cpp cdvdWrite16/17).
++        std::vector<uint8_t> m_scmdParams;
++        mutable std::deque<uint8_t> m_scmdResults;
++        uint8_t m_scmdCommand = 0;
+ 
+         IopSpu2Backend* m_spu2 = nullptr;
+         const uint64_t* m_spu2Cycle = nullptr;

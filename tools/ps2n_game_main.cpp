@@ -158,6 +158,22 @@ void dump_texture(PS2Runtime& runtime, const char* spec) {
     }
 }
 
+// PS2N_PERF_TRACE: read only the scheduler's published snapshot, without GS tracing or readbacks.
+void trace_progress(PS2Runtime& runtime, std::stop_token stop) {
+    while (!stop.stop_requested()) {
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        if (stop.stop_requested()) return;
+        const auto kernel = runtime.eeScheduler().snapshot();
+        std::cout << "[ps2n-perf] cycle=" << kernel.eeCycle
+                  << " running=" << kernel.runningThreadId;
+        // Blocked threads name the kernel object they wait on (status/reason/id, pc, ra).
+        for (const auto& t : kernel.threads)
+            std::cout << " t" << t.id << ':' << int(t.status) << '/' << int(t.waitReason) << '/' << t.waitId
+                      << std::hex << "@0x" << t.pc << ",ra=0x" << t.ra << std::dec;
+        std::cout << std::endl;
+    }
+}
+
 // PS2N_GS_TRACE: every 2 s, a summary of the PS2Recomp GS debug history
 // (its last 512 events), for diagnosing what a game draws.
 void trace_gs(PS2Runtime& runtime, std::stop_token stop) {
@@ -384,6 +400,22 @@ int run_game(int argc, char** argv) {
         PCSX2Audio audio;
         PS2Runtime runtime;
         PS2HostDevices devices{&audio};
+        if (sourceFirmware) { // the user's validated NVM backs the MECHACON S-commands
+            const auto& nvm = sourceFirmware->nvm;
+            devices.nvm.bytes = nvm.bytes.data();
+            devices.nvm.size = nvm.bytes.size();
+            const auto& layout = ps2native::nvm_layout_info(nvm.layout);
+            const auto* hardware = ps2native::find_console_hardware(sourceFirmware->console_profile);
+            if (!hardware || !hardware->mechacon) throw std::runtime_error("Console profile has no MECHACON version");
+            std::copy(hardware->mechacon->version.begin(), hardware->mechacon->version.end(), devices.nvm.version.begin());
+            devices.nvm.modelName = layout.model_name;
+            devices.nvm.ilinkId = layout.ilink_id;
+            devices.nvm.consoleId = layout.console_id;
+            for (unsigned area = 0; area < ps2native::kNvmConfigAreas; ++area) {
+                devices.nvm.configOffset[area] = layout.config[area].offset;
+                devices.nvm.configBlocks[area] = layout.config[area].blocks;
+            }
+        }
         ps2SetHostDevices(&runtime, &devices);
         struct DetachDevices {
             PS2Runtime& runtime;
@@ -426,7 +458,9 @@ int run_game(int argc, char** argv) {
         if (gsBackend && !parallel && std::strcmp(gsBackend, "cpu") != 0)
             throw std::runtime_error("PS2N_GS_BACKEND must be cpu or parallel");
         if (enhanced && !parallel) throw std::runtime_error("Enhanced requires the optional paraLLEl-GS device");
-        if (parallel) runtime.gs().setRasterBackend(ps2n_parallel_gs(runtime.memory().gs(), enhanced));
+        if (parallel)
+            runtime.gs().setRasterBackend(ps2n_parallel_gs(runtime.memory().gs(), enhanced,
+                stateRoot / "cache" / "parallel-gs-pipelines.bin"));
         if (!parallel && (std::getenv("PS2N_GS_TRACE") || std::getenv("PS2N_GS_COMPARE")))
             runtime.gs().setRasterBackend(std::make_unique<TracingBackend>());
         if (const char* dump = std::getenv("PS2N_GS_PCSX2_DUMP")) {
@@ -438,6 +472,8 @@ int run_game(int argc, char** argv) {
         }
         if (std::getenv("PS2N_GS_TRACE")) {
             diagnostics = std::jthread([&](std::stop_token stop) { trace_gs(runtime, stop); });
+        } else if (std::getenv("PS2N_PERF_TRACE")) {
+            diagnostics = std::jthread([&](std::stop_token stop) { trace_progress(runtime, stop); });
         }
         try {
             runtime.run();

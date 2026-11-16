@@ -1,0 +1,151 @@
+Back the MECHACON NVM S-commands with the user's own NVM: the host exposes a read-only
+view, the OpenConfig area table and identity offsets of its MECHACON generation, and the
+console model's MECHACON version (IopHost::mechaconNvm, PS2HostDevices::nvm). Serve the
+version and console ID (0x03 sub 0x00/0x45), sceCdReadNVM (0x0A), sceCdRI (0x12), sceCdRM
+(0x17) and sceCdOpenConfig/ReadConfig/CloseConfig (0x40/0x41/0x43) as PCSX2 CDVD.cpp does;
+without an NVM they fail, and write sessions stay unsupported until NVM persistence exists.
+
+--- a/ps2xIOP/include/ps2x/iop/iop_host.h
++++ b/ps2xIOP/include/ps2x/iop/iop_host.h
+@@ -54,6 +54,19 @@ namespace ps2x::iop
+         std::array<uint32_t, 5> arguments{};
+     };
+ 
++    // The user's own MECHACON NVM dump (512 little-endian words), where its OpenConfig
++    // areas 0-2 sit for this MECHACON generation, and the console model's MECHACON version
++    // (region, major, minor, system type); the SDK never supplies or defaults them.
++    struct IopMechaconNvm
++    {
++        const uint8_t *bytes = nullptr;
++        size_t size = 0;
++        std::array<uint16_t, 3> configOffset{};
++        std::array<uint8_t, 3> configBlocks{};
++        std::array<uint8_t, 4> version{};
++        uint16_t modelName = 0, ilinkId = 0, consoleId = 0; // NVM byte offsets (16, 8, 8 bytes)
++    };
++
+     class IopHost
+     {
+     public:
+@@ -70,6 +83,8 @@ namespace ps2x::iop
+         // Virtual card identity only; no original console keys are supplied by the SDK.
+         virtual bool memoryCardKeyset(int port, uint8_t* data, size_t size) { return false; }
+         virtual bool randomBytes(uint8_t* data, size_t size) { return false; }
++        // False when no console NVM was selected (S-commands that read it then fail).
++        virtual bool mechaconNvm(IopMechaconNvm &nvm) const { return false; }
+ 
+         virtual bool readGuest(uint32_t address, void *destination, size_t size) const = 0;
+         virtual bool writeGuest(uint32_t address, const void *source, size_t size) = 0;
+--- a/ps2xIOP/src/emulator/core/iop_magicgate.cpp
++++ b/ps2xIOP/src/emulator/core/iop_magicgate.cpp
+@@ -56,7 +56,7 @@ MgBlock mgTripleDes(const MgKey& key,const MgBlock& block,bool decrypt) {
+     auto value=des(a,number(block),decrypt); value=des(b,value,!decrypt); value=des(a,value,decrypt);
+     MgBlock result{};for(unsigned i=0;i<8;++i)result[7-i]=uint8_t(value>>(i*8));return result;
+ }
+-void IopMagicGate::reset() { m_cards={};m_mecha={}; }
++void IopMagicGate::reset() { m_cards={};m_mecha={};m_config={}; }
+ IopMagicGate::Card& IopMagicGate::identity(IopHost& host,unsigned port) {
+     if(port>=m_cards.size()) throw std::runtime_error("MagicGate port is unsupported");
+     auto& c=m_cards[port];
+@@ -141,6 +141,51 @@ bool IopMagicGate::mecha(IopHost& host,uint8_t command,std::span<const uint8_t>
+     default:
+         break;
+     }
++    // NVM-backed S-commands (PCSX2 CDVD.cpp cdvdReadNVM/cdvdReadConfig, ps2sdk cdvdman).
++    if(command==0x03 || command==0x0a || command==0x12 || command==0x17 ||
++       command==0x40 || command==0x41 || command==0x43) {
++        IopMechaconNvm nvm;
++        if(!host.mechaconNvm(nvm) || nvm.size<1024)
++            throw std::runtime_error("CDVD S-command needs the console's MECHACON NVM, which was not provided");
++        auto& c=m_config;
++        // Status 0, then 8 NVM bytes (PCSX2 cdvdReadILinkID/cdvdReadModelNumber/cdvdReadConsoleID).
++        const auto identity=[&](size_t offset) {
++            if(offset+8u>nvm.size)throw std::runtime_error("MECHACON NVM identity field exceeds the NVM image");
++            output.assign(9,0);std::copy_n(nvm.bytes+offset,8,output.begin()+1);return true;
++        };
++        if(command==0x03) { // MECHACON sub-commands: 0x00 version (1:4), 0x45 console ID (1:9)
++            if(input.size()!=1)return input.empty()?fail():false;
++            if(input[0]==0x45)return identity(nvm.consoleId);
++            if(input[0]!=0x00)return false;
++            output.assign(nvm.version.begin(),nvm.version.end());return true;
++        }
++        if(command==0x12) { if(!input.empty())return fail(); return identity(nvm.ilinkId); } // sceCdRI (0:9)
++        if(command==0x17) { // sceCdRM (1:9): model name bytes [p0, p0+8)
++            if(input.size()!=1 || input[0]>8)return fail();
++            return identity(size_t(nvm.modelName)+input[0]);
++        }
++        if(command==0x0a) { // sceCdReadNVM (2:3): status, high byte, low byte of word (p0<<8|p1)
++            if(input.size()!=2)return fail();
++            const unsigned word=(unsigned(input[0])<<8)|input[1];
++            if(word>=512) {output={0xff};return true;}
++            output={0,nvm.bytes[word*2+1],nvm.bytes[word*2]};return true;
++        }
++        if(command==0x40) { // sceCdOpenConfig (3:1): mode (0 read), area, block count
++            if(input.size()!=3 || input[1]>2)return fail();
++            if(input[0]!=0)return false; // writing needs NVM persistence, not modelled yet
++            c={true,input[1],input[2],0};return true;
++        }
++        if(command==0x43) { if(!input.empty())return fail(); c={};return true; } // sceCdCloseConfig (0:1)
++        // sceCdReadConfig (0:16): the next 16-byte block; past the session or area it reads zero.
++        if(!input.empty())return fail();
++        output.assign(16,0);
++        if(!c.open) {output[0]=0x80;return true;}
++        if(c.index>=c.blocks || c.index>=nvm.configBlocks[c.area])return true;
++        const size_t offset=size_t(nvm.configOffset[c.area])+size_t(c.index++)*16u;
++        if(offset+16u>nvm.size)throw std::runtime_error("MECHACON NVM configuration area exceeds the NVM image");
++        std::copy_n(nvm.bytes+offset,16,output.begin());
++        return true;
++    }
+     if(command<0x81 || command>0x88) {
+         if(command==0x8f) { if(!input.empty() || m.phase<4)return fail();return true; }
+         return false;
+--- a/ps2xIOP/src/emulator/core/iop_magicgate.h
++++ b/ps2xIOP/src/emulator/core/iop_magicgate.h
+@@ -30,6 +30,7 @@ private:
+         unsigned port=0,phase=0;
+         bool authenticated=false;
+     } m_mecha;
++    struct Config { bool open=false; unsigned area=0,blocks=0,index=0; } m_config; // OpenConfig session
+     std::array<Card,2> m_cards{};
+     Card& identity(IopHost& host,unsigned port);
+ };
+--- a/ps2xRuntime/include/runtime/host_devices.h
++++ b/ps2xRuntime/include/runtime/host_devices.h
+@@ -5,7 +5,11 @@
+ #include <stdexcept>
+ // Registration precedes guest execution; removal follows the joined guest thread.
+ // Kept outside the AOT-visible console layout to preserve existing objects.
+-struct PS2HostDevices { ps2x::iop::IopSpu2Backend* spu2 = nullptr; };
++#include "ps2x/iop/iop_host.h"
++struct PS2HostDevices {
++ ps2x::iop::IopSpu2Backend* spu2 = nullptr;
++ ps2x::iop::IopMechaconNvm nvm{}; // borrowed; outlives the attached console
++};
+ inline std::mutex ps2HostDevicesMutex;
+ inline std::unordered_map<const void*, PS2HostDevices*> ps2HostDevicesMap;
+ inline void ps2SetHostDevices(const void* owner, PS2HostDevices* devices) {
+--- a/ps2xRuntime/src/lib/ps2_iop_host.cpp
++++ b/ps2xRuntime/src/lib/ps2_iop_host.cpp
+@@ -4,6 +4,12 @@ ps2x::iop::IopSpu2Backend* PS2IopHostAdapter::spu2Backend() const {
+     const auto* devices = ps2GetHostDevices(&m_runtime);
+     return devices ? devices->spu2 : nullptr;
+ }
++bool PS2IopHostAdapter::mechaconNvm(ps2x::iop::IopMechaconNvm& nvm) const {
++    const auto* devices = ps2GetHostDevices(&m_runtime);
++    if (!devices || !devices->nvm.bytes) return false;
++    nvm = devices->nvm;
++    return true;
++}
+ 
+ 
+ #include "ps2_runtime.h"
+--- a/ps2xRuntime/src/lib/ps2_iop_host.h
++++ b/ps2xRuntime/src/lib/ps2_iop_host.h
+@@ -50,6 +50,7 @@ public:
+     bool readPadState(int port, int slot, uint8_t* data, size_t size) override;
+     void setPadRumble(int port, int slot, uint8_t small, uint8_t large) override;
+     bool memoryCardKeyset(int port,uint8_t* data,size_t size) override;
++    bool mechaconNvm(ps2x::iop::IopMechaconNvm& nvm) const override;
+     bool randomBytes(uint8_t* data,size_t size) override;
+     bool memoryCardPresent(int port, int slot) override;
+     bool readMemoryCard(int port, uint32_t address, uint8_t* data, size_t size) override;

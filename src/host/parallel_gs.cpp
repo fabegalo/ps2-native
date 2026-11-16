@@ -1,4 +1,6 @@
 #include "parallel_gs.h"
+#include <fstream>
+#include <iterator>
 #include "runtime/gs/gs_cpu_backend.h"
 #include "runtime/ps2_memory.h"
 #include <cstring>
@@ -26,6 +28,7 @@ class ParallelBackend final : public GSRasterBackend, public GSCommandBackend {
     static constexpr uint32_t vramSize = 4 * 1024 * 1024;
     const GSRegisters& registers_;
     bool enhanced_;
+    std::filesystem::path pipelineCache_;
     mutable std::recursive_mutex mutex_;
     Vulkan::Context context_;
     Vulkan::Device device_;
@@ -45,7 +48,8 @@ class ParallelBackend final : public GSRasterBackend, public GSCommandBackend {
         gpu_.end_vram_write(0, vramSize);
     }
 public:
-    ParallelBackend(const GSRegisters& registers, bool enhanced) : registers_(registers), enhanced_(enhanced) {
+    ParallelBackend(const GSRegisters& registers, bool enhanced, std::filesystem::path pipelineCache)
+        : registers_(registers), enhanced_(enhanced), pipelineCache_(std::move(pipelineCache)) {
         if (!Vulkan::Context::init_loader(nullptr)) throw std::runtime_error("Vulkan loader unavailable");
         context_.set_num_thread_indices(1);
         if (!context_.init_instance_and_device(nullptr, 0, nullptr, 0,
@@ -55,13 +59,35 @@ public:
             throw std::runtime_error("paraLLEl-GS Vulkan device initialization failed");
         device_.set_context(context_);
         device_.init_frame_contexts(2);
+        // gpu_.init precompiles thousands of ubershader variants; reuse the previous session's pipelines.
+        // Granite rejects a cache from another GPU/driver (UUID) or a corrupt one (hash) and starts fresh.
+        std::vector<uint8_t> cache;
+        if (std::ifstream file{pipelineCache_, std::ios::binary})
+            cache.assign(std::istreambuf_iterator<char>(file), {});
+        if (!device_.init_pipeline_cache(cache.data(), cache.size()))
+            throw std::runtime_error("paraLLEl-GS pipeline cache creation failed");
         ParallelGS::GSOptions options{};
         options.super_sampling = enhanced ? ParallelGS::SuperSampling::X4 : ParallelGS::SuperSampling::X1;
         if (!gpu_.init(&device_, options)) throw std::runtime_error("paraLLEl-GS requirements unavailable");
         std::cout << "[ps2n-gpu] paraLLEl-GS Vulkan " << device_.get_gpu_properties().deviceName
                   << " mode=" << (enhanced ? "Enhanced" : "Fidelity") << '\n';
     }
-    ~ParallelBackend() override { device_.wait_idle(); }
+    ~ParallelBackend() override {
+        device_.wait_idle();
+        try {
+            std::vector<uint8_t> cache(device_.get_pipeline_cache_size());
+            if (!cache.empty() && device_.get_pipeline_cache_data(cache.data(), cache.size())) {
+                std::filesystem::create_directories(pipelineCache_.parent_path());
+                auto temporary = pipelineCache_;
+                temporary += ".tmp";
+                std::ofstream(temporary, std::ios::binary | std::ios::trunc)
+                    .write(reinterpret_cast<const char*>(cache.data()), std::streamsize(cache.size()));
+                std::filesystem::rename(temporary, pipelineCache_);
+            }
+        } catch (const std::exception& error) {
+            std::cerr << "[ps2n-gpu] pipeline cache not saved: " << error.what() << std::endl;
+        }
+    }
     void Initialize(uint8_t* vram, uint32_t size) override {
         DeviceLock lock(mutex_);
         if (!vram || size != vramSize) throw std::runtime_error("paraLLEl-GS requires 4 MiB console VRAM");
@@ -339,9 +365,10 @@ bool ps2n_parallel_gs_available() {
 #endif
 }
 
-std::unique_ptr<GSRasterBackend> ps2n_parallel_gs(const GSRegisters& registers, bool enhanced) {
+std::unique_ptr<GSRasterBackend> ps2n_parallel_gs(const GSRegisters& registers, bool enhanced,
+                                                  const std::filesystem::path& pipelineCache) {
 #ifdef PS2N_PARALLEL_GS
-    return std::make_unique<ParallelBackend>(registers, enhanced);
+    return std::make_unique<ParallelBackend>(registers, enhanced, pipelineCache);
 #else
     throw std::runtime_error("paraLLEl-GS is unavailable in this build (PS2N_PARALLEL_GS=OFF)");
 #endif

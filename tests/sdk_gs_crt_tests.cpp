@@ -41,6 +41,16 @@ int main() try {
         require(GPR_U32((&context), 4) == 0 && GPR_U32((&context), 6) == mode,
                 "sceGsResetGraph changed its guest arguments");
     }
+    // The original OSD's libgraph passes NTSC/PAL to SetGsCrt as mode | 0x70.
+    for (unsigned mode : {2u, 3u}) {
+        gs.smode1 = retained;
+        SET_GPR_U32(&context, 4, 1);
+        SET_GPR_U32(&context, 5, mode | 0x70u);
+        SET_GPR_U32(&context, 6, 1);
+        ps2_syscalls::SetGsCrt(runtime->memory().getRDRAM(), &context, runtime.get());
+        require(((gs.smode1 >> 13) & 3) == mode && ((gs.smode1 >> 3) & 127) == 32,
+                "SetGsCrt ignored the libgraph NTSC/PAL encoding 0x72/0x73");
+    }
     std::cout << "PASS canonical NTSC/PAL CRT fields and preserved state\n";
 
     // INTC_GS: a SIGNAL (0x60) or FINISH (0x61) 0->1 CSR edge requests one
