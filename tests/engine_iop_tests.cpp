@@ -67,6 +67,23 @@ int main() {
         c.run_iop();
         check(ps2::ld32(0x8008)==0x4321 && c.sif.interrupt && (c.dmac_status&(1u<<5)),
             "Actual IOP instructions produce the shared EE SIF0 DMA completion/IRQ");
+        rejects([&]{c.iop_import("thbase",999);});
+        rejects([&]{c.iop_import("thmsgbx",10);});
+        c.iop_threads.clear();c.iop_current=1;c.iop_active=true;c.iop_reschedule=true;
+        c.iop.pc=0x4000;c.iop.pendingLoad=true;c.iop.pendingLoadReg=9;c.iop.pendingLoadValue=0x99;
+        c.iop_threads[1].status=4;c.iop_threads[1].wait=1;
+        c.iop_threads[2].status=2;c.iop_threads[2].priority=10;c.iop_threads[2].context.pc=0x6000;
+        c.iop_threads[3].status=2;c.iop_threads[3].priority=20;c.iop_threads[3].context.pc=0x7000;
+        c.iop_schedule();
+        check(c.iop_current==2 && c.iop.pc==0x6000,"The highest-priority ready IOP context runs");
+        check(c.iop_threads[1].context.pendingLoad && c.iop_threads[1].context.pendingLoadValue==0x99,"Context switches preserve pending loads");
+        c.iop_ready(1,-418);c.iop_schedule();
+        check(c.iop_current==1 && c.iop.pendingLoad && static_cast<std::int32_t>(c.iop.gpr[2])==-418,"Wakeup restores the suspended context and real wait result");
+        c.iop_threads.clear();c.iop_current=0;c.iop_active=false;c.iop_reschedule=false;
+        c.iop_threads[1].status=4;c.iop_threads[1].wait=1;
+        c.iop_module_returned=false;rejects([&]{c.run_iop();});
+        c.iop_threads[1].status=8;rejects([&]{c.run_iop();});
+        c.iop_module_returned=true;c.run_iop();
         std::puts("engine-iop: shared clock, RAM, load delays and native SIF routing PASS");
     } catch(const std::exception& e) { std::fprintf(stderr,"%s\n",e.what());return 1; }
 }

@@ -1,0 +1,4 @@
+exoteric33/ps2-native-recomp a50471a823c64e0e2893329527820a7c4deed608 (MIT).
+include/ps2/vu_ops.hpp derives from runtime/include/ps2/vu_ops.hpp; only relative includes use the existing PS2 ABI include paths.
+include/ps2/vu_semantics.hpp extracts UpperOut/upper/commit, BranchView and lower from runtime/src/vu_micro.cpp. Runtime globals are replaced by the Console-owned Unit, unsupported opcodes throw instead of logging and continuing, and VNOP is explicit. GIF kick remains a concrete unsupported consumer boundary.
+The engine-owned resumable pair emitter specializes those semantics on verified instruction words, sharing the reference pipeline and branch history. No whole-program runner, state system, live compiler, worker, GS, VIF or runtime globals are imported.

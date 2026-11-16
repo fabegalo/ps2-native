@@ -50,11 +50,48 @@ Other tests accept locked paths, e.g. `cpu/iop/lsudelay`, `cpu/ee_fpu/transfer`,
 `kernel/iop/libc/strtok`. FCR masks, performance register access and VU register/data RAM
 reuse the pinned MIT implementation's behavior; counters measure logical instruction cost.
 
-IOP kernel threading/interrupt dispatch and original firmware boot, VU microprogram
-execution (`vu0_macro/transfer` first needs microcode RAM), timer IRQ delivery, guest TLB
-exceptions, integrated GS/SPU2, BIOS and gameplay remain gaps;
-none is certified by these CPU tests. Headless OSD settings must be replaced by the matched
-profile/NVM state before firmware sessions; hardware boot must replace the ELF HLE mappings.
+**Approved continuation after `ec4e8b8`.** IOP threads now own complete R3000A contexts,
+priorities, ready order, suspend/wait states, wake counts and logical deadlines in Console.
+`thbase` creation/start/exit/delete, priority changes, rotation, sleep/wakeup, delay and
+status imports operate on that state. Semaphores, event flags and mailboxes share the
+same wait transitions; deleting an object releases its waiters with the original error.
+Module entry returns remain distinct from resident threads waiting for external events.
+The stack arena is revision-independent engine service memory (0x180000–0x1D0000);
+module images remain below it, and freed thread stacks can be reused.
+
+The maintainer validated the isolated MIT exoteric33 VU component at the same pin on
+16/11. `third_party/ps2-native-vu` retains the arithmetic/pipeline helpers and adapted
+upper/lower semantics; no runtime, worker, renderer or audio implementation is imported.
+The engine emits constant-instruction native pairs instead of importing the upstream
+whole-program runner: every pair returns to the shared scheduler, including programs
+without an E bit. VU0/VU1 retain branch history, dependency stalls, Q/flag pipelines,
+PC/end delay and distinct register/code/data state. EE register and memory accesses
+synchronize with that scheduler; CFC2.I/CTC2.I interlocks survive discarded destinations.
+VU code writes invalidate the selected translation. Native lookup verifies the entire
+micro-memory image; the existing build/compiler dependency checks invalidate changed
+semantics. Unknown code runs through an explicit interpreter fallback with counters and
+warnings; bounded snapshots are hash-verified and compiled for the next preparation run.
+`scripts/prepare-engine-vu.py` emits those native pairs; `scripts/test-engine.py` reuses
+verified captures automatically and reruns the original ELF after preparation.
+
+Focused Windows x64 Release/headless evidence adds all five official IOP thread tests,
+two event-flag tests, three mailbox tests and `cpu/vu0_macro/transfer`: 43 official passes
+including the preserved baseline of 32. The VU transfer
+test uses native VU0 and VU1 pairs with exact expected text. Reproduce the combined
+original workload with `python scripts/test-engine.py cpu/vu0_macro/transfer --with-iop
+kernel/iop/thread/stat --report joint-vu-results.json` plus the established toolchain
+options. Separate synthetic regressions compare VU0/VU1 native/interpreted registers,
+data and stalls at matched boundaries, interleaving real IOP stores and EE memory access;
+they also reject changed code and preserve pending loads across IOP context switches.
+
+Original firmware boot, IRX native export linking/loader service calls, IOP hardware
+interrupt/exception dispatch, running-unit VU reset/control, VU D/T interrupt delivery,
+GIF/XGKICK consumption, timer
+IRQ delivery, guest TLB exceptions, GS/SPU2 integration, BIOS and gameplay remain gaps.
+Unsupported paths stop explicitly. These tests certify neither physical cycle accuracy
+nor gameplay. Headless OSD settings still require the matched profile/NVM before firmware
+sessions; the next integration should exercise native module dependencies and VIF/GIF
+contracts against original code, retaining this single console state.
 
 **Decisões vigentes do mantenedor.** Aqui só o contrato e o estado; medições de ensaio ficam nas mensagens de commit e nas evidências locais.
 

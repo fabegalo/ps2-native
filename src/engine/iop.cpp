@@ -55,7 +55,7 @@ std::string Console::iop_format(std::uint32_t address,unsigned first) {
         while(i<fmt.size() && (std::isdigit(static_cast<unsigned char>(fmt[i])) || fmt[i]=='.')) spec+=fmt[i++];
         if (i==fmt.size() || spec.size()>24) throw std::runtime_error("Invalid IOP printf format");
         if (fmt[i]=='l' || fmt[i]=='h') throw std::runtime_error("IOP printf length modifier is not implemented");
-        char buffer[512]; int size=-1;
+        char buffer[65537]; int size=-1;
         switch(fmt[i]) {
         case 'd': case 'i': size=std::snprintf(buffer,sizeof(buffer),(spec+"d").c_str(),static_cast<std::int32_t>(iop_arg(next++))); break;
         case 'u': case 'x': case 'X': case 'o': size=std::snprintf(buffer,sizeof(buffer),(spec+fmt[i]).c_str(),iop_arg(next++)); break;
@@ -71,6 +71,7 @@ std::string Console::iop_format(std::uint32_t address,unsigned first) {
     return text;
 }
 void Console::iop_import(const std::string& library,std::uint32_t ordinal) {
+    if (iop_thread_import(library,ordinal)) return;
     if (library=="stdio" && ordinal==4) {
         const auto text=iop_format(iop_arg(0),1);
         tty_write(true,text); iop.gpr[2]=static_cast<std::uint32_t>(text.size()); return;
@@ -131,6 +132,9 @@ void Console::iop_import(const std::string& library,std::uint32_t ordinal) {
     throw std::runtime_error(std::format("Unsupported IOP import {}:{}",library,ordinal));
 }
 void Console::step_iop() {
+    for (auto& [id,t] : iop_threads)
+        if ((t.status&4) && t.wait==2 && t.deadline<=ticks) iop_ready(id);
+    if ((!iop_active || (iop_reschedule && !iop.branchPending && !iop_import_slot)) && !iop_callback_active) iop_schedule();
     if (!iop_callback_active && !sif.iop_commands.empty() && (!iop_active || (!iop.branchPending && !iop_import_slot))) {
         auto command=std::move(sif.iop_commands.front()); sif.iop_commands.pop_front();
         iop_suspended=iop; iop_suspended_active=iop_active;
@@ -140,6 +144,7 @@ void Console::step_iop() {
         iop.pc=command.first.entry; iop.gpr[4]=buffer; iop.gpr[5]=command.first.argument;
         iop.gpr[28]=command.first.gp; iop.gpr[29]=0x1deff0; iop.gpr[31]=0xffffffe0;
     }
+    if (!iop_active) return;
     if (!iop_instructions) iop_first_tick=ticks;
     iop_last_tick=ticks;
     if (iop.pc==0xfffffff0) { iop_active=false; iop_result=static_cast<std::int32_t>(iop.gpr[2]); return; }
@@ -158,11 +163,18 @@ void Console::step_iop() {
     }
     if (iop.pc==0xffffffe0 && iop_callback_active) {
         iop=iop_suspended; iop_active=iop_suspended_active; iop_callback_active=false;
-    } else if (iop.pc==0xfffffff0) { iop_active=false; iop_result=static_cast<std::int32_t>(iop.gpr[2]); }
+    } else if (iop.pc==0xfffffff0 || iop.pc==0xffffffd0) {
+        if (iop.pc==0xfffffff0) {iop_result=static_cast<std::int32_t>(iop.gpr[2]);iop_module_returned=true;}
+        if (iop_current) iop_threads.at(iop_current).status=16;
+        iop_active=false;iop_reschedule=true;
+    }
+    if (!iop_callback_active && iop_reschedule && !iop_import_slot && !iop.branchPending) iop_schedule();
 
 }
 void Console::run_iop() {
-    while(iop_active || !sif.iop_commands.empty()) advance_to(iop_next_tick);
+    while(iop_work_pending()) advance_to(iop_next_tick);
+    for (const auto& [id,t] : iop_threads)
+        if (t.status!=16 && !iop_module_returned) throw std::runtime_error("IOP scheduler deadlock: waiting without an event");
 }
 }
 namespace ps2x::iop::detail {

@@ -1598,7 +1598,7 @@
         "LICENSE": "e1b41e544ac8e9b4812ef77e558815cb8251129b5b4473fa202cbcad18fe39bb",
         "recomp/analysis.cpp": "307d7aa4a5d7e157272cd22ee3dabc26b48b5c30520281baf4dbd41bececc040",
         "recomp/analysis.hpp": "0c2cc96c2bb99b87d84fdf8e3dad43fde0f0a9a6b2c2fc959bd600b6464f2b60",
-        "recomp/codegen.cpp": "626fc4547edd1faf56966b7d1328388fde49df4b5982dce11a1a0aea723fce91",
+        "recomp/codegen.cpp": "b0d5a277ede660d142b705ac5d47d21a826966bac3da93249361668b44a4583a",
         "recomp/codegen.hpp": "e359f33bfe6ef5c48d3a93dca6596785a3087f4adac2461fab5794b6b3dfc5fb",
         "recomp/eerecomp_gen.cpp": "108a8522d143bc1c743193b58d6462cc842f8dff7f9ddbf8c771d06711352ed3",
         "recomp/eerecomp_gen.hpp": "6f29dc344242fbb673ba0a395918a0d0a51cdf67fd2828e610486ff7bf4c8d98",
@@ -1785,6 +1785,16 @@
         "iop_cpu.h": "5cfd207bf47e71b43e1903b0f8c0057be686f7a349a4ea4397ceb24cc0ff4c91",
         "iop_cpu.cpp": "f78d16f5d4f6ddf64594ab9e130eb61c17592c3703ede85946bf78ac5ee83a16",
         "LICENSE": "831e92808eb553250066261a1387a9323cbf300d4559a41f2c71fd3712bdb44a"
+      }
+    },
+    "vu": {
+      "repository": "https://github.com/exoteric33/ps2-native-recomp.git",
+      "commit": "a50471a823c64e0e2893329527820a7c4deed608",
+      "license": "MIT",
+      "files": {
+        "include/ps2/vu_ops.hpp": "aecec9174709639b190d81a13a1cedb99e2a049bf773258b78e28cb690df6084",
+        "include/ps2/vu_semantics.hpp": "0ed66d18c84a9484f456fdef8ba28e50c03a4d4e77f7cc91347f30e279fa0311",
+        "LICENSE": "e1b41e544ac8e9b4812ef77e558815cb8251129b5b4473fa202cbcad18fe39bb"
       }
     }
   }

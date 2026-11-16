@@ -126,3 +126,10 @@ The IRX loader/formatter and COP/FCR/VU register behavior adapt MIT exoteric33 c
 `a50471a823c64e0e2893329527820a7c4deed608`, whose license is preserved in
 `third_party/ps2-native-recomp/LICENSE`. No proprietary IRX/firmware or second runtime
 is included. The official test archive remains an external, hash-verified ISC input.
+
+The subsequent VU integration, approved 16/11/2026, adapts only MIT exoteric33
+`vu_micro.cpp` instruction semantics and `vu_ops.hpp` pipeline/arithmetic helpers at the
+same `a50471a` pin. `third_party/ps2-native-vu/LICENSE` and `deps.lock.json` retain the
+license, source identity and result hashes. Its AOT pair emitter and shared scheduler
+belong to the engine. This MIT component does not change the GPL-3.0 obligations of the
+combined engine that already includes the isolated PS2Recomp IOP CPU.

@@ -2,6 +2,7 @@
 #include "ps2/generated.hpp"
 #include "iop_cpu.h"
 #include "iop_memory.h"
+#include "ps2native/engine/vu.hpp"
 #include <map>
 #include <deque>
 #include <span>
@@ -49,6 +50,29 @@ public:
                           std::uint32_t source,std::uint32_t destination,std::uint32_t extra);
     std::uint32_t iop_heap_top{0x10000}, iop_strtok_next{}, iop_import_slot{};
     std::map<std::uint32_t,std::pair<std::string,std::uint32_t>> iop_imports;
+    struct IopThread {
+        ps2x::iop::detail::IopCpuState context{};
+        std::uint32_t status{16},attr{},option{},entry{},stack{},size{},gp{},initial_priority{},priority{};
+        std::uint32_t wait{},wait_id{},wakeups{},wait_bits{},wait_mode{},wait_pointer{};
+        std::uint64_t order{},deadline{~0ull};
+        bool delete_on_exit{};
+    };
+    std::map<std::uint32_t,IopThread> iop_threads;
+    std::uint32_t iop_current{},iop_next_thread{1},iop_dispatch_depth{};
+    std::uint64_t iop_order{};
+    bool iop_reschedule{},iop_module_returned{};
+    bool iop_work_pending() const;
+    void iop_schedule();
+    void iop_ready(std::uint32_t id,std::int32_t result=0);
+    void iop_block(std::uint32_t kind,std::uint32_t object=0);
+    bool iop_thread_import(const std::string& library,std::uint32_t ordinal);
+    struct IopObject {
+        std::uint32_t attr{},option{},initial{},value{},maximum{};
+        std::vector<std::uint32_t> waiters;
+        std::deque<std::uint32_t> messages;
+    };
+    std::map<std::uint32_t,IopObject> iop_semas,iop_events,iop_mailboxes;
+    std::uint32_t iop_next_object{1};
     std::string iop_output;
     int iop_result{};
     enum class ThreadState { Dormant, Ready, Running, Waiting };
@@ -71,6 +95,18 @@ public:
     std::vector<std::uint8_t> ram, scratchpad, iop_ram;
     std::array<std::uint8_t,4096> vu0_memory{};
     std::uint32_t vu_vi24{};
+    ps2::Vu0Regs vu1_regs{};
+    std::array<std::uint8_t,4096> vu0_code{};
+    std::array<std::uint8_t,16384> vu1_code{},vu1_memory{};
+    std::array<VuExecution,2> vu{};
+    std::array<std::uint64_t,2> vu_aot_pairs{},vu_interpreted_pairs{};
+    std::vector<const VuProgram*> vu_programs;
+    std::array<const VuProgram*,2> vu_selected{};
+    void start_vu(unsigned unit,std::uint32_t address);
+    void step_vu(unsigned unit);
+    void wait_vu(unsigned unit);
+    void invalidate_vu(unsigned unit);
+
     std::map<std::uint32_t, const ps2::UnitInfo*> aot;
     std::vector<const ps2::ModuleInfo*> aot_modules;
     std::string output;

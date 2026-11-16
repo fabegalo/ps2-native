@@ -8,6 +8,7 @@
 #include <format>
 #include "ps2native/io.hpp"
 void register_generated_code();
+void register_generated_vu();
 int main(int argc,char** argv) {
     if (argc!=1 && (argc!=5 || std::string(argv[1])!="--iop" || std::string(argv[3])!="--iop-output")) {
         std::fprintf(stderr,"usage: ps2n-engine-run [--iop ORIGINAL.irx --iop-output OBSERVED.txt]\n");return 2;
@@ -21,7 +22,7 @@ int main(int argc,char** argv) {
             if (ps2::ld32(pc) != word) throw std::runtime_error("AOT code image mismatch");
             console.code_words.emplace(pc,word);
         }
-        register_generated_code();
+        register_generated_code();register_generated_vu();
         if (argc==5) {
             const auto input=ps2::os::path(argv[2]),output=ps2::os::path(argv[4]);
             if (std::filesystem::exists(ps2native::native_io_path(output)) &&
@@ -57,6 +58,9 @@ int main(int argc,char** argv) {
                 static_cast<unsigned long long>(console.iop_last_tick),static_cast<unsigned long long>(console.iop_instructions));
             if (console.iop_result) return console.iop_result;
         }
+        for(unsigned n=0;n<2;++n)if(console.vu_aot_pairs[n] || console.vu_interpreted_pairs[n])
+            std::fprintf(stderr,"[engine-vu] unit=%u aot_pairs=%llu interpreted_pairs=%llu busy=%d\n",n,
+                static_cast<unsigned long long>(console.vu_aot_pairs[n]),static_cast<unsigned long long>(console.vu_interpreted_pairs[n]),console.vu[n].busy);
         std::fwrite(console.output.data(), 1, console.output.size(), stdout);
         std::fprintf(stderr, "[engine] original ELF exited, AOT only, instruction_cost=%llu\n", static_cast<unsigned long long>(console.ticks));
         return console.exit_code;

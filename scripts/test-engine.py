@@ -61,7 +61,7 @@ def main():
     if not all((options.cmake, options.cxx, options.cc, options.ninja)):
         parser.error("Provide CMake, Ninja, clang++ and clang paths")
     components = json.loads((ROOT / "deps.lock.json").read_text(encoding="utf-8"))["ps2native_engine"]
-    for component, directory in (("aot","ps2-native-recomp"),("iop","ps2recomp-iop")):
+    for component, directory in (("aot","ps2-native-recomp"),("iop","ps2recomp-iop"),("vu","ps2-native-vu")):
         for name, expected in components[component]["files"].items():
             data = (ROOT / "third_party" / directory / name).read_bytes().replace(b"\r\n", b"\n")
             if hashlib.sha256(data).hexdigest() != expected:
@@ -77,10 +77,13 @@ def main():
     checked(configure)
     checked([options.cmake, "--build", build, "--target", "ps2n-ee-recomp", "--parallel", "2"])
     suffix = ".exe" if os.name == "nt" else ""
-    checked([options.cmake, "--build", build, "--target", "ps2n-engine-tests", "ps2n-engine-aot-tests", "ps2n-engine-iop-tests", "ps2n-iop-run", "--parallel", "2"])
+    checked([options.cmake, "--build", build, "--target", "ps2n-engine-tests", "ps2n-engine-aot-tests", "ps2n-engine-iop-tests", "ps2n-engine-vu-tests", "ps2n-iop-run", "--parallel", "2"])
     checked([build / ("ps2n-engine-tests" + suffix)])
     checked([build / ("ps2n-engine-aot-tests" + suffix)])
     checked([build / ("ps2n-engine-iop-tests" + suffix)])
+    checked([build / ("ps2n-engine-vu-tests" + suffix)])
+    vu_spec=importlib.util.spec_from_file_location("prepare_engine_vu",ROOT/"scripts/prepare-engine-vu.py")
+    vu_preparer=importlib.util.module_from_spec(vu_spec);vu_spec.loader.exec_module(vu_preparer)
     summary = {}
     locked = json.loads((ROOT / "deps.lock.json").read_text(encoding="utf-8"))["ps2native_engine"]["ps2autotests"]["files"]
     if options.with_iop and "tests/" + options.with_iop + ".irx" not in locked:
@@ -118,6 +121,8 @@ def main():
                     raise RuntimeError("Captured AOT image hash mismatch")
                 prepare += ["--module", image, f"{module['base']:08x}", f"{module['entry']:08x}"]
             checked(prepare)
+            vu_capture=generated/"vu-capture"
+            vu_count=vu_preparer.prepare(vu_capture,generated)
             if options.prepare_only:
                 print(name + ": AOT generated (not executed)", flush=True); break
             checked(configure + [f"-DPS2N_ENGINE_ELF={elf.as_posix()}", f"-DPS2N_ENGINE_GENERATED={generated.as_posix()}",
@@ -125,12 +130,15 @@ def main():
             checked([options.cmake, "--build", build, "--target", "ps2n-engine-run", "--parallel", "2"])
             if options.build_only:
                 print(name + ": native AOT linked (not executed)", flush=True); break
-            environment = dict(os.environ, PS2N_ENGINE_AOT_MISSING_DIR=str(missing))
+            environment = dict(os.environ, PS2N_ENGINE_AOT_MISSING_DIR=str(missing),PS2N_ENGINE_VU_CAPTURE_DIR=str(vu_capture))
             command = [build / ("ps2n-engine-run" + suffix)]
             joint_output = build / "joint-iop.actual"
             if options.with_iop:
                 command += ["--iop", tests / (options.with_iop + ".irx"), "--iop-output", joint_output]
             code, actual, diagnostic = run(command, timeout=15, env=environment)
+            if code==0 and len(list(vu_capture.glob("vu[01]-*.bin")))>vu_count and attempt<32:
+                print(name+": preparing captured VU AOT",flush=True)
+                continue
             if code != 86 or attempt == 32:
                 break
             address = re.search(rb"(?m)^\[engine-aot-missing\] ([0-9A-F]{8})", diagnostic)
@@ -169,7 +177,8 @@ def main():
         summary[name] = {"passed": passed, "exit_code": code, "elf_sha256": identity,
                          "captured_aot_entries": len(modules),
                          "stdout_sha256": hashlib.sha256(actual).hexdigest(), "expected_sha256": hashlib.sha256(expected).hexdigest(),
-                         "diagnostic": diagnostic.decode(errors="replace")[:2000], **joint}
+                         "diagnostic": diagnostic.decode(errors="replace")[:2000],
+                         "vu_aot_images": vu_count if extension==".elf" else 0, **joint}
         (build / (name + ".actual")).write_bytes(actual)
         print(f"{name}: {'PASS' if passed else 'FAIL'} ({len(actual)}/{len(expected)} bytes)", flush=True)
         if not passed:

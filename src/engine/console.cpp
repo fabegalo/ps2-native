@@ -18,7 +18,7 @@ Console::Console() : ram(ps2::kRamSize), scratchpad(ps2::kScratchpadSize), iop_r
     if (active) throw std::runtime_error("The AOT ABI supports one active console per process");
     active = this;
     ps2::g_live_tlb_enabled=false;
-    ee.vu0.vf[0].w[3]=0x3f800000;
+    ee.vu0.vf[0].w[3]=0x3f800000;vu1_regs.vf[0].w[3]=0x3f800000;
     ee.budget = 100000;
     ps2::g_live_ram = ram.data();
     ps2::g_live_spr = scratchpad.data();
@@ -33,10 +33,13 @@ void Console::load(const std::filesystem::path& path) {
     std::fill(iop_ram.begin(), iop_ram.end(), 0);
     for (const auto& s : elf.segments) std::copy_n(bytes.data() + s.file_offset, s.file_size, ram.data() + s.vaddr);
     ee = {};
-    vu0_memory.fill(0); vu_vi24=0;
+    vu0_memory.fill(0); vu0_code.fill(0);vu1_memory.fill(0);vu1_code.fill(0);
+    vu1_regs={};vu1_regs.vf[0].w[3]=0x3f800000;vu={};vu_aot_pairs={};vu_interpreted_pairs={};vu_programs.clear();vu_selected={};vu_vi24=0;
     iop={}; iop_suspended={}; iop_active=false; advancing=false;
     iop_callback_active=false; iop_suspended_active=false; iop_import_slot=0;
     iop_instructions=0; iop_next_tick=0; iop_first_tick=0; iop_last_tick=0;
+    iop_threads.clear(); iop_semas.clear(); iop_events.clear(); iop_mailboxes.clear();
+    iop_current=0; iop_next_thread=1; iop_next_object=1; iop_dispatch_depth=0; iop_order=0; iop_reschedule=false;iop_module_returned=false;
     iop_heap_top=0x10000; iop_imports.clear(); iop_output.clear(); iop_result=0; iop_strtok_next=0;
     threads.clear(); semaphores.clear(); handlers.clear();
     aot.clear(); aot_modules.clear(); code_words.clear(); syscall_handlers.clear(); dma_registers.clear(); sif_registers.clear();
@@ -92,12 +95,16 @@ void Console::advance_to(std::uint64_t target) {
     if (target>100000000) throw std::runtime_error("Console execution limit reached");
     advancing=true;
     try {
-        while ((iop_active || !sif.iop_commands.empty()) && iop_next_tick<=target) {
-            ticks=iop_next_tick;
-            for (const auto& timer : timers)
-                if (timer.due<=ticks) throw std::runtime_error("Timer IRQ delivery is not integrated");
-            step_iop();
-            iop_next_tick+=8;
+        for (;;) {
+            auto event=~0ull;
+            if(iop_work_pending())event=iop_next_tick;
+            for(const auto& v:vu)if(v.busy)event=std::min(event,v.next_tick);
+            if(event>target)break;
+            if(event<ticks)throw std::runtime_error("Console event moved backwards");
+            ticks=event;
+            for(const auto& timer:timers)if(timer.due<=ticks)throw std::runtime_error("Timer IRQ delivery is not integrated");
+            if(iop_work_pending() && iop_next_tick==event) {step_iop();iop_next_tick+=8;}
+            for(unsigned n=0;n<2;++n)if(vu[n].busy && vu[n].next_tick==event)step_vu(n);
         }
         ticks=target;
         for (const auto& timer : timers)
@@ -126,7 +133,7 @@ void Console::schedule() {
         return best;
     };
     auto best=ready();
-    while (best==threads.end() && (iop_active || !sif.iop_commands.empty())) {
+    while (best==threads.end() && iop_work_pending()) {
         advance_to(std::max(ticks,iop_next_tick));
         service_sif_irq();
         best=ready();
@@ -142,7 +149,8 @@ void Console::schedule() {
     }
     current = best->first;
     best->second.state = ThreadState::Running;
-    ee = best->second.context;
+    const auto shared_vu0=ee.vu0;
+    ee = best->second.context;ee.vu0=shared_vu0;
 }
 void Console::run() {
     threads.emplace(1, Thread{.state=ThreadState::Running, .priority=64});
@@ -176,6 +184,12 @@ static std::uint8_t* mapped_physical(std::uint32_t physical, std::size_t size) {
     if (physical < c.ram.size() && size <= c.ram.size()-physical) return c.ram.data()+physical;
     if (physical>=kScratchpadBase && physical-kScratchpadBase<c.scratchpad.size() && size<=c.scratchpad.size()-(physical-kScratchpadBase))
         return c.scratchpad.data()+physical-kScratchpadBase;
+    if (physical>=0x11000000 && physical-0x11000000<c.vu0_code.size() && size<=c.vu0_code.size()-(physical-0x11000000))
+        return c.vu0_code.data()+physical-0x11000000;
+    if (physical>=0x11008000 && physical-0x11008000<c.vu1_code.size() && size<=c.vu1_code.size()-(physical-0x11008000))
+        return c.vu1_code.data()+physical-0x11008000;
+    if (physical>=0x1100c000 && physical-0x1100c000<c.vu1_memory.size() && size<=c.vu1_memory.size()-(physical-0x1100c000))
+        return c.vu1_memory.data()+physical-0x1100c000;
     if (physical>=0x11004000 && physical-0x11004000<c.vu0_memory.size() && size<=c.vu0_memory.size()-(physical-0x11004000))
         return c.vu0_memory.data()+physical-0x11004000;
     if (physical>=0x1c000000 && physical-0x1c000000<0x800000) {
@@ -186,7 +200,12 @@ static std::uint8_t* mapped_physical(std::uint32_t physical, std::size_t size) {
     unsupported("memory/MMIO",physical);
 }
 static std::uint8_t* mapped(std::uint32_t address, std::size_t size, bool write=false) {
-    return mapped_physical(active_console().translate(address,size,write),size);
+    auto& c=active_console();const auto p=c.translate(address,size,write);
+    if(p>=0x11000000 && p<0x11010000) {
+        c.account();
+        if(write && (p<0x11001000 || (p>=0x11008000 && p<0x1100c000)))c.invalidate_vu(p>=0x11008000);
+    }
+    return mapped_physical(p,size);
 }
 #define LOAD(bits, type) type slow_ld##bits(std::uint32_t a) { return load<type>(mapped(a, sizeof(type))); }
 LOAD(8, std::uint8_t)
@@ -201,6 +220,7 @@ static bool dma_register(std::uint32_t a) {
 }
 static std::uint32_t read32_physical(std::uint32_t a) {
     auto& s = active_console();
+    if(a>=0x11000000 && a<0x11010000)s.account();
     if (a == 0x1000e010) return s.dmac_status;
     if (a == 0x1000f000) return s.intc_status;
     if (a == 0x1000f010) return s.intc_mask;
@@ -224,6 +244,7 @@ std::uint32_t slow_ld32(std::uint32_t a) { return read32_physical(active_console
 std::uint64_t slow_ld64(std::uint32_t a) {
     a=active_console().translate(a,8,false);
     if ((a >= 0x10000000 && a < 0x10002000) || dma_register(a) || a == 0x1000f000 || a == 0x1000f010) return read32_physical(a);
+    if(a>=0x11000000 && a<0x11010000)active_console().account();
     return load<std::uint64_t>(mapped_physical(a,8));
 }
 #undef LOAD
@@ -267,10 +288,18 @@ static void write32_physical(std::uint32_t a, std::uint32_t v) {
     }
     store(mapped_physical(a, 4), v);
 }
-void slow_st32(std::uint32_t a, std::uint32_t v) { write32_physical(active_console().translate(a,4,true),v); }
+void slow_st32(std::uint32_t a, std::uint32_t v) {
+    const auto p=active_console().translate(a,4,true);
+    if(p>=0x11000000 && p<0x11010000)store(mapped(a,4,true),v);
+    else write32_physical(p,v);
+}
 void slow_st64(std::uint32_t a, std::uint64_t v) {
     a=active_console().translate(a,8,true);
     if ((a >= 0x10000000 && a < 0x10002000) || dma_register(a) || a == 0x1000f000 || a == 0x1000f010) { write32_physical(a, static_cast<std::uint32_t>(v)); return; }
+    if(a>=0x11000000 && a<0x11010000) {
+        active_console().account();
+        if(a<0x11001000 || (a>=0x11008000 && a<0x1100c000))active_console().invalidate_vu(a>=0x11008000);
+    }
     store(mapped_physical(a,8), v);
 }
 #undef STORE
@@ -575,9 +604,8 @@ std::uint32_t cfc2(Cpu &c, std::uint32_t reg) {
     case 24: return active_console().vu_vi24;
     case 26: return v.tpc >> 3;
     case 27: return v.cmsar0;
-    // Neither unit is ever busy: a microprogram runs to its end inside the instruction that starts it.
-    case 29: return 0; // No microprogram start is accepted by this engine yet.
-    case 31: unsupported("VU1 CMSAR1 read",reg);
+    case 29: active_console().account();return (active_console().vu[0].busy ? 1u : 0u)|(active_console().vu[1].busy ? 0x100u : 0u);
+    case 31: return active_console().vu[1].cmsar;
     default: return 0;
     }
 }
@@ -592,14 +620,19 @@ void ctc2(Cpu &c, std::uint32_t reg, std::uint32_t value) {
     case 22: v.q = value; break;
     case 24: active_console().vu_vi24 = value & 0x0C0Cu; break;
     case 27: v.cmsar0 = value & 0xFFFFu; break;
-    case 31: unsupported("VU1 microprogram start",value);
+    case 28:
+        if(value && (active_console().vu[0].busy || active_console().vu[1].busy))unsupported("VU reset/control while running",value);
+        break;
+    case 31: active_console().vu[1].cmsar=value&0xffff;active_console().start_vu(1,(value&0x7ff)*8);break;
     // MAC (17), the constant in 19, TPC (26) and VPU_STAT (29) are read only; the reserved registers
-    // (23, 25, 30) and FBRST (28) take no value.
+    // (23, 25, 30) take no value. FBRST currently accepts idle-unit writes only.
     default: break;
     }
 }
 
-void vcallms(Cpu&,std::uint32_t address) { unsupported("VU0 microprogram execution",address); }
+void vcallms(Cpu&,std::uint32_t address) {active_console().wait_vu(0);active_console().start_vu(0,address);}
+bool vu0_busy(Cpu&) {active_console().account();return active_console().vu[0].busy;}
+void vu0_wait(Cpu&) {active_console().wait_vu(0);}
 std::uint8_t* vu0_data() { return active_console().vu0_memory.data(); }
 
 std::uint32_t mfc0(Cpu& c, std::uint32_t reg, std::uint32_t sel) { if (sel) unsupported("COP0 select", reg); return c.cop0[reg]; }

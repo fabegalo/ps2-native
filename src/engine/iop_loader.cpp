@@ -7,7 +7,7 @@
 
 namespace ps2native::engine {
 void Console::load_iop(const std::filesystem::path& path) {
-    if (iop_active) throw std::runtime_error("Cannot replace a running IOP module");
+    if (iop_active || (iop_work_pending() && !iop_module_returned)) throw std::runtime_error("Cannot replace a running IOP module");
     if (ps2native::regular_file_size(path)>16u<<20) throw std::runtime_error("IRX input exceeds 16 MiB bound");
     const auto file=ps2native::read_file(path);
     const auto word=[&](std::size_t at) {
@@ -33,9 +33,9 @@ void Console::load_iop(const std::filesystem::path& path) {
         throw std::runtime_error("Invalid IRX load segment/metadata");
     const auto base=(iop_heap_top+15)&~15u;
     const auto whole=std::max<std::uint64_t>(size,std::uint64_t{word(info+12)}+word(info+16)+word(info+20));
-    if (whole>0x1d0000) throw std::runtime_error("IRX memory size overflows module arena");
+    if (whole>0x180000) throw std::runtime_error("IRX memory size overflows module arena");
     size=static_cast<std::uint32_t>(whole);
-    if (base>=0x1d0000 || size>0x1d0000-base || word(info+4)>=size || word(info+8)>0x1fffff-base)
+    if (base>=0x180000 || size>0x180000-base || word(info+4)>=size || word(info+8)>0x1fffff-base)
         throw std::runtime_error("IRX outside IOP module/stack/service boundaries");
     std::vector<std::uint8_t> image(size);
     std::copy_n(file.data()+offset,initialized,image.data());
@@ -89,6 +89,10 @@ void Console::load_iop(const std::filesystem::path& path) {
     iop_imports.insert(imports.begin(),imports.end()); iop_heap_top=base+size;
     iop={}; iop_import_slot=0; iop.pc=base+word(info+4); iop.gpr[28]=base+word(info+8);
     iop.gpr[29]=0x1ef000; iop.gpr[31]=0xfffffff0;
-    iop_next_tick=now()+8; iop_active=true; iop_result=0;
+    iop_next_tick=now()+8; iop_active=true; iop_result=0;iop_module_returned=false;
+    iop_current=iop_next_thread++;
+    auto& thread=iop_threads[iop_current];thread.context=iop;thread.status=1;
+    thread.entry=iop.pc;thread.stack=0x1df000;thread.size=0x10000;thread.gp=iop.gpr[28];
+    thread.initial_priority=thread.priority=8;thread.attr=0x02000000;
 }
 }

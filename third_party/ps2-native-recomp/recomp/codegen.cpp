@@ -694,6 +694,7 @@ private:
     void simple(const Insn &i) {
         const std::uint32_t rs = i.rs(), rt = i.rt(), rd = i.rd(), sa = i.sa();
         const std::uint32_t fsf = (i.word >> 21) & 3u, ftf = (i.word >> 23) & 3u;
+        if ((i.word >> 26) == 0x12u) line("(void)vu0_busy(c);");
         switch (i.op) {
         case Sll: if (i.word) set_w(rd, std::format("{} << {}", w(rt), sa)); break;
         case Srl: set_w(rd, std::format("{} >> {}", w(rt), sa)); break;
@@ -954,10 +955,12 @@ private:
             if (i.fs()) line(std::format("{} = {};", vf(i.fs()), reg(rt)));
             break;
         case Cfc2:
+            if (i.word & 1u) line("vu0_wait(c);");
             if (i.fs() < 16) set_w(rt, vi(i.fs()));
             else set_w(rt, std::format("cfc2(c, {}u)", i.fs()));
             break;
         case Ctc2:
+            if (i.word & 1u) line("vu0_wait(c);");
             if (i.fs() < 16) line(std::format("vu::set_vi(c.vu0, {}u, {});", i.fs(), w(rt)));
             else line(std::format("ctc2(c, {}u, {});", i.fs(), w(rt)));
             break;
