@@ -17,6 +17,8 @@
 #include <vector>
 #include <filesystem>
 
+class EngineAudio;
+
 namespace ps2native::engine {
 class MissingAotEntry : public std::runtime_error {
 public:
@@ -40,10 +42,20 @@ public:
     void iop_boot_step();
     std::filesystem::path iop_rom0;
     std::array<std::uint32_t,24> iop_sio2_send{};
+    std::uint32_t iop_sio2_control=0x3bc,iop_sio2_status=0x1d100,iop_sio2_interrupt=0,iop_sio2_command=0;
+    std::vector<std::uint8_t> iop_sio2_input;
+    std::deque<std::uint8_t> iop_sio2_output;
+    std::uint32_t sio2_read(std::uint32_t,unsigned);
+    void sio2_write(std::uint32_t,std::uint32_t,unsigned);
     std::map<std::uint32_t,std::uint32_t> iop_bus_registers;
     struct IopModuleWait {std::uint32_t thread{},result{};std::string library;std::uint32_t ordinal{},version{};};
     std::map<std::uint32_t,std::vector<IopModuleWait>> iop_module_waiters;
     std::array<std::uint32_t,4> iop_modload_callbacks{};
+    struct IopAlarm {std::uint32_t function{},argument{},gp{};std::uint64_t target{};bool pending{};};
+    std::map<std::uint32_t,IopAlarm> iop_alarms;
+    std::uint32_t iop_alarm_next=1,iop_alarm_active=0;
+    static constexpr std::uint64_t iop_alarm_min=100ull*36864/1000; // PS2SDK threadman: 100 us.
+    bool iop_alarm_step();
     struct IopTimer {std::uint32_t users{},mode{},count{},compare{},prescale{1};std::uint64_t base{};};
     std::array<IopTimer,6> iop_timers{};
     std::uint32_t iop_timer_counter(unsigned index) const;
@@ -68,6 +80,17 @@ public:
     void iop_module_return();
     void boot_cdvd(const std::filesystem::path& rom0,bool extended=true);
     std::unique_ptr<IopCdvd> cdvd;
+    std::unique_ptr<EngineAudio> audio;
+    bool audio_output{};
+    std::uint64_t audio_sample_due{~0ull};
+    std::uint32_t iop_pending_irqs{},iop_irq_cause{};
+    void initialize_audio();
+    std::uint64_t audio_next_tick() const;
+    void advance_audio();
+    void start_audio_dma(unsigned core);
+    std::uint32_t audio_read(std::uint32_t address,unsigned bytes);
+    void audio_write(std::uint32_t address,std::uint32_t value,unsigned bytes);
+    std::uint32_t pending_iop_irq() const;
     bool iop_irq_active{};
     struct RpcServer {std::uint32_t address{},sid{},function{},buffer{},callback{},callback_buffer{},queue{},gp{};std::uint64_t completions{};};
     struct RpcRequest {std::vector<std::uint32_t> packet;std::vector<std::uint8_t> payload;};
@@ -143,7 +166,7 @@ public:
         std::uint32_t entry{}, stack{}, size{}, gp{}, priority{}, wait{}, initial_priority{}, attr{}, option{};
         std::uint64_t order{};
     };
-    struct Semaphore { int count{}, maximum{}; std::vector<std::uint32_t> waiters; };
+    struct Semaphore { int count{}, maximum{}; std::vector<std::uint32_t> waiters; std::uint32_t initial{},attr{},option{}; };
     std::map<std::uint32_t, Thread> threads;
     std::map<std::uint32_t, Semaphore> semaphores;
     std::uint32_t current{1};

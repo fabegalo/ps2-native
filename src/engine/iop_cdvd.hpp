@@ -16,7 +16,7 @@ public:
     Medium medium{Medium::Auto};
     std::unique_ptr<DiscImage> media;
     const ConsoleHardware* hardware{};
-    std::map<std::uint32_t,std::uint32_t> dma{{0x1f8010b0,0},{0x1f8010b4,0},{0x1f8010b8,0},{0x1f8010f0,0},{0x1f8010f4,0},{0x1f801570,0},{0x1f801574,0}};
+    std::map<std::uint32_t,std::uint32_t> dma{{0x1f8010b0,0},{0x1f8010b4,0},{0x1f8010b8,0},{0x1f8010f0,0},{0x1f8010f4,0},{0x1f801570,0},{0x1f801574,0},{0x1f8010c0,0},{0x1f8010c4,0},{0x1f8010c8,0},{0x1f801500,0},{0x1f801504,0},{0x1f801508,0}};
     std::vector<std::uint8_t> nparams,sparams;
     std::deque<std::uint8_t> sresults;
     std::uint8_t ncommand{},scommand{},irq{},error{},status{},howto{0x80};

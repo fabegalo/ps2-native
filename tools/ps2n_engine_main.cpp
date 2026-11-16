@@ -14,7 +14,7 @@ void register_generated_vu();
 int main(int argc,char** argv) {
     try {
         std::filesystem::path iop_input,iop_output,capture,rom0,disc;std::string profile;auto medium=ps2native::engine::IopCdvd::Medium::Auto;
-        unsigned present_ms=0;std::uint64_t max_ticks=100000000;bool extended=true;
+        unsigned present_ms=0;std::uint64_t max_ticks=100000000;bool extended=true,audio_output=true;
         for(int n=1;n<argc;++n) {
             if(n+1>=argc)throw std::runtime_error("Engine option requires a value");
             const auto option=std::string(argv[n++]);
@@ -26,6 +26,7 @@ int main(int argc,char** argv) {
             else if(option=="--max-ticks"){max_ticks=std::stoull(argv[n]);if(!max_ticks || max_ticks>1000000000)throw std::runtime_error("Logical run limit must be in 1..1000000000");}
             else if(option=="--cdvd-modules"){const std::string family=argv[n];if(family!="legacy" && family!="extended")throw std::runtime_error("Unknown original CDVD module family");extended=family=="extended";}
             else if(option=="--rom0")rom0=ps2::os::path(argv[n]);
+            else if(option=="--audio-output"){const std::string mode=argv[n];if(mode!="on" && mode!="off")throw std::runtime_error("Audio output must be on or off");audio_output=mode=="on";}
             else if(option=="--capture")capture=ps2::os::path(argv[n]);
             else if(option=="--present-ms")present_ms=std::stoul(argv[n]);
             else throw std::runtime_error("Unknown engine option");
@@ -37,6 +38,7 @@ int main(int argc,char** argv) {
         ps2native::engine::Console console;
         if (ps2native::sha256_file(ps2::os::path(PS2N_ENGINE_ELF)) != kAotElfHash)
             throw std::runtime_error("AOT ELF identity mismatch");
+        console.audio_output=audio_output;
         console.load(ps2::os::path(PS2N_ENGINE_ELF));console.execution_limit=max_ticks;
         for (const auto& [pc, word] : kAotWords) {
             if (ps2::ld32(pc) != word) throw std::runtime_error("AOT code image mismatch");
@@ -71,7 +73,12 @@ int main(int argc,char** argv) {
         }
         catch (...) {
             if(console.graphics_initialized && !capture.empty()){try{ps2native::engine::capture_graphics(console,capture);}catch(const std::exception& e){std::fprintf(stderr,"[frame] no failure-boundary capture: %s\n",e.what());}}
-            std::fprintf(stderr,"[engine-state] ee_pc=%08X tick=%llu iop_pc=%08X gs=%d frames=%llu sif_ms=%08X sif_sm=%08X rpc_absent=%08X\n",console.ee.pc,static_cast<unsigned long long>(console.ticks),console.iop.pc,console.graphics_initialized,static_cast<unsigned long long>(console.graphics_frames),console.sif.msflag,console.sif.smflag,console.rpc_missing_server.value_or(0));
+            std::fprintf(stderr,"[engine-state] ee_pc=%08X tick=%llu iop_pc=%08X gs=%d vblanks=%llu sif_ms=%08X sif_sm=%08X rpc_absent=%08X\n",console.ee.pc,static_cast<unsigned long long>(console.ticks),console.iop.pc,console.graphics_initialized,static_cast<unsigned long long>(console.graphics_frames),console.sif.msflag,console.sif.smflag,console.rpc_missing_server.value_or(0));
+            for(const auto& [id,t]:console.threads)if(t.state!=ps2native::engine::Console::ThreadState::Dormant)
+                std::fprintf(stderr,"[engine-ee-thread] id=%u state=%u priority=%u pc=%08X wait=%u\n",id,static_cast<unsigned>(t.state),t.priority,id==console.current?console.ee.pc:t.context.pc,t.wait);
+            for(const auto& [id,t]:console.iop_threads)if(t.status!=16)
+                std::fprintf(stderr,"[engine-iop-thread] id=%u status=%u priority=%u pc=%08X wait=%u object=%u\n",id,t.status,t.priority,id==console.iop_current?console.iop.pc:t.context.pc,t.wait,t.wait_id);
+            std::fprintf(stderr,"[engine-registers] ee_ra=%08X a0=%08X a1=%08X v0=%08X pmode=%016llX rpc_active=%zu\n",console.ee.r[31].w[0],console.ee.r[4].w[0],console.ee.r[5].w[0],console.ee.r[2].w[0],static_cast<unsigned long long>(console.gs_private[0]),console.rpc_calls.size());
             std::fwrite(console.output.data(),1,console.output.size(),stdout);throw;
         }
         if(!capture.empty()) {

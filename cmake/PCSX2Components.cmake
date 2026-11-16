@@ -1,10 +1,11 @@
-# SPU2 only; video and EE/IOP execution remain in the pinned PS2Recomp.
+# SPU2 only; the calling Console supplies memory, time and interrupts.
 # kzspu2 (PCSX2's SPU2 with KillzoneRecomp's IOP shims) is built here rather than through its MSVC-only
 # CMakeLists, so the same locked sources compile with MSVC, GCC and Clang on x64 and ARM64.
-set(_pcsx2 "${PROJECT_SOURCE_DIR}/external/pcsx2")
-set(_kzspu2 "${PROJECT_SOURCE_DIR}/external/pcsx2-components/kzspu2")
+set(PS2N_DEVICE_SOURCE_ROOT "${PROJECT_SOURCE_DIR}" CACHE PATH "Root containing immutable locked device sources")
+set(_pcsx2 "${PS2N_DEVICE_SOURCE_ROOT}/external/pcsx2")
+set(_kzspu2 "${PS2N_DEVICE_SOURCE_ROOT}/external/pcsx2-components/kzspu2")
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
-execute_process(COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/fetch-pcsx2-components.py" --check
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/fetch-pcsx2-components.py" --check --source-root "${PS2N_DEVICE_SOURCE_ROOT}"
     RESULT_VARIABLE _device_check)
 if(NOT _device_check EQUAL 0)
     message(FATAL_ERROR "PCSX2 device sources are missing or modified; see verification output above")
@@ -19,7 +20,7 @@ if(MSVC AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_AR
     include(ExternalProject)
     set(_kzspu2_dir "${CMAKE_BINARY_DIR}/kzspu2-clang")
     set(_kzspu2_lib "${_kzspu2_dir}/lib/kzspu2.lib")
-    set(_kzspu2_args -DCMAKE_BUILD_TYPE=Release "-DPS2N_ROOT=${PROJECT_SOURCE_DIR}"
+    set(_kzspu2_args -DCMAKE_BUILD_TYPE=Release "-DPS2N_ROOT=${PROJECT_SOURCE_DIR}" "-DPS2N_DEVICE_SOURCE_ROOT=${PS2N_DEVICE_SOURCE_ROOT}"
         "-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY=${_kzspu2_dir}/lib" "-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE=${_kzspu2_dir}/lib")
     if(CMAKE_GENERATOR MATCHES "Visual Studio")
         set(_kzspu2_toolset CMAKE_GENERATOR "${CMAKE_GENERATOR}" CMAKE_GENERATOR_PLATFORM "${CMAKE_GENERATOR_PLATFORM}"
@@ -46,7 +47,7 @@ target_compile_definitions(kzspu2_test PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
 
 # Host audio output: SDL3 (Zlib), the same commit as ReXGlue, audio subsystem only.
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/fetch-pcsx2-components.py"
-    --group host_libraries --check RESULT_VARIABLE _host_check)
+    --group host_libraries --check --source-root "${PS2N_DEVICE_SOURCE_ROOT}" RESULT_VARIABLE _host_check)
 if(NOT _host_check EQUAL 0)
     message(FATAL_ERROR "Pinned host libraries missing or modified; run scripts/fetch-pcsx2-components.py --group host_libraries")
 endif()
@@ -56,4 +57,4 @@ endforeach()
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_AUDIO ON CACHE BOOL "" FORCE)
 set(SDL_UNIX_CONSOLE_BUILD ON CACHE BOOL "" FORCE)
-add_subdirectory("${PROJECT_SOURCE_DIR}/external/sdl3" sdl3 EXCLUDE_FROM_ALL SYSTEM)
+add_subdirectory("${PS2N_DEVICE_SOURCE_ROOT}/external/sdl3" sdl3 EXCLUDE_FROM_ALL SYSTEM)

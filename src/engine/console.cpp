@@ -1,6 +1,7 @@
 #include "ps2native/engine/console.hpp"
 #include "ps2native/elf.hpp"
 #include "iop_cdvd.hpp"
+#include "engine_audio.hpp"
 #include <fstream>
 #include <cstdio>
 #include <cstdlib>
@@ -25,11 +26,14 @@ Console::Console() : ram(ps2::kRamSize), scratchpad(ps2::kScratchpadSize), iop_r
     ps2::g_live_ram = ram.data();
     ps2::g_live_spr = scratchpad.data();
 }
-Console::~Console() { ps2::g_live_tlb_enabled=false; active = nullptr; ps2::g_live_ram = ps2::g_live_spr = nullptr; }
+Console::~Console() { audio.reset(); ps2::g_live_tlb_enabled=false; active = nullptr; ps2::g_live_ram = ps2::g_live_spr = nullptr; }
 void Console::reset_iop() {
+    if(audio && (audio->dmaBusy(0) || audio->dmaBusy(1)))throw std::runtime_error("IOP reboot with active SPU2 DMA cancellation is not integrated");
+    iop_alarms.clear();iop_alarm_next=1;iop_alarm_active=0;
+    iop_pending_irqs=0;iop_irq_cause=0;
     iop_bus_registers.clear();
     iop_vblank_handlers.clear();iop_vblank_jobs.clear();iop_vblank_active.reset();iop_vblank_pending=0;iop_in_vblank=false;
-    iop_timers={};for(auto& t:iop_timers)t.base=ticks;iop_modload_callbacks={};iop_sio2_send={};iop_module_waiters.clear();
+    iop_timers={};for(auto& t:iop_timers)t.base=ticks;iop_modload_callbacks={};iop_sio2_send={};iop_sio2_control=0x3bc;iop_sio2_status=0x1d100;iop_sio2_interrupt=iop_sio2_command=0;iop_sio2_input.clear();iop_sio2_output.clear();iop_module_waiters.clear();
     iop_boot_modules.clear();iop_boot_waiting=0;iop_boot_active=false;
     std::fill(iop_ram.begin(),iop_ram.end(),0);
     iop={}; iop_suspended={}; iop_active=false;
@@ -54,6 +58,7 @@ void Console::load(const std::filesystem::path& path) {
     if (!file) throw std::runtime_error("Cannot open ELF");
     std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(file), {}};
     const auto elf = parse_ee_elf(bytes);
+    audio.reset();audio_sample_due=~0ull;
     std::fill(ram.begin(), ram.end(), 0);
     for (const auto& s : elf.segments) std::copy_n(bytes.data() + s.file_offset, s.file_size, ram.data() + s.vaddr);
     ee = {};
@@ -130,7 +135,8 @@ void Console::refresh_ee_timer(unsigned index) {
 }
 std::uint64_t Console::now() const { return ticks + static_cast<std::uint64_t>(100000ll - ee.budget); }
 std::uint64_t Console::next_event_tick() const {
-    std::uint64_t event=cdvd->due;
+    std::uint64_t event=std::min(cdvd->due,audio_next_tick());
+    for(const auto& [id,a]:iop_alarms)if(!a.pending)event=std::min(event,std::max(ticks,a.target));
     for(const auto& t:timers)event=std::min(event,t.due);
     if(iop_work_pending() || iop_boot_active)event=std::min(event,iop_next_tick);
     for(const auto& [id,e]:graphics_events)event=std::min(event,e.first);
@@ -146,8 +152,11 @@ void Console::advance_to(std::uint64_t target) {
             const auto event=next_event_tick();
             if(event>target)break;
             if(event<ticks)throw std::runtime_error("Console event moved backwards");
+            const bool audio_event=audio_next_tick()==event;
             ticks=event;
+            if(audio_event)advance_audio();
             const bool boot_event=iop_boot_active && iop_next_tick==event;
+            for(auto& [id,a]:iop_alarms)if(!a.pending && a.target<=event){const bool idle=!iop_work_pending();a.pending=true;if(idle)iop_next_tick=std::max(iop_next_tick,ticks+8);}
             if(cdvd->due==event)cdvd->complete();
             for(auto it=graphics_events.begin();it!=graphics_events.end();) {
                 if(it->second.first!=event){++it;continue;}
@@ -166,6 +175,7 @@ void Console::advance_to(std::uint64_t target) {
             for(unsigned n=0;n<2;++n)if(vu[n].busy && vu[n].next_tick==event)step_vu(n);
         }
         ticks=target;
+        if(audio)advance_audio();
 
     } catch (...) { advancing=false; throw; }
     advancing=false;
@@ -209,7 +219,11 @@ void Console::schedule() {
     current = best->first;
     best->second.state = ThreadState::Running;
     const auto shared_vu0=ee.vu0;
+    const auto shared_cop0=std::to_array(ee.cop0);const auto shared_pcr_at=ee.pcr_at;
+    const auto shared_pcr=std::to_array(ee.pcr);
     ee = best->second.context;ee.vu0=shared_vu0;
+    std::copy(shared_cop0.begin(),shared_cop0.end(),ee.cop0);
+    std::copy(shared_pcr.begin(),shared_pcr.end(),ee.pcr);ee.pcr_at=shared_pcr_at;
 }
 void Console::run() {
     threads.emplace(1, Thread{.state=ThreadState::Running, .entry=ee.pc, .priority=64, .initial_priority=64});
@@ -544,6 +558,29 @@ void syscall(Cpu& c, std::uint32_t pc) {
     case 0x23: case 0x24:
         s.threads.at(s.current).state = ps2native::engine::Console::ThreadState::Dormant;
         s.reschedule_requested=true; c.pc |= kUnwind; break;
+    // Priority/ready-order contract adapted from the pinned MIT kernel; priority 0 is valid on EE.
+    case 0x29: case 0x2a: {
+        const auto it=s.threads.find(a0 ? a0 : s.current);
+        if(it==s.threads.end() || it->second.state==ps2native::engine::Console::ThreadState::Dormant){result=-1;break;}
+        auto& t=it->second;result=t.priority;t.priority=a1&127;
+        if(t.state==ps2native::engine::Console::ThreadState::Ready)t.order=++s.order;
+        s.reschedule_requested=true;
+        if(n==0x29 && !s.in_interrupt)c.pc|=kUnwind;
+        break;
+    }
+    case 0x2b: case 0x2c: {
+        const auto priority=a0&127;result=priority;
+        const auto current=s.threads.find(s.current);
+        if(current==s.threads.end() || current->second.priority!=priority){
+            auto first=s.threads.end();
+            for(auto it=s.threads.begin();it!=s.threads.end();++it)
+                if(it->second.state==ps2native::engine::Console::ThreadState::Ready && it->second.priority==priority && (first==s.threads.end() || it->second.order<first->second.order))first=it;
+            if(first!=s.threads.end())first->second.order=++s.order;
+        }
+        s.reschedule_requested=true;
+        if(n==0x2b && !s.in_interrupt)c.pc|=kUnwind;
+        break;
+    }
     case 0x2f: result = s.current; break;
     case 0x30: case 0x31: {
         const auto it=s.threads.find(a0 ? a0 : s.current);
@@ -561,12 +598,13 @@ void syscall(Cpu& c, std::uint32_t pc) {
         result=status; break;
     }
     case 0x40: {
+        (void)mapped(a0,24);
         const auto count = ld32(a0 + 8), maximum = ld32(a0 + 4);
         if (std::getenv("PS2N_ENGINE_TRACE")) std::fprintf(stderr,"[sema] %u %u %u %u %u %u\n",count,maximum,ld32(a0+8),ld32(a0+12),ld32(a0+16),ld32(a0+20));
         if (!maximum || count > maximum || maximum > 0x7fffffff) { result = -1; break; }
         std::uint32_t id = 1; while (id < 256 && s.semaphores.contains(id)) ++id;
         if (id == 256) { result = -1; break; }
-        s.semaphores.emplace(id, ps2native::engine::Console::Semaphore{static_cast<int>(count), static_cast<int>(maximum), {}});
+        s.semaphores.emplace(id, ps2native::engine::Console::Semaphore{static_cast<int>(count), static_cast<int>(maximum), {},count,ld32(a0+16),ld32(a0+20)});
         result = id; break;
     }
     case 0x41: {
@@ -602,6 +640,12 @@ void syscall(Cpu& c, std::uint32_t pc) {
             sema.waiters.push_back(s.current); s.reschedule_requested=true; c.pc |= kUnwind;
         }
         result = a0; break;
+    }
+    case 0x47: case 0x48: {
+        const auto it=s.semaphores.find(a0);if(it==s.semaphores.end()){result=-1;break;}
+        auto* out=mapped(a1,24,true);const auto& sema=it->second;
+        const std::uint32_t fields[]={static_cast<std::uint32_t>(sema.count),static_cast<std::uint32_t>(sema.maximum),sema.initial,static_cast<std::uint32_t>(sema.waiters.size()),sema.attr,sema.option};
+        std::memcpy(out,fields,sizeof(fields));result=a0;break;
     }
     case 0x3c: {
         const auto top = a1 == 0xffffffff ? kRamSize - 4096 : a1 + a2;

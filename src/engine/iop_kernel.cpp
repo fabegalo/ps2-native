@@ -7,8 +7,9 @@
 
 namespace ps2native::engine {
 bool Console::iop_work_pending() const {
+    if(iop_intr_enabled && std::any_of(iop_alarms.begin(),iop_alarms.end(),[](const auto& item){return item.second.pending;}))return true;
     if(iop_intr_enabled && (iop_vblank_pending || !iop_vblank_jobs.empty()))return true;
-    if(cdvd->irq_ready())return true;
+    if(pending_iop_irq()!=~0u)return true;
     if (iop_active || !sif.iop_commands.empty()) return true;
     for (const auto& [id,t] : iop_threads)
         if (t.status==2 || ((t.status&4) && t.wait==2 && t.deadline!=~0ull)) return true;
@@ -57,7 +58,7 @@ bool Console::iop_thread_import(const std::string& library,std::uint32_t ordinal
         case 4: case 5: case 6: case 7: case 8: case 9: case 10: case 11: case 12: case 13:
         case 14: case 15: case 16: case 17: case 18: case 19: case 20: case 22: case 23:
         case 24: case 25: case 26: case 27: case 28: case 29: case 30: case 31: case 32:
-        case 33: case 34: case 39: case 40: case 42: case 43:break;
+        case 33: case 34: case 35: case 36: case 37: case 38: case 39: case 40: case 42: case 43:break;
         default:return false;
         }
     } else if(library=="thevent") {
@@ -92,6 +93,20 @@ bool Console::iop_thread_import(const std::string& library,std::uint32_t ordinal
         if (ordinal==33) {
             if (it==iop_threads.end()) return result(-407);
             result(0);iop_block(2);it->second.deadline=ticks+std::max<std::uint64_t>(8,(std::uint64_t{a}*36864/1000)*8);return true;
+        }
+        if(ordinal>=35 && ordinal<=38){
+            if(((ordinal==36 || ordinal==38))!=iop_callback_active)return result(-100);
+            if(ordinal>=37){
+                const auto alarm=std::find_if(iop_alarms.begin(),iop_alarms.end(),[&](const auto& item){return item.first!=iop_alarm_active && item.second.function==a && item.second.argument==b;});
+                if(alarm==iop_alarms.end())return result(-105);iop_alarms.erase(alarm);return result(0);
+            }
+            if(!b || (b&3) || b>=iop_ram.size())throw std::runtime_error("IOP alarm handler outside RAM");
+            if(std::any_of(iop_alarms.begin(),iop_alarms.end(),[&](const auto& item){return item.first!=iop_alarm_active && item.second.function==b && item.second.argument==c;}))return result(-104);
+            if(iop_alarms.size()>=128)throw std::runtime_error("IOP alarm capacity limit reached");
+            auto delay=std::uint64_t{iop_read(a,4)}|(std::uint64_t{iop_read(a+4,4)}<<32);
+            if(delay<iop_alarm_min){delay=iop_alarm_min;iop_write(a,static_cast<std::uint32_t>(delay),4);}
+            if(delay>(~0ull-ticks)/8)throw std::runtime_error("IOP alarm clock overflow");
+            iop_alarms.emplace(iop_alarm_next++,IopAlarm{b,c,iop.gpr[28],ticks+delay*8,false});return result(0);
         }
         if (ordinal==34 || ordinal==43) {
             const auto clock=ticks/8;

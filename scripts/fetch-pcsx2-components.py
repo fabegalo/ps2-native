@@ -25,12 +25,15 @@ def main(root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check', action='store_true', help='Verify without downloading or writing')
     parser.add_argument('--group', choices=('pcsx2_devices', 'graphics_devices', 'host_libraries'), default='pcsx2_devices')
+    parser.add_argument('--source-root', type=Path, help='Read-only shared source root (requires --check)')
     args = parser.parse_args()
+    if args.source_root and not args.check: parser.error('--source-root is read-only and requires --check')
     root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
     entries = json.loads((root / 'deps.lock.json').read_text())[args.group]
-    directories = {(root / entry['directory']).resolve() for entry in entries}
+    source_root = args.source_root.resolve() if args.source_root else root
+    directories = {(source_root / entry['directory']).resolve() for entry in entries}
     for entry in entries:
-        directory = root / entry['directory']
+        directory = source_root / entry['directory']
         excluded = tuple(Path(item) for item in entry.get('excluded_directories', []))
         for item in excluded:
             if item.is_absolute() or '..' in item.parts or (directory / item).resolve() not in directories:

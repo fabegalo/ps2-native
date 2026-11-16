@@ -4,7 +4,8 @@
 
 **16/11/2026 — PS2Native Engine (`engine/ps2native-core`), requested by the maintainer.**
 The project-owned core preserves the seven boundaries; `main` and
-`migration/exoteric-runtime` remain separate, including the previous PCSX2 SPU2 integration.
+`migration/exoteric-runtime` remain separate. This core reuses the previously approved
+PCSX2/kzspu2 device, without linking their EE/IOP runtime.
 The pinned exoteric33 EE AOT translator is an MIT component; no external runtime is linked.
 The maintainer approved selective SIF/CMD and TTY HLE for M1/M2 on 16/11. Console-owned
 IOP RAM backs the HLE endpoint; real DMA packets and original EE AOT handlers complete
@@ -221,15 +222,39 @@ order, honoring interrupt masking and zero-return removal. EE HBlank counters us
 same deterministic PAL/NTSC clock as GS events; compare/overflow events reach INTC.
 GsGetIMR/GsPutIMR and SetGsCrt operate the existing GS backend and display mode.
 
-Super now boots the requested IOPRP and starts its original SIO2MAN, PADMAN, RSPU2DRV,
-MCMAN and MCSERV, with native PAD and memory-card RPC registrations. It reaches the
-RTX 4070/D3D12 compute GS and then the unconnected SPU2 register at `BF9007C6`
-(IOP `000557C8`, EE `001E3228`, tick 5775042). The display circuit is still inactive:
-there is no game frame or gameplay evidence. The next integration reuses the previously
-approved, locked PCSX2/kzspu2 device, keeping this Console's clock and RAM.
+The previously approved, hash-locked PCSX2/kzspu2 SPU2 now uses this Console's IOP RAM,
+clock and interrupt dispatch. DMA4/7 retain disabled descriptors, transfer actual data
+and deliver native IRQ36/40 through their respective DICR banks. The existing SDL3 host
+adapter presents unchanged 48 kHz stereo PCM with backpressure and explicit failures;
+`--audio-output off` selects headless processing, with no silent output fallback.
+`PS2N_DEVICE_SOURCE_ROOT` can share existing immutable device sources read-only; checks
+still use this checkout's dependency lock. The reused ADPCM/Gaussian/ADSR/reverb PCM
+regression retains SHA-256 `ac5db4520c88b13ae29a8f20a7cb5cce0e50c06a8916c603430f3e1725784818`.
+
+EE priority changes/ready-queue rotation include priority zero; semaphore status reads
+actual counts, waiters and original metadata. Context switches preserve processor-wide
+COP0/interrupt and performance state, correcting the deadlock when a new EE thread
+previously replaced those registers with zero. A negative regression reproduced the
+loss before the correction. SIO2 PIO/IRQ probing follows patches 0062/0065 and reports
+the actual open bus: no host controller/card is attached, and serial DMA remains explicit.
+
+CD reads now accept the original driver's CAV mode 0x85, using PCSX2's radial-rate model
+and updating sector deadlines on the shared clock. This is an approximate device timing
+model, not hardware cycle certification; DVD CAV still requires layer geometry.
+Threadman SetAlarm/CancelAlarm execute native interrupt callbacks, preserve masked
+pending deadlines and repeat from the previous target until the callback returns zero.
+Their minimum delay follows PS2SDK threadman's 100 us clock conversion.
+
+Super boots its original SIO2MAN, PADMAN, RSPU2DRV, MCMAN and MCSERV; sound initialization
+completes and the original CDVD read path advances. At tick 99994420 the RTX 4070/D3D12
+compute GS has an active display (PMODE 0x66), permitting a real 640x448 framebuffer
+capture, SHA-256 `a399b3d821b9b78d91d66b0e666b65544c96eb7b6236282e1dc36cfac1e77e9e`.
+That capture is entirely black; VBlank counts and an active display do not establish
+visible game rendering or gameplay. Continue the original execution beyond this boundary.
 
 The optional original-module regression now exercises the complete four-service IOPRP
-boot, the original SECRMAN dependency and the original POFF event wait/completion.
+boot, the original SECRMAN dependency, a native CDVDMAN CAV read with exact supplied
+media bytes (including original Init/Mmode/DiskReady), and the original POFF event wait/completion.
 
 [OPL's RPC0/S596](https://github.com/ps2homebrew/Open-PS2-Loader/blob/master/modules/iopcore/cdvdfsv/cdvdfsv.c)
 confirms the event wait; [Play!'s Invoke596](https://github.com/jpd002/Play-/blob/master/Source/iop/Iop_Cdvdfsv.cpp)

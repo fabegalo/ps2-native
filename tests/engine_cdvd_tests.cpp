@@ -47,6 +47,24 @@ static int original_poff_probe(int argc,char** argv){
         check(c.iop_module_waiters.empty() && c.iop_libraries.contains("secrman") && c.iop_modules.at(c.iop_libraries.at("secrman").owner).resident && c.iop_threads.at(200).status==16,"SECRMAN original entry registers exports before the pending native call resumes");
         std::printf("engine-cdvd: IOPRP %s original FILEIO/CDVDMAN/CDVDFSV/LOADFILE boot and SECRMAN dependency PASS\n",image.sha256.c_str());
     }
+    // Synthetic native caller, real supplied CDVDMAN instructions/IRQ/DMA and real read-only disc bytes.
+    const auto native_cdvd=[&](unsigned ordinal,std::array<std::uint32_t,4> args){
+        const auto& library=c.iop_libraries.at("cdvdman");const auto& owner=c.iop_modules.at(library.owner);
+        c.iop={};c.iop_current=200;c.iop_active=true;c.iop_threads[200]={};auto& t=c.iop_threads.at(200);t.status=1;t.priority=8;
+        c.iop.pc=library.exports.at(ordinal);c.iop.gpr[28]=owner.gp;c.iop.gpr[29]=0x1edff0;c.iop.gpr[31]=0xffffffd0;
+        for(unsigned n=0;n<4;++n)c.iop.gpr[4+n]=args[n];
+        c.iop_next_tick=c.ticks+8;c.execution_limit=c.ticks+20000000;c.run_iop();
+        return c.iop_threads.at(200).context.gpr[2];
+    };
+    check(native_cdvd(4,{0,0,0,0})==1,"Original sceCdInit must return its actual success");
+    check(native_cdvd(75,{1,0,0,0})==1,"Original sceCdMmode selects the actual CD medium before reading");
+    check(native_cdvd(13,{0,0,0,0})==2,"Original sceCdDiskReady observes the supplied disc");
+    c.iop_write(0x7d00,0x8500,4);
+    const auto read_result=native_cdvd(6,{16,1,0x100000,0x7d00});
+    if(read_result!=1)std::fprintf(stderr,"[native-read] result=%08X ncmd=%02X irq=%02X error=%02X howto=%02X ticks=%llu\n",read_result,c.cdvd->ncommand,c.cdvd->irq,c.cdvd->error,c.cdvd->howto,static_cast<unsigned long long>(c.ticks));
+    check(read_result==1,"Original sceCdRead must accept the real media request");
+    std::array<std::uint8_t,2048> expected{};c.cdvd->media->read_sector(16,expected);
+    check(c.cdvd->error==0 && c.cdvd->remaining==0 && std::equal(expected.begin(),expected.end(),c.iop_ram.begin()+0x100000),"Original CDVDMAN reads exactly the supplied media through the shared DMA");
     auto server=std::find_if(c.rpc_servers.begin(),c.rpc_servers.end(),[](const auto& item){return item.second.sid==0x80000596;});
     check(server!=c.rpc_servers.end(),"Original CDVDFSV must register POFF itself");
     const auto endpoint=server->first,thread=c.rpc_queues.at(server->second.queue).thread;
@@ -62,7 +80,7 @@ static int original_poff_probe(int argc,char** argv){
         check(!c.rpc_calls.contains(thread) && server->second.completions==before+1 && c.sif.replies.size()==replies+1 && ps2::ld32(0xc000)==1,"Original POFF sends exactly one completion after its event");
         c.run_iop();check(c.sif.replies.size()==replies+1,"Idle POFF cannot emit repeated replies");
     }
-    std::puts("engine-cdvd: original CDVDFSV POFF wait/event/completion PASS; synthetic client/event injection, not a physical power-off");return 0;
+    std::puts("engine-cdvd: original CDVDMAN CAV read and CDVDFSV POFF wait/event/completion PASS; synthetic client/event injection, not a physical power-off");return 0;
 }
 int main(int argc,char** argv){try{
     if(argc==4 || argc==5)return original_poff_probe(argc,argv);
@@ -163,7 +181,7 @@ int main(int argc,char** argv){try{
         const std::string path=text;for(unsigned k=0;k<=path.size();++k)c.iop_write(0x8400+k,k==path.size()?0:path[k],1);
         c.iop.gpr[4]=0x8400;c.iop_import("modload",15);check(c.iop.gpr[2]==(path.starts_with("cdrom") || path.starts_with("rom0") ? 0u:1u),"Boot-device checks match the supplied ROM0 MODLOAD predicate");
     }
-    c.iop_write(0xbf808200,0x1234,4);c.iop_write(0xbf808268,12,4);check(c.iop_read(0xbf808200,4)==0x1234 && !c.iop_read(0xbf808268,4),"SIO2 initialization retains real parameter registers without claiming a transfer");
+    c.iop_write(0xbf808200,0x1234,4);c.iop_write(0xbf808268,12,4);check(c.iop_read(0xbf808200,4)==0x1234 && c.iop_read(0xbf808268,4)==12 && !c.iop_read(0xbf808280,4),"SIO2 initialization retains real parameter registers without claiming a transfer");
     check(ps2::slow_ld8(0xbf40200f)==0x12,"EE and IOP see the same mounted CDVD media");
     c.cdvd->write(0x1f8010b0,0x1000,4);c.cdvd->write(0x1f8010b4,0x40080,4);c.cdvd->write(0x1f8010b8,0x1000200,4);c.cdvd->write(0x1f8010f0,0x8000,4);
     const std::uint8_t params[]={16,0,0,0,1,0,0,0,0,0,0};for(const auto byte:params)c.cdvd->write(0x1f402005,byte,1);
@@ -172,10 +190,21 @@ int main(int argc,char** argv){try{
     c.advance_to(due);check(c.iop_read(0x1000,4)==0x30444301 && c.iop_read(0x1004,2)==0x3130,"Mounted media sector bytes reach actual IOP RAM");
     check(c.cdvd->dma.at(0x1f8010b0)==0x1800 && !(c.cdvd->dma.at(0x1f8010b8)&0x1000000) && c.cdvd->irq==2,"CDVD DMA advances and completes before its IRQ");
     check(c.iop_read(0x1f8010f4,4)&(1u<<27),"DMA3 completion sets its shared controller flag");
+    c.cdvd->write(0x1f402008,0xff,1);
+    c.cdvd->write(0x1f8010b0,0x3000,4);c.cdvd->write(0x1f8010b4,0x80080,4);c.cdvd->write(0x1f8010b8,0x1000200,4);
+    const std::uint8_t cav_params[]={16,0,0,0,2,0,0,0,5,0x85,0};for(const auto byte:cav_params)c.cdvd->write(0x1f402005,byte,1);
+    c.cdvd->write(0x1f402004,6,1);const auto cav_due=c.cdvd->due,cav_duration=c.cdvd->sector_ticks;
+    check(cav_duration>(491520ull/24)*8,"CAV inner-track rate cannot silently use nominal CLV timing");
+    c.advance_to(cav_due-1);check(c.iop_read(0x3000,4)==0 && !c.cdvd->irq,"CAV sector bytes cannot appear before the shared device deadline");
+    c.advance_to(cav_due);check(c.iop_read(0x3000,4)==0x30444301 && c.cdvd->remaining==1 && !c.cdvd->irq && c.cdvd->sector_ticks<=cav_duration,"CAV reads real bytes and recomputes radial timing for the next sector");
+    c.advance_to(c.cdvd->due);std::array<std::uint8_t,2048> next_sector{};c.cdvd->media->read_sector(17,next_sector);
+    check(c.cdvd->remaining==0 && c.cdvd->irq==2 && std::equal(next_sector.begin(),next_sector.end(),c.iop_ram.begin()+0x3800),"Multi-sector CAV transfer completes with exact original media data");
     const std::uint32_t irq_code[]={0x3c081f40,0x35082008,0x240900ff,0xa1090000,0x34089600,0x8d090000,0,0x25290001,0xad090000,0x03e00008,0x24020001};
     for(unsigned n=0;n<std::size(irq_code);++n)c.iop_write(0x7000+n*4,irq_code[n],4);
     c.iop_irqs[2]={0x7000,0,0,true};c.run_iop();
     check(c.iop_read(0x9600,4)==1 && !c.cdvd->irq,"CDVD IRQ executes the registered original R3000A handler on the shared clock");
+    c.iop_write(0x9800,1000000,4);c.iop_write(0x9804,0,4);c.iop.gpr[4]=0x9800;c.iop.gpr[5]=0x7000;c.iop.gpr[6]=0;c.iop_import("thbase",35);
+    check(c.iop.gpr[2]==0 && !c.iop_alarms.empty(),"Reset regression starts with an actual pending kernel alarm");
     c.cdvd->write(0x1f402004,0,1);c.advance_to(c.cdvd->due);
     ps2::slow_st8(0xbf402008,0xff);check(!c.cdvd->irq,"EE acknowledges the same device IRQ");
     // Reset a console with a queued RPC and unfinished physical operation.
@@ -186,7 +215,7 @@ int main(int argc,char** argv){try{
     c.sif.iop_handlers[0x123]={0x7000,0,0};c.sif.iop_commands.emplace_back(c.sif.iop_handlers.at(0x123),std::vector<std::uint8_t>(16));
     c.reset_iop();
     check(c.ticks==before_reset && c.ee.pc==0x1234 && ps2::ld32(0xe000)==0x12345678,"IOP reset preserves EE execution, memory and the single clock");
-    check(c.iop_modules.empty() && c.iop_threads.empty() && c.rpc_servers.empty() && c.rpc_calls.empty() && c.sif.replies.empty() && c.sif.iop_handlers.empty() && c.sif.iop_commands.empty(),"IOP reset cannot retain stale modules, threads, RPC or callbacks");
+    check(c.iop_alarms.empty() && c.iop_modules.empty() && c.iop_threads.empty() && c.rpc_servers.empty() && c.rpc_calls.empty() && c.sif.replies.empty() && c.sif.iop_handlers.empty() && c.sif.iop_commands.empty(),"IOP reset cannot retain stale modules, threads, RPC or callbacks");
     check(c.sif.main_address==0x5000 && c.sif.ee_receive==0x6000 && c.sif.msflag==0x40 && !c.sif.smflag && !c.sif.command_buffer,"IOP reset preserves EE SIF registers without inventing boot readiness");
     std::vector<std::uint8_t> elf(88);const auto w=[&](unsigned at,std::uint32_t value){ps2::store(elf.data()+at,value);};const auto h=[&](unsigned at,std::uint16_t value){ps2::store(elf.data()+at,value);};
     w(0,0x464c457f);elf[4]=elf[5]=elf[6]=1;h(16,2);h(18,8);w(20,1);w(24,0x100000);w(28,52);h(40,52);h(42,32);h(44,1);w(52,1);w(56,84);w(60,0x100000);w(68,4);w(72,4);w(76,5);w(80,4);

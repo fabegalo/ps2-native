@@ -80,7 +80,13 @@ bool Console::iop_services_import(const std::string& lib,std::uint32_t ordinal){
     if(lib=="intrman"){
         if(ordinal==4){if(a>=64 || !c || (c&3) || c>=iop_ram.size())return result(-1);if(iop_irqs.contains(a))return result(-1);iop_irqs.emplace(a,IopIrq{c,iop_arg(3),iop.gpr[28],false});return result(0);}
         if(ordinal==5)return result(iop_irqs.erase(a)?0:-1);
-        if(ordinal==6 || ordinal==7){const auto it=iop_irqs.find(a);if(it==iop_irqs.end())return result(-1);if(ordinal==7 && b)iop_write(b,it->second.enabled,4);it->second.enabled=ordinal==6;return result(0);}
+        if(ordinal==6 || ordinal==7){const auto it=iop_irqs.find(a);if(it==iop_irqs.end())return result(-1);if(ordinal==7 && b)iop_write(b,it->second.enabled,4);it->second.enabled=ordinal==6;
+            if((a>=32 && a<39) || (a>=40 && a<46)){
+                const auto reg=a<39?0x1f8010f4u:0x1f801574u,bit=1u<<(16+(a<39?a-32:a-40));
+                auto value=iop_read(reg,4)&0xffffff;if(ordinal==6)value|=bit;else value&=~bit;iop_write(reg,value,4);
+                if(ordinal==6)iop_write(reg,(iop_read(reg,4)&0xffffff)|0x800000,4);
+            }
+            return result(0);}
         if(ordinal==8 || ordinal==9){iop_intr_enabled=ordinal==9;return result(0);}
         if(ordinal==17){const auto old=iop_intr_enabled;if(a)iop_write(a,old,4);iop_intr_enabled=false;return result(old?0:-102);}
         if(ordinal==18){iop_intr_enabled=a!=0;return result(0);}

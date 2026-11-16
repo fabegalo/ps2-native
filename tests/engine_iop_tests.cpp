@@ -12,6 +12,32 @@ static void rejects(const std::function<void()>& call) {
 int main() {
     try {
         Console c;c.initialize_sif();
+        check(c.iop_read(0xbf808270,4)==0xf,"SIO2 idle port status comes from the device reset contract");
+        check(c.iop_read(0xbf808268,4)==0x3bc,"SIO2 control reset state");
+        c.iop_write(0xbf808200,(3u<<18)|(3u<<8),4);
+        c.iop_write(0xbf808260,1,1);c.iop_write(0xbf808260,0x42,1);
+        rejects([&]{c.iop_write(0xbf808268,1,4);});
+        c.iop_write(0xbf808260,0,1);
+        check(c.iop_read(0xbf808280,4)==0 && !(c.iop_pending_irqs&(1u<<17)),"Serial data submission cannot fabricate a completion IRQ");
+        c.iop_write(0xbf808268,1,4);
+        check(c.iop_read(0xbf80826c,4)==0x1d100 && c.iop_read(0xbf808280,4)==1 && (c.iop_pending_irqs&(1u<<17)),"Open serial bus reports a disconnected device with a real pending SIO2 IRQ");
+        for(unsigned i=0;i<3;++i)check(c.iop_read(0xbf808264,1)==0xff,"Disconnected peripheral never returns a successful pad response");
+        rejects([&]{c.iop_read(0xbf808264,1);});
+        c.iop_write(0xbf808280,1,4);check(!(c.iop_pending_irqs&(1u<<17)),"SIO2 W1C acknowledges its own interrupt source");
+        const std::uint32_t alarm_code[]={0x8c085700,0,0x25080001,0xac085700,0x29090002,0x03e00008,0x00091300};
+        for(unsigned i=0;i<std::size(alarm_code);++i)c.iop_write(0x7400+i*4,alarm_code[i],4);
+        c.iop_write(0x9800,4000,4);c.iop_write(0x9804,0,4);c.iop.gpr[4]=0x9800;c.iop.gpr[5]=0x7400;c.iop.gpr[6]=123;c.iop_import("thbase",35);
+        check(c.iop.gpr[2]==0 && c.iop_alarms.size()==1,"SetAlarm registers a real clock deadline");
+        c.iop_import("thbase",35);check(static_cast<std::int32_t>(c.iop.gpr[2])==-104,"Duplicate alarm handler/argument pair is rejected");
+        c.iop_intr_enabled=false;c.advance_to(32000);check(c.iop_read(0x5700,4)==0,"A masked alarm deadline cannot execute its callback");
+        c.iop_intr_enabled=true;c.iop_next_tick=c.ticks+8;c.run_iop();
+        check(c.iop_read(0x5700,4)==2 && c.iop_alarms.empty() && !c.iop_callback_active,"Original R3000A alarm callback repeats by its returned period and zero removes it");
+        c.iop.gpr[4]=0x7400;c.iop.gpr[5]=123;c.iop_import("thbase",37);check(static_cast<std::int32_t>(c.iop.gpr[2])==-105,"Cancelling an absent alarm cannot fabricate success");
+        c.iop_write(0x9800,1,4);c.iop.gpr[4]=0x9800;c.iop.gpr[5]=0x7400;c.iop.gpr[6]=123;c.iop_import("thbase",35);
+        check(c.iop.gpr[2]==0 && c.iop_read(0x9800,4)==Console::iop_alarm_min,"Alarm minimum wait follows threadman's 100 us clock conversion");
+        c.iop.gpr[4]=0x7400;c.iop.gpr[5]=123;c.iop_import("thbase",37);
+        check(c.iop.gpr[2]==0 && c.iop_alarms.empty(),"CancelAlarm removes the exact pending handler/argument pair");
+        c.ticks=0;c.iop_instructions=0;c.iop={};c.iop_next_tick=0;
         c.iop_write(0x100,0x12345678,4);
         check(c.iop_read(0xa0000100,4)==0x12345678,"IOP aliases use Console RAM");
         rejects([&]{c.iop_read(0,8);});rejects([&]{c.iop_read(0x1f801000,4);});

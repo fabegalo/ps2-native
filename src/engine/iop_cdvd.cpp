@@ -4,6 +4,19 @@
 #include <format>
 #include <chrono>
 namespace ps2native::engine {
+// CAV radial read timing adapts pinned PCSX2 CDVD.cpp cdvdBlockReadTime (GPL-3.0-or-later).
+// Its CD radius approximation is a deterministic device model, not a hardware timing certification.
+static std::uint64_t sector_duration(bool dvd,std::uint8_t mode,std::uint32_t lba){
+    const auto spindle=mode&0x3f;
+    constexpr unsigned cd_speed[]={24,1,2,4,12,24},dvd_speed[]={4,1,2,4};
+    if((mode&0x40) || spindle>=(dvd?4u:6u))throw std::runtime_error("Unsupported CDVD spindle mode");
+    if(mode&0x80){
+        if(dvd)throw std::runtime_error("DVD CAV requires established layer geometry");
+        const float radial=(static_cast<float>(lba)/360000.0f)*0.60f+0.40f;
+        return static_cast<std::uint32_t>(36864000.0f/(static_cast<float>(75u*cd_speed[spindle])*radial))*8ull;
+    }
+    return dvd?((36864000ull*2048)/(1382400ull*dvd_speed[spindle]))*8:(491520ull/cd_speed[spindle])*8;
+}
 void IopCdvd::mount(const std::filesystem::path& path,Medium kind){
     if(due!=~0ull)throw std::runtime_error("CDVD mount during an operation");
     auto image=std::make_unique<DiscImage>(path);
@@ -13,11 +26,23 @@ void IopCdvd::mount(const std::filesystem::path& path,Medium kind){
 }
 std::uint32_t IopCdvd::irq_line() const {
     if(!console.iop_intr_enabled)return ~0u;
-    for(const auto cause:{2u,3u}){const auto it=console.iop_irqs.find(cause);if(it!=console.iop_irqs.end() && it->second.enabled && (cause==2 ? irq!=0:(dma.at(0x1f8010f4)&0x80000000)!=0))return cause;}
+    for(unsigned ch=0;ch<13;++ch){
+        const auto value=dma.at(ch<7?0x1f8010f4:0x1f801574),bit=ch<7?ch:ch-7,code=ch<7?32+ch:33+ch;
+        const auto it=console.iop_irqs.find(code);if((value&0x80000000u) && (value&(1u<<(24+bit))) && (value&(1u<<(16+bit))) && it!=console.iop_irqs.end() && it->second.enabled)return code;
+    }
+    for(const auto cause:{2u,3u}){const auto it=console.iop_irqs.find(cause);if(it!=console.iop_irqs.end() && it->second.enabled && (cause==2 ? irq!=0:((dma.at(0x1f8010f4)|dma.at(0x1f801574))&0x80000000)!=0))return cause;}
     return ~0u;
 }
 bool IopCdvd::irq_ready() const{return irq_line()!=~0u;}
-void IopCdvd::update_dicr(){auto& value=dma.at(0x1f8010f4);value&=~0x80000000u;if((value&0x8000) || ((value&0x800000) && ((value>>16)&(value>>24)&0x7f)))value|=0x80000000;}
+void IopCdvd::update_dicr(){
+    // Each DICR bank owns its master condition; either bank can assert the shared DMA line.
+    for(const auto reg:{0x1f8010f4u,0x1f801574u}){
+        auto& value=dma.at(reg);const auto mask=reg==0x1f8010f4?0x7fu:0x3fu;
+        const bool active=(value&0x8000) || ((value&0x800000) && ((value>>16)&(value>>24)&mask));
+        value=(value&0x7fffffff)|(active?0x80000000u:0);
+    }
+}
+
 std::uint32_t IopCdvd::read(std::uint32_t a,unsigned bytes){
     if(const auto it=dma.find(a);it!=dma.end()){if(bytes!=4)throw std::runtime_error("IOP DMA requires word access");return it->second;}
     if(bytes!=1)throw std::runtime_error("CDVD requires byte access");
@@ -35,7 +60,8 @@ std::uint32_t IopCdvd::read(std::uint32_t a,unsigned bytes){
     }
 }
 void IopCdvd::write(std::uint32_t a,std::uint32_t value,unsigned bytes){
-    if(auto it=dma.find(a);it!=dma.end()){if(bytes!=4)throw std::runtime_error("IOP DMA requires word access");if(a==0x1f8010f4){it->second=(value&0xffffff)|((it->second&0x7f000000)&~value);update_dicr();}else it->second=value;return;}
+    if(auto it=dma.find(a);it!=dma.end()){if(bytes!=4)throw std::runtime_error("IOP DMA requires word access");if(a==0x1f8010f4 || a==0x1f801574){it->second=(value&0xffffff)|((it->second&0x7f000000)&~value);update_dicr();}else it->second=value;
+        if(a==0x1f8010c8 || a==0x1f801508 || a==0x1f8010f0 || a==0x1f801570){console.start_audio_dma(0);console.start_audio_dma(1);}return;}
     if(bytes!=1)throw std::runtime_error("CDVD requires byte access");
     switch(a){
     case 0x1f402008:irq&=~value;return;
@@ -48,13 +74,11 @@ void IopCdvd::write(std::uint32_t a,std::uint32_t value,unsigned bytes){
         if(value>6)throw std::runtime_error(std::format("Unsupported CDVD N command {:02X}",value));
         ncommand=value;error=0;
         if(value==6){
-            if(nparams.size()!=11 || howto!=0x80 || nparams[10] || (nparams[9]&0x80))throw std::runtime_error("CDVD read requires supported 2048-byte CLV mode");
+            if(nparams.size()!=11 || howto!=0x80 || nparams[10]){std::string detail=std::format("CDVD read mode HOWTO={:02X} params",howto);for(const auto byte:nparams)detail+=std::format(" {:02X}",byte);throw std::runtime_error(detail);}
             const auto count=ps2::load<std::uint32_t>(nparams.data()+4);if(!count || count>1024)throw std::runtime_error("CDVD read exceeds bounded IOP transfer");
             read_lba=ps2::load<std::uint32_t>(nparams.data());remaining=count;
-            const bool dvd=media && medium==Medium::Dvd;const auto spindle=nparams[9];
-            constexpr unsigned cd_speed[]={24,1,2,4,12,24},dvd_speed[]={4,1,2,4};
-            if(spindle>=(dvd?4u:6u))throw std::runtime_error("Unsupported CDVD spindle mode");
-            sector_ticks=dvd?((36864000ull*2048)/(1382400ull*dvd_speed[spindle]))*8:(491520ull/cd_speed[spindle])*8;
+            const bool dvd=media && medium==Medium::Dvd;
+            sector_ticks=sector_duration(dvd,nparams[9],read_lba);
             const auto delta=position>read_lba?position-read_lba:read_lba-position;
             const auto seek=delta<(dvd?16u:8u)?delta*sector_ticks:delta<(dvd?14764u:4371u)?1105920ull*8:3686400ull*8;
             due=console.ticks+seek+sector_ticks;status=delta?0x12:6;
@@ -76,7 +100,7 @@ void IopCdvd::complete(){
             if(!words || words>512 || 512%words || blocks<512/words || madr>console.iop_ram.size()-2048)throw std::runtime_error("Invalid CDVD DMA descriptor/geometry");
             std::span<std::uint8_t,2048> target(console.iop_ram.data()+madr,2048);media->read_sector(read_lba,target);madr+=2048;position=++read_lba;
             bcr-=((512/words)<<16);if(!(bcr>>16)){chcr&=~0x1000000u;dma.at(0x1f8010f4)|=1u<<27;update_dicr();}
-            if(--remaining){due=console.ticks+sector_ticks;status=6;return;}status=0x0a;
+            if(--remaining){sector_ticks=sector_duration(medium==Medium::Dvd,nparams[9],read_lba);due=console.ticks+sector_ticks;status=6;return;}status=0x0a;
         }
         remaining=0;
     } else if(!media && ncommand>=2){error=0x12;status=0;}
