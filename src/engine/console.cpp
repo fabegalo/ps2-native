@@ -1,5 +1,6 @@
 #include "ps2native/engine/console.hpp"
 #include "ps2native/elf.hpp"
+#include "iop_cdvd.hpp"
 #include <fstream>
 #include <cstdio>
 #include <cstdlib>
@@ -17,6 +18,7 @@ Console& active_console() {
 Console::Console() : ram(ps2::kRamSize), scratchpad(ps2::kScratchpadSize), iop_ram(2u << 20), iop_bus(*this), iop_core(iop_bus) {
     if (active) throw std::runtime_error("The AOT ABI supports one active console per process");
     active = this;
+    cdvd=std::make_unique<IopCdvd>(*this);
     ps2::g_live_tlb_enabled=false;
     ee.vu0.vf[0].w[3]=0x3f800000;vu1_regs.vf[0].w[3]=0x3f800000;
     ee.budget = 100000;
@@ -40,7 +42,13 @@ void Console::load(const std::filesystem::path& path) {
     iop_instructions=0; iop_next_tick=0; iop_first_tick=0; iop_last_tick=0;
     iop_threads.clear(); iop_semas.clear(); iop_events.clear(); iop_mailboxes.clear();
     iop_current=0; iop_next_thread=1; iop_next_object=1; iop_dispatch_depth=0; iop_order=0; iop_reschedule=false;iop_module_returned=false;
-    iop_heap_top=0x10000; iop_imports.clear(); iop_output.clear(); iop_result=0; iop_strtok_next=0;
+    {auto mounted=std::move(cdvd->media);const auto medium=cdvd->medium;const auto* hardware=cdvd->hardware;const auto rtc=cdvd->rtc_epoch;cdvd=std::make_unique<IopCdvd>(*this);cdvd->media=std::move(mounted);cdvd->medium=medium;cdvd->hardware=hardware;cdvd->rtc_epoch=rtc;if(cdvd->media)cdvd->status=0x0a;}
+    iop_irq_active=false;
+    iop_native_calls.clear();iop_drivers.clear();iop_irqs.clear();iop_intr_enabled=true;
+    rpc_missing_server.reset();
+    rpc_servers.clear();rpc_queues.clear();rpc_calls.clear();
+    iop_modules.clear();iop_libraries.clear();iop_allocations.clear();
+    iop_heap_top=0x10000; iop_imports.clear();iop_import_versions.clear(); iop_output.clear(); iop_result=0; iop_strtok_next=0;
     threads.clear(); semaphores.clear(); handlers.clear();interrupt_order.clear();in_interrupt=false;
     aot.clear(); aot_modules.clear(); code_words.clear(); syscall_handlers.clear(); dma_registers.clear(); sif_registers.clear();
     dma_registers[0x1000e000]=1; // Standalone ELF kernel environment starts with DMA enabled.
@@ -95,15 +103,15 @@ std::uint32_t Console::translate(std::uint32_t address, std::size_t size, bool w
 }
 std::uint64_t Console::now() const { return ticks + static_cast<std::uint64_t>(100000ll - ee.budget); }
 std::uint64_t Console::next_event_tick() const {
-    std::uint64_t event=~0ull;
-    if(iop_work_pending())event=iop_next_tick;
+    std::uint64_t event=cdvd->due;
+    if(iop_work_pending())event=std::min(event,iop_next_tick);
     for(const auto& [id,e]:graphics_events)event=std::min(event,e.first);
     for(const auto& v:vu)if(v.busy)event=std::min(event,v.next_tick);
     return event;
 }
 void Console::advance_to(std::uint64_t target) {
     if (target<ticks) throw std::runtime_error("Logical clock cannot move backwards");
-    if (target>100000000) throw std::runtime_error("Console execution limit reached");
+    if (target>execution_limit) throw std::runtime_error("Console execution limit reached");
     advancing=true;
     try {
         for (;;) {
@@ -111,6 +119,7 @@ void Console::advance_to(std::uint64_t target) {
             if(event>target)break;
             if(event<ticks)throw std::runtime_error("Console event moved backwards");
             ticks=event;
+            if(cdvd->due==event)cdvd->complete();
             for(auto it=graphics_events.begin();it!=graphics_events.end();) {
                 if(it->second.first!=event){++it;continue;}
                 auto action=std::move(it->second.second);it=graphics_events.erase(it);action();
@@ -222,7 +231,7 @@ static std::uint8_t* mapped(std::uint32_t address, std::size_t size, bool write=
     return mapped_physical(p,size);
 }
 #define LOAD(bits, type) type slow_ld##bits(std::uint32_t a) { return load<type>(mapped(a, sizeof(type))); }
-LOAD(8, std::uint8_t)
+std::uint8_t slow_ld8(std::uint32_t a){auto& c=active_console();const auto p=c.translate(a,1,false);if(p>=0x1f402000 && p<0x1f402020){c.account();return c.cdvd->read(p,1);}return load<std::uint8_t>(mapped(a,1));}
 LOAD(16, std::uint16_t)
 static bool dma_register(std::uint32_t a) {
     constexpr std::uint32_t bases[] = {0x10008000,0x10009000,0x1000a000,0x1000b000,0x1000b400,0x1000c000,0x1000c400,0x1000c800,0x1000d000,0x1000d400};
@@ -270,7 +279,7 @@ std::uint64_t slow_ld64(std::uint32_t a) {
 #undef LOAD
 void slow_ld128(std::uint32_t a, Reg128& v) { std::memcpy(&v, mapped(a, 16), 16); }
 #define STORE(bits, type) void slow_st##bits(std::uint32_t a, type v) { store(mapped(a, sizeof(type),true), v); }
-STORE(8, std::uint8_t)
+void slow_st8(std::uint32_t a,std::uint8_t value){auto& c=active_console();const auto p=c.translate(a,1,true);if(p>=0x1f402000 && p<0x1f402020){c.account();c.cdvd->write(p,value,1);return;}store(mapped(a,1,true),value);}
 STORE(16, std::uint16_t)
 // Timer register masks follow exoteric33 hw.cpp (MIT), adapted to console-owned state.
 static void write32_physical(std::uint32_t a, std::uint32_t v) {

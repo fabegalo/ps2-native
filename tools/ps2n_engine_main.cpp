@@ -1,5 +1,6 @@
 #include "ps2native/engine/console.hpp"
 #include "ps2native/engine/graphics_output.hpp"
+#include "iop_cdvd.hpp"
 #include <cstdio>
 #include "ps2/os.hpp"
 #include "aot_image.hpp"
@@ -12,23 +13,31 @@ void register_generated_code();
 void register_generated_vu();
 int main(int argc,char** argv) {
     try {
-        std::filesystem::path iop_input,iop_output,capture;
-        unsigned present_ms=0;
+        std::filesystem::path iop_input,iop_output,capture,rom0,disc;std::string profile;auto medium=ps2native::engine::IopCdvd::Medium::Auto;
+        unsigned present_ms=0;std::uint64_t max_ticks=100000000;bool extended=true;
         for(int n=1;n<argc;++n) {
             if(n+1>=argc)throw std::runtime_error("Engine option requires a value");
             const auto option=std::string(argv[n++]);
             if(option=="--iop")iop_input=ps2::os::path(argv[n]);
             else if(option=="--iop-output")iop_output=ps2::os::path(argv[n]);
+            else if(option=="--disc")disc=ps2::os::path(argv[n]);
+            else if(option=="--disc-type"){const std::string type=argv[n];if(type=="cd")medium=ps2native::engine::IopCdvd::Medium::Cd;else if(type=="dvd")medium=ps2native::engine::IopCdvd::Medium::Dvd;else throw std::runtime_error("Invalid physical disc type");}
+            else if(option=="--profile")profile=argv[n];
+            else if(option=="--max-ticks"){max_ticks=std::stoull(argv[n]);if(!max_ticks || max_ticks>1000000000)throw std::runtime_error("Logical run limit must be in 1..1000000000");}
+            else if(option=="--cdvd-modules"){const std::string family=argv[n];if(family!="legacy" && family!="extended")throw std::runtime_error("Unknown original CDVD module family");extended=family=="extended";}
+            else if(option=="--rom0")rom0=ps2::os::path(argv[n]);
             else if(option=="--capture")capture=ps2::os::path(argv[n]);
             else if(option=="--present-ms")present_ms=std::stoul(argv[n]);
             else throw std::runtime_error("Unknown engine option");
         }
         if(present_ms>5000)throw std::runtime_error("Presentation limit is 5000 ms");
         if(iop_input.empty()!=iop_output.empty())throw std::runtime_error("IOP input and observation must be supplied together");
+        const auto protect=[&](const std::filesystem::path& output){if(output.empty() || !std::filesystem::exists(ps2native::native_io_path(output)))return;for(const auto& input:{ps2::os::path(PS2N_ENGINE_ELF),iop_input,rom0,disc})if(!input.empty() && ps2native::files_equivalent(output,input))throw std::runtime_error("Observation must not overwrite original content");};
+        protect(capture);protect(iop_output);
         ps2native::engine::Console console;
         if (ps2native::sha256_file(ps2::os::path(PS2N_ENGINE_ELF)) != kAotElfHash)
             throw std::runtime_error("AOT ELF identity mismatch");
-        console.load(ps2::os::path(PS2N_ENGINE_ELF));
+        console.load(ps2::os::path(PS2N_ENGINE_ELF));console.execution_limit=max_ticks;
         for (const auto& [pc, word] : kAotWords) {
             if (ps2::ld32(pc) != word) throw std::runtime_error("AOT code image mismatch");
             console.code_words.emplace(pc,word);
@@ -41,7 +50,9 @@ int main(int argc,char** argv) {
                 throw std::runtime_error("IOP observation must not overwrite original content");
             console.load_iop(input);
         }
-        try { console.run(); }
+        if(!profile.empty()){console.cdvd->hardware=ps2native::find_console_hardware(profile);if(!console.cdvd->hardware)throw std::runtime_error("Unknown CDVD console profile");}
+        if(!disc.empty())console.cdvd->mount(disc,medium);
+        try {if(!rom0.empty())console.boot_cdvd(rom0,extended); console.run(); }
 
         catch (const ps2native::engine::MissingAotEntry& missing) {
             const auto base=missing.pc & ~0xffffu;
@@ -59,7 +70,8 @@ int main(int argc,char** argv) {
             throw;
         }
         catch (...) {
-            std::fprintf(stderr,"[engine-state] ee_pc=%08X tick=%llu iop_pc=%08X gs=%d frames=%llu sif_ms=%08X sif_sm=%08X\n",console.ee.pc,static_cast<unsigned long long>(console.ticks),console.iop.pc,console.graphics_initialized,static_cast<unsigned long long>(console.graphics_frames),console.sif.msflag,console.sif.smflag);
+            if(console.graphics_initialized && !capture.empty()){try{ps2native::engine::capture_graphics(console,capture);}catch(const std::exception& e){std::fprintf(stderr,"[frame] no failure-boundary capture: %s\n",e.what());}}
+            std::fprintf(stderr,"[engine-state] ee_pc=%08X tick=%llu iop_pc=%08X gs=%d frames=%llu sif_ms=%08X sif_sm=%08X rpc_absent=%08X\n",console.ee.pc,static_cast<unsigned long long>(console.ticks),console.iop.pc,console.graphics_initialized,static_cast<unsigned long long>(console.graphics_frames),console.sif.msflag,console.sif.smflag,console.rpc_missing_server.value_or(0));
             std::fwrite(console.output.data(),1,console.output.size(),stdout);throw;
         }
         if(!capture.empty()) {

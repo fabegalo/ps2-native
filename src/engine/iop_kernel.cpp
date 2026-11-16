@@ -1,11 +1,13 @@
 // Thread/import contracts informed by ps2autotests and exoteric33 a50471a (MIT).
 // API reference: ps2dev/ps2sdk iop/system/threadman/src/thbase.c (behavior only, no SDK source imported).
 #include "ps2native/engine/console.hpp"
+#include "iop_cdvd.hpp"
 #include <algorithm>
 #include <limits>
 
 namespace ps2native::engine {
 bool Console::iop_work_pending() const {
+    if(cdvd->irq_ready())return true;
     if (iop_active || !sif.iop_commands.empty()) return true;
     for (const auto& [id,t] : iop_threads)
         if (t.status==2 || ((t.status&4) && t.wait==2 && t.deadline!=~0ull)) return true;

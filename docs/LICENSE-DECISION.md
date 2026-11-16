@@ -146,3 +146,14 @@ package hashes are locked. Binary distribution must preserve applicable dependen
 notices and source obligations; this local integration is not a release. The combined
 engine retains its GPL-3.0 obligations. Original games/firmware, commercial generated
 AOT sources, frames and private state are not committed.
+
+The CDVD continuation uses the user's read-only ROM0 CDVDMAN/CDVDFSV or paired
+XCDVDMAN/XCDVDFSV through the existing isolated CPU, not redistributed firmware or a
+new runtime. Loader/registration/RPC adapters reuse MIT exoteric33 `a50471a` contracts
+(`runtime/src/iop/{kernel,libs,sif}.cpp`), with the existing MIT notices retained in
+`third_party/ps2-native-recomp/LICENSE`. Device scheduling adapts the repository's own
+BSD-3-Clause CDVD implementation before `b2959c8`; earlier native-thread RPC fixes inform
+the same Console adapter. OPL (AFL-3.0) and Play! were read as behavioral references for
+POFF; no source/module/runtime from them was incorporated. The engine's existing combined
+GPL-3.0 obligations and original BSD/MIT notices remain. Test IRXs/ISO/EE fixtures are
+independently authored; commercial firmware, media, translations and captures stay local.

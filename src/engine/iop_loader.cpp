@@ -1,15 +1,22 @@
 // IRX relocation adapted from exoteric33 a50471a runtime/src/iop/kernel.cpp (MIT).
 #include "ps2native/engine/console.hpp"
 #include "ps2native/io.hpp"
+#include "ps2native/bios.hpp"
+#include "iop_cdvd.hpp"
+#include "ps2native/sha256.hpp"
+#include "ps2/os.hpp"
+#include <cstdio>
 #include <algorithm>
 #include <map>
 #include <format>
 
 namespace ps2native::engine {
 void Console::load_iop(const std::filesystem::path& path) {
-    if (iop_active || (iop_work_pending() && !iop_module_returned)) throw std::runtime_error("Cannot replace a running IOP module");
     if (ps2native::regular_file_size(path)>16u<<20) throw std::runtime_error("IRX input exceeds 16 MiB bound");
     const auto file=ps2native::read_file(path);
+    (void)load_iop(file,ps2::os::utf8(path));
+}
+std::uint32_t Console::load_iop(std::span<const std::uint8_t> file,std::string origin) {
     const auto word=[&](std::size_t at) {
         if (at>file.size() || 4>file.size()-at) throw std::runtime_error("Truncated IRX");
         return ps2::load<std::uint32_t>(file.data()+at);
@@ -31,10 +38,13 @@ void Console::load_iop(const std::filesystem::path& path) {
     }
     if (!info || info>file.size() || 24>file.size()-info || !size || initialized>size || offset>file.size() || initialized>file.size()-offset)
         throw std::runtime_error("Invalid IRX load segment/metadata");
-    const auto base=(iop_heap_top+15)&~15u;
+    std::uint32_t base=0x10000;
     const auto whole=std::max<std::uint64_t>(size,std::uint64_t{word(info+12)}+word(info+16)+word(info+20));
     if (whole>0x180000) throw std::runtime_error("IRX memory size overflows module arena");
     size=static_cast<std::uint32_t>(whole);
+    const auto reserved=(size+15)&~15u;
+    for(const auto& [at,bytes]:iop_allocations){if(reserved<=at-base)break;base=std::max(base,at+bytes);}
+    base=(base+15)&~15u;
     if (base>=0x180000 || size>0x180000-base || word(info+4)>=size || word(info+8)>0x1fffff-base)
         throw std::runtime_error("IRX outside IOP module/stack/service boundaries");
     std::vector<std::uint8_t> image(size);
@@ -75,6 +85,7 @@ void Console::load_iop(const std::filesystem::path& path) {
         if (!high.empty()) throw std::runtime_error("Unpaired IRX HI16");
     }
     std::map<std::uint32_t,std::pair<std::string,std::uint32_t>> imports;
+    std::map<std::uint32_t,std::uint16_t> versions;
     for (std::uint32_t at=0;at+20<=initialized;at+=4) {
         if (get(at)!=0x41e00000) continue;
         const auto name=std::string(reinterpret_cast<const char*>(image.data()+at+12),8);
@@ -82,17 +93,91 @@ void Console::load_iop(const std::filesystem::path& path) {
         for (auto stub=at+20;stub+8<=initialized;stub+=8) {
             const auto first=get(stub), second=get(stub+4);
             if (first!=0x03e00008 || (second&0xffff0000)!=0x24000000) break;
-            imports.emplace(base+stub,std::pair(library,second&0xffff));
+            imports.emplace(base+stub,std::pair(library,second&0xffff));versions.emplace(base+stub,get(at+8)&0xffff);
         }
     }
+    // Reserve before publishing either image or imports; every entry thread has a distinct stack.
+    const auto stack_size=0x4000u;auto stack=0x180000u;
+    std::vector<std::pair<std::uint32_t,std::uint32_t>> occupied;
+    for(const auto& [id,t]:iop_threads)if(t.stack>=0x180000 && t.stack<0x1d0000)occupied.emplace_back(t.stack,t.size);
+    std::sort(occupied.begin(),occupied.end());
+    for(const auto& [at,bytes]:occupied){if(stack+stack_size<=at)break;stack=std::max(stack,at+bytes);}
+    if(stack+stack_size>0x1d0000)throw std::runtime_error("No IOP module entry stack available");
+    const auto id=iop_next_thread++;
+    IopThread thread;thread.status=2;thread.entry=base+word(info+4);thread.gp=base+word(info+8);
+    thread.stack=stack;thread.size=stack_size;thread.initial_priority=thread.priority=8;thread.attr=0x02000000;thread.module=id;thread.order=++iop_order;
+    thread.context.pc=thread.entry;thread.context.gpr[28]=thread.gp;thread.context.gpr[29]=stack+stack_size-16;thread.context.gpr[31]=0xfffffff0;
     std::copy(image.begin(),image.end(),iop_ram.begin()+base);
-    iop_imports.insert(imports.begin(),imports.end()); iop_heap_top=base+size;
-    iop={}; iop_import_slot=0; iop.pc=base+word(info+4); iop.gpr[28]=base+word(info+8);
-    iop.gpr[29]=0x1ef000; iop.gpr[31]=0xfffffff0;
-    iop_next_tick=now()+8; iop_active=true; iop_result=0;iop_module_returned=false;
-    iop_current=iop_next_thread++;
-    auto& thread=iop_threads[iop_current];thread.context=iop;thread.status=1;
-    thread.entry=iop.pc;thread.stack=0x1df000;thread.size=0x10000;thread.gp=iop.gpr[28];
-    thread.initial_priority=thread.priority=8;thread.attr=0x02000000;
+    iop_import_versions.insert(versions.begin(),versions.end());
+    iop_imports.insert(imports.begin(),imports.end());iop_allocations[base]=(size+15)&~15u;iop_heap_top=std::max(iop_heap_top,base+size);
+    iop_modules.emplace(id,IopModule{base,size,thread.entry,thread.gp,id,std::move(origin)});
+    iop_threads.emplace(id,thread);iop_module_returned=false;iop_reschedule=true;
+    if(!iop_active){iop_schedule();iop_next_tick=now()+8;}
+    return id;
+}
+void Console::boot_cdvd(const std::filesystem::path& path,bool extended) {
+    const auto bytes=ps2native::read_file(path);const auto bios=ps2native::load_bios_rom0(bytes);
+    if(cdvd->hardware && cdvd->hardware->romver!=bios.version.romver)throw std::runtime_error("CDVD console profile does not match ROM0 revision");
+    std::fprintf(stderr,"[engine-firmware] ROM0 %s ROMVER=%s\n",bios.sha256.c_str(),bios.version.romver.c_str());
+    const char* names[]={extended?"XCDVDMAN":"CDVDMAN",extended?"XCDVDFSV":"CDVDFSV"};
+    for(const auto name:names){
+        const auto* module=bios.find(name);if(!module)throw std::runtime_error(std::string("Original ROM0 module missing: ")+name);
+        const auto image=std::span(bios.rom0).subspan(module->offset,module->size);
+        const auto id=load_iop(image,std::string("rom0:")+name);
+        const auto deadline=ticks+5000000;
+        while(!iop_modules.at(id).returned){if(!iop_work_pending() || ticks>=deadline)throw std::runtime_error("Original CDVD module entry failed to return");advance_to(iop_next_tick);}
+        const auto& loaded=iop_modules.at(id);
+        std::fprintf(stderr,"[engine-module] %s base=%08X bytes=%u result=%d sha256=%s\n",name,loaded.base,loaded.size,loaded.result,ps2native::sha256_hex(image).c_str());
+        if(!loaded.resident)throw std::runtime_error("Original CDVD module did not stay resident");
+    }
+    const auto deadline=ticks+5000000;
+    while(std::none_of(rpc_servers.begin(),rpc_servers.end(),[](const auto& item){return item.second.sid==0x80000592;})){
+        if(!iop_work_pending() || ticks>=deadline)throw std::runtime_error("Original CDVDFSV did not register CDVD Init RPC");advance_to(iop_next_tick);
+    }
+}
+std::uint32_t Console::iop_allocate(std::uint32_t bytes) {
+    if(!bytes || bytes>0x170000)return 0;bytes=(bytes+15)&~15u;auto base=0x10000u;
+    for(const auto& [at,size]:iop_allocations){if(bytes<=at-base)break;base=at+size;}
+    if(base>=0x180000 || bytes>0x180000-base)return 0;
+    iop_allocations.emplace(base,bytes);std::fill_n(iop_ram.begin()+base,bytes,0);iop_heap_top=std::max(iop_heap_top,base+bytes);return base;
+}
+void Console::iop_release(std::uint32_t address) {
+    const auto it=iop_allocations.find(address);if(it==iop_allocations.end())throw std::runtime_error("IOP free of an unallocated block");
+    if(std::any_of(iop_modules.begin(),iop_modules.end(),[&](const auto& item){return item.second.base==address && (!item.second.returned || item.second.resident);}))throw std::runtime_error("Cannot free a live IOP module");
+    std::fill_n(iop_ram.begin()+address,it->second,0);iop_allocations.erase(it);
+}
+void Console::iop_module_return() {
+    if(!iop_current || !iop_threads.at(iop_current).module)return;
+    const auto id=iop_threads.at(iop_current).module;auto& module=iop_modules.at(id);
+    iop_threads.at(iop_current).delete_on_exit=true;module.result=static_cast<std::int32_t>(iop.gpr[2]);module.returned=true;
+    module.resident=module.result==0 || module.result==2;
+    if(!module.resident){
+        for(const auto& [name,lib]:iop_libraries)if(lib.owner==id)throw std::runtime_error("Nonresident IOP module left registered exports");
+        const auto base=module.base,end=base+module.size;
+        for(const auto& [tid,t]:iop_threads)if(tid!=iop_current && t.status!=16 && t.entry>=base && t.entry<end)throw std::runtime_error("Nonresident IOP module left live threads");
+        std::erase_if(iop_import_versions,[&](const auto& item){return item.first>=base && item.first<end;});
+        std::erase_if(iop_imports,[&](const auto& item){return item.first>=base && item.first<end;});
+        iop_allocations.erase(base);std::fill(iop_ram.begin()+base,iop_ram.begin()+end,0);
+    }
+}
+bool Console::iop_loader_import(const std::string& library,std::uint32_t ordinal) {
+    const auto a=iop_arg(0),b=iop_arg(1);const auto result=[&](std::int32_t value){iop.gpr[2]=static_cast<std::uint32_t>(value);return true;};
+    if(library=="sysmem" && ordinal==4){if(a!=0 || iop_arg(2))throw std::runtime_error("IOP fixed/top allocation mode is not integrated");return result(iop_allocate(b));}
+    if(library=="sysmem" && ordinal==5){iop_release(a);return result(0);}
+    if(library!="loadcore")return false;
+    if(ordinal==4 || ordinal==5){return result(0);} // Interpreter reads the coherent Console RAM directly.
+    if(ordinal==6){
+        if(iop_read(a,4)!=0x41c00000)throw std::runtime_error("Invalid IOP export table");
+        std::string name;for(unsigned k=0;k<8;++k){const auto ch=iop_read(a+12+k,1);if(!ch)break;name+=static_cast<char>(ch);}const auto version=iop_read(a+8,4)&0xffff;
+        if(iop_libraries.contains(name))return result(-1);
+        IopLibrary lib;lib.address=a;lib.version=version;
+        for(const auto& [id,m]:iop_modules)if((!m.returned || m.resident) && a>=m.base && a-m.base<m.size){lib.owner=id;break;}
+        for(unsigned k=0;k<256;++k){const auto function=iop_read(a+20+k*4,4);if(!function)break;if((function&3) || (function&0x1fffffff)>=iop_ram.size())throw std::runtime_error("IOP export outside RAM");lib.exports.push_back(function);}
+        if(lib.exports.empty())throw std::runtime_error("Empty IOP export table");
+        iop_libraries.emplace(name,std::move(lib));return result(0);
+    }
+    if(ordinal==7){for(auto it=iop_libraries.begin();it!=iop_libraries.end();++it)if(it->second.address==a){iop_libraries.erase(it);return result(0);}return result(-1);}
+    if(ordinal==12){std::string name;for(unsigned k=0;k<8;++k){const auto ch=iop_read(a+4+k,1);if(!ch)break;name+=static_cast<char>(ch);}const auto it=iop_libraries.find(name);return result(it==iop_libraries.end()?0:it->second.address);}
+    return false;
 }
 }

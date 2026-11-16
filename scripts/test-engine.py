@@ -83,11 +83,12 @@ def main():
     checked(configure)
     checked([options.cmake, "--build", build, "--target", "ps2n-ee-recomp", "--parallel", "2"])
     suffix = ".exe" if os.name == "nt" else ""
-    checked([options.cmake, "--build", build, "--target", "ps2n-engine-tests", "ps2n-engine-aot-tests", "ps2n-engine-iop-tests", "ps2n-engine-vu-tests", "ps2n-iop-run", "--parallel", "2"])
+    checked([options.cmake, "--build", build, "--target", "ps2n-engine-tests", "ps2n-engine-aot-tests", "ps2n-engine-iop-tests", "ps2n-engine-vu-tests", "ps2n-engine-cdvd-tests", "ps2n-iop-run", "--parallel", "2"])
     checked([build / ("ps2n-engine-tests" + suffix)])
     checked([build / ("ps2n-engine-aot-tests" + suffix)])
     checked([build / ("ps2n-engine-iop-tests" + suffix)])
     checked([build / ("ps2n-engine-vu-tests" + suffix)])
+    checked([build / ("ps2n-engine-cdvd-tests" + suffix)])
     vu_spec=importlib.util.spec_from_file_location("prepare_engine_vu",ROOT/"scripts/prepare-engine-vu.py")
     vu_preparer=importlib.util.module_from_spec(vu_spec);vu_spec.loader.exec_module(vu_preparer)
     summary = {}

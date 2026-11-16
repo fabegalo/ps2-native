@@ -1,6 +1,7 @@
 // CPU: isolated GPL-3.0 PS2Recomp component. Loader/formatter adapt exoteric33 a50471a (MIT).
 #include "ps2native/engine/console.hpp"
 #include "ps2native/io.hpp"
+#include "iop_cdvd.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -16,6 +17,7 @@ std::uint32_t Console::iop_read(std::uint32_t address,unsigned bytes) const {
         if (bytes>iop_ram.size()-offset) throw std::runtime_error("IOP RAM access crosses its end");
         std::uint32_t value=0; std::memcpy(&value,iop_ram.data()+offset,bytes); return value;
     }
+    if((p>=0x1f402000 && p<0x1f402020) || cdvd->dma.contains(p))return cdvd->read(p,bytes);
     throw std::runtime_error(std::format("Unsupported IOP MMIO read {:08X}",address));
 }
 void Console::iop_write(std::uint32_t address,std::uint32_t value,unsigned bytes) {
@@ -26,6 +28,7 @@ void Console::iop_write(std::uint32_t address,std::uint32_t value,unsigned bytes
         if (bytes>iop_ram.size()-offset) throw std::runtime_error("IOP RAM access crosses its end");
         std::memcpy(iop_ram.data()+offset,&value,bytes); return;
     }
+    if((p>=0x1f402000 && p<0x1f402020) || cdvd->dma.contains(p)){cdvd->write(p,value,bytes);return;}
     throw std::runtime_error(std::format("Unsupported IOP MMIO write {:08X}",address));
 }
 std::string Console::iop_string(std::uint32_t address,std::size_t limit) const {
@@ -71,7 +74,7 @@ std::string Console::iop_format(std::uint32_t address,unsigned first) {
     return text;
 }
 void Console::iop_import(const std::string& library,std::uint32_t ordinal) {
-    if (iop_thread_import(library,ordinal)) return;
+    if (iop_services_import(library,ordinal) || iop_rpc_import(library,ordinal) || iop_loader_import(library,ordinal) || iop_thread_import(library,ordinal)) return;
     if (library=="stdio" && ordinal==4) {
         const auto text=iop_format(iop_arg(0),1);
         tty_write(true,text); iop.gpr[2]=static_cast<std::uint32_t>(text.size()); return;
@@ -144,11 +147,21 @@ void Console::step_iop() {
         iop.pc=command.first.entry; iop.gpr[4]=buffer; iop.gpr[5]=command.first.argument;
         iop.gpr[28]=command.first.gp; iop.gpr[29]=0x1deff0; iop.gpr[31]=0xffffffe0;
     }
+    if(!iop_callback_active && !iop_import_slot && !iop.branchPending && cdvd->irq_ready()){
+        cdvd->active_irq=cdvd->irq_line();const auto& irq=iop_irqs.at(cdvd->active_irq);iop_suspended=iop;iop_suspended_active=iop_active;iop_callback_active=true;iop_irq_active=true;iop_active=true;
+        iop={};iop.pc=irq.function;iop.gpr[4]=irq.argument;iop.gpr[28]=irq.gp;iop.gpr[29]=0x1ddff0;iop.gpr[31]=0xffffffa4;
+    }
+    if(iop.pc==0xffffffa4 && iop_irq_active){const auto keep=iop.gpr[2];iop=iop_suspended;iop_active=iop_suspended_active;iop_callback_active=iop_irq_active=false;if(!keep)iop_irqs.at(cdvd->active_irq).enabled=false;if(iop_reschedule)iop_schedule();return;}
     if (!iop_active) return;
     if (!iop_instructions) iop_first_tick=ticks;
     iop_last_tick=ticks;
     if (iop.pc==0xfffffff0) { iop_active=false; iop_result=static_cast<std::int32_t>(iop.gpr[2]); return; }
     if (iop_instructions++>=10000000) throw std::runtime_error("IOP instruction limit reached");
+    if(iop.pc==0xffffffa0){
+        auto& stack=iop_native_calls.at(iop_current);auto call=std::move(stack.back());stack.pop_back();const auto result=iop.gpr[2];iop=call.saved;call.finish(result);return;
+    }
+    if(iop.pc==0xffffffb0){rpc_finish();return;}
+    if(iop.pc==0xffffffb4){rpc_next(iop.gpr[4]);if(iop_reschedule)iop_schedule();return;}
     const auto before=iop.pc;
     if (iop_imports.contains(before)) {
         if (iop_import_slot) throw std::runtime_error("Nested unresolved IOP import");
@@ -158,13 +171,18 @@ void Console::step_iop() {
     if (iop.exception) throw std::runtime_error(std::format("IOP exception {} EPC={:08X}",(iop.cop0[13]>>2)&31,iop.cop0[14]));
     if (iop_import_slot && before==iop_import_slot) {
         const auto imported=iop_imports.at(iop_import_slot-4);
-        iop_import_slot=0;
-        iop_import(imported.first,imported.second);
+        const auto slot=iop_import_slot-4;iop_import_slot=0;
+        const auto lib=iop_libraries.find(imported.first);
+        if(lib!=iop_libraries.end()) {
+            if(imported.second>=lib->second.exports.size())throw std::runtime_error("Missing native IOP export ordinal; HLE cannot replace a registered library");
+            if(const auto version=iop_import_versions.find(slot);version!=iop_import_versions.end() && ((version->second&0xff00)!=(lib->second.version&0xff00) || (version->second&0xff)>(lib->second.version&0xff)))throw std::runtime_error("IOP import/export ABI version mismatch");
+            iop.pc=lib->second.exports[imported.second];iop.branchPending=false;
+        } else iop_import(imported.first,imported.second);
     }
     if (iop.pc==0xffffffe0 && iop_callback_active) {
         iop=iop_suspended; iop_active=iop_suspended_active; iop_callback_active=false;
     } else if (iop.pc==0xfffffff0 || iop.pc==0xffffffd0) {
-        if (iop.pc==0xfffffff0) {iop_result=static_cast<std::int32_t>(iop.gpr[2]);iop_module_returned=true;}
+        if (iop.pc==0xfffffff0) {iop_module_return();iop_result=static_cast<std::int32_t>(iop.gpr[2]);iop_module_returned=true;}
         if (iop_current) iop_threads.at(iop_current).status=16;
         iop_active=false;iop_reschedule=true;
     }
@@ -172,7 +190,7 @@ void Console::step_iop() {
 
 }
 void Console::run_iop() {
-    while(iop_work_pending()) advance_to(iop_next_tick);
+    while(iop_work_pending() || cdvd->due!=~0ull) advance_to(next_event_tick());
     for (const auto& [id,t] : iop_threads)
         if (t.status!=16 && !iop_module_returned) throw std::runtime_error("IOP scheduler deadlock: waiting without an event");
 }

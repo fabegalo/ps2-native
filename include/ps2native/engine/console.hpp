@@ -7,6 +7,7 @@
 #include "vif.hpp"
 #include "gs/gif.hpp"
 #include <map>
+#include <optional>
 #include <deque>
 #include <span>
 #include <stdexcept>
@@ -23,6 +24,7 @@ public:
     std::uint32_t pc;
 };
 // Owns the console; the translator ABI only borrows its RAM while executing.
+class IopCdvd;
 class Console {
 public:
     Console();
@@ -33,6 +35,40 @@ public:
     void run();
     void advance_to(std::uint64_t target);
     void load_iop(const std::filesystem::path& irx);
+    std::uint32_t load_iop(std::span<const std::uint8_t> file,std::string origin);
+    struct IopModule {std::uint32_t base{},size{},entry{},gp{},thread{};std::string origin;std::int32_t result{};bool returned{},resident{};};
+    struct IopLibrary {std::uint32_t address{},version{},owner{};std::vector<std::uint32_t> exports;};
+    std::map<std::uint32_t,IopModule> iop_modules;
+    std::map<std::string,IopLibrary> iop_libraries;
+    std::map<std::uint32_t,std::uint32_t> iop_allocations;
+    std::uint32_t iop_allocate(std::uint32_t bytes);
+    void iop_release(std::uint32_t address);
+    bool iop_loader_import(const std::string& library,std::uint32_t ordinal);
+    void iop_module_return();
+    void boot_cdvd(const std::filesystem::path& rom0,bool extended=true);
+    std::unique_ptr<IopCdvd> cdvd;
+    bool iop_irq_active{};
+    struct RpcServer {std::uint32_t address{},sid{},function{},buffer{},callback{},callback_buffer{},queue{},gp{};std::uint64_t completions{};};
+    struct RpcRequest {std::vector<std::uint32_t> packet;std::vector<std::uint8_t> payload;};
+    struct RpcQueue {std::uint32_t thread{};std::deque<RpcRequest> requests;};
+    struct RpcCall {RpcRequest request;ps2x::iop::detail::IopCpuState saved;std::uint32_t queue{};};
+    std::optional<std::uint32_t> rpc_missing_server;
+    std::map<std::uint32_t,RpcServer> rpc_servers;
+    std::map<std::uint32_t,RpcQueue> rpc_queues;
+    std::map<std::uint32_t,RpcCall> rpc_calls;
+    struct IopNativeCall {ps2x::iop::detail::IopCpuState saved;std::function<void(std::uint32_t)> finish;};
+    std::map<std::uint32_t,std::vector<IopNativeCall>> iop_native_calls;
+    std::map<std::string,std::uint32_t> iop_drivers;
+    struct IopIrq {std::uint32_t function{},argument{},gp{};bool enabled{};};
+    std::map<std::uint32_t,IopIrq> iop_irqs;
+    bool iop_intr_enabled{true};
+    void iop_native_call(std::uint32_t function,std::uint32_t argument,std::function<void(std::uint32_t)> finish);
+    bool iop_services_import(const std::string& library,std::uint32_t ordinal);
+    bool iop_rpc_import(const std::string& library,std::uint32_t ordinal);
+    bool rpc_command(std::span<const std::uint8_t> packet);
+    void rpc_next(std::uint32_t queue);
+    void rpc_finish();
+
     void step_iop();
     void run_iop();
     std::uint32_t iop_read(std::uint32_t address,unsigned bytes) const;
@@ -53,10 +89,11 @@ public:
                           std::uint32_t source,std::uint32_t destination,std::uint32_t extra);
     std::uint32_t iop_heap_top{0x10000}, iop_strtok_next{}, iop_import_slot{};
     std::map<std::uint32_t,std::pair<std::string,std::uint32_t>> iop_imports;
+    std::map<std::uint32_t,std::uint16_t> iop_import_versions;
     struct IopThread {
         ps2x::iop::detail::IopCpuState context{};
         std::uint32_t status{16},attr{},option{},entry{},stack{},size{},gp{},initial_priority{},priority{};
-        std::uint32_t wait{},wait_id{},wakeups{},wait_bits{},wait_mode{},wait_pointer{};
+        std::uint32_t wait{},wait_id{},wakeups{},wait_bits{},wait_mode{},wait_pointer{},module{};
         std::uint64_t order{},deadline{~0ull};
         bool delete_on_exit{};
     };
@@ -136,7 +173,7 @@ public:
     std::vector<const ps2::ModuleInfo*> aot_modules;
     std::string output;
     std::map<std::uint32_t,std::uint32_t> code_words;
-    std::uint64_t ticks{};
+    std::uint64_t ticks{},execution_limit{100000000};
     std::uint32_t stack_base{}, heap_end{};
     // shortcut: headless ELF settings start at zero; firmware sessions must supply the matched profile/NVM settings.
     std::uint32_t osd_config{};

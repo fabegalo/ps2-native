@@ -58,6 +58,7 @@ void Console::sif_command(std::span<const std::uint8_t> packet) {
         if (!iop_active && !iop_callback_active) iop_next_tick=std::max(iop_next_tick,now()+8);
         return;
     }
+    if(rpc_command(packet))return;
     if (cid == 0x80000000 || (cid == 0x80000002 && opt == 0)) {
         if (packet.size() < 20) throw std::runtime_error("Truncated SIF receive-address command");
         const auto address = ps2::load<std::uint32_t>(packet.data()+16);

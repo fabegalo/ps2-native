@@ -30,6 +30,11 @@ static Result run(unsigned n,bool native) {
     check(v.pairs==4 && (native ? v.aot_pairs==4 && !v.interpreted_pairs : v.interpreted_pairs==4 && !v.aot_pairs),"Explicit execution mode counters");
     check(c.ticks==10,"VU dependency stalls advance the shared logical clock");
     out.tick=c.ticks;out.pc=r.tpc;out.mac=r.mac;out.status=r.status;
+    // Byte accesses use the same VU synchronization/invalidation boundary as word accesses.
+    c.ee.budget-=1;(void)ps2::slow_ld8(data);check(c.ticks==11 && c.ee.budget==100000,"VU byte reads synchronize the logical clock");
+    const auto code=n ? 0x11008000u : 0x11000000u;
+    ps2::slow_st8(code,0x3c);check(c.vu_selected[n]==nullptr,"VU byte code writes invalidate native selection");
+    ps2::slow_st8(code,0);
     // The source bytes, not an entry address alone, select native code.
     ps2::st32(n ? 0x11008000 : 0x11000000,0x8000033c);
     c.start_vu(n,0);check(c.vu_selected[n]==nullptr,"Changed microcode invalidates its native translation");

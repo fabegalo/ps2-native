@@ -3,7 +3,7 @@ if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR "The vendored AOT component requires Clang vector builtins")
 endif()
 set(_ee "${PROJECT_SOURCE_DIR}/third_party/ps2-native-recomp")
-add_library(ps2n_engine_content STATIC src/elf.cpp src/io.cpp src/sha256.cpp)
+add_library(ps2n_engine_content STATIC src/elf.cpp src/io.cpp src/sha256.cpp src/disc.cpp src/bios.cpp src/nvm.cpp src/console.cpp src/packed_elf.cpp src/xff.cpp)
 target_include_directories(ps2n_engine_content PUBLIC include)
 add_executable(ps2n-ee-recomp
     tools/ps2n_ee_prepare.cpp ${_ee}/recomp/elf.cpp ${_ee}/recomp/r5900.cpp
@@ -11,7 +11,7 @@ add_executable(ps2n-ee-recomp
     ${_ee}/recomp/eerecomp_gen.cpp ${_ee}/recomp/snr2.cpp)
 target_include_directories(ps2n-ee-recomp PRIVATE ${_ee}/include ${_ee}/recomp)
 target_link_libraries(ps2n-ee-recomp PRIVATE ps2n_engine_content)
-add_library(ps2n_engine STATIC src/engine/console.cpp src/engine/sif.cpp src/engine/iop.cpp src/engine/iop_loader.cpp src/engine/iop_kernel.cpp src/engine/vu.cpp src/engine/graphics.cpp src/host/engine_graphics.cpp
+add_library(ps2n_engine STATIC src/engine/console.cpp src/engine/sif.cpp src/engine/iop.cpp src/engine/iop_loader.cpp src/engine/iop_rpc.cpp src/engine/iop_services.cpp src/engine/iop_cdvd.cpp src/engine/iop_kernel.cpp src/engine/vu.cpp src/engine/graphics.cpp src/host/engine_graphics.cpp
     third_party/ps2recomp-iop/iop_cpu.cpp)
 target_include_directories(ps2n_engine PUBLIC include ${_ee}/include third_party/ps2recomp-iop third_party/ps2-native-vu/include src/engine)
 target_link_libraries(ps2n_engine PRIVATE ps2n_engine_content)
@@ -101,4 +101,11 @@ target_link_libraries(ps2n-engine-graphics-tests PRIVATE ps2n_engine)
 
 add_test(NAME engine-graphics COMMAND ps2n-engine-graphics-tests)
 set_tests_properties(engine-graphics PROPERTIES TIMEOUT 30 LABELS gpu)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(ps2n-engine-cdvd-tests tests/engine_cdvd_tests.cpp)
+    target_link_libraries(ps2n-engine-cdvd-tests PRIVATE ps2n_engine)
+    add_test(NAME engine-cdvd COMMAND ps2n-engine-cdvd-tests)
+    set_tests_properties(engine-cdvd PROPERTIES TIMEOUT 10)
 endif()

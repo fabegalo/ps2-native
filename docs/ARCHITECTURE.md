@@ -141,7 +141,7 @@ GS compute -> capture/native presentation. The 32x32 RGBA pixels are all checked
 IOP starts at tick 8 before EE finishes at 1008 and retires at 275856. This is a tiny
 original synthetic guest diagnostic, not a commercial game or proof of gameplay.
 
-The existing read-only Super Bust-A-Move ELF (SHA-256
+At graphics commit `23f251b`, the existing read-only Super Bust-A-Move ELF (SHA-256
 `eeb913a6eac79a58d8424dc18190310f1ae5d14d762dec5a339f44ad9870d965`) was prepared and
 run through this AOT. It reaches the 100-million logical-cost bound before GS use;
 observed EE continuation is `001D3224`, IOP PC is zero and no GS frame exists. Original
@@ -152,15 +152,78 @@ No fake endpoint, title-specific override, original-content mutation or second r
 was introduced. Vulkan, other GPUs/hosts, original firmware boot and gameplay remain
 untested in this graphics integration.
 
-Original firmware boot, IRX native export linking/loader services, IOP hardware
+**CDVD/IOP continuation approved 16/11/2026.** The maintainer validated original
+CDVDMAN/CDVDFSV execution with selective kernel/loadcore/SIF HLE, on this Console;
+neither a new IOP runtime nor host CDVD RPC handlers are used. The resident loader
+reserves shared RAM, relocates each IRX, validates native export/import ABI versions,
+keeps distinct entry contexts and reclaims nonresident images/stacks. Original exports
+supersede HLE. Required driver initialization/deinitialization executes original IOP
+callbacks. Module and RPC state is retired on reset while mounted media remains read-only.
+
+RPC registration uses the original module's server data, queue, buffer, GP and thread.
+Calls run on those threads, can block on kernel events/semaphores, retain queued payloads
+and send SIF0 end only after the original handler returns. NOWAIT without end notification
+clears the actual EE request packet; a null result sends no invented payload. SIF1 input,
+SIF0 replies, DMA3/CDVD IRQ callbacks and device deadlines use the existing RAM/scheduler.
+`76295e2`/`620697b` supplied the prior native-thread RPC correction; the CDVD CLV seek/sector
+model reuses `b2959c8^`. RTC starts from host time and advances on the logical clock.
+No CAV, CDDA, 2064-byte DVD envelope, authentication/NVM write or full firmware boot is
+claimed; unsupported operations stop. DMA starts disabled in the standalone HLE kernel
+profile until the original driver configures its real shared registers.
+
+With ROM0 `d6653f4e…` / ROMVER `0200EC20040614`, matching `SCPH-70004:GH-032-11`,
+IOPBTCONF names legacy CDVDMAN/CDVDFSV. Their IRX identities are 1.04 (library export ABI
+1.01); they register 592/593/595/597/59A, not 596. The same ROM contains XCDVDMAN/XCDVDFSV
+IRX 2.11 (`b3310cd1…` / `940a7f17…`, export ABI 1.01), compatible with each other's imports.
+The user explicitly requested the original X pair; `--cdvd-modules extended` is the default,
+with `--cdvd-modules legacy` retained as an explicit negative control. Missing originals
+fail instead of substituting a host endpoint. No firmware bytes are distributed.
+
+Super's EE `001D1C88` helper tries POFF bind at `001D1D00`, retries absence 17 times
+(18 attempts), then returns zero; its caller at `001D33F4` preserves the CDVD Init result.
+It is optional probing, not an unconditional requirement. The original 100-million-cost
+supervision limit stopped inside these waits. `--max-ticks 200000000` lets the legacy
+code exhaust its own retries and reach the next shared gap at tick 136615848, without
+shortening loops or fabricating a server. This agrees with the historical bounded-wait
+record below and in FIRST-GAME-STATUS; elapsed guest work is not a GS performance issue.
+
+The original XCDVDFSV registers 596 on thread 3, queue `0003A0B0`, handler `00037A78`;
+592 runs on its separate original queue/thread. Super's original ELF `eeb913a6…` completes
+592 with result 1 at logical tick 4496302, binds/calls real 596 and reaches unsupported EE
+`SleepThread` syscall 30 at `001E30E4` (continuation `001E30E8`, tick 4497128). GS is still
+unused: no game frame or gameplay evidence exists. The next task is the shared EE
+sleep/wakeup/callback contract, preserving the pending POFF call and original workers.
+
+[OPL's RPC0/S596](https://github.com/ps2homebrew/Open-PS2-Loader/blob/master/modules/iopcore/cdvdfsv/cdvdfsv.c)
+confirms the event wait; [Play!'s Invoke596](https://github.com/jpd002/Play-/blob/master/Source/iop/Iop_Cdvdfsv.cpp)
+explains why method 1 cannot receive repeated immediate replies. These are behavioral
+references only; their modules/runtime were not substituted or copied. Our original-ROM
+probe executes the X handler, observes CDVDMAN event bit 4 waiting with no end, supplies
+a controlled test event and verifies exactly one original completion. Repeating it requires
+a fresh event; this is synthetic client/event input, not physical power-off certification.
+Reproduce with `ps2n-engine-cdvd-tests ROM0 PROFILE RAW_DISC` after building that target.
+Windows x64 Release validation preserves all 57 exact-output official tests and all
+five existing CTests; the new CDVD target makes six passing CTests.
+Standalone CTest also covers resident/nonresident IRXs, relocations/native exports,
+concurrent blocked RPC handlers, real fixture sectors, no-media errors, native IRQ,
+shared EE device access, reset and stale-event ordering. Public tests remain separate.
+
+Runner: prepare/build the original ELF through the existing verified AOT path, then use
+`ps2n-engine-run --rom0 ROM0 --profile SCPH-70004:GH-032-11 --disc RAW_DISC
+--cdvd-modules extended --max-ticks 200000000 --capture OUTPUT.bmp`. Capture also works
+at a failure boundary if the guest really initialized GS; no image is emitted here.
+For cooked images, `--disc-type cd|dvd` supplies physical medium metadata explicitly;
+2352-byte raw media identifies CD. Saves and original media/ROMs are not written.
+
+Original firmware boot, dynamic MODLOAD/LOADFILE services, other IOP hardware
 interrupt/exception dispatch, running-unit VU reset/control, VU D/T interrupts, timer
 IRQs, guest TLB exceptions, SPU2, complete graphics timing and gameplay remain gaps.
 Transient transfer caches/GPU resources do not implement checkpoints; no enhanced-mode
 or hardware-cycle fidelity certification is claimed.
 Unsupported paths stop explicitly. These tests certify neither physical cycle accuracy
 nor gameplay. Headless OSD settings still require the matched profile/NVM before firmware
-sessions; the next integration should exercise native module dependencies and original
-startup against this graphics path, retaining the single console state.
+sessions; the next integration should complete shared EE sleep/wakeup/callback services
+and original module dependencies, retaining the single console state.
 
 **Decisões vigentes do mantenedor.** Aqui só o contrato e o estado; medições de ensaio ficam nas mensagens de commit e nas evidências locais.
 
