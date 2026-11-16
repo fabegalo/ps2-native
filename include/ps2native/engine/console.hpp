@@ -33,6 +33,7 @@ public:
     Console& operator=(const Console&) = delete;
     void load(const std::filesystem::path& elf);
     void run();
+    void reset_iop();
     void advance_to(std::uint64_t target);
     void load_iop(const std::filesystem::path& irx);
     std::uint32_t load_iop(std::span<const std::uint8_t> file,std::string origin);
@@ -119,7 +120,7 @@ public:
     struct Thread {
         ps2::Cpu context{};
         ThreadState state{ThreadState::Dormant};
-        std::uint32_t entry{}, stack{}, size{}, gp{}, priority{}, wait{};
+        std::uint32_t entry{}, stack{}, size{}, gp{}, priority{}, wait{}, initial_priority{}, attr{}, option{};
         std::uint64_t order{};
     };
     struct Semaphore { int count{}, maximum{}; std::vector<std::uint32_t> waiters; };

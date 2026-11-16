@@ -2,6 +2,7 @@
 #include "iop_cdvd.hpp"
 #include "iso_image.hpp"
 #include "ps2native/io.hpp"
+#include "ps2native/bios.hpp"
 #include "ps2/os.hpp"
 #include <chrono>
 #include <cstdio>
@@ -28,11 +29,21 @@ static std::vector<std::uint8_t> module(bool provider){
     else {w(0x550,16);w(0x554,4);}
     return file;
 }
-static int original_poff_probe(char** argv){
+static int original_poff_probe(int argc,char** argv){
     Console c;c.initialize_sif();c.cdvd->hardware=ps2native::find_console_hardware(argv[2]);
     check(c.cdvd->hardware,"Probe requires a known console profile");c.cdvd->mount(ps2::os::path(argv[3]));c.boot_cdvd(ps2::os::path(argv[1]),true);c.run_iop();
+    if(argc==5){
+        const auto image=ps2native::load_iop_reboot_image(c.cdvd->media->read(argv[4]));
+        c.reset_iop();c.initialize_sif();
+        for(const auto name:{"CDVDMAN","CDVDFSV"}){
+            const auto* m=image.find(name);check(m,"IOPRP must contain both original CDVD modules");
+            const auto id=c.load_iop(std::span(image.bytes).subspan(m->offset,m->size),std::string(argv[4])+":"+name);
+            c.run_iop();check(c.iop_modules.at(id).returned && c.iop_modules.at(id).resident,"Original IOPRP CDVD entry must finish resident");
+        }
+        std::printf("engine-cdvd: IOPRP %s original CDVD modules executed; this probe does not boot FILEIO/LOADFILE\n",image.sha256.c_str());
+    }
     auto server=std::find_if(c.rpc_servers.begin(),c.rpc_servers.end(),[](const auto& item){return item.second.sid==0x80000596;});
-    check(server!=c.rpc_servers.end(),"Original XCDVDFSV must register POFF itself");
+    check(server!=c.rpc_servers.end(),"Original CDVDFSV must register POFF itself");
     const auto endpoint=server->first,thread=c.rpc_queues.at(server->second.queue).thread;
     for(unsigned iteration=0;iteration<2;++iteration){
         const auto before=server->second.completions;const auto replies=c.sif.replies.size();
@@ -46,11 +57,11 @@ static int original_poff_probe(char** argv){
         check(!c.rpc_calls.contains(thread) && server->second.completions==before+1 && c.sif.replies.size()==replies+1 && ps2::ld32(0xc000)==1,"Original POFF sends exactly one completion after its event");
         c.run_iop();check(c.sif.replies.size()==replies+1,"Idle POFF cannot emit repeated replies");
     }
-    std::puts("engine-cdvd: original XCDVDFSV POFF wait/event/completion PASS; synthetic client/event injection, not a physical power-off");return 0;
+    std::puts("engine-cdvd: original CDVDFSV POFF wait/event/completion PASS; synthetic client/event injection, not a physical power-off");return 0;
 }
 int main(int argc,char** argv){try{
-    if(argc==4)return original_poff_probe(argv);
-    if(argc!=1)throw std::runtime_error("usage: ps2n-engine-cdvd-tests [ROM0 PROFILE RAW_DISC]");
+    if(argc==4 || argc==5)return original_poff_probe(argc,argv);
+    if(argc!=1)throw std::runtime_error("usage: ps2n-engine-cdvd-tests [ROM0 PROFILE RAW_DISC [IOPRP_PATH]]");
     Console c;c.initialize_sif();const auto p=c.load_iop(module(true),"original-provider-fixture"),q=c.load_iop(module(false),"original-consumer-fixture");
     check(p!=q && c.iop_modules.size()==2,"IRXs reserve separate RAM while entries coexist");
     const auto first=c.iop_modules.at(p).thread,second=c.iop_modules.at(q).thread;
@@ -107,6 +118,10 @@ int main(int argc,char** argv){try{
     std::vector<std::uint8_t> malformed(57);ps2::store(malformed.data(),57u);ps2::store(malformed.data()+8,0x8000000au);
     bool rejected=false;try{c.sif_command(malformed);}catch(const std::runtime_error&){rejected=true;}
     check(rejected && c.rpc_calls.empty(),"Malformed RPC alignment cannot publish a request");
+    std::uint32_t bad_reset[]={24,0,0x80000003,0,81,0};
+    const auto old_modules=c.iop_modules.size(),old_servers=c.rpc_servers.size();
+    rejected=false;try{c.sif_command({reinterpret_cast<const std::uint8_t*>(bad_reset),sizeof(bad_reset)});}catch(const std::runtime_error&){rejected=true;}
+    check(rejected && c.iop_modules.size()==old_modules && c.rpc_servers.size()==old_servers,"Malformed reset cannot retire the live IOP session");
     const auto observed=c.sif.replies.size();while(c.sif.replies.size()<31)c.sif.replies.emplace_back();
     for(unsigned k=0;k<2;++k){c.iop_write(0x8000+k*16,0x9000,4);c.iop_write(0x8004+k*16,0xd000,4);c.iop_write(0x8008+k*16,16,4);c.iop_write(0x800c+k*16,4,4);}
     c.iop.gpr[4]=0x8000;c.iop.gpr[5]=2;rejected=false;try{c.iop_import("sifman",7);}catch(const std::runtime_error&){rejected=true;}
@@ -133,6 +148,13 @@ int main(int argc,char** argv){try{
     // Reset a console with a queued RPC and unfinished physical operation.
     const std::uint32_t pending[]={56,0,0x8000000a,0,9,0xb000,9,0xb200,0,4,0xc000,4,1,0x9200};
     c.sif_command({reinterpret_cast<const std::uint8_t*>(pending),sizeof(pending)});c.cdvd->write(0x1f402004,2,1);
+    const auto before_reset=c.ticks;ps2::st32(0xe000,0x12345678);c.ee.pc=0x1234;
+    c.sif.main_address=0x5000;c.sif.ee_receive=0x6000;c.sif.msflag=0x40;
+    c.sif.iop_handlers[0x123]={0x7000,0,0};c.sif.iop_commands.emplace_back(c.sif.iop_handlers.at(0x123),std::vector<std::uint8_t>(16));
+    c.reset_iop();
+    check(c.ticks==before_reset && c.ee.pc==0x1234 && ps2::ld32(0xe000)==0x12345678,"IOP reset preserves EE execution, memory and the single clock");
+    check(c.iop_modules.empty() && c.iop_threads.empty() && c.rpc_servers.empty() && c.rpc_calls.empty() && c.sif.replies.empty() && c.sif.iop_handlers.empty() && c.sif.iop_commands.empty(),"IOP reset cannot retain stale modules, threads, RPC or callbacks");
+    check(c.sif.main_address==0x5000 && c.sif.ee_receive==0x6000 && c.sif.msflag==0x40 && !c.sif.smflag && !c.sif.command_buffer,"IOP reset preserves EE SIF registers without inventing boot readiness");
     std::vector<std::uint8_t> elf(88);const auto w=[&](unsigned at,std::uint32_t value){ps2::store(elf.data()+at,value);};const auto h=[&](unsigned at,std::uint16_t value){ps2::store(elf.data()+at,value);};
     w(0,0x464c457f);elf[4]=elf[5]=elf[6]=1;h(16,2);h(18,8);w(20,1);w(24,0x100000);w(28,52);h(40,52);h(42,32);h(44,1);w(52,1);w(56,84);w(60,0x100000);w(68,4);w(72,4);w(76,5);w(80,4);
     ps2native::write_file_atomically(scratch/"reset.elf",elf);c.load(scratch/"reset.elf");

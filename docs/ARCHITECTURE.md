@@ -189,10 +189,29 @@ record below and in FIRST-GAME-STATUS; elapsed guest work is not a GS performanc
 
 The original XCDVDFSV registers 596 on thread 3, queue `0003A0B0`, handler `00037A78`;
 592 runs on its separate original queue/thread. Super's original ELF `eeb913a6…` completes
-592 with result 1 at logical tick 4496302, binds/calls real 596 and reaches unsupported EE
-`SleepThread` syscall 30 at `001E30E4` (continuation `001E30E8`, tick 4497128). GS is still
-unused: no game frame or gameplay evidence exists. The next task is the shared EE
-sleep/wakeup/callback contract, preserving the pending POFF call and original workers.
+592 with result 1 at logical tick 4496302 and binds/calls real 596. The previous report
+misidentified syscall 30 at `001E30E4`: it is `ReferThreadStatus`, not `SleepThread` (32),
+as defined by PS2SDK `ee/kernel/include/syscallnr.h`. Its 48-byte status ABI now reads
+the Console's real thread state, initial/current priority, metadata and semaphore wait.
+The original caller gets thread 1's status at `00F32388`; execution then completes
+593 method 34 and sends SIF RESET (EE continuation `001E35A8`, tick 4499379).
+Its arguments are `rom0:UDNL cdrom0:\IOP\IOPRP202.IMG;1`, mode 0.
+
+The existing read-only disc/container loaders validate that original IOPRP (110993 bytes,
+SHA-256 `e4857da724efb48213d4cb805637b461846767e4dd659905c32d9a007f5f90cc`):
+SIFCMD, FILEIO, CDVDMAN, CDVDFSV and LOADFILE. The reset primitive reuses the previous
+Console reset, retires IOP modules/threads/imports/RPC/callbacks and pending CDVD work,
+and preserves EE execution/RAM, logical time, mounted media and EE-owned SIF registers.
+It does not publish BOOTEND. The SIF RESET path currently validates the request and
+reports the missing IOPRP execution explicitly, before mutating the running session.
+
+A bounded original-module probe also resets the IOP and executes the IOPRP CDVD pair:
+both entries return resident, the original CDVDFSV registers 596, and its handler passes
+the same real event-wait/completion regression described below. This is not a complete
+IOPRP boot: FILEIO/LOADFILE execution with kernel/SIF HLE and their missing IOMAN/MODLOAD
+contracts awaits maintainer validation under AGENTS section 2. The game has not reached
+GS; there is no game frame or gameplay evidence. No previous module or fake boot-ready
+flag is substituted for the requested reboot.
 
 [OPL's RPC0/S596](https://github.com/ps2homebrew/Open-PS2-Loader/blob/master/modules/iopcore/cdvdfsv/cdvdfsv.c)
 confirms the event wait; [Play!'s Invoke596](https://github.com/jpd002/Play-/blob/master/Source/iop/Iop_Cdvdfsv.cpp)
@@ -201,7 +220,8 @@ references only; their modules/runtime were not substituted or copied. Our origi
 probe executes the X handler, observes CDVDMAN event bit 4 waiting with no end, supplies
 a controlled test event and verifies exactly one original completion. Repeating it requires
 a fresh event; this is synthetic client/event input, not physical power-off certification.
-Reproduce with `ps2n-engine-cdvd-tests ROM0 PROFILE RAW_DISC` after building that target.
+Reproduce with `ps2n-engine-cdvd-tests ROM0 PROFILE RAW_DISC` after building that target;
+append an ISO path such as `IOP/IOPRP202.IMG;1` to exercise its original CDVD pair.
 Windows x64 Release validation preserves all 57 exact-output official tests and all
 five existing CTests; the new CDVD target makes six passing CTests.
 Standalone CTest also covers resident/nonresident IRXs, relocations/native exports,

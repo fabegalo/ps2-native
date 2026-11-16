@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <format>
 #include <stdexcept>
+#include "iop_cdvd.hpp"
+#include "ps2native/bios.hpp"
 
 namespace ps2native::engine {
 namespace {
@@ -57,6 +59,18 @@ void Console::sif_command(std::span<const std::uint8_t> packet) {
         sif.iop_commands.emplace_back(native->second,std::vector<std::uint8_t>(packet.begin(),packet.end()));
         if (!iop_active && !iop_callback_active) iop_next_tick=std::max(iop_next_tick,now()+8);
         return;
+    }
+    if(cid==0x80000003) {
+        if(packet.size()<24)throw std::runtime_error("Truncated SIF reset packet");
+        const auto length=ps2::load<std::uint32_t>(packet.data()+16),mode=ps2::load<std::uint32_t>(packet.data()+20);
+        if(length>80 || length>packet.size()-24)throw std::runtime_error("Invalid SIF reset arguments");
+        const std::string args(reinterpret_cast<const char*>(packet.data()+24),length);
+        const auto prefix=std::string("rom0:UDNL cdrom0:");
+        if(mode || !args.starts_with(prefix) || !cdvd->media)throw std::runtime_error("Unsupported IOP reboot arguments: "+args);
+        const auto image=ps2native::load_iop_reboot_image(cdvd->media->read(args.substr(prefix.size())));
+        std::string modules;
+        for(const auto& m:image.modules)modules+=m.name+":"+std::to_string(m.size)+" ";
+        throw std::runtime_error("IOPRP execution pending: "+modules);
     }
     if(rpc_command(packet))return;
     if (cid == 0x80000000 || (cid == 0x80000002 && opt == 0)) {

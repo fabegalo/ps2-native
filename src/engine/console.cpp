@@ -26,18 +26,9 @@ Console::Console() : ram(ps2::kRamSize), scratchpad(ps2::kScratchpadSize), iop_r
     ps2::g_live_spr = scratchpad.data();
 }
 Console::~Console() { ps2::g_live_tlb_enabled=false; active = nullptr; ps2::g_live_ram = ps2::g_live_spr = nullptr; }
-void Console::load(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) throw std::runtime_error("Cannot open ELF");
-    std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(file), {}};
-    const auto elf = parse_ee_elf(bytes);
-    std::fill(ram.begin(), ram.end(), 0);
-    std::fill(iop_ram.begin(), iop_ram.end(), 0);
-    for (const auto& s : elf.segments) std::copy_n(bytes.data() + s.file_offset, s.file_size, ram.data() + s.vaddr);
-    ee = {};
-    vu0_memory.fill(0); vu0_code.fill(0);vu1_memory.fill(0);vu1_code.fill(0);
-    vu1_regs={};vu1_regs.vf[0].w[3]=0x3f800000;vu={};vu_aot_pairs={};vu_interpreted_pairs={};vu_programs.clear();vu_selected={};vu_vi24=0;
-    iop={}; iop_suspended={}; iop_active=false; advancing=false;
+void Console::reset_iop() {
+    std::fill(iop_ram.begin(),iop_ram.end(),0);
+    iop={}; iop_suspended={}; iop_active=false;
     iop_callback_active=false; iop_suspended_active=false; iop_import_slot=0;
     iop_instructions=0; iop_next_tick=0; iop_first_tick=0; iop_last_tick=0;
     iop_threads.clear(); iop_semas.clear(); iop_events.clear(); iop_mailboxes.clear();
@@ -49,6 +40,23 @@ void Console::load(const std::filesystem::path& path) {
     rpc_servers.clear();rpc_queues.clear();rpc_calls.clear();
     iop_modules.clear();iop_libraries.clear();iop_allocations.clear();
     iop_heap_top=0x10000; iop_imports.clear();iop_import_versions.clear(); iop_output.clear(); iop_result=0; iop_strtok_next=0;
+    const auto main=sif.main_address,receive=sif.ee_receive,msflag=sif.msflag,transfer=sif.transfer_id;
+    sif={};sif.main_address=main;sif.ee_receive=receive;sif.msflag=msflag;
+    sif.transfer_id=sif.completed_id=transfer;
+    dmac_status &= ~(1u<<5);
+}
+void Console::load(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) throw std::runtime_error("Cannot open ELF");
+    std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(file), {}};
+    const auto elf = parse_ee_elf(bytes);
+    std::fill(ram.begin(), ram.end(), 0);
+    for (const auto& s : elf.segments) std::copy_n(bytes.data() + s.file_offset, s.file_size, ram.data() + s.vaddr);
+    ee = {};
+    vu0_memory.fill(0); vu0_code.fill(0);vu1_memory.fill(0);vu1_code.fill(0);
+    vu1_regs={};vu1_regs.vf[0].w[3]=0x3f800000;vu={};vu_aot_pairs={};vu_interpreted_pairs={};vu_programs.clear();vu_selected={};vu_vi24=0;
+    reset_iop();
+    advancing=false;
     threads.clear(); semaphores.clear(); handlers.clear();interrupt_order.clear();in_interrupt=false;
     aot.clear(); aot_modules.clear(); code_words.clear(); syscall_handlers.clear(); dma_registers.clear(); sif_registers.clear();
     dma_registers[0x1000e000]=1; // Standalone ELF kernel environment starts with DMA enabled.
@@ -176,7 +184,7 @@ void Console::schedule() {
     ee = best->second.context;ee.vu0=shared_vu0;
 }
 void Console::run() {
-    threads.emplace(1, Thread{.state=ThreadState::Running, .priority=64});
+    threads.emplace(1, Thread{.state=ThreadState::Running, .entry=ee.pc, .priority=64, .initial_priority=64});
     while (!exited) {
         ee.pc &= ~ps2::kUnwind;
         ps2::dispatch(ee, 0, 0);
@@ -487,6 +495,7 @@ void syscall(Cpu& c, std::uint32_t pc) {
         break;
     }
     case 0x20: {
+        (void)mapped(a0,36);
         const auto entry = ld32(a0 + 4), stack = ld32(a0 + 8), size = ld32(a0 + 12), gp = ld32(a0 + 16), priority = ld32(a0 + 20);
         if (!s.aot.contains(entry) || stack > kRamSize || size > kRamSize - stack || size < context_reserve || priority < 1 || priority > 127) {
             if (std::getenv("PS2N_ENGINE_TRACE")) std::fprintf(stderr,"[thread] rejected entry=%08X aot=%d stack=%08X size=%08X priority=%u\n",entry,s.aot.contains(entry),stack,size,priority);
@@ -495,7 +504,7 @@ void syscall(Cpu& c, std::uint32_t pc) {
         std::uint32_t id = 1; while (id < 256 && s.threads.contains(id)) ++id;
         if (id == 256) { result = -1; break; }
         auto& t = s.threads[id];
-        t.entry = entry; t.stack = stack; t.size = size; t.gp = gp; t.priority = priority;
+        t.entry = entry; t.stack = stack; t.size = size; t.gp = gp; t.priority = t.initial_priority = priority; t.attr = ld32(a0 + 28); t.option = ld32(a0 + 32);
         result = id; break;
     }
     case 0x22: {
@@ -515,6 +524,21 @@ void syscall(Cpu& c, std::uint32_t pc) {
         s.threads.at(s.current).state = ps2native::engine::Console::ThreadState::Dormant;
         s.reschedule_requested=true; c.pc |= kUnwind; break;
     case 0x2f: result = s.current; break;
+    case 0x30: case 0x31: {
+        const auto it=s.threads.find(a0 ? a0 : s.current);
+        if(it==s.threads.end()) { result=a0<256 ? 0 : -1; break; }
+        const auto& t=it->second;
+        const auto status=t.state==ps2native::engine::Console::ThreadState::Running ? 1u :
+            t.state==ps2native::engine::Console::ThreadState::Ready ? 2u :
+            t.state==ps2native::engine::Console::ThreadState::Waiting ? 4u : 16u;
+        if(a1) {
+            auto* out=mapped(a1,48,true);
+            const std::uint32_t fields[]={status,t.entry,t.stack,t.size,t.gp,t.initial_priority,
+                t.priority,t.attr,t.option,t.wait ? 2u : 0u,t.wait,0};
+            std::memcpy(out,fields,sizeof(fields));
+        }
+        result=status; break;
+    }
     case 0x40: {
         const auto count = ld32(a0 + 8), maximum = ld32(a0 + 4);
         if (std::getenv("PS2N_ENGINE_TRACE")) std::fprintf(stderr,"[sema] %u %u %u %u %u %u\n",count,maximum,ld32(a0+8),ld32(a0+12),ld32(a0+16),ld32(a0+20));
@@ -562,6 +586,8 @@ void syscall(Cpu& c, std::uint32_t pc) {
         const auto top = a1 == 0xffffffff ? kRamSize - 4096 : a1 + a2;
         if (a2 > top || top > kRamSize || top < context_reserve) throw std::runtime_error("Invalid thread stack");
         s.stack_base = top - a2;
+        auto& t=s.threads.at(s.current);
+        t.stack=s.stack_base; t.size=a2; t.gp=a0; t.initial_priority=t.priority;
         result = top - context_reserve;
         break;
     }

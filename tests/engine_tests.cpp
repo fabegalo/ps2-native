@@ -75,10 +75,15 @@ int main() {
         require(syscall(s,0x45,1) < 0, "Token consumed exactly once");
         s.threads.emplace(1,Console::Thread{.state=Console::ThreadState::Running,.priority=64});
         s.threads.emplace(2,Console::Thread{.state=Console::ThreadState::Ready,.priority=32});
+        require(syscall(s,0x30,0,0x6200)==1 && ps2::ld32(0x6200)==1 && ps2::ld32(0x6218)==64,"ReferThreadStatus self reports running thread and priority");
+        require(syscall(s,0x30,2,0x6200)==2 && ps2::ld32(0x6200)==2,"ReferThreadStatus reports ready thread");
+        require(syscall(s,0x30,255,0x6200)==0 && syscall(s,0x30,256,0x6200)==-1,"Unused slot and invalid thread range");
+        rejects([&]{syscall(s,0x30,1,ps2::kRamSize-44);});
         s.threads.at(2).context.pc=0x4000;
         s.ee.pc=0x3000;
         syscall(s,0x44,1);
         require(s.threads.at(1).state == Console::ThreadState::Waiting, "Wait blocks without a token");
+        require(syscall(s,0x30,1,0x6200)==4 && ps2::ld32(0x6224)==2 && ps2::ld32(0x6228)==1,"ReferThreadStatus exposes actual semaphore wait");
         s.schedule();
         require(s.current == 2 && s.ee.pc == 0x4000, "Highest priority ready context selected");
         syscall(s,0x42,1);
@@ -88,6 +93,8 @@ int main() {
         ps2::st32(0x5010,0x1234); ps2::st32(0x5014,48);
         const auto thread = syscall(s,0x20,0x5000);
         require(thread > 0 && s.threads.at(thread).entry == 0x1000, "CreateThread consumes PS2SDK ABI");
+        ps2::st32(0x6230,0x12345678);
+        require(syscall(s,0x30,thread,0x6200)==16 && ps2::ld32(0x6204)==0x1000 && ps2::ld32(0x6208)==0x10000 && ps2::ld32(0x6214)==48 && ps2::ld32(0x6230)==0x12345678,"Dormant thread status uses the complete bounded ABI");
         syscall(s,0x22,thread,99);
         require(s.threads.at(thread).context.r[4].w[0] == 99 && s.threads.at(thread).context.r[29].w[0] == 0x18000 - 0x2a0, "StartThread argument and context reserve");
         require(syscall(s,0x41,sema) == sema && syscall(s,0x45,sema) < 0, "Deleted semaphore cannot be polled");
