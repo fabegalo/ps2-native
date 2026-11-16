@@ -116,9 +116,9 @@ Flickable {
                     Text {
                         Layout.fillWidth: true
                         text: page.biosReady
-                              ? qsTr("BIOS %1 (%2, %3). Games run through PS2Recomp: open the library and press Play.")
+                              ? qsTr("BIOS %1 (%2, %3). Games run on the native engine: open the library and press Play.")
                                   .arg(page.bios.info.version).arg(page.bios.info.region).arg(page.bios.info.romver)
-                              : qsTr("Import your discs and press Play: PS2Recomp recompiles and runs them. A BIOS dumped from your own console identifies the system; ps2-native never bundles or downloads firmware.")
+                              : qsTr("Import your discs and press Play: the native engine recompiles and runs them. A BIOS dumped from your own console identifies the system; ps2-native never bundles or downloads firmware.")
                         color: Theme.textMuted
                         font.pixelSize: Theme.bodySize
                         lineHeight: 1.15
@@ -132,7 +132,7 @@ Flickable {
                         text: qsTr("Enter PS2 Browser")
                         iconName: "globe"
                         available: false
-                        reason: qsTr("PS2Recomp runs games directly; the original firmware Browser is not executed.")
+                        reason: qsTr("Not available yet: the engine starts games directly; booting the original Browser is in progress.")
                         visible: page.wide
                     }
                     AppButton {

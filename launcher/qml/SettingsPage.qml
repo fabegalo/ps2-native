@@ -136,7 +136,7 @@ Flickable {
                 SectionTitle { Layout.fillWidth: true; text: qsTr("Execution"); iconName: "terminal" }
                 SettingRow {
                     Layout.fillWidth: true
-                    title: qsTr("ps2n (PS2Recomp)")
+                    title: qsTr("ps2n (native engine)")
                     description: Launcher.gameTool
                     iconName: "file"
                     Badge {
@@ -177,7 +177,7 @@ Flickable {
                     Layout.fillWidth: true
                     available: false
                     title: qsTr("Internal resolution, aspect ratio, V-Sync")
-                    description: qsTr("Not available: the PS2Recomp runtime does not expose these settings yet.")
+                    description: qsTr("Not available here yet: set them in the game window (F1 lists the keys, F2 switches picture styles).")
                     iconName: "monitor"
                     Icon { name: "lock"; size: 18; color: Theme.textFaint }
                 }

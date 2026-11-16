@@ -73,10 +73,11 @@ py+=(-X utf8)  # print paths with non-ASCII letters (the scripts run with -I, wh
 
 windows=0
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) windows=1 ;; esac
-game="$ROOT/games/$name"
-generated="$ROOT/generated/$name"
-native="$ROOT/build/native-$name"
-tools="$ROOT/build/tools"
+WORK="${PS2_WORK:-$ROOT}"  # ps2-native keeps games and builds outside the source tree
+game="$WORK/games/$name"
+generated="$WORK/generated/$name"
+native="$WORK/build/native-$name"
+tools="$WORK/build/tools"
 export EMSDK="${EMSDK:-$ROOT/tools/emsdk}"
 [ -e "$source_path" ] || [ -e "$game/disc.iso" ] || { echo "$source_path: no such file" >&2; exit 1; }
 setup=()

@@ -75,7 +75,7 @@ public:
     [[nodiscard]] int validBiosCount() const;
     [[nodiscard]] QStringList gameFolders() const;
     [[nodiscard]] QString coversFolder() const;
-    // ps2n, next to the launcher: prepares discs with PS2Recomp and runs them.
+    // ps2n, next to the launcher: prepares discs with the engine and runs them.
     [[nodiscard]] QString gameTool() const;
     [[nodiscard]] bool gameToolAvailable() const;
     [[nodiscard]] QString renderer() const;

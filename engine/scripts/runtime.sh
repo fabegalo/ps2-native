@@ -43,9 +43,9 @@ shared_runtime() {
   local gpu=0 key dir
   [ ! -f "$ROOT/third_party/wgpu-native/lib/libwgpu_native.a" ] || gpu=1
   key=$(printf '%s' "native $build_type gpu$gpu ${CXXFLAGS:-} ${cxx_stamp:-} ${cxx_flags[*]}" | cksum | cut -d' ' -f1)
-  dir="$ROOT/build/runtime-native-$key"
+  dir="${PS2_WORK:-$ROOT}/build/runtime-native-$key"
   if [ "$runtime_ready" != 1 ]; then
-    mkdir -p "$ROOT/build"
+    mkdir -p "${PS2_WORK:-$ROOT}/build"
     runtime_lock "$dir.lock"
     runtime_lock_dir="$dir.lock"
     trap 'rm -rf "$runtime_lock_dir"' EXIT

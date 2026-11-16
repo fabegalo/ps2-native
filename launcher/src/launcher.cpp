@@ -709,7 +709,7 @@ bool Launcher::launchGame(const QString& id, bool prepare_only) {
         return fail(tr("Select an identified PlayStation 2 disc."));
     if (gameRunning()) return fail(tr("Another game is running or being prepared."));
     if (!gameToolAvailable()) return fail(tr("ps2n was not found next to the launcher: %1").arg(gameTool()));
-    // ps2n prepares (PS2Recomp analysis, recompilation, build) and runs the game in its own window.
+    // ps2n prepares (translation, exploration, build) and runs the game in its own window.
     game_title_ = qstr(game->title);
     QStringList arguments{prepare_only ? QStringLiteral("prepare") : QStringLiteral("play"), qpath(game->path)};
     if (const auto* bios = library_.find(settings_.active_bios)) {
@@ -720,8 +720,8 @@ bool Launcher::launchGame(const QString& id, bool prepare_only) {
     }
     game_.start(gameTool(), arguments);
     emit notify(QStringLiteral("info"), game_title_,
-                prepare_only ? tr("Preparing with PS2Recomp. The first time takes several minutes.")
-                             : tr("Starting. The first time PS2Recomp prepares the game, which takes several minutes."));
+                prepare_only ? tr("Preparing the native code. The first time downloads the build tools and takes several minutes.")
+                             : tr("Starting. The first time the game is prepared before it runs, which takes several minutes."));
     return true;
 }
 void Launcher::stopGame() {

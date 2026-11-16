@@ -8,7 +8,7 @@
 # file are unchanged (delete the file to probe again), which saves the 4 s probe.
 cxx_flags=()
 cxx_stamp=
-cxx_cache="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/build/cxx_flags"
+cxx_cache="${PS2_WORK:-${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}/build/cxx_flags"
 cxx_stat() { stat -c '%s %Y' "$1" 2> /dev/null || stat -f '%z %m' "$1" 2> /dev/null; }
 cached_env=; cached_cxx=; cached_stamp=; cached_stdlib=; cached_probe=
 [ ! -f "$cxx_cache" ] || { IFS= read -r cached_env; IFS= read -r cached_cxx; IFS= read -r cached_stamp; IFS= read -r cached_stdlib; IFS= read -r cached_probe; } < "$cxx_cache" || true

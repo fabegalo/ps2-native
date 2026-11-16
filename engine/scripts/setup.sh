@@ -48,6 +48,6 @@ esac
 
 cxx_tools=1  # the tools get no AVX2 flags
 . "$ROOT/scripts/cxx.sh"
-cmake -S "$ROOT" -B "$ROOT/build/tools" -G Ninja -DCMAKE_BUILD_TYPE=Release "${cxx_flags[@]}" > /dev/null
-ninja -C "$ROOT/build/tools" eerecomp vurecomp
+cmake -S "$ROOT" -B "${PS2_WORK:-$ROOT}/build/tools" -G Ninja -DCMAKE_BUILD_TYPE=Release "${cxx_flags[@]}" > /dev/null
+ninja -C "${PS2_WORK:-$ROOT}/build/tools" eerecomp vurecomp
 echo "== ready"

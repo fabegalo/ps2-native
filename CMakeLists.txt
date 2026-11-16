@@ -9,15 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
-# Execution: PS2Recomp, unmodified (recompiler, analyzer, runtime, IOP).
-include(cmake/PS2Recomp.cmake)
-include(cmake/PCSX2Components.cmake)
-add_library(ps2n_pcsx2_audio STATIC src/host/pcsx2_audio.cpp)
-target_include_directories(ps2n_pcsx2_audio PUBLIC "${PROJECT_SOURCE_DIR}/src/host")
-target_link_libraries(ps2n_pcsx2_audio PRIVATE kzspu2 ps2_runtime SDL3::SDL3-static)
-
 include(CTest)
-include(cmake/ParallelGS.cmake)
 
 # ps2-native: content identification, disc access, the library and the
 # preparation/supervision tool. No CPU, device or graphics emulation here.
@@ -33,52 +25,17 @@ else()
     target_compile_options(ps2n_content PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-set(PS2N_GAMES_DIR "${CMAKE_BINARY_DIR}/games" CACHE PATH "Prepared games (extracted disc, PS2Recomp config and output)")
-foreach(_var IN ITEMS INCLUDE LIB LIBPATH PATH)
-    set(PS2N_ENV_${_var} "$ENV{${_var}}")
-endforeach()
-configure_file(cmake/templates/build_environment.hpp.in generated/ps2n_build_environment.hpp @ONLY)
+
+# Execution: the engine in engine/ (exoteric33/ps2-native-recomp, MIT). It is built
+# with its own clang toolchain by its scripts; ps2n drives it and keeps the
+# games, generated code and builds in PS2N_ENGINE_WORK.
+set(PS2N_ENGINE_WORK "${CMAKE_BINARY_DIR}/engine" CACHE PATH "Engine games, generated code and builds")
 add_executable(ps2n tools/ps2n.cpp)
-target_include_directories(ps2n PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(ps2n PRIVATE ps2n_content)
-add_dependencies(ps2n ps2recomp_tools)
 target_compile_definitions(ps2n PRIVATE
-    PS2N_GAMES_DIR="${PS2N_GAMES_DIR}"
-    PS2N_BINARY_DIR="${CMAKE_BINARY_DIR}"
-    PS2N_CMAKE_COMMAND="${CMAKE_COMMAND}"
-    PS2N_RECOMP_EXE="${PS2N_RECOMP_EXE}"
-    PS2N_ANALYZER_EXE="${PS2N_ANALYZER_EXE}"
+    PS2N_ENGINE_DIR="${PROJECT_SOURCE_DIR}/engine"
+    PS2N_ENGINE_WORK="${PS2N_ENGINE_WORK}"
     PS2N_EXE_SUFFIX="${CMAKE_EXECUTABLE_SUFFIX}")
-
-# Each prepared game becomes the target ps2n-game-<id>.
-set(PS2N_BUILD_GAME "" CACHE STRING "Add this prepared game to the build; empty configures all")
-if(NOT DEFINED PS2N_CONFIGURED_GAMES)
-    set(PS2N_CONFIGURED_GAMES "" CACHE INTERNAL "Game targets retained to preserve Ninja dependency records")
-endif()
-if(PS2N_BUILD_GAME)
-    list(APPEND PS2N_CONFIGURED_GAMES "${PS2N_BUILD_GAME}")
-endif()
-file(GLOB _ps2n_games LIST_DIRECTORIES true CONFIGURE_DEPENDS "${PS2N_GAMES_DIR}/*")
-foreach(_game IN LISTS _ps2n_games)
-    get_filename_component(_id "${_game}" NAME)
-    if(PS2N_BUILD_GAME AND NOT _id IN_LIST PS2N_CONFIGURED_GAMES)
-        continue()
-    endif()
-    if(IS_DIRECTORY "${_game}/generated" AND EXISTS "${_game}/game.txt")
-        ps2n_add_game(${_id} "${_game}/generated")
-        list(APPEND PS2N_CONFIGURED_GAMES "${_id}")
-    endif()
-endforeach()
-list(REMOVE_DUPLICATES PS2N_CONFIGURED_GAMES)
-set(PS2N_CONFIGURED_GAMES "${PS2N_CONFIGURED_GAMES}" CACHE INTERNAL "Game targets retained to preserve Ninja dependency records" FORCE)
-
-# Prepared EE content modules compile independently of the original entry ELF.
-file(GLOB _ps2n_ee_modules LIST_DIRECTORIES true CONFIGURE_DEPENDS "${CMAKE_BINARY_DIR}/ee-aot/*/g")
-foreach(_generated IN LISTS _ps2n_ee_modules)
-    get_filename_component(_module "${_generated}" DIRECTORY)
-    get_filename_component(_identity "${_module}" NAME)
-    ps2x_add_ee_aot_module(ps2n-ee-${_identity} "${_generated}")
-endforeach()
 
 # Desktop launcher (Qt 6 Quick). AUTO builds it only when Qt is found.
 set(PS2N_LAUNCHER "AUTO" CACHE STRING "Build the ps2-native desktop launcher (Qt 6): AUTO, ON or OFF")
@@ -87,80 +44,8 @@ if(NOT PS2N_LAUNCHER STREQUAL "OFF")
     add_subdirectory(launcher)
 endif()
 
-if(BUILD_TESTING)
-    add_test(NAME spu2 COMMAND kzspu2_test)
-    add_executable(ps2n-audio-device-tests tests/audio_device_tests.cpp)
-    target_link_libraries(ps2n-audio-device-tests PRIVATE ps2n_pcsx2_audio ps2_runtime kzspu2 SDL3::SDL3-static)
-    target_include_directories(ps2n-audio-device-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
-    add_test(NAME audio-device COMMAND ps2n-audio-device-tests)
-    set_tests_properties(audio-device PROPERTIES ENVIRONMENT "SDL_AUDIO_DRIVER=dummy" TIMEOUT 20)
 
-    add_executable(ps2n-spu2-pcm-tests tests/spu2_pcm_tests.cpp)
-    target_link_libraries(ps2n-spu2-pcm-tests PRIVATE kzspu2 ps2n_content)
-    add_test(NAME spu2-pcm COMMAND ps2n-spu2-pcm-tests)
-    add_test(NAME spu2-pcm-concurrent COMMAND ps2n-spu2-pcm-tests concurrent)
-    set_tests_properties(spu2-pcm-concurrent PROPERTIES TIMEOUT 15)
-    if(TARGET kzspu2_avx2)
-        foreach(_isa sse4 avx avx2)
-            add_test(NAME spu2-pcm-${_isa} COMMAND ps2n-spu2-pcm-tests)
-            set_tests_properties(spu2-pcm-${_isa} PROPERTIES ENVIRONMENT OVERRIDE_VECTOR_ISA=${_isa})
-        endforeach()
-    endif()
-    add_executable(ps2n-sdk-gs-crt-tests tests/sdk_gs_crt_tests.cpp
-        "${PS2N_PS2RECOMP_DIR}/ps2xTest/src/test_function_table.cpp")
-    target_link_libraries(ps2n-sdk-gs-crt-tests PRIVATE ps2_runtime)
-    add_test(NAME sdk-gs-crt COMMAND ps2n-sdk-gs-crt-tests)
-    add_executable(ps2n-sdk-memory-card-io-tests tests/sdk_memory_card_io_tests.cpp
-        "${PS2N_PS2RECOMP_DIR}/ps2xTest/src/test_function_table.cpp")
-    target_include_directories(ps2n-sdk-memory-card-io-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib")
-    target_link_libraries(ps2n-sdk-memory-card-io-tests PRIVATE ps2_runtime)
-    ps2x_stage_ffmpeg_runtime_dlls(ps2n-sdk-memory-card-io-tests)
-    add_test(NAME sdk-memory-card-io COMMAND ps2n-sdk-memory-card-io-tests "${CMAKE_BINARY_DIR}/sdk-memory-card-io-fixture")
-    set_tests_properties(sdk-memory-card-io PROPERTIES TIMEOUT 30)
-    add_executable(ps2n-sdk-gs-presentation-tests tests/sdk_gs_presentation_tests.cpp)
-    target_link_libraries(ps2n-sdk-gs-presentation-tests PRIVATE ps2_runtime)
-    add_test(NAME sdk-gs-presentation COMMAND ps2n-sdk-gs-presentation-tests)
-    add_executable(ps2n-sdk-gs-thread-tests tests/sdk_gs_thread_tests.cpp)
-    target_link_libraries(ps2n-sdk-gs-thread-tests PRIVATE ps2_runtime)
-    target_include_directories(ps2n-sdk-gs-thread-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/gs")
-    add_test(NAME sdk-gs-thread COMMAND ps2n-sdk-gs-thread-tests)
-    add_test(NAME sdk-ee-module-codegen COMMAND "${Python3_EXECUTABLE}"
-        "${PROJECT_SOURCE_DIR}/tests/ee_module_codegen_tests.py" "${PS2N_RECOMP_EXE}"
-        "${PROJECT_SOURCE_DIR}/out/game-functional" "${CMAKE_COMMAND}" "${PS2N_PS2RECOMP_DIR}")
-    add_test(NAME sdk-recompiler-incremental COMMAND "${Python3_EXECUTABLE}"
-        "${PROJECT_SOURCE_DIR}/tests/recompiler_incremental_tests.py" "${PS2N_RECOMP_EXE}"
-        "${CMAKE_CURRENT_BINARY_DIR}")
-    foreach(_var IN ITEMS INCLUDE LIB LIBPATH PATH)
-        string(REPLACE ";" "\\;" _value "${PS2N_ENV_${_var}}")
-        list(APPEND _ee_test_environment "${_var}=${_value}")
-    endforeach()
-    set_tests_properties(sdk-ee-module-codegen PROPERTIES ENVIRONMENT "${_ee_test_environment}")
-    set(_ee_fixture "${CMAKE_BINARY_DIR}/generated/ee-aot-test")
-    set(_ee_fixture_sources "")
-    foreach(_kind IN ITEMS branch likely)
-        if(_kind STREQUAL "branch")
-            set(_identity "31827b80145d43613b620329b6905c0f84bdfc36c37c306366cd0abb23aa81af")
-        else()
-            set(_identity "5ff2957621e8b9d19861546e47cd29e747de4829bc577778a30e2a07780f2053")
-        endif()
-        set(_kind_sources "${_ee_fixture}/${_kind}/g/register_functions.cpp"
-            "${_ee_fixture}/${_kind}/g/ee_${_identity}_sub_00200000_0x200000.cpp"
-            "${_ee_fixture}/${_kind}/g/ee_${_identity}_sub_00200010_0x200010.cpp")
-        set_source_files_properties(${_kind_sources} PROPERTIES
-            INCLUDE_DIRECTORIES "${_ee_fixture}/${_kind}/g")
-        list(APPEND _ee_fixture_sources ${_kind_sources} "${_ee_fixture}/${_kind}/fixture.h")
-    endforeach()
-    add_custom_command(OUTPUT ${_ee_fixture_sources}
-        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/ee_module_fixture.py"
-            "${PS2N_RECOMP_EXE}" "${_ee_fixture}"
-        DEPENDS tests/ee_module_fixture.py "${PS2N_RECOMP_EXE}"
-        VERBATIM)
-    add_executable(ps2n-sdk-ee-module-tests tests/sdk_ee_module_tests.cpp ${_ee_fixture_sources}
-        "${PS2N_PS2RECOMP_DIR}/ps2xTest/src/test_function_table.cpp")
-    add_dependencies(ps2n-sdk-ee-module-tests ps2recomp_tools)
-    target_include_directories(ps2n-sdk-ee-module-tests PRIVATE "${_ee_fixture}")
-    target_link_libraries(ps2n-sdk-ee-module-tests PRIVATE ps2_runtime)
-    add_test(NAME sdk-ee-module COMMAND ps2n-sdk-ee-module-tests)
+if(BUILD_TESTING)
     add_executable(ps2n-packed-elf-tests tests/packed_elf_tests.cpp)
     target_link_libraries(ps2n-packed-elf-tests PRIVATE ps2n_content)
     add_test(NAME packed-elf COMMAND ps2n-packed-elf-tests)
@@ -170,79 +55,6 @@ if(BUILD_TESTING)
     add_executable(ps2n-browser-tests tests/browser_tests.cpp)
     target_link_libraries(ps2n-browser-tests PRIVATE ps2n_content)
     add_test(NAME browser-firmware COMMAND ps2n-browser-tests)
-    add_executable(ps2n-sdk-function-table-tests tests/sdk_function_table_tests.cpp)
-    target_include_directories(ps2n-sdk-function-table-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xRecomp/include")
-    add_test(NAME sdk-function-table COMMAND ps2n-sdk-function-table-tests)
-    add_executable(ps2n-preparation-receipt-tests tests/preparation_receipt_tests.cpp)
-    target_include_directories(ps2n-preparation-receipt-tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-    target_link_libraries(ps2n-preparation-receipt-tests PRIVATE ps2n_content)
-    add_test(NAME preparation-receipt COMMAND ps2n-preparation-receipt-tests "${PROJECT_SOURCE_DIR}/out/game-functional")
-    add_executable(ps2n-sdk-cd-image-tests tests/sdk_cd_image_tests.cpp)
-    target_link_libraries(ps2n-sdk-cd-image-tests PRIVATE ps2_iop)
-    target_include_directories(ps2n-sdk-cd-image-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
-    add_test(NAME sdk-cd-image COMMAND ps2n-sdk-cd-image-tests)
-    add_executable(ps2n-sdk-iop-rpc-tests tests/sdk_iop_rpc_tests.cpp)
-    target_link_libraries(ps2n-sdk-iop-rpc-tests PRIVATE ps2_iop)
-    target_include_directories(ps2n-sdk-iop-rpc-tests PRIVATE
-        "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tests" "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
-    add_test(NAME sdk-iop-rpc COMMAND ps2n-sdk-iop-rpc-tests)
-    add_executable(ps2n-sdk-iop-aot-tests tests/sdk_iop_aot_tests.cpp)
-    target_link_libraries(ps2n-sdk-iop-aot-tests PRIVATE ps2_iop)
-    target_include_directories(ps2n-sdk-iop-aot-tests PRIVATE
-        "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tests" "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
-    add_test(NAME sdk-iop-aot COMMAND ps2n-sdk-iop-aot-tests)
-    add_executable(ps2n-sdk-sio2-tests tests/sdk_sio2_tests.cpp)
-    target_link_libraries(ps2n-sdk-sio2-tests PRIVATE ps2_iop)
-    target_include_directories(ps2n-sdk-sio2-tests PRIVATE
-        "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tests" "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
-    add_test(NAME sdk-sio2 COMMAND ps2n-sdk-sio2-tests)
-    add_executable(ps2n-sdk-iop-sysclib-tests tests/sdk_iop_sysclib_tests.cpp)
-    target_link_libraries(ps2n-sdk-iop-sysclib-tests PRIVATE ps2_iop)
-    target_include_directories(ps2n-sdk-iop-sysclib-tests PRIVATE
-        "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tests" "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
-    add_test(NAME sdk-iop-sysclib COMMAND ps2n-sdk-iop-sysclib-tests)
-    add_executable(ps2n-sdk-magicgate-tests tests/sdk_magicgate_tests.cpp)
-    target_link_libraries(ps2n-sdk-magicgate-tests PRIVATE ps2_iop)
-    target_include_directories(ps2n-sdk-magicgate-tests PRIVATE
-        "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tests" "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
-    add_test(NAME sdk-magicgate COMMAND ps2n-sdk-magicgate-tests)
-    add_executable(ps2n-sdk-card-tests tests/sdk_card_tests.cpp
-        "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/Kernel/Stubs/Ps2CardImage.cpp")
-    target_include_directories(ps2n-sdk-card-tests PRIVATE
-        "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib/Kernel")
-    add_test(NAME sdk-card COMMAND ps2n-sdk-card-tests "${CMAKE_BINARY_DIR}/sdk-card-fixture")
-    set(_iop_fixture "${CMAKE_BINARY_DIR}/generated/iop-aot-test")
-    set(_iop_fixture_sources "${_iop_fixture}/module.cpp")
-    foreach(_bucket RANGE 0 15)
-        if(_bucket LESS 10)
-            set(_bucket "0${_bucket}")
-        endif()
-        list(APPEND _iop_fixture_sources "${_iop_fixture}/ops_${_bucket}.cpp")
-    endforeach()
-    add_custom_command(OUTPUT ${_iop_fixture_sources} "${_iop_fixture}/fixture.h"
-        BYPRODUCTS "${_iop_fixture}/fixture.irx"
-        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/iop_codegen_fixture.py"
-            "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tools/iop_aot.py" "${_iop_fixture}"
-        DEPENDS tests/iop_codegen_fixture.py "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tools/iop_aot.py"
-        VERBATIM)
-    add_executable(ps2n-sdk-iop-codegen-tests tests/sdk_iop_codegen_tests.cpp ${_iop_fixture_sources})
-    target_include_directories(ps2n-sdk-iop-codegen-tests PRIVATE
-        "${_iop_fixture}" "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
-    target_link_libraries(ps2n-sdk-iop-codegen-tests PRIVATE ps2_iop)
-    add_test(NAME sdk-iop-codegen COMMAND ps2n-sdk-iop-codegen-tests)
-    add_test(NAME sdk-iop-embedded COMMAND "${Python3_EXECUTABLE}"
-        "${PROJECT_SOURCE_DIR}/tests/iop_embedded_tests.py"
-        "${PS2N_PS2RECOMP_DIR}/ps2xIOP/tools/iop_aot.py" "${_iop_fixture}/fixture.irx"
-        "${PROJECT_SOURCE_DIR}/out/game-functional")
-    add_executable(ps2n-sdk-memory-tests tests/sdk_memory_tests.cpp
-        "${PS2N_PS2RECOMP_DIR}/ps2xTest/src/test_function_table.cpp")
-    target_link_libraries(ps2n-sdk-memory-tests PRIVATE ps2_runtime)
-    target_include_directories(ps2n-sdk-memory-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xIOP/src")
-    target_include_directories(ps2n-sdk-memory-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/src/lib")
-    add_test(NAME sdk-memory COMMAND ps2n-sdk-memory-tests)
-    add_executable(ps2n-sdk-call-tests tests/sdk_call_tests.cpp)
-    target_include_directories(ps2n-sdk-call-tests PRIVATE "${PS2N_PS2RECOMP_DIR}/ps2xRuntime/include")
-    add_test(NAME sdk-calls COMMAND ps2n-sdk-call-tests)
     add_executable(ps2n-content-tests tests/content_tests.cpp)
     target_link_libraries(ps2n-content-tests PRIVATE ps2n_content)
     add_test(NAME content COMMAND ps2n-content-tests "${CMAKE_CURRENT_BINARY_DIR}/content-tests")

@@ -6,17 +6,17 @@ namespace ps2native::frontend {
 namespace {
 constexpr std::array kCapabilities{
     CapabilityStatus{Capability::FirmwareBrowser, "PS2 Browser", false,
-                     "PS2Recomp runs games directly with its kernel implementation; the original firmware is not executed."},
+                     "In progress: the engine starts games with its kernel HLE; booting the original OSDSYS is not implemented yet."},
     CapabilityStatus{Capability::DiscBoot, "Game boot", true,
-                     "Play recompiles the game with PS2Recomp and runs it natively; compatibility depends on the game."},
+                     "Play recompiles the game with the native engine and runs it; code met later is translated during play and kept."},
     CapabilityStatus{Capability::Controller, "Controller input", true,
-                     "Keyboard and gamepad through the PS2Recomp runtime."},
-    CapabilityStatus{Capability::Audio, "Audio", true, "SPU2 through the PS2Recomp runtime."},
-    CapabilityStatus{Capability::MemoryCards, "Memory cards", true, "Memory cards emulated by the PS2Recomp runtime."},
+                     "Keyboard, mouse and game controllers; F1 shows the keys."},
+    CapabilityStatus{Capability::Audio, "Audio", true, "SPU2 emulated by the engine, stretched instead of chopped below full speed."},
+    CapabilityStatus{Capability::MemoryCards, "Memory cards", true, "One console memory card shared by every game (slot 1)."},
     CapabilityStatus{Capability::GsFaithful, "GS renderer", true,
-                     "The PS2Recomp software GS; some games still miss textures or effects."},
+                     "The engine's GS on the GPU (WebGPU on Direct3D 12 or Vulkan); equivalence is still being validated."},
     CapabilityStatus{Capability::GsNative, "Native renderer", false,
-                     "Not available: games use the PS2Recomp GS."},
+                     "Not available yet: higher resolutions exist in the engine but are not validated as equivalent."},
 };
 } // namespace
 

@@ -1,5 +1,5 @@
 #pragma once
-// What the launcher can do with the execution layer (PS2Recomp, driven by
+// What the launcher can do with the execution layer (the engine in engine/, driven by
 // ps2n). What is not available is reported with its reason so the UI disables
 // it explicitly instead of faking it.
 #include <cstdint>

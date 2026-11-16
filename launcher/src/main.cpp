@@ -1,5 +1,5 @@
 // ps2-native desktop launcher: manages the user's BIOS dumps, console NVM and
-// disc images. Play runs `ps2n play <disc>`: PS2Recomp recompiles the game and
+// disc images. Play runs `ps2n play <disc>`: the engine recompiles the game and
 // its runtime executes it in its own window.
 #include "automation.hpp"
 #include "icon_provider.hpp"

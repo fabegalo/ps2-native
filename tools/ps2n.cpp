@@ -1,38 +1,41 @@
-// ps2n: prepares a PS2 disc with the pinned PS2Recomp tools and runs the
-// resulting native executable, which links the PS2Recomp runtime unchanged.
+// ps2n: prepares a PS2 disc with the engine in engine/ (exoteric33/ps2-native-recomp)
+// and runs the resulting native program with the console state shared by every game.
 //
-//   ps2n prepare <disc.bin|.cue|.iso>   extract, analyze, recompile, build
-//   ps2n run <game-id|game-dir>          run; learn missing entry points
-//   ps2n play <disc>                     prepare when needed, then run
+//   ps2n prepare <disc.bin|.cue|.iso>   translate, explore, compile vector programs, build
+//   ps2n build <game-id>                 compile what play recorded (new VU programs, code)
+//   ps2n run <game-id>                   play in a window
+//   ps2n play <disc>                     prepare or update when needed, then run
+#include "ps2native/bios.hpp"
 #include "ps2native/disc.hpp"
 #include "ps2native/io.hpp"
 #include "ps2native/process.hpp"
-#include "ps2native/sha256.hpp"
-#include "ps2native/bios.hpp"
-#include "ps2n_build_environment.hpp"
 
 #include <algorithm>
-#include <array>
-#include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
-#include <map>
-#include <optional>
 #include <regex>
-#include <set>
 #include <sstream>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
 using namespace ps2native;
 
 namespace {
-constexpr int kMaxLearningRounds = 32;
-
 fs::path from_utf8(const std::string& text) { return fs::path(std::u8string(text.begin(), text.end())); }
-fs::path games_root() { return from_utf8(PS2N_GAMES_DIR); }
+fs::path engine_root() { return from_utf8(PS2N_ENGINE_DIR); }
+fs::path work_root() { return from_utf8(PS2N_ENGINE_WORK); }
+fs::path game_dir(const std::string& id) { return work_root() / "games" / from_utf8(id); }
+fs::path runner(const std::string& id) {
+    return work_root() / "build" / from_utf8("native-" + id) / from_utf8(std::string("ps2run") + PS2N_EXE_SUFFIX);
+}
+fs::path console_root() { return console_state_root(work_root().parent_path() / "console"); }
+// bash and the engine's programs take forward slashes on every OS
+std::string arg(const fs::path& path) {
+    const auto text = fs::absolute(path).lexically_normal().generic_u8string();
+    return {text.begin(), text.end()};
+}
 
 std::string read_text(const fs::path& path) {
     std::ifstream in(path, std::ios::binary);
@@ -44,6 +47,19 @@ std::string read_text(const fs::path& path) {
 
 void write_text(const fs::path& path, const std::string& text) {
     write_file_atomically(path, std::span(reinterpret_cast<const std::uint8_t*>(text.data()), text.size()));
+}
+
+std::string env(const char* name) {
+    const char* value = std::getenv(name);
+    return value ? value : "";
+}
+
+void set_env(const char* name, const std::string& value) {
+#ifdef _WIN32
+    _wputenv_s(from_utf8(name).wstring().c_str(), from_utf8(value).wstring().c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
 }
 
 // A CUE sheet names the raw image of its first data track.
@@ -70,749 +86,120 @@ std::string game_id(std::string boot) {
     return id;
 }
 
-// The PS2Recomp runtime reads cdrom0: files from a host directory and raw
-// LBN reads from a 2048-byte-sector image.
-void extract(DiscImage& disc, const std::string& directory, const fs::path& target) {
-    ps2native::create_directories(target);
-    std::array<std::uint8_t, 2048> sector{};
-    for (const auto& entry : disc.list(directory)) {
-        const auto name = entry.name.substr(0, entry.name.find(';'));
-        const auto inner = directory.empty() ? name : directory + "/" + name;
-        if (entry.directory) {
-            extract(disc, inner, target / from_utf8(name));
-            continue;
-        }
-        std::ofstream out(target / from_utf8(name), std::ios::binary | std::ios::trunc);
-        for (std::uint64_t at = 0; at < entry.size; at += 2048u) {
-            disc.read_sector(entry.lba + static_cast<std::uint32_t>(at / 2048u), sector);
-            out.write(reinterpret_cast<const char*>(sector.data()),
-                      static_cast<std::streamsize>(std::min<std::uint64_t>(2048u, entry.size - at)));
-        }
-        if (!out) throw std::runtime_error("cannot write " + path_utf8(target / from_utf8(name)));
-    }
+std::string disc_id(const fs::path& input) {
+    DiscImage disc(disc_image(input));
+    return game_id(disc.boot_path());
 }
 
-void write_user_image(DiscImage& disc, const fs::path& target) {
-    std::ofstream out(target, std::ios::binary | std::ios::trunc);
-    std::array<std::uint8_t, 2048> sector{};
-    for (std::uint32_t lba = 0; lba < disc.user_sector_count(); ++lba) {
-        disc.read_sector(lba, sector);
-        out.write(reinterpret_cast<const char*>(sector.data()), sector.size());
-    }
-    if (!out) throw std::runtime_error("cannot write " + path_utf8(target));
-}
+fs::path console_firmware_path() { return console_root() / "firmware.txt"; }
 
-struct Game {
-    fs::path dir;
-    std::string id, elf, cd_image;
-    std::string native_output = "generated";
-    std::string rom0, rom0_sha256, console_profile, nvm, nvm_sha256;
-    bool browser() const { return cd_image.empty() && !rom0.empty(); }
-};
-
-void read_game_metadata(Game& game, const std::string& text) {
-    std::istringstream lines(text);
-    for (std::string line; std::getline(lines, line);) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        const auto equal = line.find('=');
-        if (equal == line.npos) continue;
-        const auto key = line.substr(0, equal), value = line.substr(equal + 1);
-        if (key == "id") game.id = value;
-        else if (key == "elf") game.elf = value;
-        else if (key == "cd_image") game.cd_image = value;
-        else if (key == "rom0") game.rom0 = value;
-        else if (key == "rom0_sha256") game.rom0_sha256 = value;
-        else if (key == "console_profile") game.console_profile = value;
-        else if (key == "nvm") game.nvm = value;
-        else if (key == "nvm_sha256") game.nvm_sha256 = value;
-    }
-}
-
-Game load_game(const std::string& selector) {
-    Game game;
-    game.dir = fs::exists(from_utf8(selector)) ? from_utf8(selector) : games_root() / from_utf8(selector);
-    read_game_metadata(game, read_text(game.dir / "game.txt"));
-    if (game.id.empty() || game.elf.empty() || (!game.browser() && game.cd_image.empty()) ||
-        (!game.rom0.empty() && (game.rom0_sha256.empty() || game.console_profile.empty() || game.nvm.empty() || game.nvm_sha256.empty())))
-        throw std::runtime_error("incomplete game.txt in " + path_utf8(game.dir));
-    return game;
-}
-
-fs::path console_firmware_path() {
-    return console_state_root(games_root().parent_path() / "console") / "firmware.txt";
-}
-
-std::string firmware_metadata(const Game& game) {
-    return "rom0=" + game.rom0 + "\nrom0_sha256=" + game.rom0_sha256 +
-        "\nconsole_profile=" + game.console_profile + "\nnvm=" + game.nvm +
-        "\nnvm_sha256=" + game.nvm_sha256 + "\n";
-}
-
+// The console's ROM0/profile/NVM choice. The engine does not boot it yet (OSDSYS is a later milestone).
 void select_console_firmware(const fs::path& rom0, const std::string& profile, const fs::path& nvm) {
     const auto firmware = load_browser_firmware(read_file(rom0), profile, read_file(nvm));
-    Game game;
-    game.rom0 = path_utf8(fs::absolute(rom0)); game.rom0_sha256 = firmware.bios.sha256;
-    game.console_profile = profile;
-    game.nvm = path_utf8(fs::absolute(nvm)); game.nvm_sha256 = firmware.nvm.sha256;
-    const auto selected = console_firmware_path();
-    ps2native::create_directories(selected.parent_path());
-    write_text(selected, firmware_metadata(game));
+    ps2native::create_directories(console_firmware_path().parent_path());
+    write_text(console_firmware_path(), "rom0=" + path_utf8(fs::absolute(rom0)) + "\nrom0_sha256=" + firmware.bios.sha256 +
+        "\nconsole_profile=" + profile + "\nnvm=" + path_utf8(fs::absolute(nvm)) + "\nnvm_sha256=" + firmware.nvm.sha256 + "\n");
 }
 
-bool attach_console_firmware(Game& game) {
-    if (game.browser() || !fs::exists(console_firmware_path())) return false;
-    Game selected;
-    read_game_metadata(selected, read_text(console_firmware_path()));
-    if (selected.rom0.empty() || selected.rom0_sha256.empty() || selected.console_profile.empty() ||
-        selected.nvm.empty() || selected.nvm_sha256.empty())
-        throw std::runtime_error("Incomplete selected console firmware; run ps2n use-bios");
-    const auto firmware = load_browser_firmware(read_file(from_utf8(selected.rom0)), selected.console_profile,
-        read_file(from_utf8(selected.nvm)), {selected.rom0_sha256}, {selected.nvm_sha256});
-    game.rom0=selected.rom0; game.rom0_sha256=selected.rom0_sha256;
-    game.console_profile=selected.console_profile; game.nvm=selected.nvm; game.nvm_sha256=selected.nvm_sha256;
-    const auto module = firmware.bios.find("SECRMAN");
-    if (!module) throw std::runtime_error("Selected ROM0 has no SECRMAN module");
-    const auto image = std::span(firmware.bios.rom0).subspan(module->offset, module->size);
-    // Keep unrelated preparation metadata and entry-point learning intact.
-    const auto before = read_text(game.dir / "game.txt");
-    std::istringstream lines(before); std::string after;
-    for (std::string line; std::getline(lines,line);) {
-        const auto key = line.substr(0,line.find('='));
-        if (key == "rom0" || key == "rom0_sha256" || key == "console_profile" ||
-            key == "nvm" || key == "nvm_sha256" || key.starts_with("secrman_")) continue;
-        after += line + "\n";
-    }
-    after += firmware_metadata(game) + "secrman_offset=" + std::to_string(module->offset) +
-        "\nsecrman_size=" + std::to_string(module->size) + "\nsecrman_sha256=" + sha256_hex(image) + "\n";
-    if (before == after) return false;
-    write_text(game.dir / "game.txt",after);
-    return true;
-}
-
-void run_tool(const fs::path& exe, const std::vector<std::string>& args, const fs::path& cwd, const fs::path& log) {
-    const auto code = run_process(exe, args, cwd, log);
-    if (code != 0)
-        throw std::runtime_error(path_utf8(exe.filename()) + " failed with exit code " + std::to_string(code) +
-                                 "; see " + path_utf8(log));
-}
-
-// Generated headers sit beside the sources; the per-game CMake target adds
-// that directory to its include path. PS2Recomp rewrites only changed files and
-// removes stale ones, so the directory is kept for incremental rebuilds.
-bool restore_heuristic_stores(const Game& game) {
-    const auto path = game.dir / "config.toml";
-    const auto original = read_text(path);
-    std::istringstream lines(original);
-    std::string config;
-    int removed = 0;
-    for (std::string line; std::getline(lines, line);) {
-        if (line.find("# Potential self-modifying code") != line.npos &&
-            line.find("value = \"0x0\"") != line.npos) {
-            ++removed;
-            continue;
-        }
-        config += line + "\n";
-    }
-    if (!removed) return false;
-    write_text(path, config);
-    std::cout << "Restored " << removed << " guest stores replaced by analyzer heuristics\n";
-    return true;
-}
-
-std::string generation_inputs(const Game& game) {
-    const auto selected = sha256_file(game.dir / "cd" / from_utf8(game.elf));
-    const auto metadata = game.dir / "generation.inputs";
-    std::string result = "ps2n-generation-v1\n" + sha256_file(PS2N_RECOMP_EXE) + "\n" + selected +
-        "\n" + sha256_file(game.dir / "config.toml") + "\n" + sha256_file(metadata) + "\n";
-    std::istringstream description(read_text(metadata));
-    std::string line;
-    if (!std::getline(description, line) || line != "ps2x-inputs-v1")
-        throw std::runtime_error("unsupported SDK input description");
-    unsigned elf = 0, output = 0;
-    while (std::getline(description, line)) {
-        const auto space = line.find(' ');
-        if (space == line.npos || (line.size() - space - 1) % 2)
-            throw std::runtime_error("malformed SDK input description");
-        const auto nibble = [](char c) -> unsigned {
-            if (c >= '0' && c <= '9') return c - '0';
-            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-            throw std::runtime_error("invalid SDK path encoding");
-        };
-        std::string decoded;
-        for (auto at = space + 1; at < line.size(); at += 2)
-            decoded += static_cast<char>((nibble(line[at]) << 4) | nibble(line[at + 1]));
-        auto path = from_utf8(decoded);
-        if (path.is_relative()) path = game.dir / path;
-        const auto role = line.substr(0, space);
-        if (role == "elf") {
-            if (++elf != 1 || sha256_file(path) != selected)
-                throw std::runtime_error("SDK input differs from the selected ELF");
-        } else if (role == "output") {
-            std::error_code error;
-            if (++output != 1 || !fs::equivalent(path, game.dir / game.native_output, error) || error)
-                throw std::runtime_error("SDK output differs from the native program directory");
-        } else if (role == "extra") result += sha256_file(path) + "\n";
-        else throw std::runtime_error("unsupported SDK input dependency role");
-    }
-    if (elf != 1 || output != 1) throw std::runtime_error("incomplete SDK input description");
-    return result;
-}
-
-std::string generation_outputs(const Game& game) {
-    std::vector<fs::path> sources;
-    const auto generated = game.dir / game.native_output;
-    if (!fs::exists(generated)) return "missing";
-    for (const auto& file : fs::directory_iterator(generated))
-        if (file.is_regular_file() && (file.path().extension() == ".cpp" || file.path().extension() == ".h"))
-            sources.push_back(file.path());
-    std::sort(sources.begin(), sources.end());
-    if (std::none_of(sources.begin(), sources.end(), [](const auto& path) { return path.extension() == ".cpp"; }))
-        return "missing";
-    Sha256 digest;
-    for (const auto& source : sources) {
-        const auto name = path_utf8(source.filename());
-        const auto entry = std::to_string(name.size()) + ":" + name + ":" + sha256_file(source) + "\n";
-        digest.update(std::span(reinterpret_cast<const std::uint8_t*>(entry.data()), entry.size()));
-    }
-    return digest.hex_digest();
-}
-
-bool generation_current(const Game& game) {
-    const auto receipt = game.dir / "generation.sha256";
-    if (!fs::exists(receipt)) return false;
-    const auto recorded = read_text(receipt), inputs = generation_inputs(game);
-    return recorded.starts_with(inputs) && recorded == inputs + generation_outputs(game) + "\n";
-}
-
-void recompile(const Game& game) {
-    restore_heuristic_stores(game);
-    const auto generated = game.dir / game.native_output;
-    ps2native::create_directories(generated);
-    const auto before = generation_inputs(game);
-    run_tool(PS2N_RECOMP_EXE, {"config.toml"}, game.dir, game.dir / "recomp.log");
-    const auto outputs = generation_outputs(game);
-    if (generation_inputs(game) != before || outputs == "missing")
-        throw std::runtime_error("preparation inputs changed or native output is missing; receipt not published");
-    write_text(game.dir / "generation.sha256", before + outputs + "\n");
-}
-
-// The build tree was configured inside a compiler environment; rebuilds started
-// from the launcher or a plain shell must see the same one.
-void apply_build_environment() {
-    for (const auto& [name, value] : ps2n_build::kEnvironment) {
-        if (value.empty()) continue;
+// The engine's build tools: its portable set on Windows (downloaded once and hash-checked by
+// engine/scripts/portable.ps1), the system's bash, clang, cmake, ninja and python elsewhere.
+fs::path bash() {
 #ifdef _WIN32
-        _putenv_s(std::string(name).c_str(), std::string(value).c_str());
-#else
-        setenv(std::string(name).c_str(), std::string(value).c_str(), 1);
-#endif
+    const auto tools = engine_root() / "tools" / "portable";
+    const auto shell = tools / "mingit" / "usr" / "bin" / "bash.exe";
+    const auto system = from_utf8(env("SystemRoot").empty() ? "C:\\Windows" : env("SystemRoot")) / "System32";
+    if (!fs::exists(shell)) {
+        std::cout << "Downloading the build tools (about 300 MB, once)..." << std::endl;
+        ps2native::create_directories(work_root());
+        const auto log = work_root() / "tools.log";
+        const auto code = run_process(system / "WindowsPowerShell" / "v1.0" / "powershell.exe",
+            {"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path_utf8(engine_root() / "scripts" / "portable.ps1")},
+            engine_root(), log, [](std::string_view text) { std::cout << text << std::flush; return true; });
+        if (code != 0 || !fs::exists(shell)) throw std::runtime_error("downloading the build tools failed; see " + path_utf8(log));
     }
+    // Only the portable tools and System32 on the PATH, as engine/tools/portable/env.ps1 sets it.
+    std::string path;
+    for (const char* dir : {"llvm-mingw/bin", "cmake/bin", "ninja", "python", "mingit/cmd", "mingit/usr/bin", "busybox"})
+        path += path_utf8(tools / dir) + ";";
+    set_env("PATH", path + path_utf8(system));
+    return shell;
+#else
+    return "/bin/bash";
+#endif
 }
 
-bool configured_game(std::string_view cache, std::string_view id) {
-    std::istringstream lines{std::string(cache)};
-    const auto selected = "PS2N_BUILD_GAME:STRING=" + std::string(id);
-    constexpr std::string_view retained = "PS2N_CONFIGURED_GAMES:INTERNAL=";
-    for (std::string line; std::getline(lines, line);) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line == selected) return true;
-        if (line.starts_with(retained) &&
-            (";" + line.substr(retained.size()) + ";").find(";" + std::string(id) + ";") != std::string::npos)
-            return true;
+// port.sh does the whole preparation; its output is the progress the launcher shows.
+void port(const std::string& id, const fs::path& input, bool explore) {
+    const auto shell = bash();
+    set_env("PS2_WORK", arg(work_root()));
+    std::vector<std::string> arguments{"scripts/port.sh", id, arg(input), "--native-only"};
+    if (!explore) arguments.emplace_back("--no-explore");
+    ps2native::create_directories(game_dir(id));
+    const auto log = work_root() / from_utf8(id + "-prepare.log");
+    const auto code = run_process(shell, arguments, engine_root(), log,
+        [](std::string_view text) { std::cout << text << std::flush; return true; });
+    if (code != 0 || !fs::exists(runner(id)))
+        throw std::runtime_error("preparing " + id + " failed (exit code " + std::to_string(code) + "); see " + path_utf8(log));
+    write_text(game_dir(id) / "ps2n.txt", "disc=" + path_utf8(fs::absolute(input)) + "\n");
+}
+
+std::string recorded_disc(const std::string& id) {
+    std::istringstream lines(read_text(game_dir(id) / "ps2n.txt"));
+    for (std::string line; std::getline(lines, line);)
+        if (line.starts_with("disc=")) return line.substr(5);
+    throw std::runtime_error("game " + id + " has no recorded disc; prepare it again");
+}
+
+// Play records the vector programs the build lacks into games/<id>/vu0 and vu1; a recording newer
+// than the program means the next start compiles them first.
+bool recordings_newer(const std::string& id) {
+    std::error_code error;
+    const auto built = fs::last_write_time(runner(id), error);
+    if (error) return true;
+    for (const char* unit : {"vu0", "vu1"}) {
+        const auto dir = game_dir(id) / unit;
+        if (!fs::is_directory(dir, error)) continue;
+        for (const auto& file : fs::directory_iterator(dir, error))
+            if (file.is_regular_file() && file.last_write_time() > built) return true;
     }
     return false;
 }
 
-void build(const Game& game, bool configure) {
-    std::cout << "Building " << game.id << "...\n";
-    apply_build_environment();
-    // Add the selected game without dropping dependency records for previous targets.
-    const auto cache = fs::path(PS2N_BINARY_DIR) / "CMakeCache.txt";
-    if (configure || !fs::exists(cache) || !configured_game(read_text(cache), game.id))
-        run_tool(PS2N_CMAKE_COMMAND, {"-DPS2N_BUILD_GAME=" + game.id, fs::path(PS2N_BINARY_DIR).string()},
-                 PS2N_BINARY_DIR, game.dir / "configure.log");
-    run_tool(PS2N_CMAKE_COMMAND, {"--build", fs::path(PS2N_BINARY_DIR).string(), "--target", "ps2n-game-" + game.id},
-             PS2N_BINARY_DIR, game.dir / "build.log");
+int run(const std::string& id) {
+    const auto dir = game_dir(id), console = console_root();
+    const auto iso = fs::exists(dir / "disc.iso") ? dir / "disc.iso" : from_utf8(recorded_disc(id));
+    ps2native::create_directories(console / "mc0");
+    ps2native::create_directories(console / "quick" / from_utf8(id));
+    const auto log = dir / "run.log";
+    std::cout << "Starting " << id << " (log: " << path_utf8(log) << ")" << std::endl;
+    // One console state: slot 1 holds the console's card, the same file for every game.
+    return run_process(runner(id), {"--disc", arg(iso), "--window", "--game-dir", arg(dir),
+        "--memcard", arg(console / "mc0" / ".ps2n-card.raw"), "--quick-dir", arg(console / "quick" / from_utf8(id))},
+        dir, log);
 }
 
-struct ExecModule {
-    Game game;
-    std::string config;
-    uint32_t base = 0, size = 0;
-};
-
-// "magic\nkey=value..." receipts written by ps2n-game; exactly `keys`, each once.
-std::map<std::string, std::string> read_receipt(const fs::path& path, std::string_view magic,
-                                                std::initializer_list<std::string_view> keys) {
-    std::istringstream input(read_text(path));
-    std::string line;
-    if (!std::getline(input, line) || line != magic)
-        throw std::runtime_error("unsupported receipt: " + path_utf8(path));
-    std::map<std::string, std::string> fields;
-    while (std::getline(input, line)) {
-        const auto equal = line.find('=');
-        if (equal == line.npos || !fields.emplace(line.substr(0, equal), line.substr(equal + 1)).second)
-            throw std::runtime_error("malformed receipt: " + path_utf8(path));
-    }
-    if (fields.size() != keys.size() ||
-        !std::all_of(keys.begin(), keys.end(), [&](auto key) { return fields.contains(std::string(key)); }))
-        throw std::runtime_error("incomplete receipt: " + path_utf8(path));
-    return fields;
-}
-
-uint32_t receipt_number(const std::map<std::string, std::string>& fields, const char* name) {
-    const auto& value = fields.at(name);
-    size_t used = 0;
-    const auto result = std::stoull(value, &used, 10);
-    if (used != value.size() || result > UINT32_MAX || std::to_string(result) != value)
-        throw std::runtime_error("invalid receipt number");
-    return static_cast<uint32_t>(result);
-}
-
-std::string quoted_toml_path(const fs::path& path) {
-    const auto generic = path.generic_u8string();
-    std::string text;
-    for (const char byte : std::string(generic.begin(), generic.end())) {
-        if (byte == '"' || byte == '\\') text += '\\';
-        if (static_cast<unsigned char>(byte) < 0x20) throw std::runtime_error("control character in native input path");
-        text += byte;
-    }
-    return '"' + text + '"';
-}
-
-std::optional<ExecModule> exec_module(const Game& game, const BrowserFirmware& firmware) {
-    const auto metadata = game.dir / "exec/current.txt";
-    if (!fs::exists(metadata)) return std::nullopt;
-    if (!firmware.unpacked) throw std::runtime_error("executable receipt has no matching firmware payload");
-    const auto fields = read_receipt(metadata, "ps2n-exec-image-v1",
-        {"sha256", "parent_sha256", "load_address", "size", "entry"});
-    const auto& image = *firmware.unpacked;
-    const auto identity = sha256_hex(image.bytes);
-    if (fields.at("sha256") != identity || fields.at("parent_sha256") != firmware.bios.sha256 ||
-        game.rom0_sha256 != firmware.bios.sha256)
-        throw std::runtime_error("executable receipt belongs to different firmware content");
-    const auto base = receipt_number(fields, "load_address"), size = receipt_number(fields, "size"),
-        entry = receipt_number(fields, "entry");
-    if (base != image.load_address || size != image.bytes.size() || size < 4 || (entry & 3u) ||
-        entry < base || uint64_t(entry) + 4 > uint64_t(base) + size)
-        throw std::runtime_error("executable receipt range differs from its firmware payload");
-    const auto binary = fs::absolute(game.dir / "exec" / (identity + ".bin"));
-    if (sha256_file(binary) != identity) throw std::runtime_error("prepared executable image changed");
-    ExecModule module;
-    module.game.id = identity;
-    module.game.dir = fs::path(PS2N_BINARY_DIR) / "ee-aot" / identity;
-    module.game.elf = path_utf8(binary);
-    module.game.native_output = "g";
-    module.base = base; module.size = size;
-    module.config = "[general]\ninput = " + quoted_toml_path(binary) + "\noutput = \"g\"\nmodule_id = \"" +
-        identity + "\"\noutput_worker_threads = 8\n[raw_image]\nload_address = " + std::to_string(base) +
-        "\nentry = " + std::to_string(entry) + "\n";
-    return module;
-}
-
-// Code the game linked into RAM itself, captured by ps2n-game when control first reached it
-// (ee-load/<sha256>.txt with the .bin image, .functions symbol starts and .live import sites).
-std::vector<ExecModule> loaded_modules(const Game& game) {
-    std::vector<ExecModule> modules;
-    const auto directory = game.dir / "ee-load";
-    if (!fs::exists(directory)) return modules;
-    for (const auto& item : fs::directory_iterator(directory)) {
-        if (item.path().extension() != ".txt") continue;
-        const auto fields = read_receipt(item.path(), "ps2n-loaded-image-v1", {"sha256", "load_address", "size", "entry"});
-        const auto& identity = fields.at("sha256");
-        const auto base = receipt_number(fields, "load_address"), size = receipt_number(fields, "size"),
-            entry = receipt_number(fields, "entry");
-        const auto binary = fs::absolute(directory / (identity + ".bin"));
-        if (path_utf8(item.path().stem()) != identity || sha256_file(binary) != identity || fs::file_size(binary) != size ||
-            (entry & 3u) || entry < base || uint64_t(entry) + 4 > uint64_t(base) + size)
-            throw std::runtime_error("loaded-image receipt differs from its image: " + path_utf8(item.path()));
-        ExecModule module;
-        module.game.id = identity;
-        module.game.dir = fs::path(PS2N_BINARY_DIR) / "ee-aot" / identity;
-        module.game.elf = path_utf8(binary);
-        module.game.native_output = "g";
-        module.base = base; module.size = size;
-        std::ostringstream entries;
-        std::istringstream functions(read_text(directory / (identity + ".functions")));
-        const char* separator = "";
-        for (std::string line; std::getline(functions, line); separator = ", ")
-            entries << separator << "\"entry@0x" << std::hex << std::stoul(line) << '"';
-        module.config = "[general]\ninput = " + quoted_toml_path(binary) + "\noutput = \"g\"\nmodule_id = \"" +
-            identity + "\"\noutput_worker_threads = 8\nlive_immediates = " +
-            quoted_toml_path(fs::absolute(directory / (identity + ".live"))) + "\nentry_points = [" + entries.str() +
-            "]\n[raw_image]\nload_address = " + std::to_string(base) + "\nentry = " + std::to_string(entry) + "\n";
-        modules.push_back(std::move(module));
-    }
-    return modules;
-}
-
-// Translates the VU1 blocks a game session recorded (vu1/recorded.txt, "pc word0 word1 ..." in hex) into
-// vu1/blocks_<n>.cpp: each pair runs PCSX2's VU1 interpreter step with its words as constants. Keys match
-// pcsx2vu1::aot::blockKey; first-recorded order keeps earlier files unchanged when blocks are added.
-void generate_vu1_blocks(const Game& game) {
-    const auto directory = game.dir / "vu1";
-    const auto recorded = directory / "recorded.txt";
-    if (!fs::exists(recorded)) return;
-    struct Block { uint64_t key; uint32_t pc; std::vector<uint32_t> words; };
-    std::vector<Block> blocks;
-    std::set<uint64_t> seen;
-    std::istringstream lines(read_text(recorded));
-    for (std::string line; std::getline(lines, line);) {
-        std::istringstream fields(line);
-        std::string field;
-        std::vector<uint32_t> values;
-        while (fields >> field) {
-            size_t used = 0;
-            const auto value = std::stoull(field, &used, 16);
-            if (used != field.size() || value > UINT32_MAX) throw std::runtime_error("malformed VU1 block record");
-            values.push_back(static_cast<uint32_t>(value));
-        }
-        if (values.empty()) continue; // a session stopped while appending
-        const uint32_t pc = values[0];
-        std::vector<uint32_t> words(values.begin() + 1, values.end());
-        if (words.empty() || words.size() % 2 || words.size() > 512 || (pc & 7u) || pc + words.size() * 4 > 0x4000u)
-            continue; // incomplete trailing line
-        uint64_t key = 1469598103934665603ull;
-        for (uint32_t i = 0; i < 4; ++i) key = (key ^ ((pc >> (i * 8)) & 0xFFu)) * 1099511628211ull;
-        for (const uint32_t word : words)
-            for (uint32_t i = 0; i < 4; ++i) key = (key ^ ((word >> (i * 8)) & 0xFFu)) * 1099511628211ull;
-        if (seen.insert(key).second) blocks.push_back({key, pc, std::move(words)});
-    }
-    constexpr size_t kBlocksPerFile = 128;
-    for (size_t first = 0, file = 0; first < blocks.size(); first += kBlocksPerFile, ++file) {
-        char name[32];
-        std::snprintf(name, sizeof name, "blocks_%03zu", file);
-        std::ostringstream code;
-        code << "// Generated by ps2n from vu1/recorded.txt: PCSX2 VU1 interpreter steps (GPL-3.0+).\n"
-                "#include \"pcsx2_vu1_aot_step.h\"\n\nnamespace {\nnamespace ops = pcsx2vu1_aot_ops;\n" << std::hex;
-        const size_t last = std::min(blocks.size(), first + kBlocksPerFile);
-        for (size_t i = first; i < last; ++i) {
-            const auto& block = blocks[i];
-            const size_t pairs = block.words.size() / 2;
-            code << "uint32_t b" << block.key << "(VURegs* VU, uint64_t end) {\n";
-            for (size_t p = 0; p < pairs; ++p) {
-                code << "    " << (p + 1 < pairs ? "if (!" : "") << "ops::pair<0x" << block.pc + p * 8 << "u, 0x"
-                     << block.words[p * 2 + 1] << "u, 0x" << block.words[p * 2] << "u>(VU, end)"
-                     << (p + 1 < pairs ? ") return " + std::to_string(p + 1) + ";\n" : ";\n");
-            }
-            code << "    return " << std::dec << pairs << std::hex << ";\n}\n";
-        }
-        code << "const pcsx2vu1::aot::Block kBlocks[] = {\n";
-        for (size_t i = first; i < last; ++i)
-            code << "    {0x" << blocks[i].key << "ull, 0x" << blocks[i].pc << "u, " << std::dec
-                 << blocks[i].words.size() / 2 << std::hex << "u, &b" << blocks[i].key << "},\n";
-        code << "};\n} // namespace\n\nvoid ps2n_vu1_" << name
-             << "() { pcsx2vu1::aot::registerBlocks(kBlocks, std::size(kBlocks)); }\n";
-        const auto path = directory / (std::string(name) + ".cpp");
-        if (!fs::exists(path) || read_text(path) != code.str()) write_text(path, code.str());
-    }
-}
-
-void prepare_module(const ExecModule& module) {
-    ps2native::create_directories(module.game.dir / module.game.native_output);
-    if (!fs::exists(module.game.dir / "config.toml")) write_text(module.game.dir / "config.toml", module.config);
-    run_tool(PS2N_RECOMP_EXE, {"config.toml", "--describe-inputs", "generation.inputs"},
-        module.game.dir, module.game.dir / "recomp.log");
-    if (!generation_current(module.game)) recompile(module.game);
-}
-
-bool add_entry_points(const Game& game, const std::set<std::string>& targets);
-
-void ensure_prepared(Game& game, bool configure = false) {
-    configure = attach_console_firmware(game) || configure;
-    if (game.browser()) {
-        const auto firmware = load_browser_firmware(read_file(from_utf8(game.rom0)), game.console_profile,
-            read_file(from_utf8(game.nvm)), {game.rom0_sha256}, {game.nvm_sha256});
-        if (sha256_file(game.dir / "cd" / from_utf8(game.elf)) != sha256_hex(firmware.program.bytes))
-            throw std::runtime_error("Prepared OSDSYS differs from the selected ROM0");
-    }
-    const auto prepare_modules = [&] {
-        if (game.browser()) {
-            const auto firmware = load_browser_firmware(read_file(from_utf8(game.rom0)), game.console_profile,
-                read_file(from_utf8(game.nvm)), {game.rom0_sha256}, {game.nvm_sha256});
-            if (auto module = exec_module(game, firmware)) prepare_module(*module);
-        }
-        for (const auto& module : loaded_modules(game)) prepare_module(module);
-    };
-    apply_build_environment();
-    // Configuring requires every captured module translated, and building the tools configures.
-    if (fs::exists(fs::path(PS2N_RECOMP_EXE))) prepare_modules();
-    run_tool(PS2N_CMAKE_COMMAND, {"--build", fs::path(PS2N_BINARY_DIR).string(), "--target", "ps2recomp_tools"},
-             PS2N_BINARY_DIR, game.dir / "build.log");
-    prepare_modules();  // a rebuilt recompiler regenerates; unchanged inputs are skipped
-    // Functions of the game's own image that captured modules import: declared together instead of
-    // one learning round (session, recompile, build) per first call.
-    std::set<std::string> imports;
-    const auto modules = loaded_modules(game);
-    for (const auto& module : modules) {
-        const auto list = game.dir / "ee-load" / (module.game.id + ".imports");
-        if (!fs::exists(list)) continue;
-        std::istringstream lines(read_text(list));
-        for (std::string line; std::getline(lines, line);) {
-            const auto address = std::stoull(line);
-            if (std::none_of(modules.begin(), modules.end(), [&](const ExecModule& m) {
-                    return address >= m.base && address < uint64_t(m.base) + m.size; })) {
-                std::ostringstream target;
-                target << "0x" << std::hex << address;
-                imports.insert(target.str());
-            }
-        }
-    }
-    if (add_entry_points(game, imports)) std::cout << "Declared entry points imported by captured modules\n";
-    restore_heuristic_stores(game);
-    ps2native::create_directories(game.dir / "generated");
-    run_tool(PS2N_RECOMP_EXE, {"config.toml", "--describe-inputs", "generation.inputs"},
-             game.dir, game.dir / "recomp.log");
-    if (!generation_current(game)) recompile(game);
-    generate_vu1_blocks(game);
-    build(game, configure);
-}
-
-fs::path game_executable(const Game& game) {
-    return fs::path(PS2N_BINARY_DIR) / from_utf8("ps2n-game-" + game.id + PS2N_EXE_SUFFIX);
-}
-
-// Library code runs as the game's own recompiled code, like reference ports;
-// the runtime emulates the hardware and the kernel syscalls beneath it. Only
-// clients of IOP services keep runtime handlers until the IOP side speaks the
-// SIF RPC protocol (the analyzer's other HLE stubs diverged from the originals,
-// e.g. libgraph placed Z over a display buffer).
-bool runtime_owned_stub(const std::string& line) {
-    static const std::array<std::string_view, 14> prefixes = {
-        "sceSif", "_sceSif", "isceSif", "_sceRpc", "sceCd", "_sceCd", "sceMc", "mce",
-        "scePad", "sceFs", "_sceFs", "sceDeci2", "sceTty", "sceIo"};
-    // libkernel routines that patch or extend the kernel (kCopy/SetSyscall)
-    // belong to the runtime, which is the kernel here.
-    static const std::array<std::string_view, 21> names = {
-        "sceOpen", "sceClose", "sceLseek", "sceRead", "sceWrite", "sceIoctl", "sceGetstat",
-        "InitThread", "InitAlarm", "InitTLB", "InitTLBFunctions", "InitTLB32MB", "InitExecPS2", "InitOsd",
-        "StartThread", "iWakeupThread", "iRotateThreadReadyQueue", "SetAlarm", "iSetAlarm", "ReleaseAlarm",
-        "iReleaseAlarm"};
-    const auto start = line.find('"');
-    if (start == std::string::npos) return true;
-    auto end = line.find_first_of("@\"", start + 1);
-    if (end == std::string::npos) return true;
-    const std::string_view name(line.data() + start + 1, end - start - 1);
-    if (std::find(names.begin(), names.end(), name) != names.end()) return true;
-    return std::any_of(prefixes.begin(), prefixes.end(), [&](std::string_view p) { return name.starts_with(p); });
-}
-
-void analyze(const Game& game) {
-    const auto elf = game.dir / "cd" / from_utf8(game.elf);
-    run_tool(PS2N_ANALYZER_EXE, {path_utf8(elf), "config.toml"}, game.dir, game.dir / "analyzer.log");
-    std::istringstream original(read_text(game.dir / "config.toml"));
-    std::string config;
-    bool in_stubs = false;
-    for (std::string line; std::getline(original, line);) {
-        if (line.starts_with("input = ")) {
-            const auto generic = fs::absolute(elf).generic_u8string();
-            line = "input = \"" + std::string(generic.begin(), generic.end()) + "\"";
-        }
-        else if (line.starts_with("output = ")) line = "output = \"generated/\"";
-        else if (line.starts_with("stubs = [")) in_stubs = true;
-        else if (line.starts_with("]")) in_stubs = false;
-        else if (in_stubs && !runtime_owned_stub(line)) continue;
-        config += line + "\n";
-    }
-    write_text(game.dir / "config.toml", config);
-}
-
-Game prepare_browser(const fs::path& rom0, const std::string& profile, const fs::path& nvm) {
-    const auto firmware = load_browser_firmware(read_file(rom0), profile, read_file(nvm));
-    Game game;
-    game.id = "bios-" + firmware.bios.sha256;
-    game.dir = games_root() / game.id;
-    game.elf = "OSDSYS";
-    game.rom0 = path_utf8(fs::absolute(rom0)); game.rom0_sha256 = firmware.bios.sha256;
-    game.console_profile = profile;
-    game.nvm = path_utf8(fs::absolute(nvm)); game.nvm_sha256 = firmware.nvm.sha256;
-    ps2native::create_directories(game.dir / "cd");
-    const auto elf = game.dir / "cd" / game.elf;
-    if (!fs::exists(elf) || sha256_file(elf) != sha256_hex(firmware.program.bytes))
-        write_file_atomically(elf, firmware.program.bytes);
-    // Keep learned entries and unchanged native objects for this exact ROM0.
-    if (!fs::exists(game.dir / "config.toml")) analyze(game);
-    write_text(game.dir / "game.txt", "id=" + game.id + "\nelf=" + game.elf + "\nrom0=" + game.rom0 +
-        "\nrom0_sha256=" + game.rom0_sha256 + "\nconsole_profile=" + profile +
-        "\nnvm=" + game.nvm + "\nnvm_sha256=" + game.nvm_sha256 + "\n");
-    // Compile ROM IRX in place by identity; never copy original modules into the content tree.
-    std::string romModules;
-    for (const auto& module : firmware.bios.modules) {
-        const auto image = std::span(firmware.bios.rom0).subspan(module.offset, module.size);
-        if (image.size() < 52 || image[0] != 0x7f || image[1] != 'E' || image[2] != 'L' || image[3] != 'F' ||
-            image[4] != 1 || image[5] != 1 || image[18] != 8 || image[19] != 0 ||
-            image[17] != 0xff || (image[16] != 0x80 && image[16] != 0x81)) continue;
-        romModules += "iop_rom_module=" + std::to_string(module.offset) + ":" + std::to_string(module.size) +
-            ":" + sha256_hex(image) + "\n";
-    }
-    if (!romModules.empty()) write_text(game.dir / "game.txt", read_text(game.dir / "game.txt") + romModules);
-    ensure_prepared(game);
-    return game;
-}
-
-Game prepare(const fs::path& input) {
-    const auto image = disc_image(input);
-    DiscImage disc(image);
-    const auto boot = disc.boot_path();
-    Game game;
-    game.id = game_id(boot);
-    game.dir = games_root() / game.id;
-    game.elf = boot.substr(0, boot.find(';'));
-    std::replace(game.elf.begin(), game.elf.end(), '\\', '/');
-    if (!game.elf.empty() && game.elf.front() == '/') game.elf.erase(0, 1);
-    std::cout << "Preparing " << disc.volume_id() << " (" << game.id << ") in " << path_utf8(game.dir) << "\n";
-    ps2native::create_directories(game.dir);
-
-    std::cout << "Extracting disc files...\n";
-    if (fs::exists(game.dir / "cd")) remove_directory_tree(game.dir / "cd");
-    extract(disc, {}, game.dir / "cd");
-    if (!disc.raw_sectors()) {
-        game.cd_image = path_utf8(fs::absolute(image));  // already user sectors: no copy
-    } else {
-        write_user_image(disc, game.dir / "disc.iso");
-        game.cd_image = path_utf8(game.dir / "disc.iso");
-    }
-
-    std::cout << "Analyzing " << game.elf << "...\n";
-    analyze(game);
-    write_text(game.dir / "game.txt", "id=" + game.id + "\nelf=" + game.elf + "\ncd_image=" + game.cd_image + "\n");
-
-    std::cout << "Recompiling with PS2Recomp...\n";
-    ensure_prepared(game, true);
-    std::cout << "Prepared " << path_utf8(game_executable(game)) << "\n";
-    return game;
-}
-
-// PS2Recomp reports a guest branch to code it did not emit as an entry.
-std::set<std::string> missing_targets(std::string_view log) {
-    constexpr std::string_view marker = "[guest-branch:missing-target]", key = " target=0x";
-    std::set<std::string> found;
-    for (auto at = log.find(marker); at != log.npos; at = log.find(marker, at + 1)) {
-        const auto line_end = log.find('\n', at);
-        const auto report = log.substr(at, line_end == log.npos ? log.npos : line_end - at);
-        if (report.find(" codeRegion=no") != report.npos)
-            throw std::runtime_error("guest jumped outside registered code; refusing to recompile data as an entry point");
-        const auto target = log.find(key, at);
-        if (target == log.npos) break;
-        auto end = target + key.size();
-        while (end < log.size() && std::isxdigit(static_cast<unsigned char>(log[end]))) ++end;
-        if (end > target + key.size()) found.insert(std::string(log.substr(target + 8, end - target - 8)));
-    }
-    return found;
-}
-
-bool add_entry_points(const Game& game, const std::set<std::string>& targets) {
-    auto config = read_text(game.dir / "config.toml");
-    std::string added;
-    for (const auto& target : targets) {
-        const auto item = "\"entry@" + target + "\"";
-        if (config.find(item) != config.npos) continue;
-        added += item + ", ";
-    }
-    if (added.empty()) return false;
-    if (const auto existing = config.find("\nentry_points = ["); existing != config.npos) config.insert(existing + 17, added);
-    else {
-        added.resize(added.size() - 2);
-        auto general = config.find("[general]\n");
-        std::string newline = "\n";
-        if (general == config.npos) {
-            general = config.find("[general]\r\n");
-            newline = "\r\n";
-        }
-        if (general == config.npos) throw std::runtime_error("config.toml has no [general] table");
-        config.insert(general + 9 + newline.size(), "entry_points = [" + added + "]" + newline);
-    }
-    write_text(game.dir / "config.toml", config);
-    return true;
-}
-
-int run(Game game) {
-    ensure_prepared(game);
-    std::optional<ExecModule> module;
-    std::optional<BrowserFirmware> firmware;
-    if (game.browser()) {
-        firmware = load_browser_firmware(read_file(from_utf8(game.rom0)), game.console_profile,
-            read_file(from_utf8(game.nvm)), {game.rom0_sha256}, {game.nvm_sha256});
-        module = exec_module(game, *firmware);
-    }
-    for (int round = 0; round < kMaxLearningRounds; ++round) {
-        const auto log = game.dir / "run.log";
-        std::string learned;
-        auto arguments = game.browser() ? std::vector<std::string>{game.elf, "--bios", game.rom0,
-            game.rom0_sha256, game.console_profile, game.nvm, game.nvm_sha256} :
-            std::vector<std::string>{game.elf, game.cd_image};
-        if (game.browser() && !module) arguments.emplace_back("--prepare-exec");
-        if (!game.browser() && !game.rom0.empty()) {
-            arguments.insert(arguments.end(), {"--firmware",game.rom0,game.rom0_sha256,
-                game.console_profile,game.nvm,game.nvm_sha256});
-        }
-        arguments.emplace_back("--state-root");
-        arguments.emplace_back(path_utf8(console_state_root(games_root().parent_path() / "console")));
-        const auto code = run_process(game_executable(game), arguments, game.dir / "cd", log,
-            [&](std::string_view output) {
-                // Keep a short overlap so a report split across reads is still seen.
-                learned.append(output);
-                const auto report = learned.find("[guest-branch:missing-target]");
-                const bool keep_running = report == learned.npos || learned.find('\n', report) == learned.npos;
-                if (learned.size() > 4096) learned.erase(0, learned.size() - 4096);
-                return keep_running;  // stop the game when an entry is missing
-            });
-        if (firmware && !module && code == 0 && fs::exists(game.dir / "exec/current.txt")) {
-            module = exec_module(game, *firmware);
-            std::cout << "Original EE payload verified; preparing its native module" << std::endl;
-            ensure_prepared(game);
-            continue;
-        }
-        const auto output = read_text(log);
-        if (output.find("[guest-load:captured]") != output.npos) {
-            std::cout << "Captured code the game loaded itself; preparing its native module" << std::endl;
-            ensure_prepared(game);
-            continue;
-        }
-        const auto targets = missing_targets(output);
-        if (targets.empty()) return code;
-        std::cout << "PS2Recomp reported " << targets.size() << " missing entry point(s); recompiling\n";
-        auto modules = loaded_modules(game);
-        if (module) modules.push_back(*module);
-        std::vector<std::set<std::string>> module_targets(modules.size());
-        std::set<std::string> initial_targets;
-        for (const auto& target : targets) {
-            const auto address = std::stoull(target, nullptr, 0);
-            const auto owner = std::find_if(modules.begin(), modules.end(), [&](const ExecModule& m) {
-                return address >= m.base && address < uint64_t(m.base) + m.size; });
-            if (owner != modules.end()) module_targets[owner - modules.begin()].insert(target);
-            else initial_targets.insert(target);
-        }
-        const auto learn = [&](const Game& owner, const std::set<std::string>& entries) {
-            if (entries.empty()) return;
-            if (!add_entry_points(owner, entries))
-                throw std::runtime_error("entry points already declared but still missing; see " + path_utf8(log));
-            recompile(owner);
-        };
-        learn(game, initial_targets);
-        for (size_t i = 0; i < modules.size(); ++i) learn(modules[i].game, module_targets[i]);
-        build(game, false);
-    }
-    throw std::runtime_error("entry-point learning did not converge");
+int play(const fs::path& input) {
+    const auto id = disc_id(input);
+    if (!fs::exists(runner(id))) port(id, input, true);
+    else if (recordings_newer(id)) port(id, from_utf8(recorded_disc(id)), false);
+    return run(id);
 }
 
 int usage() {
     std::cerr << "Usage: ps2n prepare <disc.bin|.cue|.iso>\n"
-                 "       ps2n use-bios <ROM0> <console-profile> <NVM>\n"
-                 "       ps2n prepare-bios <ROM0> <console-profile> <NVM>\n"
-                 "       ps2n bios <ROM0> <console-profile> <NVM>\n"
-                 "       ps2n build <game-id|game-dir>    reuse content; update native artifacts\n"
-                 "       ps2n run <game-id|game-dir>\n"
+                 "       ps2n build <game-id>      compile what play recorded\n"
+                 "       ps2n run <game-id>\n"
                  "       ps2n play <disc.bin|.cue|.iso>\n"
-                 "prepare/build/run/play also accept --bios <ROM0> <console-profile> <NVM>\n"
-                 "Games are kept in " << path_utf8(games_root()) << "\n";
+                 "       ps2n use-bios <ROM0> <console-profile> <NVM>\n"
+                 "prepare/play also accept --bios <ROM0> <console-profile> <NVM>\n"
+                 "Games are kept in " << path_utf8(work_root() / "games") << "\n";
     return 2;
 }
 
 template <class C> int main_impl(int argc, C** argv) {
     try {
         if (argc == 7 && path_utf8(fs::path(argv[3])) == "--bios") {
-            select_console_firmware(fs::path(argv[4]),path_utf8(fs::path(argv[5])),fs::path(argv[6]));
+            select_console_firmware(fs::path(argv[4]), path_utf8(fs::path(argv[5])), fs::path(argv[6]));
             argc = 3;
         }
         if (argc != 3 && argc != 5) return usage();
@@ -820,24 +207,21 @@ template <class C> int main_impl(int argc, C** argv) {
         const fs::path argument(argv[2]);
         if (argc == 5) {
             if (command == "use-bios") {
-                select_console_firmware(argument,path_utf8(fs::path(argv[3])),fs::path(argv[4]));
+                select_console_firmware(argument, path_utf8(fs::path(argv[3])), fs::path(argv[4]));
                 return 0;
             }
-            if (command != "bios" && command != "prepare-bios") return usage();
-            const auto game = prepare_browser(argument, path_utf8(fs::path(argv[3])), fs::path(argv[4]));
-            return command == "bios" ? run(game) : 0;
+            if (command == "bios" || command == "prepare-bios")
+                throw std::runtime_error("starting the original BIOS (OSDSYS) is not implemented on the engine yet");
+            return usage();
         }
-        if (command == "prepare") return (void)prepare(argument), 0;
-        if (command == "build") { auto game = load_game(path_utf8(argument)); ensure_prepared(game); return 0; }
-        if (command == "run") return run(load_game(path_utf8(argument)));
-        if (command == "play") {
-            const auto image = disc_image(argument);
-            DiscImage disc(image);
-            const auto id = game_id(disc.boot_path());
-            const auto existing = games_root() / id;
-            const bool ready = fs::exists(existing / "game.txt") && fs::exists(game_executable(load_game(path_utf8(existing))));
-            return run(ready ? load_game(path_utf8(existing)) : prepare(argument));
+        if (command == "prepare") { port(disc_id(argument), argument, true); return 0; }
+        if (command == "build") {
+            const auto id = path_utf8(argument);
+            port(id, from_utf8(recorded_disc(id)), false);
+            return 0;
         }
+        if (command == "run") return run(path_utf8(argument));
+        if (command == "play") return play(argument);
         return usage();
     } catch (const std::exception& error) {
         std::cerr << "ps2n: " << error.what() << "\n";
