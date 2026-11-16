@@ -14,6 +14,9 @@ static void upload(unsigned base,unsigned psm,unsigned w,unsigned h,const std::v
 int main(){
  try{
   ps2native::engine::Console c;c.initialize_graphics();
+  c.ee.r[3].w[0]=0x71;c.ee.r[4].d[0]=0xff00;ps2::syscall(c.ee,0x1000);
+  c.ee.r[3].w[0]=0x70;ps2::syscall(c.ee,0x1000);check(c.ee.r[2].d[0]==0xff00 && gs::read_privileged(0x1010)==0xff00,"GS mask syscalls access the same privileged register");
+  c.ee.r[3].w[0]=2;c.ee.r[4].w[0]=1;c.ee.r[5].w[0]=2;c.ee.r[6].w[0]=1;ps2::syscall(c.ee,0x1000);check(c.gs_crt_mode==2 && !c.gs_options.pal && c.gs_private[2]==3,"Original CRT syscall configures the existing GS display mode");
   check(gs::gpu::mode()==gs::gpu::Mode::primary,"GS compute must be primary");
   check(!gs::gpu::attach_surface({gs::gpu::SurfaceTarget::Win32,nullptr,0,nullptr,nullptr,640,480}),"Invalid native surface must be rejected before driver calls");
   for(unsigned fixture=0;fixture<7;++fixture){

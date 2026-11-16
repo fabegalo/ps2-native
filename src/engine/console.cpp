@@ -27,6 +27,10 @@ Console::Console() : ram(ps2::kRamSize), scratchpad(ps2::kScratchpadSize), iop_r
 }
 Console::~Console() { ps2::g_live_tlb_enabled=false; active = nullptr; ps2::g_live_ram = ps2::g_live_spr = nullptr; }
 void Console::reset_iop() {
+    iop_bus_registers.clear();
+    iop_vblank_handlers.clear();iop_vblank_jobs.clear();iop_vblank_active.reset();iop_vblank_pending=0;iop_in_vblank=false;
+    iop_timers={};for(auto& t:iop_timers)t.base=ticks;iop_modload_callbacks={};iop_sio2_send={};iop_module_waiters.clear();
+    iop_boot_modules.clear();iop_boot_waiting=0;iop_boot_active=false;
     std::fill(iop_ram.begin(),iop_ram.end(),0);
     iop={}; iop_suspended={}; iop_active=false;
     iop_callback_active=false; iop_suspended_active=false; iop_import_slot=0;
@@ -109,10 +113,26 @@ std::uint32_t Console::translate(std::uint32_t address, std::size_t size, bool w
     if (address<0x80000000) return address;
     throw std::runtime_error("TLB refill exception is not integrated");
 }
+std::uint32_t Console::ee_timer_count(unsigned index) const {
+    const auto& t=timers[index];if(!(t.mode&0x80))return t.count;
+    if(t.mode&0x3c)throw std::runtime_error("EE gated timer is not integrated");
+    const auto divider=(t.mode&3)==3 ? (294912000ull/(gs_options.pal?50:60))*2/(gs_options.pal?625:525) : 2ull<<(4*(t.mode&3));
+    const auto elapsed=(t.mode&3)==3 ? now()/divider-t.base/divider : (now()-t.base)/divider;
+    return static_cast<std::uint32_t>(t.count+elapsed)&0xffff;
+}
+void Console::refresh_ee_timer(unsigned index) {
+    auto& t=timers[index];t.due=~0ull;if(!(t.mode&0x80))return;
+    if(t.mode&0x3c)throw std::runtime_error("EE gated timer is not integrated");
+    const auto divider=(t.mode&3)==3 ? (294912000ull/(gs_options.pal?50:60))*2/(gs_options.pal?625:525) : 2ull<<(4*(t.mode&3));
+    auto compare=(t.compare-t.count)&0xffffu;if(!compare)compare=0x10000;
+    const auto delta=std::min(compare,0x10000u-t.count);
+    t.due=(t.mode&3)==3 ? (t.base/divider+delta)*divider : t.base+delta*divider;
+}
 std::uint64_t Console::now() const { return ticks + static_cast<std::uint64_t>(100000ll - ee.budget); }
 std::uint64_t Console::next_event_tick() const {
     std::uint64_t event=cdvd->due;
-    if(iop_work_pending())event=std::min(event,iop_next_tick);
+    for(const auto& t:timers)event=std::min(event,t.due);
+    if(iop_work_pending() || iop_boot_active)event=std::min(event,iop_next_tick);
     for(const auto& [id,e]:graphics_events)event=std::min(event,e.first);
     for(const auto& v:vu)if(v.busy)event=std::min(event,v.next_tick);
     return event;
@@ -127,18 +147,26 @@ void Console::advance_to(std::uint64_t target) {
             if(event>target)break;
             if(event<ticks)throw std::runtime_error("Console event moved backwards");
             ticks=event;
+            const bool boot_event=iop_boot_active && iop_next_tick==event;
             if(cdvd->due==event)cdvd->complete();
             for(auto it=graphics_events.begin();it!=graphics_events.end();) {
                 if(it->second.first!=event){++it;continue;}
                 auto action=std::move(it->second.second);it=graphics_events.erase(it);action();
             }
-            for(const auto& timer:timers)if(timer.due<=ticks)throw std::runtime_error("Timer IRQ delivery is not integrated");
+            for(unsigned n=0;n<4;++n)if(timers[n].due==ticks){
+                auto& t=timers[n];const auto count=ee_timer_count(n);
+                const bool overflow=count<t.count || (!count && t.count==0);
+                const bool equal=count==t.compare;
+                if(overflow){if((t.mode&0x200) && !(t.mode&0x800))intc_status|=1u<<(9+n);t.mode|=0x800;}
+                if(equal){if((t.mode&0x100) && !(t.mode&0x400))intc_status|=1u<<(9+n);t.mode|=0x400;}
+                t.count=equal && (t.mode&0x40)?0:count;t.base=ticks;refresh_ee_timer(n);
+            }
             if(iop_work_pending() && iop_next_tick==event) {step_iop();iop_next_tick+=8;}
+            if(boot_event){if(!iop_work_pending())iop_next_tick=event+8;iop_boot_step();}
             for(unsigned n=0;n<2;++n)if(vu[n].busy && vu[n].next_tick==event)step_vu(n);
         }
         ticks=target;
-        for (const auto& timer : timers)
-            if (timer.due<=ticks) throw std::runtime_error("Timer IRQ delivery is not integrated");
+
     } catch (...) { advancing=false; throw; }
     advancing=false;
 }
@@ -261,18 +289,10 @@ static std::uint32_t read32_physical(std::uint32_t a) {
     if (a == 0x1000f010) return s.intc_mask;
     if (dma_register(a)) return s.dma_registers[a];
     if (a >= 0x10000000 && a < 0x10002000 && !(a & 15) && (a & 0x7ff) < 0x40) {
-        auto& t = active_console().timers[(a >> 11) & 3];
-        switch (a & 0x30) {
-        case 0:
-            if (!(t.mode & 0x80)) return t.count;
-            if ((t.mode & 3) == 3 || (t.mode & 0x7c)) unsupported("gated/HBlank timer", a);
-            if (t.due <= s.now()) unsupported("timer IRQ delivery", a);
-            return static_cast<std::uint32_t>((t.count + (s.now() - t.base) / (2ull << (4 * (t.mode & 3)))) & 0xffff);
-        case 0x10: return t.mode;
-        case 0x20: return t.compare;
-        default: return t.hold;
-        }
+        s.account();auto& t=s.timers[(a>>11)&3];
+        switch(a&0x30){case 0:return s.ee_timer_count((a>>11)&3);case 0x10:return t.mode;case 0x20:return t.compare;default:return t.hold;}
     }
+
     return load<std::uint32_t>(mapped_physical(a, 4));
 }
 std::uint32_t slow_ld32(std::uint32_t a) { return read32_physical(active_console().translate(a,4,false)); }
@@ -315,7 +335,7 @@ static void write32_physical(std::uint32_t a, std::uint32_t v) {
         return;
     }
     if (a >= 0x10000000 && a < 0x10002000 && !(a & 15) && (a & 0x7ff) < 0x40) {
-        auto& t = active_console().timers[(a >> 11) & 3];
+        s.account();auto& t = s.timers[(a >> 11) & 3];
         const auto count = read32_physical(a & ~0x30u);
         t.count = count;
         switch (a & 0x30) {
@@ -324,17 +344,7 @@ static void write32_physical(std::uint32_t a, std::uint32_t v) {
         case 0x20: t.compare = v & 0xffff; break;
         default: t.hold = v & 0xffff; break;
         }
-        t.base = s.now();
-        t.due = ~0ull;
-        if (t.mode & 0x80) {
-            if ((t.mode & 3) == 3 || (t.mode & 0x7c)) unsupported("gated/HBlank timer", a);
-            const auto divider = 2ull << (4 * (t.mode & 3));
-            if (t.mode & 0x200) t.due = t.base + (0x10000u - t.count) * divider;
-            if (t.mode & 0x100) {
-                auto delta = (t.compare - t.count) & 0xffff; if (!delta) delta = 0x10000;
-                t.due = std::min<std::uint64_t>(t.due, t.base + delta * divider);
-            }
-        }
+        t.base=s.now();s.refresh_ee_timer((a>>11)&3);
         return;
     }
     store(mapped_physical(a, 4), v);
@@ -459,6 +469,17 @@ void syscall(Cpu& c, std::uint32_t pc) {
     }
     std::int64_t result{};
     switch (n) {
+    case 0x02: {
+        if((a1!=2 && a1!=3) || a0>1 || a2>1)unsupported("CRT mode",a1);
+        s.account();
+        for(unsigned k=0;k<4;++k)if((s.timers[k].mode&0x83)==0x83){s.timers[k].count=s.ee_timer_count(k);s.timers[k].base=s.ticks;}
+        s.gs_crt_mode=a1;s.gs_options.pal=a1==3;s.initialize_graphics();
+        gs::write_privileged(0x20,(a0&1)|((a2&1)<<1));
+        for(unsigned k=0;k<4;++k)if((s.timers[k].mode&0x83)==0x83)s.refresh_ee_timer(k);
+        const auto period=294912000u/(s.gs_options.pal?50:60);
+        s.graphics_events[2]={(s.ticks/period+1)*period,[&s]{s.graphics_vblank();}};
+        break;
+    }
     case 0x04: s.exited = true; s.exit_code = static_cast<int>(a0); c.pc = 0; break;
     case 0x10: case 0x12: {
         if (a0 >= 15 || !s.aot.contains(a1)) { result = -1; break; }
@@ -612,6 +633,14 @@ void syscall(Cpu& c, std::uint32_t pc) {
         s.sif.armed=false;
         for (const auto base : {0x1000c000u,0x1000c400u}) s.dma_registers[base] &= ~0x100u;
         break;
+    case 0x70: case 0x71:
+        s.account();s.initialize_graphics();result=static_cast<std::int64_t>(gs::read_privileged(0x1010));
+        if(n==0x71)gs::write_privileged(0x1010,c.r[4].d[0]);
+        break;
+    case 0x7c:
+        // No DECI2 debugger transport is attached; socket operations fail without callbacks.
+        if(a0<1 || a0>6)unsupported("DECI2 operation",a0);
+        result=-1;break;
     case 0x7f: result = kRamSize; break;
     default: throw std::runtime_error(std::format("Unsupported syscall 0x{:02X} at 0x{:08X} args {:08X} {:08X} {:08X}", n, pc, a0, a1, a2));
     }

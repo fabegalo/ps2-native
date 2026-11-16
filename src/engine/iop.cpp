@@ -17,6 +17,14 @@ std::uint32_t Console::iop_read(std::uint32_t address,unsigned bytes) const {
         if (bytes>iop_ram.size()-offset) throw std::runtime_error("IOP RAM access crosses its end");
         std::uint32_t value=0; std::memcpy(&value,iop_ram.data()+offset,bytes); return value;
     }
+    if(const auto it=iop_bus_registers.find(p);it!=iop_bus_registers.end() && bytes==4)return it->second;
+    const std::uint32_t timer_bases[]={0x1f801100,0x1f801110,0x1f801120,0x1f801480,0x1f801490,0x1f8014a0};
+    for(unsigned k=0;k<6;++k)if(p>=timer_bases[k] && p<timer_bases[k]+12){
+        if((bytes!=2 && bytes!=4) || (p&3))throw std::runtime_error("Invalid IOP timer access");
+        const auto reg=p-timer_bases[k];return reg==0?iop_timer_counter(k):reg==4?iop_timers[k].mode:iop_timers[k].compare;
+    }
+    if(p>=0x1f808200 && p<0x1f808260 && bytes==4 && !(p&3))return iop_sio2_send[(p-0x1f808200)/4];
+    if(p==0x1f808268 && bytes==4)return 0;
     if((p>=0x1f402000 && p<0x1f402020) || cdvd->dma.contains(p))return cdvd->read(p,bytes);
     throw std::runtime_error(std::format("Unsupported IOP MMIO read {:08X}",address));
 }
@@ -28,6 +36,10 @@ void Console::iop_write(std::uint32_t address,std::uint32_t value,unsigned bytes
         if (bytes>iop_ram.size()-offset) throw std::runtime_error("IOP RAM access crosses its end");
         std::memcpy(iop_ram.data()+offset,&value,bytes); return;
     }
+    // Bus timing/base latches reused from ps2-native before b2959c8; unwritten values remain unknown.
+    if(bytes==4 && !(p&3) && ((p>=0x1f801000 && p<=0x1f801020) || (p>=0x1f801400 && p<=0x1f801420) || p==0x1f801060 || p==0x1f801450 || p==0x1ffe0130)) {iop_bus_registers[p]=value;return;}
+    if(p>=0x1f808200 && p<0x1f808260 && bytes==4 && !(p&3)){iop_sio2_send[(p-0x1f808200)/4]=value;return;}
+    if(p==0x1f808268 && bytes==4){if(value&1)throw std::runtime_error("SIO2 transfer is not integrated");return;}
     if((p>=0x1f402000 && p<0x1f402020) || cdvd->dma.contains(p)){cdvd->write(p,value,bytes);return;}
     throw std::runtime_error(std::format("Unsupported IOP MMIO write {:08X}",address));
 }
@@ -73,8 +85,8 @@ std::string Console::iop_format(std::uint32_t address,unsigned first) {
     }
     return text;
 }
-void Console::iop_import(const std::string& library,std::uint32_t ordinal) {
-    if (iop_services_import(library,ordinal) || iop_rpc_import(library,ordinal) || iop_loader_import(library,ordinal) || iop_thread_import(library,ordinal)) return;
+void Console::iop_import(const std::string& library,std::uint32_t ordinal,std::uint32_t version) {
+    if (iop_services_import(library,ordinal) || iop_rpc_import(library,ordinal) || iop_loader_import(library,ordinal,version) || iop_thread_import(library,ordinal)) return;
     if (library=="stdio" && ordinal==4) {
         const auto text=iop_format(iop_arg(0),1);
         tty_write(true,text); iop.gpr[2]=static_cast<std::uint32_t>(text.size()); return;
@@ -132,12 +144,30 @@ void Console::iop_import(const std::string& library,std::uint32_t ordinal) {
         }
         if (ordinal==27) { iop.gpr[2]=static_cast<std::uint32_t>(iop_string(a,65536).size()); return; }
     }
-    throw std::runtime_error(std::format("Unsupported IOP import {}:{}",library,ordinal));
+    throw std::runtime_error(std::format("Unsupported IOP import {}:{} args={:08X},{:08X},{:08X},{:08X}",library,ordinal,iop_arg(0),iop_arg(1),iop_arg(2),iop_arg(3)));
 }
 void Console::step_iop() {
     for (auto& [id,t] : iop_threads)
         if ((t.status&4) && t.wait==2 && t.deadline<=ticks) iop_ready(id);
     if ((!iop_active || (iop_reschedule && !iop.branchPending && !iop_import_slot)) && !iop_callback_active) iop_schedule();
+    if(!iop_callback_active && iop_intr_enabled && !iop.branchPending && !iop_import_slot){
+        if(iop_vblank_pending){
+            const auto pending=iop_vblank_pending;iop_vblank_pending=0;
+            for(const auto& h:iop_vblank_handlers)if(pending&(1u<<h.edge))iop_vblank_jobs.push_back(h);
+            std::stable_sort(iop_vblank_jobs.begin(),iop_vblank_jobs.end(),[](const auto& a,const auto& b){return std::pair(a.edge,std::pair(a.priority,a.order))<std::pair(b.edge,std::pair(b.priority,b.order));});
+            for(auto& [id,t]:iop_threads)if((t.status&4) && t.wait==8 && (pending&(1u<<t.wait_id)))iop_ready(id);
+        }
+        if(!iop_vblank_jobs.empty()){
+            const auto h=iop_vblank_jobs.front();iop_vblank_jobs.pop_front();iop_vblank_active=h;
+            iop_suspended=iop;iop_suspended_active=iop_active;iop={};iop_active=iop_callback_active=true;
+            iop.pc=h.function;iop.gpr[4]=h.argument;iop.gpr[28]=h.gp;iop.gpr[29]=0x1dcff0;iop.gpr[31]=0xffffff9c;
+        }
+    }
+    if(iop.pc==0xffffff9c && iop_vblank_active){
+        const auto h=*iop_vblank_active;if(!iop.gpr[2])std::erase_if(iop_vblank_handlers,[&](const auto& old){return old.edge==h.edge && old.function==h.function;});
+        iop_vblank_active.reset();iop=iop_suspended;iop_active=iop_suspended_active;iop_callback_active=false;
+        if(iop_reschedule)iop_schedule();return;
+    }
     if (!iop_callback_active && !sif.iop_commands.empty() && (!iop_active || (!iop.branchPending && !iop_import_slot))) {
         auto command=std::move(sif.iop_commands.front()); sif.iop_commands.pop_front();
         iop_suspended=iop; iop_suspended_active=iop_active;
@@ -177,7 +207,7 @@ void Console::step_iop() {
             if(imported.second>=lib->second.exports.size())throw std::runtime_error("Missing native IOP export ordinal; HLE cannot replace a registered library");
             if(const auto version=iop_import_versions.find(slot);version!=iop_import_versions.end() && ((version->second&0xff00)!=(lib->second.version&0xff00) || (version->second&0xff)>(lib->second.version&0xff)))throw std::runtime_error("IOP import/export ABI version mismatch");
             iop.pc=lib->second.exports[imported.second];iop.branchPending=false;
-        } else iop_import(imported.first,imported.second);
+        } else iop_import(imported.first,imported.second,(iop_import_versions.contains(slot)?iop_import_versions.at(slot):0));
     }
     if (iop.pc==0xffffffe0 && iop_callback_active) {
         iop=iop_suspended; iop_active=iop_suspended_active; iop_callback_active=false;
@@ -190,7 +220,7 @@ void Console::step_iop() {
 
 }
 void Console::run_iop() {
-    while(iop_work_pending() || cdvd->due!=~0ull) advance_to(next_event_tick());
+    while(iop_work_pending() || iop_boot_active || cdvd->due!=~0ull) advance_to(next_event_tick());
     for (const auto& [id,t] : iop_threads)
         if (t.status!=16 && !iop_module_returned) throw std::runtime_error("IOP scheduler deadlock: waiting without an event");
 }

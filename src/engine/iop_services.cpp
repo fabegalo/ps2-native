@@ -1,14 +1,82 @@
 // Kernel/device registration adapts exoteric33 a50471a libs.cpp (MIT).
 #include "ps2native/engine/console.hpp"
 #include <algorithm>
+#include "iop_cdvd.hpp"
 namespace ps2native::engine {
 void Console::iop_native_call(std::uint32_t function,std::uint32_t argument,std::function<void(std::uint32_t)> finish){
     if((function&3) || function>=iop_ram.size())throw std::runtime_error("Native IOP callback outside RAM");
     auto& stack=iop_native_calls[iop_current];if(stack.size()>=16)throw std::runtime_error("Native IOP callback depth limit");
     stack.push_back({iop,std::move(finish)});iop.pc=function;iop.gpr[4]=argument;iop.gpr[31]=0xffffffa0;iop.branchPending=iop.pendingLoad=false;
 }
+void Console::iop_vblank_edge(unsigned edge){
+    const bool idle=!iop_work_pending();iop_in_vblank=edge==0;
+    iop_vblank_pending|=1u<<edge;
+    if(idle)iop_next_tick=std::max(iop_next_tick,ticks+8);
+}
+std::uint32_t Console::iop_timer_counter(unsigned index) const {
+    const auto& t=iop_timers.at(index);const auto value=std::uint64_t{t.count}+(ticks-t.base)/(8ull*t.prescale);
+    return static_cast<std::uint32_t>(value)&(index<3?0xffffu:0xffffffffu);
+}
 bool Console::iop_services_import(const std::string& lib,std::uint32_t ordinal){
     const auto a=iop_arg(0),b=iop_arg(1),c=iop_arg(2);const auto result=[&](std::int32_t v){iop.gpr[2]=static_cast<std::uint32_t>(v);return true;};
+    if(lib=="vblank"){
+        if(ordinal==8 || ordinal==9){
+            if(iop_callback_active)return result(-100);
+            const auto edge=a?1u:0u;
+            if(ordinal==9){const auto n=std::erase_if(iop_vblank_handlers,[&](const auto& h){return h.edge==edge && h.function==b;});return result(n?0:-105);}
+            if(!c || (c&3) || c>=iop_ram.size())throw std::runtime_error("VBlank callback outside IOP RAM");
+            if(std::any_of(iop_vblank_handlers.begin(),iop_vblank_handlers.end(),[&](const auto& h){return h.edge==edge && h.function==c;}))return result(-104);
+            if(iop_vblank_handlers.size()>=14)return result(-400);
+            iop_vblank_handlers.push_back({edge,b,c,iop_arg(3),iop.gpr[28],++iop_order});return result(0);
+        }
+        if(ordinal>=4 && ordinal<=7){
+            if((ordinal==6 && iop_in_vblank) || (ordinal==7 && !iop_in_vblank))return result(0);
+            result(0);iop_block(8,ordinal==5 || ordinal==7?1:0);return true;
+        }
+    }
+    if(lib=="timrman"){
+        if(!((ordinal>=4 && ordinal<=12) || (ordinal>=16 && ordinal<=18)))return false;
+        constexpr std::uint32_t addresses[]={0xbf801100,0xbf801110,0xbf801120,0xbf801480,0xbf801490,0xbf8014a0};
+        constexpr unsigned sources[]={11,13,1,5,1,1},widths[]={16,16,16,32,32,32},limits[]={1,1,8,1,256,256},irq[]={4,5,6,14,15,16};
+        const auto id=[&](unsigned k){return ((k+1)<<28)|(addresses[k]>>4);};
+        if(ordinal==4 || ordinal==5){
+            if(iop_callback_active)return result(-100);
+            constexpr unsigned allocation_order[]={2,5,4,3,0,1};
+            for(unsigned n=0;n<6;++n){const auto k=ordinal==4?allocation_order[n]:n;auto& t=iop_timers[k];
+                if(!(sources[k]&a) || widths[k]!=b)continue;
+                if(ordinal==4){if(t.users || !c || c>limits[k])continue;t={};t.users=1;t.base=ticks;return result(id(k));}
+                if(t.users && t.mode && (t.mode&iop_arg(3))==c){++t.users;return result(id(k));}
+            }
+            return result(-150);
+        }
+        const auto k=(a>>28)-1;
+        if(k>=6 || a!=id(k) || !iop_timers[k].users)return result(-151);
+        auto& t=iop_timers[k];
+        if(ordinal==6){if(!--t.users)t={};return result(0);}
+        if(ordinal==7){
+            if(b&0x13f)throw std::runtime_error("IOP gated/external/IRQ timer mode is not integrated");
+            t.mode=b;t.count=0;t.base=ticks;t.prescale=k<3?((b&0x200)?8:1):((b&0x6000)==0x6000?256:(b&0x6000)==0x4000?16:(b&0x6000)==0x2000?8:1);return true;
+        }
+        if(ordinal==8 || ordinal==17)return result(t.mode);
+        if(ordinal==9){t.count=b;t.base=ticks;return true;}
+        if(ordinal==10)return result(iop_timer_counter(k));
+        if(ordinal==11){t.compare=b;return true;}
+        if(ordinal==12)return result(t.compare);
+        if(ordinal==16)return result(irq[k]);
+        if(ordinal==18){
+            const auto at=0x1e0800u+k*16;const std::uint32_t code[]={0x3c020000u|(addresses[k]>>16),0x8c420000u|(addresses[k]&65535),0x03e00008,0};
+            for(unsigned n=0;n<4;++n)iop_write(at+n*4,code[n],4);return result(at);
+        }
+        return false;
+    }
+    if(lib=="dmacman" && ordinal>=33 && ordinal<=35){
+        if(a>=13)throw std::runtime_error("IOP DMA channel not integrated");
+        const auto reg=a<7?0x1f8010f0u:0x1f801570u,shift=4*(a<7?a:a-7);
+        auto value=iop_read(reg,4);
+        if(ordinal==33)value=(value&~(7u<<shift))|((b&7)<<shift);
+        else if(ordinal==34)value|=8u<<shift;else value&=~(8u<<shift);
+        iop_write(reg,value,4);return true;
+    }
     if(lib=="intrman"){
         if(ordinal==4){if(a>=64 || !c || (c&3) || c>=iop_ram.size())return result(-1);if(iop_irqs.contains(a))return result(-1);iop_irqs.emplace(a,IopIrq{c,iop_arg(3),iop.gpr[28],false});return result(0);}
         if(ordinal==5)return result(iop_irqs.erase(a)?0:-1);

@@ -3,6 +3,7 @@
 #include "ps2native/engine/console.hpp"
 #include <algorithm>
 #include <format>
+#include <cstdio>
 #include <stdexcept>
 #include "iop_cdvd.hpp"
 #include "ps2native/bios.hpp"
@@ -68,9 +69,15 @@ void Console::sif_command(std::span<const std::uint8_t> packet) {
         const auto prefix=std::string("rom0:UDNL cdrom0:");
         if(mode || !args.starts_with(prefix) || !cdvd->media)throw std::runtime_error("Unsupported IOP reboot arguments: "+args);
         const auto image=ps2native::load_iop_reboot_image(cdvd->media->read(args.substr(prefix.size())));
-        std::string modules;
-        for(const auto& m:image.modules)modules+=m.name+":"+std::to_string(m.size)+" ";
-        throw std::runtime_error("IOPRP execution pending: "+modules);
+        std::deque<std::pair<std::string,std::vector<std::uint8_t>>> modules;
+        for(const auto name:{"FILEIO","CDVDMAN","CDVDFSV","LOADFILE"}) {
+            const auto* m=image.find(name);if(!m)throw std::runtime_error(std::string("Missing original IOPRP module: ")+name);
+            modules.emplace_back(std::string(name),std::vector<std::uint8_t>(image.bytes.begin()+m->offset,image.bytes.begin()+m->offset+m->size));
+        }
+        account();reset_iop();sif.command_buffer=static_cast<std::uint32_t>(iop_ram.size())-0x10000;
+        iop_boot_modules=std::move(modules);iop_boot_active=true;iop_next_tick=now()+8;
+        std::fprintf(stderr,"[engine-boot] IOPRP %s; original FILEIO/CDVDMAN/CDVDFSV/LOADFILE, kernel/SIF HLE\n",image.sha256.c_str());
+        return;
     }
     if(rpc_command(packet))return;
     if (cid == 0x80000000 || (cid == 0x80000002 && opt == 0)) {

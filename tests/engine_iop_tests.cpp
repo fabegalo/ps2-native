@@ -14,7 +14,9 @@ int main() {
         Console c;c.initialize_sif();
         c.iop_write(0x100,0x12345678,4);
         check(c.iop_read(0xa0000100,4)==0x12345678,"IOP aliases use Console RAM");
-        rejects([&]{c.iop_read(0,8);});rejects([&]{c.iop_write(0x1f801000,0,4);});
+        rejects([&]{c.iop_read(0,8);});rejects([&]{c.iop_read(0x1f801000,4);});
+        c.iop_write(0x1f801000,0x1234,4);check(c.iop_read(0xbf801000,4)==0x1234,"Bus configuration latches retain written values across aliases");
+        rejects([&]{c.iop_write(0x1f802000,0,4);});
         check(ps2::ld32(0xbc000100)==0x12345678,"EE observes the same IOP backing RAM");
         ps2::st32(0x1c000104,0x87654321);
         check(c.iop_read(0x104,4)==0x87654321,"EE writes are visible to IOP");

@@ -39,8 +39,15 @@ int main() {
         s.ee.budget -= 2;
         require(ps2::slow_ld32(0x10000800) == 0xffff, "Bus-clock timer advances at EE/2");
         s.ee.budget -= 2;
-        rejects([&] { s.account(); });
+        s.account();require((s.intc_status&(1u<<10)) && (s.timers[1].mode&0x800),"EE overflow reaches its shared INTC source and status flag");
         s.timers[1] = {}; s.ticks=0; s.ee.budget=100000;
+        ps2::slow_st32(0x10000010,0x83);const auto hblank=(294912000ull/60)*2/525;
+        s.advance_to(hblank-1);require(ps2::slow_ld32(0x10000000)==0,"HBlank timer cannot advance before the line edge");
+        s.advance_to(hblank);require(ps2::slow_ld32(0x10000000)==1,"HBlank counter advances on the shared video clock without initializing a GPU");
+        s.timers[0]={};s.ticks=0;
+        ps2::slow_st32(0x10001020,4);ps2::slow_st32(0x10001010,0x1c0);s.advance_to(8);
+        require(ps2::slow_ld32(0x10001000)==0 && (s.intc_status&(1u<<11)) && (s.timers[2].mode&0x400),"Compare event resets the count and raises the real timer INTC source");
+        s.timers[2]={};s.ticks=0;
         ps2::slow_st32(0x1000f010, 4); ps2::slow_st32(0x1000f010, 4);
         require(ps2::slow_ld32(0x1000f010) == 0, "INTC mask uses toggle writes");
         ps2::slow_st32(0x1000e010, 0x20000); ps2::slow_st32(0x1000e010, 0x20000);
@@ -54,6 +61,7 @@ int main() {
         require(s.ee.r[2].w[0] == 123 && s.ee.pc == 0x1004, "AOT dispatch executes native unit");
         rejects([&] { ps2::dispatch(s.ee,0,0); });
         rejects([&] { syscall(s,0xff); });
+        require(syscall(s,0x7c,1)==-1 && syscall(s,0x7c,3)==-1 && s.sif.replies.empty(),"Absent DECI2 transport fails without fabricating debugger completion");
         static const ps2::UnitInfo irq_units[]={{0x1010,4,irq,entries}};ps2::register_units(irq_units,1);
         s.ee.pc=0x1234;s.ee.cop0[12]|=0x10000;s.ee.r[6].sw[0]=-1;s.ee.r[7].w[0]=0x12345678;
         const auto irq_id=syscall(s,0x10,2,0x1010);

@@ -34,13 +34,18 @@ static int original_poff_probe(int argc,char** argv){
     check(c.cdvd->hardware,"Probe requires a known console profile");c.cdvd->mount(ps2::os::path(argv[3]));c.boot_cdvd(ps2::os::path(argv[1]),true);c.run_iop();
     if(argc==5){
         const auto image=ps2native::load_iop_reboot_image(c.cdvd->media->read(argv[4]));
-        c.reset_iop();c.initialize_sif();
-        for(const auto name:{"CDVDMAN","CDVDFSV"}){
-            const auto* m=image.find(name);check(m,"IOPRP must contain both original CDVD modules");
-            const auto id=c.load_iop(std::span(image.bytes).subspan(m->offset,m->size),std::string(argv[4])+":"+name);
-            c.run_iop();check(c.iop_modules.at(id).returned && c.iop_modules.at(id).resident,"Original IOPRP CDVD entry must finish resident");
-        }
-        std::printf("engine-cdvd: IOPRP %s original CDVD modules executed; this probe does not boot FILEIO/LOADFILE\n",image.sha256.c_str());
+        const std::string args=std::string("rom0:UDNL cdrom0:")+argv[4];check(args.size()<=80,"Probe reboot argument bound");
+        std::vector<std::uint8_t> packet(104);ps2::store(packet.data(),104u);ps2::store(packet.data()+8,0x80000003u);ps2::store(packet.data()+16,static_cast<std::uint32_t>(args.size()));std::copy(args.begin(),args.end(),packet.begin()+24);
+        ps2::st32(0xe000,0x12345678);const auto before=c.ticks;c.sif_command(packet);
+        check(c.iop_boot_active && !(c.sif.smflag&0x40000),"IOPRP cannot signal completion before original entries run");
+        c.run_iop();
+        check(!c.iop_boot_active && (c.sif.smflag&0x40000) && c.ticks>before && ps2::ld32(0xe000)==0x12345678,"Original IOPRP boot completion preserves EE RAM and logical time");
+        for(const auto sid:{0x80000001u,0x80000006u,0x80000592u})check(std::any_of(c.rpc_servers.begin(),c.rpc_servers.end(),[&](const auto& item){return item.second.sid==sid;}),"IOPRP services must come from original RPC registrations");
+        check(c.iop_modules.size()==4 && std::all_of(c.iop_modules.begin(),c.iop_modules.end(),[](const auto& item){return item.second.returned && item.second.resident;}),"All four original IOPRP service entries finish resident");
+        c.iop_current=200;c.iop_threads[200].status=1;c.iop_active=true;c.iop.pc=0x7500;c.iop.gpr[31]=0xffffffd0;c.iop.gpr[4]=0x7500;
+        c.iop_import("secrman",4,0x101);check(c.iop_threads.at(200).status==4,"Missing original dependency blocks its importing thread");c.run_iop();
+        check(c.iop_module_waiters.empty() && c.iop_libraries.contains("secrman") && c.iop_modules.at(c.iop_libraries.at("secrman").owner).resident && c.iop_threads.at(200).status==16,"SECRMAN original entry registers exports before the pending native call resumes");
+        std::printf("engine-cdvd: IOPRP %s original FILEIO/CDVDMAN/CDVDFSV/LOADFILE boot and SECRMAN dependency PASS\n",image.sha256.c_str());
     }
     auto server=std::find_if(c.rpc_servers.begin(),c.rpc_servers.end(),[](const auto& item){return item.second.sid==0x80000596;});
     check(server!=c.rpc_servers.end(),"Original CDVDFSV must register POFF itself");
@@ -122,6 +127,20 @@ int main(int argc,char** argv){try{
     const auto old_modules=c.iop_modules.size(),old_servers=c.rpc_servers.size();
     rejected=false;try{c.sif_command({reinterpret_cast<const std::uint8_t*>(bad_reset),sizeof(bad_reset)});}catch(const std::runtime_error&){rejected=true;}
     check(rejected && c.iop_modules.size()==old_modules && c.rpc_servers.size()==old_servers,"Malformed reset cannot retire the live IOP session");
+    c.iop.gpr[4]=1;c.iop.gpr[5]=32;c.iop.gpr[6]=0;c.iop.gpr[7]=0x6309;c.iop_import("timrman",5);check(static_cast<std::int32_t>(c.iop.gpr[2])==-150,"ReferHardTimer cannot invent an allocated clock");
+    c.iop.gpr[6]=1;c.iop_import("timrman",4);const auto timer=c.iop.gpr[2];check(timer==0x6bf8014a,"Hard timer allocation uses actual capabilities and encoded hardware address");
+    c.iop.gpr[4]=timer;c.iop.gpr[5]=0x80;c.iop_import("timrman",7);const auto timer_start=c.ticks;c.advance_to(timer_start+80);c.iop_import("timrman",10);check(c.iop.gpr[2]==10 && c.iop_read(0xbf8014a0,4)==10,"HLE and native timer reads use the shared EE/IOP clock");
+    c.iop.gpr[4]=1;c.iop.gpr[5]=32;c.iop.gpr[6]=0;c.iop.gpr[7]=0x6309;c.iop_import("timrman",5);check(c.iop.gpr[2]==timer,"ReferHardTimer matches mode, source and width");
+    c.iop.gpr[4]=timer;c.iop_import("timrman",6);c.iop_import("timrman",6);c.iop_import("timrman",10);check(static_cast<std::int32_t>(c.iop.gpr[2])==-151,"Timer references must be released before its id becomes invalid");
+    c.iop.gpr[4]=11;c.iop.gpr[5]=3;c.iop_import("dmacman",33);c.iop_import("dmacman",34);check(c.iop_read(0xbf801570,4)==0xb0000,"DMA priority and channel enable share real controller bits");c.iop_import("dmacman",35);check(c.iop_read(0xbf801570,4)==0x30000,"Disabling DMA preserves its priority");
+    c.iop.gpr[4]=0x1000;c.iop.gpr[5]=0x2000;c.iop.gpr[6]=0x3000;c.iop_import("modload",12);c.iop.gpr[4]=0x4000;c.iop_import("modload",13);c.iop.gpr[4]=0x8600;c.iop.gpr[5]=0x8604;c.iop_import("modload",14);check(c.iop_read(0x8600,4)==0x4000 && c.iop_read(0x8604,4)==0x3000,"Original security callback registration remains queryable in the Console");
+    const std::uint32_t vblank_code[]={0x8c086700,0,0x00084880,0x25296710,0xad240000,0x25080001,0xac086700,0x03e00008,0x24020001};
+    for(unsigned k=0;k<std::size(vblank_code);++k){c.iop_write(0x7800+k*4,vblank_code[k],4);c.iop_write(0x7840+k*4,vblank_code[k],4);}c.iop_write(0x7860,0x24020000,4);
+    for(const auto [pc,prio,arg]:{std::tuple{0x7800u,20u,2u},std::tuple{0x7840u,10u,1u}}){c.iop.gpr[4]=0;c.iop.gpr[5]=prio;c.iop.gpr[6]=pc;c.iop.gpr[7]=arg;c.iop_import("vblank",8);check(c.iop.gpr[2]==0,"VBlank registers real IOP functions");}
+    c.iop_intr_enabled=false;c.iop_vblank_edge(0);c.run_iop();check(c.iop_read(0x6700,4)==0 && c.iop_vblank_pending,"Masked VBlank remains pending without invoking callbacks");
+    c.iop_intr_enabled=true;c.run_iop();check(c.iop_read(0x6700,4)==2 && c.iop_read(0x6710,4)==1 && c.iop_read(0x6714,4)==2,"VBlank callbacks execute native R3000A in priority order with original arguments");
+    check(c.iop_vblank_handlers.size()==1 && c.iop_vblank_handlers.front().function==0x7800,"A zero callback result unregisters only that VBlank handler");
+    c.iop.gpr[4]=0;c.iop.gpr[5]=0x7800;c.iop_import("vblank",9);check(c.iop_vblank_handlers.empty(),"Explicit VBlank release removes the real registration");
     const auto observed=c.sif.replies.size();while(c.sif.replies.size()<31)c.sif.replies.emplace_back();
     for(unsigned k=0;k<2;++k){c.iop_write(0x8000+k*16,0x9000,4);c.iop_write(0x8004+k*16,0xd000,4);c.iop_write(0x8008+k*16,16,4);c.iop_write(0x800c+k*16,4,4);}
     c.iop.gpr[4]=0x8000;c.iop.gpr[5]=2;rejected=false;try{c.iop_import("sifman",7);}catch(const std::runtime_error&){rejected=true;}
@@ -130,7 +149,21 @@ int main(int argc,char** argv){try{
     const auto scratch=std::filesystem::temp_directory_path()/("ps2n-cdvd-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directory(scratch);
     struct Cleanup{Console& c;std::filesystem::path path;~Cleanup(){c.cdvd->media.reset();std::error_code ec;for(const auto name:{"disc.bin","reset.elf"})std::filesystem::remove(path/name,ec);std::filesystem::remove(path,ec);}} cleanup{c,scratch};
-    iso_test::IsoOptions options;options.raw_mode=2;const auto iso=iso_test::build_iso(options);ps2native::write_file_atomically(scratch/"disc.bin",iso);c.cdvd->mount(scratch/"disc.bin");
+    auto dynamic=module(false);ps2::store(dynamic.data()+0x100,0xac040830u);ps2::store(dynamic.data()+0x104,0xac050834u);ps2::store(dynamic.data()+0x108,0x03e00008u);ps2::store(dynamic.data()+0x10c,0x00001021u);
+    iso_test::IsoOptions options;options.system_cnf.assign(reinterpret_cast<const char*>(dynamic.data()),dynamic.size());options.raw_mode=2;const auto iso=iso_test::build_iso(options);ps2native::write_file_atomically(scratch/"disc.bin",iso);c.cdvd->mount(scratch/"disc.bin");
+    c.iop_current=200;c.iop_threads[200].status=1;c.iop_active=true;c.iop.pc=0x7500;c.iop.gpr[31]=0xffffffd0;c.iop_write(0x7500,0x03e00008,4);c.iop_write(0x7504,0,4);
+    const std::string module_path="cdrom0:/SYSTEM.CNF;1";
+    for(unsigned k=0;k<=module_path.size();++k)c.iop_write(0x8400+k,k==module_path.size()?0:module_path[k],1);
+    c.iop_write(0x8480,0x00620061,4);c.iop_write(0x8500,0x12345678,4);
+    c.iop.gpr[4]=0x8400;c.iop.gpr[5]=4;c.iop.gpr[6]=0x8480;c.iop.gpr[7]=0x8500;c.iop_import("modload",7);
+    check(c.iop_threads.at(200).status==4 && c.iop_read(0x8500,4)==0x12345678,"LoadStartModule blocks until its original entry returns");
+    c.run_iop();check(c.iop_module_waiters.empty() && c.iop_read(0x8500,4)==0 && c.iop_read(0x830,4)==3,"LoadStartModule executes the original entry with pathname and NUL-separated arguments");
+    const auto module_argv=c.iop_read(0x834,4);check(c.iop_string(c.iop_read(module_argv,4))==module_path && c.iop_string(c.iop_read(module_argv+4,4))=="a" && c.iop_string(c.iop_read(module_argv+8,4))=="b","Module argv uses live IOP RAM and preserves argument boundaries");
+    for(const auto text:{"cdrom0:/module.irx","rom0:CDVDMAN","mc0:/module.irx"," HD0:/x","net:/x","dev0:/x"}){
+        const std::string path=text;for(unsigned k=0;k<=path.size();++k)c.iop_write(0x8400+k,k==path.size()?0:path[k],1);
+        c.iop.gpr[4]=0x8400;c.iop_import("modload",15);check(c.iop.gpr[2]==(path.starts_with("cdrom") || path.starts_with("rom0") ? 0u:1u),"Boot-device checks match the supplied ROM0 MODLOAD predicate");
+    }
+    c.iop_write(0xbf808200,0x1234,4);c.iop_write(0xbf808268,12,4);check(c.iop_read(0xbf808200,4)==0x1234 && !c.iop_read(0xbf808268,4),"SIO2 initialization retains real parameter registers without claiming a transfer");
     check(ps2::slow_ld8(0xbf40200f)==0x12,"EE and IOP see the same mounted CDVD media");
     c.cdvd->write(0x1f8010b0,0x1000,4);c.cdvd->write(0x1f8010b4,0x40080,4);c.cdvd->write(0x1f8010b8,0x1000200,4);c.cdvd->write(0x1f8010f0,0x8000,4);
     const std::uint8_t params[]={16,0,0,0,1,0,0,0,0,0,0};for(const auto byte:params)c.cdvd->write(0x1f402005,byte,1);

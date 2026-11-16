@@ -202,16 +202,34 @@ SHA-256 `e4857da724efb48213d4cb805637b461846767e4dd659905c32d9a007f5f90cc`):
 SIFCMD, FILEIO, CDVDMAN, CDVDFSV and LOADFILE. The reset primitive reuses the previous
 Console reset, retires IOP modules/threads/imports/RPC/callbacks and pending CDVD work,
 and preserves EE execution/RAM, logical time, mounted media and EE-owned SIF registers.
-It does not publish BOOTEND. The SIF RESET path currently validates the request and
-reports the missing IOPRP execution explicitly, before mutating the running session.
+The maintainer approved original FILEIO/LOADFILE with kernel/SIF HLE. SIF RESET now
+starts the four original IOPRP service modules on ordinary IOP entry threads, preserving
+the pending EE session. The HLE boot manager publishes BOOTEND only after those entries
+return resident and the original FILEIO, LOADFILE and CDVD Init RPC registrations exist;
+no host RPC endpoint or arbitrary boot delay substitutes for their initialization.
 
-A bounded original-module probe also resets the IOP and executes the IOPRP CDVD pair:
-both entries return resident, the original CDVDFSV registers 596, and its handler passes
-the same real event-wait/completion regression described below. This is not a complete
-IOPRP boot: FILEIO/LOADFILE execution with kernel/SIF HLE and their missing IOMAN/MODLOAD
-contracts awaits maintainer validation under AGENTS section 2. The game has not reached
-GS; there is no game frame or gameplay evidence. No previous module or fake boot-ready
-flag is substituted for the requested reboot.
+MODLOAD LoadStartModule reuses the resident IRX loader, passes pathname/NUL-separated
+arguments in IOP RAM, blocks its caller, and returns the real entry result. Missing
+SECRMAN is loaded from the selected ROM0, following patch 0066's native dependency fix;
+its exports must match before the suspended import executes. Original security callbacks
+remain registered; authentication is not fabricated. MODLOAD's device predicate matches
+the supplied ROM's checks rather than PS2SDK's unconditional placeholder.
+
+IOP DMA channel priorities/enables and SSBUS configuration retain their shared register
+state. The original PADMAN VBlank callbacks run as R3000A interrupt callbacks in priority
+order, honoring interrupt masking and zero-return removal. EE HBlank counters use the
+same deterministic PAL/NTSC clock as GS events; compare/overflow events reach INTC.
+GsGetIMR/GsPutIMR and SetGsCrt operate the existing GS backend and display mode.
+
+Super now boots the requested IOPRP and starts its original SIO2MAN, PADMAN, RSPU2DRV,
+MCMAN and MCSERV, with native PAD and memory-card RPC registrations. It reaches the
+RTX 4070/D3D12 compute GS and then the unconnected SPU2 register at `BF9007C6`
+(IOP `000557C8`, EE `001E3228`, tick 5775042). The display circuit is still inactive:
+there is no game frame or gameplay evidence. The next integration reuses the previously
+approved, locked PCSX2/kzspu2 device, keeping this Console's clock and RAM.
+
+The optional original-module regression now exercises the complete four-service IOPRP
+boot, the original SECRMAN dependency and the original POFF event wait/completion.
 
 [OPL's RPC0/S596](https://github.com/ps2homebrew/Open-PS2-Loader/blob/master/modules/iopcore/cdvdfsv/cdvdfsv.c)
 confirms the event wait; [Play!'s Invoke596](https://github.com/jpd002/Play-/blob/master/Source/iop/Iop_Cdvdfsv.cpp)

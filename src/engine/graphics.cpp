@@ -25,14 +25,15 @@ void Console::initialize_graphics() {
     std::vector<std::uint32_t> zero(1u<<20),clut(512);
     ps2::gs::gpu::write_state(zero,1,clut);
     graphics_initialized=true;
-    graphics_events[2]={ticks+294912000u/(gs_options.pal ? 50u : 60u),[this]{graphics_vblank();}};
+    const auto period=294912000u/(gs_options.pal ? 50u : 60u);
+    graphics_events[2]={(ticks/period+1)*period,[this]{graphics_vblank();}};
 }
 // Same deterministic NTSC/PAL timing profile as the pinned GS host; not hardware cycle certification.
 void Console::graphics_vblank() {
-    ++graphics_frames;intc_status|=1u<<2;ps2::gs::vblank(true);
+    iop_vblank_edge(0);++graphics_frames;intc_status|=1u<<2;ps2::gs::vblank(true);
     const auto period=294912000u/(gs_options.pal ? 50u : 60u);
     const auto hblank=period*2/(gs_options.pal ? 625u : 525u);
-    graphics_events[3]={ticks+hblank*22,[this]{intc_status|=1u<<3;ps2::gs::vblank(false);}};
+    graphics_events[3]={ticks+hblank*22,[this]{iop_vblank_edge(1);intc_status|=1u<<3;ps2::gs::vblank(false);}};
     graphics_events[2]={ticks+period,[this]{graphics_vblank();}};
 }
 void Console::graphics_dma(unsigned channel) {

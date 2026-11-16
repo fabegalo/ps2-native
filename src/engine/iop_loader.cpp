@@ -115,8 +115,30 @@ std::uint32_t Console::load_iop(std::span<const std::uint8_t> file,std::string o
     if(!iop_active){iop_schedule();iop_next_tick=now()+8;}
     return id;
 }
+void Console::iop_boot_step() {
+    if(iop_boot_waiting) {
+        const auto& m=iop_modules.at(iop_boot_waiting);
+        if(!m.returned)return;
+        if(!m.resident)throw std::runtime_error("IOPRP module did not remain resident: "+m.origin);
+        std::fprintf(stderr,"[engine-boot] resident %s base=%08X tick=%llu\n",m.origin.c_str(),m.base,static_cast<unsigned long long>(ticks));
+        iop_boot_waiting=0;
+    }
+    if(!iop_boot_modules.empty()) {
+        auto module=std::move(iop_boot_modules.front());iop_boot_modules.pop_front();
+        iop_boot_waiting=load_iop(module.second,"ioprp:"+module.first);return;
+    }
+    const auto registered=[&](std::uint32_t sid){return std::any_of(rpc_servers.begin(),rpc_servers.end(),[&](const auto& p){return p.second.sid==sid;});};
+    if(!registered(0x80000001) || !registered(0x80000006) || !registered(0x80000592)) {
+        if(!iop_work_pending())throw std::runtime_error("IOPRP initialization ended without its original RPC registrations");
+        return;
+    }
+    // The HLE boot manager completes only after the original entries and service registrations complete.
+    sif.smflag |= 0x70000;iop_boot_active=false;
+    std::fprintf(stderr,"[engine-boot] original IOPRP services ready tick=%llu\n",static_cast<unsigned long long>(ticks));
+}
 void Console::boot_cdvd(const std::filesystem::path& path,bool extended) {
     const auto bytes=ps2native::read_file(path);const auto bios=ps2native::load_bios_rom0(bytes);
+    iop_rom0=path;
     if(cdvd->hardware && cdvd->hardware->romver!=bios.version.romver)throw std::runtime_error("CDVD console profile does not match ROM0 revision");
     std::fprintf(stderr,"[engine-firmware] ROM0 %s ROMVER=%s\n",bios.sha256.c_str(),bios.version.romver.c_str());
     const char* names[]={extended?"XCDVDMAN":"CDVDMAN",extended?"XCDVDFSV":"CDVDFSV"};
@@ -151,6 +173,18 @@ void Console::iop_module_return() {
     const auto id=iop_threads.at(iop_current).module;auto& module=iop_modules.at(id);
     iop_threads.at(iop_current).delete_on_exit=true;module.result=static_cast<std::int32_t>(iop.gpr[2]);module.returned=true;
     module.resident=module.result==0 || module.result==2;
+    if(const auto waiter=iop_module_waiters.find(id);waiter!=iop_module_waiters.end()) {
+        for(const auto& w:waiter->second){
+            if(w.result)iop_write(w.result,static_cast<std::uint32_t>(module.result),4);
+            iop_ready(w.thread,id);
+            if(!w.library.empty()){
+                const auto lib=iop_libraries.find(w.library);
+                if(!module.resident || lib==iop_libraries.end() || w.ordinal>=lib->second.exports.size() || (w.version && ((w.version&0xff00)!=(lib->second.version&0xff00) || (w.version&255)>(lib->second.version&255))))throw std::runtime_error("Original dependency did not register the required export ABI");
+                iop_threads.at(w.thread).context.pc=lib->second.exports[w.ordinal];
+            }
+        }
+        iop_module_waiters.erase(waiter);
+    }
     if(!module.resident){
         for(const auto& [name,lib]:iop_libraries)if(lib.owner==id)throw std::runtime_error("Nonresident IOP module left registered exports");
         const auto base=module.base,end=base+module.size;
@@ -160,8 +194,58 @@ void Console::iop_module_return() {
         iop_allocations.erase(base);std::fill(iop_ram.begin()+base,iop_ram.begin()+end,0);
     }
 }
-bool Console::iop_loader_import(const std::string& library,std::uint32_t ordinal) {
+bool Console::iop_loader_import(const std::string& library,std::uint32_t ordinal,std::uint32_t version) {
     const auto a=iop_arg(0),b=iop_arg(1);const auto result=[&](std::int32_t value){iop.gpr[2]=static_cast<std::uint32_t>(value);return true;};
+    if(library=="secrman"){
+        if(iop_rom0.empty() || !iop_current)throw std::runtime_error("Original SECRMAN requires the selected user ROM0 and an IOP thread");
+        std::uint32_t id=0;for(const auto& [candidate,m]:iop_modules)if(m.origin=="rom0:SECRMAN" && !m.returned)id=candidate;
+        if(!id){
+            const auto bios=ps2native::load_bios_rom0(ps2native::read_file(iop_rom0));const auto* m=bios.find("SECRMAN");
+            if(!m)throw std::runtime_error("Original SECRMAN missing from selected ROM0");
+            id=load_iop(std::span(bios.rom0).subspan(m->offset,m->size),"rom0:SECRMAN");
+            std::fprintf(stderr,"[engine-module] original SECRMAN dependency id=%u\n",id);
+        }
+        iop_module_waiters[id].push_back({iop_current,0,library,ordinal,version});iop_block(7,id);return true;
+    }
+    if(library=="modload" && ordinal>=12 && ordinal<=14){
+        if(ordinal==12 || ordinal==13){for(const auto p:ordinal==12?std::vector<std::uint32_t>{a,b,iop_arg(2)}:std::vector<std::uint32_t>{a})if(p && ((p&3) || p>=iop_ram.size()))throw std::runtime_error("MODLOAD callback outside IOP RAM");}
+        if(ordinal==12){iop_modload_callbacks[0]=a;iop_modload_callbacks[1]=b;iop_modload_callbacks[2]=iop_arg(2);}
+        if(ordinal==13)iop_modload_callbacks[3]=a;
+        if(ordinal==14){if(a)iop_write(a,iop_modload_callbacks[3],4);if(b)iop_write(b,iop_modload_callbacks[2],4);}
+        return true;
+    }
+    if(library=="modload" && ordinal==15){
+        auto path=iop_string(a,1024);const auto start=path.find_first_not_of(' ');path=start==path.npos ? "" : path.substr(start);
+        std::transform(path.begin(),path.end(),path.begin(),[](unsigned char ch){return static_cast<char>(ch|32);});
+        for(const auto prefix:{"mc","hd","net","dev"})if(path.starts_with(prefix)) {
+            const auto at=std::char_traits<char>::length(prefix);
+            return result(path.size()>at && path[at]>='0' && path[at]<=':');
+        }
+        return result(0); // Matched ROM0 MODLOAD ordinal 15, not PS2SDK's unconditional success placeholder.
+    }
+    if(library=="modload" && ordinal==7){
+        const auto path=iop_string(a,1024);const auto arguments=iop_arg(2),out=iop_arg(3),caller=iop_current;
+        if(!caller || b>4096)throw std::runtime_error("Invalid LoadStartModule caller/arguments");
+        if(out)(void)iop_read(out,4);
+        std::vector<std::string> words{path};
+        for(std::uint32_t k=0;k<b;){const auto text=iop_string(arguments+k,b-k);words.push_back(text);k+=static_cast<std::uint32_t>(text.size())+1;if(words.size()>64)throw std::runtime_error("Too many module arguments");}
+        std::vector<std::uint8_t> image;
+        if(path.starts_with("cdrom0:") || path.starts_with("cdrom:")) {
+            if(!cdvd->media)return result(-203);
+            image=cdvd->media->read(path.substr(path.find(':')+1));
+        } else if(path.starts_with("rom0:")) {
+            if(iop_rom0.empty())return result(-203);
+            const auto bios=ps2native::load_bios_rom0(ps2native::read_file(iop_rom0));const auto* m=bios.find(path.substr(5));
+            if(!m)return result(-203);image.assign(bios.rom0.begin()+m->offset,bios.rom0.begin()+m->offset+m->size);
+        } else throw std::runtime_error("Unintegrated module device: "+path);
+        const auto id=load_iop(image,path);auto& t=iop_threads.at(iop_modules.at(id).thread);
+        const auto argv=t.stack+t.size-0x2100;auto data=argv+0x110;
+        for(unsigned k=0;k<words.size();++k){iop_write(argv+k*4,data,4);for(const auto ch:words[k])iop_write(data++,static_cast<std::uint8_t>(ch),1);iop_write(data++,0,1);}
+        iop_write(argv+static_cast<std::uint32_t>(words.size())*4,0,4);
+        t.context.gpr[4]=static_cast<std::uint32_t>(words.size());t.context.gpr[5]=argv;t.context.gpr[29]=argv-16;
+        iop_module_waiters[id].push_back({caller,out});iop_block(7,id);
+        std::fprintf(stderr,"[engine-module] starting %s id=%u argc=%zu\n",path.c_str(),id,words.size());return true;
+    }
     if(library=="sysmem" && ordinal==4){if(a!=0 || iop_arg(2))throw std::runtime_error("IOP fixed/top allocation mode is not integrated");return result(iop_allocate(b));}
     if(library=="sysmem" && ordinal==5){iop_release(a);return result(0);}
     if(library!="loadcore")return false;
