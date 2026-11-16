@@ -1,3 +1,6 @@
 exoteric33/ps2-native-recomp a50471a823c64e0e2893329527820a7c4deed608 (MIT): EE AOT translator and generated-code ABI headers.
 Local adaptation: memory.hpp validates the full width of RAM/scratchpad accesses before taking the inline fast path.
 Console-owned register masks for timers/DMAC in src/engine/console.cpp follow runtime/src/hw.cpp and dmac.cpp from the same upstream revision; the external runtime is not linked.
+Local adaptation: analysis.cpp follows static targets/call continuations of transfers in delay slots, matching codegen.cpp slot_flow rather than dropping reachable code.
+Local adaptation: codegen.cpp emits native tlbwi via generated.hpp; memory.hpp defers fast accesses while TLB mappings are active. Translation/masks/permissions reuse this repository at 0ac965121b3d82125c09c5bfcbbce04a7cbf9d80 (src/memory.cpp), adapted to the current console. PCSX2 COP0.cpp was a behavior reference, not a linked runtime.
+SIF/CMD/RPC/TTY in src/engine/sif.cpp adapts the wire protocol from upstream runtime/src/iop/sif.cpp at the pin above; original guest handlers remain AOT. PS2SDK sifcmd.c/fileio.c/syscallnr.h were behavior references, with no SDK source copied into the core.

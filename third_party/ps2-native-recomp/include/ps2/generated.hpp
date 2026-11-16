@@ -53,6 +53,7 @@ void trap(Cpu &c, std::uint32_t pc);
 void stop(Cpu &c, std::uint32_t pc, const char *what);
 void probe(Cpu &c, std::uint32_t pc);
 
+void tlbwi(Cpu &c);
 std::uint32_t mfc0(Cpu &c, std::uint32_t reg, std::uint32_t sel);
 void mtc0(Cpu &c, std::uint32_t reg, std::uint32_t value);
 void set_interrupts(Cpu &c, bool enabled);

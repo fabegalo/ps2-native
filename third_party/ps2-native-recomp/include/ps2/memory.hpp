@@ -16,6 +16,7 @@ inline constexpr std::uint32_t kScratchpadSize = 16u << 10;
 // when it is loaded: it is not linked to the runner's g_ram.
 extern std::uint8_t *g_live_ram;
 extern std::uint8_t *g_live_spr;
+extern bool g_live_tlb_enabled;
 #define PS2_RAM g_live_ram
 #define PS2_SPR g_live_spr
 #else
@@ -50,6 +51,9 @@ void slow_st128(std::uint32_t a, const Reg128 &v);
 
 template <typename T>
 inline T *fast(std::uint32_t a, std::size_t bytes = sizeof(T)) {
+#ifdef PS2_LIVE_EE
+    if (g_live_tlb_enabled) return nullptr;
+#endif
     if (a < kRamSize && bytes <= kRamSize - a) [[likely]] return reinterpret_cast<T *>(PS2_RAM + a);
     if ((a >> 14) == (kScratchpadBase >> 14) && bytes <= kScratchpadSize - (a & (kScratchpadSize - 1))) return reinterpret_cast<T *>(PS2_SPR + (a & (kScratchpadSize - 1)));
     return nullptr;

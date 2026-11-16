@@ -78,7 +78,18 @@ private:
             if (f == Flow::Stop) return;
             if (insn.op == Op::Syscall) p_.entries.insert(pc + 4);
             if (f == Flow::None) { pc += 4; continue; }
-            if (valid_target(pc + 4) && decode(*image_.word(pc + 4), pc + 4).op != Op::Invalid) mark(pc + 4);
+            if (valid_target(pc + 4)) {
+                const auto slot = decode(*image_.word(pc + 4), pc + 4);
+                if (slot.op != Op::Invalid) mark(pc + 4);
+                // The generator executes nested delay transfers; their static targets need code too.
+                const auto sf = flow(slot.op);
+                if (sf == Flow::Branch || sf == Flow::BranchLikely || sf == Flow::Jump || sf == Flow::Call) {
+                    if (!p_.dynamic.count(pc + 4)) local(slot.branch_target_of(), pc + 4);
+                    if (sf == Flow::BranchLikely && f != Flow::JumpRegister && f != Flow::CallRegister)
+                        local(insn.branch_target_of() + 4, pc);
+                }
+                if (sf == Flow::Call || sf == Flow::CallRegister) strong(pc + 12, false);
+            }
             switch (f) {
             case Flow::Branch:
             case Flow::BranchLikely:

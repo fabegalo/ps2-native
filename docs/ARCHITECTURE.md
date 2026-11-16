@@ -3,21 +3,33 @@
 ## Diretriz
 
 **16/11/2026 — PS2Native Engine (`engine/ps2native-core`), requested by the maintainer.**
-The project-owned core preserves the seven boundaries; `main` and `migration/exoteric-runtime`
-remain separate. The exoteric33 EE AOT translator is an MIT component, with no external
-runtime linked. The previous PCSX2 SPU2 integration is preserved on the migration branch.
-`PS2N_ENGINE_ONLY=ON` builds the focused core. `scripts/test-engine.py` verifies 55 public
-ELF/expected pairs by pinned hashes, prepares and compiles the six EE tests, and compares
-the complete guest stdout with `.expected`. Existing ELF loading and SHA-256 are reused;
-EE/IOP RAM, scratchpad, thread contexts, semaphores and AOT registrations belong to the
-project-owned console. Missing entries/services/devices and changed translated instructions fail
-explicitly. Instruction costs are deterministic execution limits, not certified hardware
-cycles. Core regressions pass; all six original ELFs compile/link and enter startup.
-Four stop at SIFGetReg(4); lsu/muldiv stop earlier at GetOsdConfigParam (0x4B).
-No reference output matches yet: M1/M2 remain incomplete. Extending HLE to SIF/CMD and
-TTY awaits maintainer validation. Executable IOP, timer IRQ delivery, integrated GS/SPU2,
-BIOS and gameplay remain unproven. Reproduce with `python scripts/test-engine.py`
-(provide `--cmake`, `--cxx`, `--cc`, `--ninja` if tools are outside PATH).
+The project-owned core preserves the seven boundaries; `main` and
+`migration/exoteric-runtime` remain separate, including the previous PCSX2 SPU2 integration.
+The pinned exoteric33 EE AOT translator is an MIT component; no external runtime is linked.
+The maintainer approved selective SIF/CMD and TTY HLE for M1/M2 on 16/11. Console-owned
+IOP RAM backs the HLE endpoint; real DMA packets and original EE AOT handlers complete
+CMD/RPC/TTY, with explicit errors for unsupported services. Existing ELF loading and
+SHA-256 are reused. Threads/semaphores and kernel callbacks share this console; the TLB
+mapping/permission logic reuses the pre-migration implementation at `0ac9651`.
+
+**M1 and the six-test EE milestone demonstrated on Windows x64, Release, headless HLE.**
+`lsudelay`, `branchdelay`, `alu`, `branch`, `lsu`, `muldiv` all exit successfully with exact
+reference text (only host CRLF conversion is normalized). The 55 public ELF/reference
+pairs and ISC license are revision/hash verified; none of their binaries are committed.
+The shared analyzer follows nested delay-slot targets. Copied kernel code is captured
+in bounded 64 KiB windows, compiled through the same translator and registered as fixed
+AOT modules with instruction checks. Missing code stops execution and preparation restarts
+the ELF; verified snapshots and incremental objects persist by ELF/content hashes. This
+is not in-process hot loading. Warm-cache execution of all six also passes. Regressions
+cover changed module code, TLB mappings/permissions, SIF backpressure/invalid descriptors,
+semaphores, native callbacks, worker return and nested delay analysis.
+
+Reproduce with `python scripts/test-engine.py` (`--cmake`, `--cxx`, `--cc`, `--ninja` accept
+explicit tool paths); `PS2N_ENGINE_ONLY=ON` isolates the focused build. Instruction costs
+are deterministic limits, not certified hardware cycles. Original IOP execution, timer
+IRQ delivery, guest TLB exceptions, integrated GS/SPU2, BIOS and gameplay remain gaps;
+none is certified by these CPU tests. Headless OSD settings must be replaced by the matched
+profile/NVM state before firmware sessions; hardware boot must replace the ELF HLE mappings.
 
 **Decisões vigentes do mantenedor.** Aqui só o contrato e o estado; medições de ensaio ficam nas mensagens de commit e nas evidências locais.
 

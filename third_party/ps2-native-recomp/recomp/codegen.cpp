@@ -911,7 +911,8 @@ private:
             break;
         case Ei: line("set_interrupts(c, true);"); break;
         case Di: line("set_interrupts(c, false);"); break;
-        case Tlbr: case Tlbwi: case Tlbwr: case Tlbp:
+        case Tlbwi: line("tlbwi(c);"); break;
+        case Tlbr: case Tlbwr: case Tlbp:
             line(std::format("stop(c, {}, \"{}\");", pc(i.pc), name(i.op)));
             break;
 
