@@ -46,7 +46,7 @@ int main(int argc,char** argv) {
         console.load(ps2::os::path(PS2N_ENGINE_ELF));console.execution_limit=max_ticks;
         for (const auto& [pc, word] : kAotWords) {
             if (ps2::ld32(pc) != word) throw std::runtime_error("AOT code image mismatch");
-            console.code_words.emplace(pc,word);
+            console.record_code_word(pc,word);
         }
         register_generated_code();register_generated_vu();
         if (!iop_input.empty()) {

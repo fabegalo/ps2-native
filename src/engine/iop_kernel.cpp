@@ -7,10 +7,10 @@
 
 namespace ps2native::engine {
 bool Console::iop_work_pending() const {
+    if (iop_active || !sif.iop_commands.empty()) return true;
     if(iop_intr_enabled && std::any_of(iop_alarms.begin(),iop_alarms.end(),[](const auto& item){return item.second.pending;}))return true;
     if(iop_intr_enabled && (iop_vblank_pending || !iop_vblank_jobs.empty()))return true;
     if(pending_iop_irq()!=~0u)return true;
-    if (iop_active || !sif.iop_commands.empty()) return true;
     for (const auto& [id,t] : iop_threads)
         if (t.status==2 || ((t.status&4) && t.wait==2 && t.deadline!=~0ull)) return true;
     return false;

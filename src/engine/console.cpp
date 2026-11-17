@@ -9,6 +9,8 @@
 #include <format>
 #include <stdexcept>
 #include <algorithm>
+#include <bit>
+#include <cstring>
 
 namespace ps2native::engine {
 namespace { Console* active{}; }
@@ -27,6 +29,39 @@ Console::Console() : ram(ps2::kRamSize), scratchpad(ps2::kScratchpadSize), iop_r
     ps2::g_live_spr = scratchpad.data();
 }
 Console::~Console() { audio.reset(); ps2::g_live_tlb_enabled=false; active = nullptr; ps2::g_live_ram = ps2::g_live_spr = nullptr; }
+// Expected bytes are derived from the authoritative checks; every FlushCache still compares every word.
+void Console::record_code_word(std::uint32_t pc,std::uint32_t word){
+    auto [it,inserted]=code_words.try_emplace(pc,word);
+    if(!inserted && it->second==word)return;
+    it->second=word;code_checks.clear();expected_code.clear();
+}
+void Console::verify_code_words(){
+    if(expected_code.empty() && !code_words.empty()){
+        std::vector<CodeCheck> checks;std::vector<std::uint32_t> expected;expected.reserve(code_words.size());
+        for(const auto& [pc,word]:code_words){
+            if(checks.empty() || std::uint64_t{checks.back().pc}+checks.back().count*4!=pc || (pc>>12)!=(checks.back().pc>>12))
+                checks.push_back({pc,expected.size(),0});
+            expected.push_back(word);++checks.back().count;
+        }
+        code_checks.swap(checks);expected_code.swap(expected);
+    }
+    for(const auto& check:code_checks){
+        const auto bytes=check.count*4;
+        if constexpr(std::endian::native==std::endian::little){
+            if(!ps2::g_live_tlb_enabled || !(check.pc&3)){
+                auto physical=check.pc;
+                if(ps2::g_live_tlb_enabled)physical=translate(check.pc,bytes,false);
+                else if(physical>=0x80000000 && physical<0xc0000000)physical&=0x1fffffff;
+                if(physical<ram.size() && bytes<=ram.size()-physical &&
+                   std::memcmp(ram.data()+physical,expected_code.data()+check.first,bytes)==0)continue;
+            }
+        }
+        // Device reads, unaligned TLB spans and changed blocks retain the original checks and first failing address.
+        for(std::size_t i=0;i<check.count;++i){const auto pc=check.pc+static_cast<std::uint32_t>(i*4);
+            if(ps2::ld32(pc)!=expected_code[check.first+i])throw std::runtime_error(std::format("Unsupported modified AOT instruction at 0x{:08X}",pc));
+        }
+    }
+}
 void Console::reset_iop() {
     if(audio && (audio->dmaBusy(0) || audio->dmaBusy(1)))throw std::runtime_error("IOP reboot with active SPU2 DMA cancellation is not integrated");
     iop_alarms.clear();iop_alarm_next=1;iop_alarm_active=0;
@@ -67,7 +102,7 @@ void Console::load(const std::filesystem::path& path) {
     reset_iop();
     advancing=false;
     threads.clear(); semaphores.clear(); handlers.clear();interrupt_order.clear();in_interrupt=false;
-    aot.clear(); aot_modules.clear(); code_words.clear(); syscall_handlers.clear(); dma_registers.clear(); sif_registers.clear();
+    aot.clear(); aot_modules.clear(); code_words.clear(); code_checks.clear(); expected_code.clear(); syscall_handlers.clear(); dma_registers.clear(); sif_registers.clear();
     dma_registers[0x1000e000]=1; // Standalone ELF kernel environment starts with DMA enabled.
     output.clear(); current=1; order=0; ticks=0; stack_base=0; heap_end=0;
     exited=false; exit_code=0; intc_mask=0; intc_status=0; dmac_status=0;
@@ -442,7 +477,7 @@ void dispatch(Cpu& c, std::uint32_t, std::uint32_t depth) {
                 const auto& u=module->units[i];
                 if (offset<u.base || offset-u.base>=u.size || !u.entries[(offset-u.base)/4]) continue;
                 for (std::uint32_t k=0; k<module->check_count; ++k)
-                    active_console().code_words[module->fixed_base+module->checks[k*2]]=module->checks[k*2+1];
+                    active_console().record_code_word(module->fixed_base+module->checks[k*2],module->checks[k*2+1]);
                 c.base=module->fixed_base;
                 u.function(c,u.entries[(offset-u.base)/4],depth);
                 return;
@@ -663,8 +698,7 @@ void syscall(Cpu& c, std::uint32_t pc) {
     case 0x4a: s.osd_config=ld32(a0); break;
     case 0x4b: st32(a0,s.osd_config); break;
     case 0x64: // Unified host memory: reject stale translations before completing FlushCache.
-        for (const auto& [pc, word] : s.code_words)
-            if (ld32(pc) != word) unsupported("modified AOT instruction", pc);
+        s.verify_code_words();
         break;
     case 0x74:
         if (a0 >= 256 || (a1&3)) throw std::runtime_error("Invalid SetSyscall slot/address");

@@ -26,11 +26,18 @@ void IopCdvd::mount(const std::filesystem::path& path,Medium kind){
 }
 std::uint32_t IopCdvd::irq_line() const {
     if(!console.iop_intr_enabled)return ~0u;
-    for(unsigned ch=0;ch<13;++ch){
-        const auto value=dma.at(ch<7?0x1f8010f4:0x1f801574),bit=ch<7?ch:ch-7,code=ch<7?32+ch:33+ch;
-        const auto it=console.iop_irqs.find(code);if((value&0x80000000u) && (value&(1u<<(24+bit))) && (value&(1u<<(16+bit))) && it!=console.iop_irqs.end() && it->second.enabled)return code;
+    const std::uint32_t banks[]={dma.at(0x1f8010f4),dma.at(0x1f801574)};
+    for(unsigned bank=0;bank<2;++bank){
+        const auto value=banks[bank];if(!(value&0x80000000u))continue;
+        const auto pending=(value>>24)&(value>>16)&(bank?0x3fu:0x7fu);
+        for(unsigned bit=0;bit<(bank?6u:7u);++bit){
+            if(!(pending&(1u<<bit)))continue;
+            const auto code=(bank?40u:32u)+bit;const auto it=console.iop_irqs.find(code);
+            if(it!=console.iop_irqs.end() && it->second.enabled)return code;
+        }
     }
-    for(const auto cause:{2u,3u}){const auto it=console.iop_irqs.find(cause);if(it!=console.iop_irqs.end() && it->second.enabled && (cause==2 ? irq!=0:((dma.at(0x1f8010f4)|dma.at(0x1f801574))&0x80000000)!=0))return cause;}
+    if(irq){const auto it=console.iop_irqs.find(2);if(it!=console.iop_irqs.end() && it->second.enabled)return 2;}
+    if((banks[0]|banks[1])&0x80000000u){const auto it=console.iop_irqs.find(3);if(it!=console.iop_irqs.end() && it->second.enabled)return 3;}
     return ~0u;
 }
 bool IopCdvd::irq_ready() const{return irq_line()!=~0u;}

@@ -3,15 +3,45 @@
 #include <functional>
 #include "ps2native/io.hpp"
 #include <stdexcept>
+#include "iop_cdvd.hpp"
+#include <chrono>
+#include <cstdlib>
 using ps2native::engine::Console;
 static void check(bool value,const char* why) { if(!value) throw std::runtime_error(why); }
 static void rejects(const std::function<void()>& call) {
     bool failed=false;try { call(); } catch(const std::runtime_error&) { failed=true; }
     check(failed,"Expected explicit IOP refusal");
 }
-int main() {
+int main(int argc,char** argv) {
     try {
         Console c;c.initialize_sif();
+        if(argc==2 && std::string_view(argv[1])=="--irq-bench"){
+            for(unsigned irq=0;irq<46;++irq)c.iop_irqs[irq]={0x8000,0,0,true};
+            c.iop_intr_enabled=true;c.iop_active=true;c.iop.pc=0x8000;
+            c.iop_write(0x8000,0x08002000,4);c.iop_write(0x8004,0,4);
+            using Clock=std::chrono::steady_clock;constexpr unsigned count=1000000;std::uint64_t total=0;
+            auto start=Clock::now();for(unsigned n=0;n<count;++n)total+=c.pending_iop_irq();auto irq_end=Clock::now();
+            for(unsigned n=0;n<count;++n)total+=c.iop_work_pending();auto work_end=Clock::now();
+            for(unsigned n=0;n<count;++n)c.step_iop();auto end=Clock::now();
+            const auto ns=[](auto a,auto b){return std::chrono::duration<double,std::nano>(b-a).count()/count;};
+            std::printf("synthetic IRQ benchmark: pending_ns=%.2f active_work_ns=%.2f iop_step_ns=%.2f checksum=%llu instructions=%llu\n",ns(start,irq_end),ns(irq_end,work_end),ns(work_end,end),static_cast<unsigned long long>(total),static_cast<unsigned long long>(c.iop_instructions));return 0;
+        }
+        for(const auto irq:{2u,3u,5u,17u,36u,45u})c.iop_irqs[irq]={0x8000,0,0,true};
+        c.iop_intr_enabled=true;c.iop_pending_irqs=(1u<<5)|(1u<<17);c.iop_irqs.at(5).enabled=false;
+        check(c.pending_iop_irq()==17,"A disabled lower IRQ cannot hide the next enabled pending source");
+        c.iop_irqs.at(5).enabled=true;check(c.pending_iop_irq()==5,"Base IOP IRQ priority remains ascending");
+        auto& dicr0=c.cdvd->dma.at(0x1f8010f4);auto& dicr1=c.cdvd->dma.at(0x1f801574);
+        dicr0=0x90100000;dicr1=0xa0200000;c.cdvd->irq=1;
+        check(c.pending_iop_irq()==36,"First-bank DMA keeps its virtual priority ahead of CDVD/base IRQs");
+        c.iop_irqs.at(36).enabled=false;check(c.pending_iop_irq()==45,"Disabled first-bank handler does not hide second-bank SIO2 DMA");
+        c.iop_irqs.at(36).enabled=true;dicr0&=~0x80000000u;check(c.pending_iop_irq()==45,"DMA flags and enable without their bank master cannot fabricate an IRQ");
+        dicr1=0;check(c.pending_iop_irq()==2,"CDVD device source keeps priority over generic DMA/base IRQs");
+        c.cdvd->irq=0;dicr0=0x80008000;check(c.pending_iop_irq()==3,"Forced DMA master still reaches the generic DMA line without a virtual channel");
+        c.iop_irqs.at(3).enabled=false;check(c.pending_iop_irq()==5,"Disabled DMA line still permits a pending base IRQ");
+        c.iop_intr_enabled=false;check(c.pending_iop_irq()==~0u,"Global IOP interrupt masking still gates all banks and device lines");
+        c.iop_active=true;check(c.iop_work_pending(),"A running IOP remains work even when interrupts are masked");
+        c.reset_iop();c.initialize_sif();
+
         check(c.iop_read(0xbf808270,4)==0xf,"SIO2 idle port status comes from the device reset contract");
         check(c.iop_read(0xbf808268,4)==0x3bc,"SIO2 control reset state");
         c.iop_write(0xbf808200,(3u<<18)|(3u<<8),4);

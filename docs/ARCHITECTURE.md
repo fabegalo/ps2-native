@@ -271,11 +271,19 @@ reproducible button input (VBlank frame / hexadecimal pressed PS2 button mask), 
 physical-controller evidence or direct guest-memory injection. The SDL window title
 reports rolling emulation speed and VBlanks/s, not unique gameplay frames/s.
 
-Original Super Bust-A-Move reaches Round A1 through this input path. The maintainer
-confirmed manual navigation and launcher control in the SDL window; a real GS capture
-at tick 19842662400 / 4036 VBlanks shows bubbles, launcher and scoring. SPU2 outputs
-nonzero PCM. Performance remains insufficient (the observed window fell to 0.06x in
-one interval); reaching gameplay is not a full fidelity or performance certification.
+Super Bust-A-Move renders Round A1 through this input path. The maintainer reported
+manual navigation and launcher control; captured GS frames show bubbles and scoring,
+and SPU2 outputs nonzero PCM. Automated input also reaches the original attract-mode
+DEMO; that recording does not certify a controlled one-player game. Real-time speed
+is not sustained: the measured late interval remains about 28-33 ms per VBlank.
+
+FlushCache still compares every recorded AOT instruction on every call. A derived,
+transactionally built index groups exact expected words into page-bounded contiguous
+ranges; fresh TLB translation preserves remapping/ASID checks, and changed blocks
+retain the original first failing instruction. Registering changed code invalidates
+the index. Negative controls cover word/page boundaries, aliases and TLB changes.
+IRQ polling now avoids map lookups for sources with no pending flag while retaining
+the original masks and priority. These changes reduce host cost, not guest cycles.
 The former fixed cumulative IOP instruction cap now derives from the same bounded
 Console clock (eight EE ticks per IOP instruction), with a negative budget regression.
 

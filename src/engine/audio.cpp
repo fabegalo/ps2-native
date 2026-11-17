@@ -64,7 +64,7 @@ void Console::start_audio_dma(unsigned core){
 std::uint32_t Console::pending_iop_irq() const {
     if(!iop_intr_enabled)return ~0u;
     const auto device=cdvd->irq_line();if(device!=~0u)return device;
-    for(unsigned cause=0;cause<32;++cause){const auto it=iop_irqs.find(cause);if((iop_pending_irqs&(1u<<cause)) && it!=iop_irqs.end() && it->second.enabled)return cause;}
+    for(unsigned cause=0,pending=iop_pending_irqs;pending;++cause,pending>>=1){if(!(pending&1))continue;const auto it=iop_irqs.find(cause);if(it!=iop_irqs.end() && it->second.enabled)return cause;}
     return ~0u;
 }
 }

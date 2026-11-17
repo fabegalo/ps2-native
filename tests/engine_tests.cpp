@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <functional>
 #include <stdexcept>
+#include <chrono>
 using ps2native::engine::Console;
 static void require(bool yes, const char* message) { if (!yes) throw std::runtime_error(message); }
 static void rejects(const std::function<void()>& action) {
@@ -17,9 +18,30 @@ static std::int64_t syscall(Console& s, std::uint32_t n, std::uint32_t a=0, std:
 }
 static void irq(ps2::Cpu& c,std::uint32_t,std::uint32_t){ps2::st32(0x9800,c.r[4].w[0]);ps2::st32(0x9804,c.r[5].w[0]);c.vu0.vf[2].w[0]=77;c.r[2].sw[0]=-1;c.pc=c.r[31].w[0];}
 static void unit(ps2::Cpu& c, std::uint32_t, std::uint32_t) { c.r[2].w[0] = 123; c.pc = c.r[31].w[0]; }
-int main() {
+int main(int argc,char** argv) {
     try {
         Console s;
+        if(argc==2 && std::string_view(argv[1])=="--code-check-bench"){
+            constexpr unsigned count=235947,passes=128;
+            for(unsigned i=0;i<count;++i){const auto pc=0x100000+i*4,word=i*1664525u+1013904223u;ps2::st32(pc,word);s.record_code_word(pc,word);}
+            using Clock=std::chrono::steady_clock;auto start=Clock::now();syscall(s,0x64);auto first=Clock::now();
+            for(unsigned i=0;i<passes;++i)syscall(s,0x64);auto end=Clock::now();
+            ps2::st32(0x100000+(count-1)*4,0);rejects([&]{syscall(s,0x64);});
+            const auto value=[](unsigned i){return i*1664525u+1013904223u;};
+            ps2::st32(0x100000+(count-1)*4,value(count-1));syscall(s,0x64);
+            for(const auto index:{0u,1023u,1024u,count/2,count-1}){const auto pc=0x100000+index*4;ps2::st32(pc,~value(index));rejects([&]{syscall(s,0x64);});ps2::st32(pc,value(index));syscall(s,0x64);}
+            const auto changed=0x100000+(count/2)*4;s.record_code_word(changed,0x12345678);ps2::st32(changed,0x12345678);syscall(s,0x64);
+            ps2::st32(changed,0);rejects([&]{syscall(s,0x64);});s.record_code_word(changed,0);syscall(s,0x64);
+            s.record_code_word(0x80007000,0x50607080);ps2::st32(0x7000,0x50607080);syscall(s,0x64);
+            ps2::st32(0xa0007000,0);rejects([&]{syscall(s,0x64);});ps2::st32(0x7000,0x50607080);syscall(s,0x64);
+            s.ee.cop0[0]=5;s.ee.cop0[5]=0;s.ee.cop0[10]=0x40000000;s.ee.cop0[2]=0xc7;s.ee.cop0[3]=0;ps2::tlbwi(s.ee);
+            ps2::st32(0x3000,0x11223344);s.record_code_word(0x40000000,0x11223344);syscall(s,0x64);
+            ps2::st32(0x3000,0);rejects([&]{syscall(s,0x64);});ps2::st32(0x3000,0x11223344);
+            s.ee.cop0[2]=0x107;ps2::tlbwi(s.ee);rejects([&]{syscall(s,0x64);});ps2::st32(0x4000,0x11223344);syscall(s,0x64);
+            s.ee.cop0[10]=0x40000001;rejects([&]{syscall(s,0x64);});
+            std::puts("code checks: first/middle/last word, page edge, same-size registration, aliases, TLB remapping and ASID negatives PASS");
+            std::printf("synthetic complete-code verification: words=%u passes=%u first_ms=%.4f steady_ms=%.4f modified_word_rejected=1\n",count,passes,std::chrono::duration<double,std::milli>(first-start).count(),std::chrono::duration<double,std::milli>(end-first).count()/passes);return 0;
+        }
         rejects([] { Console second; });
         ps2::st32(0x1000, 0x12345678);
         require(ps2::ld8(0x1000) == 0x78, "Little endian memory");
@@ -70,7 +92,7 @@ int main() {
         s.service_interrupts();
         require(ps2::ld32(0x9800)==2 && ps2::ld32(0x9804)==0x12345678 && !s.intc_status && s.ee.pc==0x1234 && s.ee.vu0.vf[2].w[0]==77,"Interrupt arguments, acknowledgement, continuation and shared VU0 state survive callback");
         syscall(s,0x11,2,irq_id);s.intc_mask=0;s.ee.cop0[12]=0;
-        s.code_words[0x1000]=0xabcdef01;
+        s.record_code_word(0x1000,0xabcdef01);
         syscall(s,0x64);
         ps2::st32(0x1000,0);
         rejects([&] { syscall(s,0x64); });

@@ -224,7 +224,14 @@ public:
     std::map<std::uint32_t, const ps2::UnitInfo*> aot;
     std::vector<const ps2::ModuleInfo*> aot_modules;
     std::string output;
+    void record_code_word(std::uint32_t pc,std::uint32_t word);
+    void verify_code_words();
+private:
     std::map<std::uint32_t,std::uint32_t> code_words;
+    struct CodeCheck {std::uint32_t pc;std::size_t first,count;};
+    std::vector<CodeCheck> code_checks;
+    std::vector<std::uint32_t> expected_code;
+public:
     std::uint64_t ticks{},execution_limit{100000000};
     std::uint32_t stack_base{}, heap_end{};
     // shortcut: headless ELF settings start at zero; firmware sessions must supply the matched profile/NVM settings.
