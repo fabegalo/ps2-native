@@ -34,11 +34,15 @@ void Console::sio2_input_byte(std::uint8_t value){
         const auto wire=std::max(length,receive);
         const auto size=iop_sio2_block_size?((wire+iop_sio2_block_size-1)/iop_sio2_block_size)*iop_sio2_block_size:wire;
         if(size>32768-iop_sio2_output.size())throw std::runtime_error("SIO2 receive FIFO limit reached");
-        // No host peripheral is attached yet: an open serial bus returns FF, never a successful pad/card response.
-        iop_sio2_output.insert(iop_sio2_output.end(),wire,0xff);
+        const auto port=descriptor&1;auto& pad=pads[port];
+        std::vector<std::uint8_t> reply(wire,0xff);
+        const bool connected=protocol==1 && pad.connected;
+        if(connected)pad.exchange(iop_sio2_input,reply);
+        iop_sio2_output.insert(iop_sio2_output.end(),reply.begin(),reply.end());
         iop_sio2_output.insert(iop_sio2_output.end(),size-wire,0);
         iop_sio2_status=(iop_sio2_status&0x300)?((iop_sio2_status&~0x300u)|0x200):iop_sio2_status|0x100;
-        iop_sio2_status|=0x1000|((descriptor&1) && protocol!=0x21?0x2d000:0x1d000);
+        iop_sio2_status|=0x1000;
+        if(!connected)iop_sio2_status|=port && protocol!=0x21?0x2d000:0x1d000;
         iop_sio2_input.clear();iop_sio2_received=0;++iop_sio2_command;
     }
 }

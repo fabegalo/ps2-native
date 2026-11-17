@@ -236,7 +236,7 @@ actual counts, waiters and original metadata. Context switches preserve processo
 COP0/interrupt and performance state, correcting the deadlock when a new EE thread
 previously replaced those registers with zero. A negative regression reproduced the
 loss before the correction. SIO2 PIO/IRQ probing follows patches 0062/0065 and reports
-the actual open bus: no host controller/card is attached. Serial DMA11/12 now consume
+the actual open bus for absent host controllers/cards. Serial DMA11/12 now consume
 that same FIFO and IOP RAM, retain disabled descriptors and receiver-first waits, and
 complete on the shared clock through native IRQ44/45. DMACMAN slice/start imports reuse
 patch 0062's register contract. Invalid/zero SIF DMA IDs now report no transfer rather
@@ -256,9 +256,28 @@ SHA-256 `4d0133c7f791dcd4f1490dbf9d6db46cee07c2f3da15ef883d4a9132fe65a990`.
 Earlier and later captures are black; GS traces show the guest palette/texture uploads
 and textured sprites. A bounded continuation reaches tick 4999999168 / 1016 VBlanks
 without another unsupported call, with original PADMAN still seeing disconnected ports.
-These are real guest pixels, not gameplay evidence. DS2 protocol/host-input integration
-was proposed for maintainer validation; preserve original PADMAN and this Console's
-state, DMA, callbacks and SIF when connecting input.
+These are real guest pixels, not gameplay evidence.
+
+Maintainer decision (2026-11-16): reuse the pinned SDL3 audio dependency for portable
+host DS2 input. SDL gamepads and focused SDL-window keyboard input update this Console's
+per-port DS2 state; original PADMAN/SIO2MAN still negotiate modes, poll packets and
+command motors through the existing SIO2 FIFO/DMA/interrupt path. No XInput-specific
+adapter or second input/runtime state is introduced. Sticks retain their center/range;
+pressure uses real SDL axes/bindings where present, with digital endpoints otherwise.
+Rumble is submitted only when SDL reports support. Hot unplug restores the absent-device
+wire response. `--input on` opens the SDL input/presentation window; `--input off` is
+headless. `--input-script` explicitly attaches an SDL virtual gamepad for bounded,
+reproducible button input (VBlank frame / hexadecimal pressed PS2 button mask), not
+physical-controller evidence or direct guest-memory injection. The SDL window title
+reports rolling emulation speed and VBlanks/s, not unique gameplay frames/s.
+
+Original Super Bust-A-Move reaches Round A1 through this input path. The maintainer
+confirmed manual navigation and launcher control in the SDL window; a real GS capture
+at tick 19842662400 / 4036 VBlanks shows bubbles, launcher and scoring. SPU2 outputs
+nonzero PCM. Performance remains insufficient (the observed window fell to 0.06x in
+one interval); reaching gameplay is not a full fidelity or performance certification.
+The former fixed cumulative IOP instruction cap now derives from the same bounded
+Console clock (eight EE ticks per IOP instruction), with a negative budget regression.
 
 The optional original-module regression now exercises the complete four-service IOPRP
 boot, the original SECRMAN dependency, a native CDVDMAN CAV read with exact supplied

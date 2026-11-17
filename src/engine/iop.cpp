@@ -209,7 +209,8 @@ void Console::step_iop() {
     if (!iop_instructions) iop_first_tick=ticks;
     iop_last_tick=ticks;
     if (iop.pc==0xfffffff0) { iop_active=false; iop_result=static_cast<std::int32_t>(iop.gpr[2]); return; }
-    if (iop_instructions++>=10000000) throw std::runtime_error("IOP instruction limit reached");
+    // One IOP instruction per eight EE ticks; long sessions share the Console run bound.
+    if (iop_instructions++>=execution_limit/8+1) throw std::runtime_error("IOP instruction limit reached");
     if(iop.pc==0xffffffa0){
         auto& stack=iop_native_calls.at(iop_current);auto call=std::move(stack.back());stack.pop_back();const auto result=iop.gpr[2];iop=call.saved;call.finish(result);return;
     }

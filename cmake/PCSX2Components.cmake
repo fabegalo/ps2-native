@@ -45,16 +45,20 @@ target_link_libraries(kzspu2_test PRIVATE kzspu2)
 target_compile_features(kzspu2_test PRIVATE cxx_std_20)
 target_compile_definitions(kzspu2_test PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
 
-# Host audio output: SDL3 (Zlib), the same commit as ReXGlue, audio subsystem only.
+# Host audio output: SDL3 (Zlib), the same commit as ReXGlue, audio and approved DS2 input/window subsystems.
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/fetch-pcsx2-components.py"
     --group host_libraries --check --source-root "${PS2N_DEVICE_SOURCE_ROOT}" RESULT_VARIABLE _host_check)
 if(NOT _host_check EQUAL 0)
     message(FATAL_ERROR "Pinned host libraries missing or modified; run scripts/fetch-pcsx2-components.py --group host_libraries")
 endif()
-foreach(_option SHARED TEST_LIBRARY INSTALL VIDEO GPU RENDER CAMERA JOYSTICK HAPTIC HIDAPI SENSOR POWER DIALOG TRAY)
+foreach(_option SHARED TEST_LIBRARY INSTALL GPU RENDER CAMERA SENSOR POWER DIALOG TRAY)
     set(SDL_${_option} OFF CACHE BOOL "" FORCE)
 endforeach()
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_AUDIO ON CACHE BOOL "" FORCE)
+set(SDL_VIDEO ON CACHE BOOL "" FORCE)
+set(SDL_JOYSTICK ON CACHE BOOL "" FORCE)
+set(SDL_HAPTIC ON CACHE BOOL "" FORCE)
+set(SDL_HIDAPI ON CACHE BOOL "" FORCE)
 set(SDL_UNIX_CONSOLE_BUILD ON CACHE BOOL "" FORCE)
 add_subdirectory("${PS2N_DEVICE_SOURCE_ROOT}/external/sdl3" sdl3 EXCLUDE_FROM_ALL SYSTEM)

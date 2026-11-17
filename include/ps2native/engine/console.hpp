@@ -1,4 +1,5 @@
 #pragma once
+#include "ps2native/engine/pad.hpp"
 #include "ps2/generated.hpp"
 #include "iop_cpu.h"
 #include "iop_memory.h"
@@ -41,6 +42,8 @@ public:
     bool iop_boot_active{};
     void iop_boot_step();
     std::filesystem::path iop_rom0;
+    std::array<Pad,2> pads;
+    std::function<void()> input_poll;
     std::array<std::uint32_t,24> iop_sio2_send{};
     std::uint32_t iop_sio2_control=0x3bc,iop_sio2_status=0x1d100,iop_sio2_interrupt=0,iop_sio2_command=0;
     std::vector<std::uint8_t> iop_sio2_input;

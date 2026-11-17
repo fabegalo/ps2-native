@@ -3,6 +3,7 @@
 #include "iop_cdvd.hpp"
 #include <cstdio>
 #include <algorithm>
+#include "engine_input.hpp"
 #include "ps2/os.hpp"
 #include "aot_image.hpp"
 #include "ps2native/sha256.hpp"
@@ -14,7 +15,7 @@ void register_generated_code();
 void register_generated_vu();
 int main(int argc,char** argv) {
     try {
-        std::filesystem::path iop_input,iop_output,capture,rom0,disc;std::string profile;auto medium=ps2native::engine::IopCdvd::Medium::Auto;
+        std::filesystem::path iop_input,iop_output,capture,rom0,disc,input_script;bool input_window=false;std::string profile;auto medium=ps2native::engine::IopCdvd::Medium::Auto;
         unsigned present_ms=0;std::uint64_t max_ticks=100000000;bool extended=true,audio_output=true;
         for(int n=1;n<argc;++n) {
             if(n+1>=argc)throw std::runtime_error("Engine option requires a value");
@@ -24,17 +25,19 @@ int main(int argc,char** argv) {
             else if(option=="--disc")disc=ps2::os::path(argv[n]);
             else if(option=="--disc-type"){const std::string type=argv[n];if(type=="cd")medium=ps2native::engine::IopCdvd::Medium::Cd;else if(type=="dvd")medium=ps2native::engine::IopCdvd::Medium::Dvd;else throw std::runtime_error("Invalid physical disc type");}
             else if(option=="--profile")profile=argv[n];
-            else if(option=="--max-ticks"){max_ticks=std::stoull(argv[n]);if(!max_ticks || max_ticks>10000000000ull)throw std::runtime_error("Logical run limit must be in 1..10000000000");}
+            else if(option=="--max-ticks"){max_ticks=std::stoull(argv[n]);if(!max_ticks || max_ticks>100000000000ull)throw std::runtime_error("Logical run limit must be in 1..100000000000");}
             else if(option=="--cdvd-modules"){const std::string family=argv[n];if(family!="legacy" && family!="extended")throw std::runtime_error("Unknown original CDVD module family");extended=family=="extended";}
             else if(option=="--rom0")rom0=ps2::os::path(argv[n]);
             else if(option=="--audio-output"){const std::string mode=argv[n];if(mode!="on" && mode!="off")throw std::runtime_error("Audio output must be on or off");audio_output=mode=="on";}
+            else if(option=="--input"){const std::string mode=argv[n];if(mode!="on" && mode!="off")throw std::runtime_error("Input must be on or off");input_window=mode=="on";}
+            else if(option=="--input-script")input_script=ps2::os::path(argv[n]);
             else if(option=="--capture")capture=ps2::os::path(argv[n]);
             else if(option=="--present-ms")present_ms=std::stoul(argv[n]);
             else throw std::runtime_error("Unknown engine option");
         }
         if(present_ms>5000)throw std::runtime_error("Presentation limit is 5000 ms");
         if(iop_input.empty()!=iop_output.empty())throw std::runtime_error("IOP input and observation must be supplied together");
-        const auto protect=[&](const std::filesystem::path& output){if(output.empty() || !std::filesystem::exists(ps2native::native_io_path(output)))return;for(const auto& input:{ps2::os::path(PS2N_ENGINE_ELF),iop_input,rom0,disc})if(!input.empty() && ps2native::files_equivalent(output,input))throw std::runtime_error("Observation must not overwrite original content");};
+        const auto protect=[&](const std::filesystem::path& output){if(output.empty() || !std::filesystem::exists(ps2native::native_io_path(output)))return;for(const auto& input:{ps2::os::path(PS2N_ENGINE_ELF),iop_input,rom0,disc,input_script})if(!input.empty() && ps2native::files_equivalent(output,input))throw std::runtime_error("Observation must not overwrite original content");};
         protect(capture);protect(iop_output);
         ps2native::engine::Console console;
         if (ps2native::sha256_file(ps2::os::path(PS2N_ENGINE_ELF)) != kAotElfHash)
@@ -55,6 +58,7 @@ int main(int argc,char** argv) {
         }
         if(!profile.empty()){console.cdvd->hardware=ps2native::find_console_hardware(profile);if(!console.cdvd->hardware)throw std::runtime_error("Unknown CDVD console profile");}
         if(!disc.empty())console.cdvd->mount(disc,medium);
+        std::unique_ptr<EngineInput> input;if(input_window || !input_script.empty())input=std::make_unique<EngineInput>(console,input_window,input_script);
         try {if(!rom0.empty())console.boot_cdvd(rom0,extended); console.run(); }
 
         catch (const ps2native::engine::MissingAotEntry& missing) {
@@ -75,6 +79,8 @@ int main(int argc,char** argv) {
         catch (...) {
             if(console.graphics_initialized && !capture.empty()){try{ps2native::engine::capture_graphics(console,capture);}catch(const std::exception& e){std::fprintf(stderr,"[frame] no failure-boundary capture: %s\n",e.what());}}
             std::fprintf(stderr,"[engine-state] ee_pc=%08X tick=%llu iop_pc=%08X gs=%d vblanks=%llu sif_ms=%08X sif_sm=%08X rpc_absent=%08X\n",console.ee.pc,static_cast<unsigned long long>(console.ticks),console.iop.pc,console.graphics_initialized,static_cast<unsigned long long>(console.graphics_frames),console.sif.msflag,console.sif.smflag,console.rpc_missing_server.value_or(0));
+            std::fprintf(stderr,"[engine-counters] iop_instructions=%llu sif_started=%u sif_completed=%u\n",static_cast<unsigned long long>(console.iop_instructions),console.sif.transfer_id,console.sif.completed_id);
+            if(std::getenv("PS2N_ENGINE_STATE_HASH"))std::fprintf(stderr,"[engine-state-hash] ee_ram=%s iop_ram=%s vu0_code=%s vu1_code=%s vu0_mem=%s vu1_mem=%s\n",ps2native::sha256_hex(console.ram).c_str(),ps2native::sha256_hex(console.iop_ram).c_str(),ps2native::sha256_hex(console.vu0_code).c_str(),ps2native::sha256_hex(console.vu1_code).c_str(),ps2native::sha256_hex(console.vu0_memory).c_str(),ps2native::sha256_hex(console.vu1_memory).c_str());
             for(const auto& [id,t]:console.threads)if(t.state!=ps2native::engine::Console::ThreadState::Dormant)
                 std::fprintf(stderr,"[engine-ee-thread] id=%u state=%u priority=%u pc=%08X wait=%u\n",id,static_cast<unsigned>(t.state),t.priority,id==console.current?console.ee.pc:t.context.pc,t.wait);
             for(const auto& [id,t]:console.iop_threads)if(t.status!=16)

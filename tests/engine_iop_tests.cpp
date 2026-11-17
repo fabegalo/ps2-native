@@ -54,6 +54,9 @@ int main() {
         c.run_iop();check(c.iop_read(0x7a00,4)==2 && !(c.iop_read(0xbf801548,4)&0x1000000) && !(c.iop_read(0xbf801558,4)&0x1000000),"Both SIO2 DMA deadlines invoke their actual R3000A handlers and retire channel STR");
         check(c.iop_read(0xbf801540,4)==0x6410 && c.iop_read(0xbf801550,4)==0x6510,"Serial DMA uses the shared IOP RAM and advances both addresses");
         for(unsigned i=0;i<16;++i)check(c.iop_read(0x6500+i,1)==(i<3?0xff:0),"Open-bus wire replies and DMA block padding remain distinct");
+        c.iop_active=true;c.iop.pc=0x6800;c.iop_instructions=10000000;c.iop_write(0x6800,0,4);
+        c.step_iop();check(c.iop_instructions==10000001,"Long IOP sessions use the shared logical execution budget, not a fixed cumulative cap");
+        c.execution_limit=80000000;rejects([&]{c.step_iop();});c.execution_limit=100000000;
         c.reset_iop();c.initialize_sif();c.ticks=0;c.iop_instructions=0;c.iop={};c.iop_next_tick=0;
         c.sif.transfer_id=2;c.sif.completed_id=1;
         for(const auto id:{0u,1u,3u}){c.iop.gpr[4]=id;c.iop_import("sifman",8);check(static_cast<std::int32_t>(c.iop.gpr[2])==-1,"Unknown, zero and completed DMA identifiers cannot fabricate a busy transfer");}

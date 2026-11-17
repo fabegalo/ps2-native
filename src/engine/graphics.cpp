@@ -31,6 +31,7 @@ void Console::initialize_graphics() {
 // Same deterministic NTSC/PAL timing profile as the pinned GS host; not hardware cycle certification.
 void Console::graphics_vblank() {
     iop_vblank_edge(0);++graphics_frames;intc_status|=1u<<2;ps2::gs::vblank(true);
+    if(input_poll)input_poll();
     const auto period=294912000u/(gs_options.pal ? 50u : 60u);
     const auto hblank=period*2/(gs_options.pal ? 625u : 525u);
     graphics_events[3]={ticks+hblank*22,[this]{iop_vblank_edge(1);intc_status|=1u<<3;ps2::gs::vblank(false);}};
