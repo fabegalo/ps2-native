@@ -140,3 +140,8 @@ if(BUILD_TESTING)
     add_test(NAME engine-pad COMMAND ps2n-engine-pad-tests)
     set_tests_properties(engine-pad PROPERTIES TIMEOUT 15)
 endif()
+
+if(BUILD_TESTING)
+    add_test(NAME engine-prepare COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/engine_prepare_tests.py" "$<TARGET_FILE:ps2n-ee-recomp>")
+    set_tests_properties(engine-prepare PROPERTIES TIMEOUT 30)
+endif()
