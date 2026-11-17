@@ -25,6 +25,8 @@ Console::Console() : ram(ps2::kRamSize), scratchpad(ps2::kScratchpadSize), iop_r
     ps2::g_live_tlb_enabled=false;
     ee.vu0.vf[0].w[3]=0x3f800000;vu1_regs.vf[0].w[3]=0x3f800000;
     ee.budget = 100000;
+    gs_private[11]=0x551B4000;gs_private[12]=0x7f00;
+    graphics_events[2]={294912000u/60u,[this]{graphics_vblank();}};
     ps2::g_live_ram = ram.data();
     ps2::g_live_spr = scratchpad.data();
 }
@@ -102,12 +104,14 @@ void Console::load(const std::filesystem::path& path) {
     reset_iop();
     advancing=false;
     threads.clear(); semaphores.clear(); handlers.clear();interrupt_order.clear();in_interrupt=false;
-    aot.clear(); aot_modules.clear(); code_words.clear(); code_checks.clear(); expected_code.clear(); syscall_handlers.clear(); dma_registers.clear(); sif_registers.clear();
+    aot.clear(); aot_modules.clear(); code_words.clear(); code_checks.clear(); expected_code.clear(); dma_registers.clear(); sif_registers.clear();
     dma_registers[0x1000e000]=1; // Standalone ELF kernel environment starts with DMA enabled.
-    output.clear(); current=1; order=0; ticks=0; stack_base=0; heap_end=0;
+    boot_path.clear();output.clear(); current=1; order=0; ticks=0; stack_base=0; heap_end=0;
     exited=false; exit_code=0; intc_mask=0; intc_status=0; dmac_status=0;
     vif_state={};gif_paths={};gif_scans={};gif_held={};gif_status=0;graphic_dma={};graphics_events.clear();
     graphics_initialized=false;graphics_frames=0;gs_state={};gs_private={};gs_display={};gs_buffers={};gs_finish_pending=gs_finish_queued=0;gs_odd_field=false;
+    gs_private[11]=0x551B4000;gs_private[12]=0x7f00;
+    graphics_events[2]={294912000u/(gs_options.pal?50u:60u),[this]{graphics_vblank();}};
     std::fill(gs_vram.begin(),gs_vram.end(),0);
     for (auto& timer : timers) timer = {};
     for (auto& entry : tlb) entry = {};
@@ -173,6 +177,7 @@ std::uint64_t Console::next_event_tick() const {
     std::uint64_t event=std::min(cdvd->due,audio_next_tick());
     for(const auto due:iop_sio2_dma_due)event=std::min(event,due);
     for(const auto& [id,a]:iop_alarms)if(!a.pending)event=std::min(event,std::max(ticks,a.target));
+    for(const auto& t:iop_timers)event=std::min(event,t.due);
     for(const auto& t:timers)event=std::min(event,t.due);
     if(iop_work_pending() || iop_boot_active)event=std::min(event,iop_next_tick);
     for(const auto& [id,e]:graphics_events)event=std::min(event,e.first);
@@ -193,6 +198,11 @@ void Console::advance_to(std::uint64_t target) {
             if(audio_event)advance_audio();
             const bool boot_event=iop_boot_active && iop_next_tick==event;
             for(auto& [id,a]:iop_alarms)if(!a.pending && a.target<=event){const bool idle=!iop_work_pending();a.pending=true;if(idle)iop_next_tick=std::max(iop_next_tick,ticks+8);}
+            constexpr unsigned timer_irq[]={4,5,6,14,15,16};
+            for(unsigned k=0;k<6;++k)if(iop_timers[k].due==event){
+                auto& t=iop_timers[k];t.due=~0ull;t.count=0;t.base=ticks;t.mode|=0x800;iop_pending_irqs|=1u<<timer_irq[k];
+                if(iop_next_tick<ticks)iop_next_tick=ticks+8;
+            }
             if(cdvd->due==event)cdvd->complete();
             for(unsigned n=0;n<2;++n)if(iop_sio2_dma_due[n]==event)complete_sio2_dma(n);
             for(auto it=graphics_events.begin();it!=graphics_events.end();) {
@@ -504,18 +514,22 @@ void syscall(Cpu& c, std::uint32_t pc) {
     if (n == 0x68) n = 0x64;
     if (std::getenv("PS2N_ENGINE_TRACE"))
         std::fprintf(stderr,"[sys] t%u %02X pc=%08X a=%08X %08X %08X\n",s.current,n,pc,a0,a1,a2);
-    if (const auto custom=s.syscall_handlers.find(n); custom != s.syscall_handlers.end() && custom->second) {
-        const auto resume=c.pc;
-        const auto return_address=c.r[31];
-        c.pc=custom->second; c.r[31].w[0]=0xffffffe4;
+    constexpr auto table_base=ps2native::engine::Console::syscall_table&0x1fffffff;
+    constexpr auto table_limit=ps2native::engine::Console::kernel_data_limit;
+    const auto handler=n<(table_limit-table_base)/4 ? load<std::uint32_t>(s.ram.data()+table_base+n*4) : 0;
+    if (handler) {
+        if(handler&3)throw std::runtime_error("Unaligned registered syscall handler");
+        const auto resume=c.pc,base=c.base,sa=c.sa;const auto regs=std::to_array(c.r);const auto hi=c.hi,lo=c.lo;
+        const auto restore=[&]{std::copy(regs.begin(),regs.end(),c.r);c.hi=hi;c.lo=lo;c.sa=sa;c.pc=resume;c.base=base;};
+        c.pc=handler; c.r[31].w[0]=0xffffffe4;
         try {
             do {
                 c.pc &= ~kUnwind;
                 dispatch(c,0,0);
                 if (s.reschedule_requested) throw std::runtime_error("Blocking custom syscall is not supported");
             } while ((c.pc & ~kUnwind) != 0xffffffe4);
-        } catch (...) { c.r[31]=return_address; c.pc=resume; throw; }
-        c.r[31]=return_address; c.pc=resume;
+        } catch (...) {restore();throw;}
+        const auto result=c.r[2];restore();c.r[2]=result;
         return;
     }
     std::int64_t result{};
@@ -685,8 +699,14 @@ void syscall(Cpu& c, std::uint32_t pc) {
         std::memcpy(out,fields,sizeof(fields));result=a0;break;
     }
     case 0x3c: {
+        const auto a3=c.r[7].w[0];
         const auto top = a1 == 0xffffffff ? kRamSize - 4096 : a1 + a2;
         if (a2 > top || top > kRamSize || top < context_reserve) throw std::runtime_error("Invalid thread stack");
+        if(a3 && !s.boot_path.empty()){
+            if(s.boot_path.size()>255)throw std::runtime_error("Boot argument exceeds CRT payload");
+            auto* args=mapped(a3,0x144,true);std::memset(args,0,0x144);
+            store(args,1u);store(args+4,a3+0x44);std::memcpy(args+0x44,s.boot_path.c_str(),s.boot_path.size()+1);
+        }
         s.stack_base = top - a2;
         auto& t=s.threads.at(s.current);
         t.stack=s.stack_base; t.size=a2; t.gp=a0; t.initial_priority=t.priority;
@@ -701,8 +721,9 @@ void syscall(Cpu& c, std::uint32_t pc) {
         s.verify_code_words();
         break;
     case 0x74:
-        if (a0 >= 256 || (a1&3)) throw std::runtime_error("Invalid SetSyscall slot/address");
-        result=s.syscall_handlers[a0]; s.syscall_handlers[a0]=a1; break;
+        {const auto offset=std::int64_t{table_base}+std::int64_t{static_cast<std::int32_t>(a0)}*4;
+        if(offset<0 || offset>table_limit-4 || (a0<256 && (a1&3)))throw std::runtime_error("Invalid SetSyscall slot/address");
+        const auto address=0x80000000u|static_cast<std::uint32_t>(offset);result=ld32(address);st32(address,a1);break;}
     case 0x79: s.sif_setreg(a0,a1); break;
     case 0x7a: result=s.sif_getreg(a0); break;
     case 0x77: result=s.sif_dma(a0,a1); break;
@@ -832,6 +853,11 @@ std::uint8_t* vu0_data() { return active_console().vu0_memory.data(); }
 bool cpcond0(Cpu&) {auto& c=active_console();const auto selected=c.dma_registers[0x1000e020]&0x3ff;return (c.dmac_status&selected)==selected;}
 std::uint32_t mfc0(Cpu& c, std::uint32_t reg, std::uint32_t sel) { if (sel) unsupported("COP0 select", reg); return c.cop0[reg]; }
 void mtc0(Cpu& c, std::uint32_t reg, std::uint32_t value) { c.cop0[reg] = value; }
+// R5900 ERET: ERL/ErrorEPC takes priority; otherwise clear EXL and return to EPC.
+std::uint32_t eret(Cpu& c) {
+    if(c.cop0[12]&4u){c.cop0[12]&=~4u;return c.cop0[30];}
+    c.cop0[12]&=~2u;return c.cop0[14];
+}
 // FCR aliases and masks from exoteric33 cop.cpp at the pinned MIT revision.
 std::uint32_t cfc1(Cpu& c, std::uint32_t reg) { return reg<16 ? 0x2e30u : c.fcr31|0x01000001u; }
 void ctc1(Cpu& c, std::uint32_t reg, std::uint32_t v) { if (reg==31) c.fcr31=v&0x0083c078u; }

@@ -64,9 +64,10 @@ public:
     std::uint32_t iop_alarm_next=1,iop_alarm_active=0;
     static constexpr std::uint64_t iop_alarm_min=100ull*36864/1000; // PS2SDK threadman: 100 us.
     bool iop_alarm_step();
-    struct IopTimer {std::uint32_t users{},mode{},count{},compare{},prescale{1};std::uint64_t base{};};
+    struct IopTimer {std::uint32_t users{},mode{},count{},compare{},prescale{1},setup{},handler{},argument{},gp{};std::uint64_t base{},due{~0ull};};
     std::array<IopTimer,6> iop_timers{};
     std::uint32_t iop_timer_counter(unsigned index) const;
+    void refresh_iop_timer(unsigned index);
     struct IopVblankHandler {std::uint32_t edge{},priority{},function{},argument{},gp{};std::uint64_t order{};};
     std::vector<IopVblankHandler> iop_vblank_handlers;
     std::deque<IopVblankHandler> iop_vblank_jobs;
@@ -82,7 +83,7 @@ public:
     std::map<std::uint32_t,IopModule> iop_modules;
     std::map<std::string,IopLibrary> iop_libraries;
     std::map<std::uint32_t,std::uint32_t> iop_allocations;
-    std::uint32_t iop_allocate(std::uint32_t bytes);
+    std::uint32_t iop_allocate(std::uint32_t bytes,bool from_top=false);
     void iop_release(std::uint32_t address);
     bool iop_loader_import(const std::string& library,std::uint32_t ordinal,std::uint32_t version=0);
     void iop_module_return();
@@ -246,10 +247,12 @@ public:
     std::map<std::uint32_t, InterruptHandler> handlers;
     std::vector<std::uint32_t> interrupt_order;
     bool in_interrupt{};
+    std::string boot_path;
     std::uint32_t intc_mask{}, intc_status{}, dmac_status{};
     std::map<std::uint32_t,std::uint32_t> dma_registers;
     std::map<std::uint32_t,std::uint32_t> sif_registers;
-    std::map<std::uint32_t,std::uint32_t> syscall_handlers;
+    // Existing compatibility-kernel data ABI; registered handlers live in the shared EE RAM.
+    static constexpr std::uint32_t syscall_table=0x80011f80,kernel_data_limit=0x80000;
     // HLE-owned IOP service region, not a hardware-mandated guest address.
     struct Sif {
         std::uint32_t command_buffer{}, main_address{}, ee_receive{}, msflag{}, smflag{};
@@ -257,6 +260,7 @@ public:
         std::int32_t dma_status(std::uint32_t id) const {return id && id>completed_id && id<=transfer_id?0:-1;}
         struct IopHandler { std::uint32_t entry{},argument{},gp{}; };
         std::map<std::uint32_t,IopHandler> iop_handlers;
+        std::deque<IopHandler> dma_callbacks;
         std::deque<std::pair<IopHandler,std::vector<std::uint8_t>>> iop_commands;
         std::array<std::uint32_t,32> iop_sregs{};
         std::map<std::uint32_t,std::uint32_t> tty_descriptors{{0,1},{1,2},{2,2}};

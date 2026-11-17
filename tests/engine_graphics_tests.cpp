@@ -13,7 +13,12 @@ static void upload(unsigned base,unsigned psm,unsigned w,unsigned h,const std::v
 }
 int main(){
  try{
-  ps2native::engine::Console c;c.initialize_graphics();
+  ps2native::engine::Console c;
+  constexpr auto period=294912000u/60u;
+  c.advance_to(period-1);check(!c.graphics_initialized && !(c.intc_status&4) && c.graphics_frames==0,"Video clock cannot raise VBlank early or initialize a renderer");
+  c.advance_to(period);check(!c.graphics_initialized && (c.intc_status&4) && c.graphics_frames==1 && c.gs_odd_field,"VBlank runs before any GS access on the shared Console clock");
+  const auto next=c.graphics_events.at(2).first,csr=c.gs_private[11];
+  c.initialize_graphics();check(c.graphics_events.at(2).first==next && c.gs_private[11]==csr && c.gs_odd_field,"Lazy renderer initialization preserves video phase, CSR and field");
   c.ee.r[3].w[0]=0x71;c.ee.r[4].d[0]=0xff00;ps2::syscall(c.ee,0x1000);
   c.ee.r[3].w[0]=0x70;ps2::syscall(c.ee,0x1000);check(c.ee.r[2].d[0]==0xff00 && gs::read_privileged(0x1010)==0xff00,"GS mask syscalls access the same privileged register");
   c.ee.r[3].w[0]=2;c.ee.r[4].w[0]=1;c.ee.r[5].w[0]=2;c.ee.r[6].w[0]=1;ps2::syscall(c.ee,0x1000);check(c.gs_crt_mode==2 && !c.gs_options.pal && c.gs_private[2]==3,"Original CRT syscall configures the existing GS display mode");
@@ -75,8 +80,8 @@ int main(){
    if(path==1)reference=memory;else check(memory==reference,"GIF PATH1/2/3 full-VRAM matched boundaries");
    std::printf("graphics: GIF ingress=%u full-VRAM PASS\n",path);
   }
-  const auto before=c.graphics_frames;c.advance_to(294912000u/60u);
-  check(c.graphics_frames==before+1 && (c.intc_status&4) && (gs::read_privileged(0x12001000)&0x2000),"VBlank event and GS field share the Console clock");
+  const auto before=c.graphics_frames;c.advance_to(period*2);
+  check(c.graphics_frames==before+1 && (c.intc_status&4) && !(gs::read_privileged(0x12001000)&0x2000),"VBlank event and GS field share the Console clock");
   gs::write_privileged(0x12000000,1);gs::write_privileged(0x12000070,1ull<<9);gs::write_privileged(0x12000080,(31ull<<32)|(31ull<<44));
   std::vector<std::uint32_t> pixels;std::uint32_t w=0,h=0;
   check(gs::display(pixels,w,h)&&w==32&&h==32,"GS compute framebuffer readback");

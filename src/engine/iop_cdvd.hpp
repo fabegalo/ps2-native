@@ -20,11 +20,14 @@ public:
     std::vector<std::uint8_t> nparams,sparams;
     std::deque<std::uint8_t> sresults;
     std::uint8_t ncommand{},scommand{},irq{},error{},status{},howto{0x80};
+    bool spinning{};
+    std::uint8_t spindle{};
     std::uint64_t due{~0ull},rtc_epoch{},sector_ticks{};
     std::uint32_t position{},remaining{},read_lba{},active_irq{2};
     std::uint32_t read(std::uint32_t address,unsigned bytes);
     void write(std::uint32_t address,std::uint32_t value,unsigned bytes);
     void complete();
+    std::array<std::uint8_t,2048> dvd_toc();
     void scmd(std::uint8_t command);
     void mount(const std::filesystem::path& path,Medium kind=Medium::Auto);
     bool irq_ready() const;

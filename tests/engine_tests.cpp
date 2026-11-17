@@ -17,6 +17,7 @@ static std::int64_t syscall(Console& s, std::uint32_t n, std::uint32_t a=0, std:
     return s.ee.r[2].sd[0];
 }
 static void irq(ps2::Cpu& c,std::uint32_t,std::uint32_t){ps2::st32(0x9800,c.r[4].w[0]);ps2::st32(0x9804,c.r[5].w[0]);c.vu0.vf[2].w[0]=77;c.r[2].sw[0]=-1;c.pc=c.r[31].w[0];}
+static void syscall_clobber(ps2::Cpu& c,std::uint32_t,std::uint32_t){const auto target=c.r[31].w[0];c.r[2].w[0]=456;c.r[4].w[0]=0xdead;c.r[28].w[0]=0xdead;c.r[29].w[0]=0;c.hi.w[0]=0;c.lo.w[0]=0;c.sa=0;c.pc=target;}
 static void unit(ps2::Cpu& c, std::uint32_t, std::uint32_t) { c.r[2].w[0] = 123; c.pc = c.r[31].w[0]; }
 int main(int argc,char** argv) {
     try {
@@ -42,6 +43,13 @@ int main(int argc,char** argv) {
             std::puts("code checks: first/middle/last word, page edge, same-size registration, aliases, TLB remapping and ASID negatives PASS");
             std::printf("synthetic complete-code verification: words=%u passes=%u first_ms=%.4f steady_ms=%.4f modified_word_rejected=1\n",count,passes,std::chrono::duration<double,std::milli>(first-start).count(),std::chrono::duration<double,std::milli>(end-first).count()/passes);return 0;
         }
+        const auto saved_pc=s.ee.pc,saved_status=s.ee.cop0[12],saved_epc=s.ee.cop0[14],saved_error=s.ee.cop0[30];
+        s.ee.cop0[14]=0x12345678;s.ee.cop0[30]=0x87654320;s.ee.cop0[12]=0x10003;
+        s.ee.pc=ps2::eret(s.ee);require(s.ee.pc==0x12345678 && s.ee.cop0[12]==0x10001,"ERET returns EPC and clears only EXL");
+        s.ee.cop0[12]=0x10007;s.ee.pc=ps2::eret(s.ee);require(s.ee.pc==0x87654320 && s.ee.cop0[12]==0x10003,"ERL/ErrorEPC has priority while preserving EXL and other status bits");
+        s.ee.pc=ps2::eret(s.ee);require(s.ee.pc==0x12345678 && s.ee.cop0[12]==0x10001,"Nested error return permits the subsequent exception return");
+        s.ee.cop0[12]=0x10004;s.ee.pc=ps2::eret(s.ee);require(s.ee.pc==0x87654320 && s.ee.cop0[12]==0x10000,"ERET cannot fabricate global interrupt enable");
+        s.ee.pc=saved_pc;s.ee.cop0[12]=saved_status;s.ee.cop0[14]=saved_epc;s.ee.cop0[30]=saved_error;
         rejects([] { Console second; });
         ps2::st32(0x1000, 0x12345678);
         require(ps2::ld8(0x1000) == 0x78, "Little endian memory");
@@ -213,6 +221,20 @@ int main(int argc,char** argv) {
         s.ee.pc=0x123456; s.ee.r[31].w[0]=0x1234;
         syscall(s,0x74,0x55,0x1000);
         require(syscall(s,0x55)==123 && s.ee.pc==0x123456 && s.ee.r[31].w[0]==0x1234, "Installed syscall executes native guest callback and preserves continuation");
+        require(ps2::ld32(Console::syscall_table+0x55*4)==0x1000,"SetSyscall publishes its actual handler in the shared kernel table");
+        syscall(s,0x74,0x12c,0x1000);require(syscall(s,0x12c)==123,"Extended kernel table indices retain actual native handlers");
+        syscall(s,0x74,0xffffffff,0x89abcdef);require(ps2::ld32(Console::syscall_table-4)==0x89abcdef,"Signed SetSyscall offsets update kernel data in the same RAM");
+        syscall(s,0x74,0x12d,3);require(ps2::ld32(Console::syscall_table+0x12d*4)==3,"Extended kernel data slots are words, not fabricated function pointers");rejects([&]{syscall(s,0x12d);});
+        rejects([&]{syscall(s,0x74,0x40000000,0);});rejects([&]{syscall(s,0x74,0xff000000,0);});
+        ps2::st32(Console::syscall_table+0x55*4,0);rejects([&]{syscall(s,0x55);});
+        ps2::st32(Console::syscall_table+0x55*4,0x1000);require(syscall(s,0x55)==123,"Native dispatch reads guest table updates instead of a duplicate host map");
+        ps2::st32(Console::syscall_table+0x55*4,1);rejects([&]{syscall(s,0x55);});
+        static const ps2::UnitInfo clobber_info={0x1100,4,syscall_clobber,entries};s.aot[0x1100]=&clobber_info;
+        ps2::st32(Console::syscall_table+0x55*4,0x1100);s.ee.hi.w[0]=99;s.ee.lo.w[0]=101;s.ee.sa=7;
+        const auto saved_gp=s.ee.r[28],saved_sp=s.ee.r[29];
+        require(syscall(s,0x55,0x11223344)==456 && s.ee.r[4].w[0]==0x11223344 && s.ee.r[28].d[0]==saved_gp.d[0] && s.ee.r[29].d[0]==saved_sp.d[0] && s.ee.hi.w[0]==99 && s.ee.lo.w[0]==101 && s.ee.sa==7,"Custom syscall returns v0 while preserving caller integer context");
+        ps2::st32(Console::syscall_table+0x55*4,0x1000);
+
         // Fixed modules are selected by actual loaded code, never by an address alone.
         ps2::st32(0x1000,0xabcdef01);
         static const std::uint32_t checks[]={0,0xabcdef01};
@@ -256,6 +278,12 @@ int main(int argc,char** argv) {
         ps2::mtperf(s.ee,0,0);ps2::mtperf(s.ee,1,0);
         s.advance_to(s.ticks+32);
         require(ps2::mfperf(s.ee,1)==0,"Disabled performance counter stays unchanged");
+        ps2::g_live_tlb_enabled=false;s.threads.try_emplace(s.current);
+        s.boot_path="cdrom0:\\TEST_000.01;1";s.ee.r[6].w[0]=0x2000;s.ee.r[7].w[0]=0x9000;
+        require(syscall(s,0x3c,0,0x100000)==0x102000-0x2a0 && ps2::ld32(0x9000)==1 && ps2::ld32(0x9004)==0x9044 && ps2::ld32(0x9008)==0,"SetupThread publishes argc, argv and a terminated pointer table");
+        require(std::string(reinterpret_cast<const char*>(s.ram.data()+0x9044))==s.boot_path,"Boot path reaches the original CRT unchanged");
+        s.boot_path=std::string(256,'x');rejects([&]{syscall(s,0x3c,0,0x100000);});s.boot_path="cdrom0:TEST;1";
+        s.ee.r[7].w[0]=ps2::kRamSize-4;rejects([&]{syscall(s,0x3c,0,0x100000);});s.boot_path.clear();s.ee.r[7].w[0]=0;
         s.threads.clear();s.current=1;
         s.threads[1].state=Console::ThreadState::Waiting;
         rejects([&]{s.schedule();});

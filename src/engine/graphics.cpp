@@ -20,13 +20,13 @@ std::span<std::uint8_t> dma_memory(Console& c,std::uint32_t address,std::size_t 
 }
 void Console::initialize_graphics() {
     if(graphics_initialized)return;
+    const auto csr=gs_private[11],imr=gs_private[12];const auto field=gs_odd_field;
     ps2::gs::reset();
+    gs_private[11]=csr;gs_private[12]=imr;gs_odd_field=field;
     if(ps2::gs::gpu::mode()!=ps2::gs::gpu::Mode::primary)throw std::runtime_error("GS compute unavailable");
     std::vector<std::uint32_t> zero(1u<<20),clut(512);
     ps2::gs::gpu::write_state(zero,1,clut);
     graphics_initialized=true;
-    const auto period=294912000u/(gs_options.pal ? 50u : 60u);
-    graphics_events[2]={(ticks/period+1)*period,[this]{graphics_vblank();}};
 }
 // Same deterministic NTSC/PAL timing profile as the pinned GS host; not hardware cycle certification.
 void Console::graphics_vblank() {

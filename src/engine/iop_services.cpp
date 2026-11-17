@@ -14,8 +14,15 @@ void Console::iop_vblank_edge(unsigned edge){
     if(idle)iop_next_tick=std::max(iop_next_tick,ticks+8);
 }
 std::uint32_t Console::iop_timer_counter(unsigned index) const {
-    const auto& t=iop_timers.at(index);const auto value=std::uint64_t{t.count}+(ticks-t.base)/(8ull*t.prescale);
+    const auto& t=iop_timers.at(index);if(t.setup && !t.mode)return t.count;const auto value=std::uint64_t{t.count}+(ticks-t.base)/(8ull*t.prescale);
     return static_cast<std::uint32_t>(value)&(index<3?0xffffu:0xffffffffu);
+}
+// Timer scheduling/return semantics reuse PS2Recomp IopTimrman; ticks remain owned by Console.
+void Console::refresh_iop_timer(unsigned k){
+    auto& t=iop_timers.at(k);t.due=~0ull;if(!(t.mode&0x10) || !t.handler)return;
+    const auto modulus=k<3?0x10000ull:0x100000000ull;
+    auto delta=(std::uint64_t{t.compare}+modulus-iop_timer_counter(k))%modulus;if(!delta)delta=modulus;
+    t.due=ticks+delta*8*t.prescale;
 }
 bool Console::iop_services_import(const std::string& lib,std::uint32_t ordinal){
     const auto a=iop_arg(0),b=iop_arg(1),c=iop_arg(2);const auto result=[&](std::int32_t v){iop.gpr[2]=static_cast<std::uint32_t>(v);return true;};
@@ -35,7 +42,7 @@ bool Console::iop_services_import(const std::string& lib,std::uint32_t ordinal){
         }
     }
     if(lib=="timrman"){
-        if(!((ordinal>=4 && ordinal<=12) || (ordinal>=16 && ordinal<=18)))return false;
+        if(!((ordinal>=4 && ordinal<=12) || (ordinal>=16 && ordinal<=18) || ordinal==20 || (ordinal>=22 && ordinal<=24)))return false;
         constexpr std::uint32_t addresses[]={0xbf801100,0xbf801110,0xbf801120,0xbf801480,0xbf801490,0xbf8014a0};
         constexpr unsigned sources[]={11,13,1,5,1,1},widths[]={16,16,16,32,32,32},limits[]={1,1,8,1,256,256},irq[]={4,5,6,14,15,16};
         const auto id=[&](unsigned k){return ((k+1)<<28)|(addresses[k]>>4);};
@@ -52,15 +59,34 @@ bool Console::iop_services_import(const std::string& lib,std::uint32_t ordinal){
         const auto k=(a>>28)-1;
         if(k>=6 || a!=id(k) || !iop_timers[k].users)return result(-151);
         auto& t=iop_timers[k];
-        if(ordinal==6){if(!--t.users)t={};return result(0);}
+        if(ordinal==6){if(!--t.users){if(t.handler)iop_irqs.erase(irq[k]);t={};}return result(0);}
+        if(ordinal==20){
+            if(t.mode)return result(-156);if(c && ((c&3) || c>=iop_ram.size()))throw std::runtime_error("IOP timer callback outside RAM");
+            t.compare=k<3?b&65535:b;t.handler=c;t.argument=iop_arg(3);t.gp=iop.gpr[28];return result(0);
+        }
+        if(ordinal==22){
+            if(t.mode)return result(-154);if(!(sources[k]&b))return result(-152);
+            if(b!=1 || c)throw std::runtime_error("IOP external/gated hard timer setup is not integrated");
+            const auto scale=iop_arg(3);if((scale!=1 && scale!=8 && scale!=16 && scale!=256) || scale>limits[k])return result(-153);
+            t.prescale=scale;t.setup=0x80000000|(k<3?(scale==8?0x200:0):scale==8?0x2000:scale==16?0x4000:scale==256?0x6000:0);return result(0);
+        }
+        if(ordinal==23){
+            if(t.mode)return result(-154);if(!t.setup)return result(-155);
+            if(t.handler){if(iop_irqs.contains(irq[k]))return result(-104);iop_irqs.emplace(irq[k],IopIrq{t.handler,t.argument,t.gp,true});}
+            t.count=0;t.base=ticks;t.mode=t.setup|(t.handler?0x58:0);refresh_iop_timer(k);return result(0);
+        }
+        if(ordinal==24){
+            if(!t.mode)return result(-156);t.count=iop_timer_counter(k);t.base=ticks;t.mode=0;t.due=~0ull;
+            if(t.handler)iop_irqs.erase(irq[k]);return result(0);
+        }
         if(ordinal==7){
             if(b&0x13f)throw std::runtime_error("IOP gated/external/IRQ timer mode is not integrated");
-            t.mode=b;t.count=0;t.base=ticks;t.prescale=k<3?((b&0x200)?8:1):((b&0x6000)==0x6000?256:(b&0x6000)==0x4000?16:(b&0x6000)==0x2000?8:1);return true;
+            t.mode=b;t.setup=0;t.count=0;t.base=ticks;t.prescale=k<3?((b&0x200)?8:1):((b&0x6000)==0x6000?256:(b&0x6000)==0x4000?16:(b&0x6000)==0x2000?8:1);return true;
         }
-        if(ordinal==8 || ordinal==17)return result(t.mode);
-        if(ordinal==9){t.count=b;t.base=ticks;return true;}
+        if(ordinal==8 || ordinal==17)return result(ordinal==8?t.mode&65535:t.mode);
+        if(ordinal==9){t.count=b;t.base=ticks;refresh_iop_timer(k);return true;}
         if(ordinal==10)return result(iop_timer_counter(k));
-        if(ordinal==11){t.compare=b;return true;}
+        if(ordinal==11){t.compare=b;refresh_iop_timer(k);return true;}
         if(ordinal==12)return result(t.compare);
         if(ordinal==16)return result(irq[k]);
         if(ordinal==18){
@@ -70,6 +96,18 @@ bool Console::iop_services_import(const std::string& lib,std::uint32_t ordinal){
         return false;
     }
     // Shared-register adapter reused from patch 0062, following the PS2SDK DMACMAN ABI.
+    if(lib=="dmacman" && ordinal>=4 && ordinal<=9){
+        if(a>=13)throw std::runtime_error("IOP DMA channel not integrated");
+        const auto reg=(a<7?0x1f801080u+a*16:0x1f801500u+(a-7)*16)+((ordinal-4)/2)*4;
+        if(!cdvd->dma.contains(reg))throw std::runtime_error("IOP DMA register not integrated");
+        if(ordinal&1)return result(iop_read(reg,4));
+        iop_write(reg,b,4);return true;
+    }
+    if(lib=="dmacman" && (ordinal==14 || ordinal==15 || ordinal==16 || ordinal==17 || ordinal==20 || ordinal==21 || ordinal==22 || ordinal==23)){
+        const auto reg=ordinal<18?(ordinal<16?0x1f8010f0u:0x1f801570u):(ordinal<22?0x1f8010f4u:0x1f801574u);
+        if(ordinal&1)return result(iop_read(reg,4));
+        iop_write(reg,a,4);return true;
+    }
     if(lib=="dmacman" && (ordinal==28 || ordinal==32)){
         if(a>=13 || (ordinal==28 && a==6))return result(0);
         const auto base=a<7?0x1f801080u+a*16:0x1f801500u+(a-7)*16;
@@ -101,6 +139,22 @@ bool Console::iop_services_import(const std::string& lib,std::uint32_t ordinal){
         if(ordinal==18){iop_intr_enabled=a!=0;return result(0);}
         if(ordinal==23)return result(iop_callback_active?1:0);
     }
+    if(lib=="ioman" && ordinal==31){
+        const auto path=iop_string(a,1024);const auto colon=path.find(':');if(colon==path.npos)return result(-19);
+        auto end=colon;while(end && path[end-1]>='0' && path[end-1]<='9')--end;
+        const auto driver=iop_drivers.find(path.substr(0,end));if(driver==iop_drivers.end())return result(-19);
+        const auto device=driver->second;if(!(iop_read(device+4,4)&0x10000000))throw std::runtime_error("IOP devctl requires an extended native driver");
+        const auto function=iop_read(iop_read(device+16,4)+23*4,4);if(!function)throw std::runtime_error("IOP native driver has no devctl handler");
+        const auto arglen=iop_arg(3),buffer=iop_arg(4),buflen=iop_arg(5);
+        unsigned unit=0;for(auto k=end;k<colon;++k){if(unit>1000000)throw std::runtime_error("IOP device unit overflow");unit=unit*10+path[k]-'0';}
+        const auto stack=(iop.gpr[29]-64)&~15u;if(stack>iop_ram.size()-32)throw std::runtime_error("Invalid native devctl stack");
+        const auto frame=iop_allocate(16);if(!frame)return result(-12);
+        iop_write(frame+4,unit,4);iop_write(frame+8,device,4);
+        iop_write(stack+16,arglen,4);iop_write(stack+20,buffer,4);iop_write(stack+24,buflen,4);
+        iop_native_call(function,frame,[this,frame](std::uint32_t value){iop_release(frame);iop.gpr[2]=value;});
+        for(const auto& [id,module]:iop_modules)if(function>=module.base && function-module.base<module.size){iop.gpr[28]=module.gp;break;}
+        iop.gpr[5]=a+static_cast<std::uint32_t>(colon)+1;iop.gpr[6]=b;iop.gpr[7]=c;iop.gpr[29]=stack;return true;
+    }
     if(lib=="ioman" && (ordinal==20 || ordinal==21)){
         if(ordinal==21){const auto name=iop_string(a,256);const auto it=iop_drivers.find(name);if(it==iop_drivers.end())return result(-1);const auto device=it->second;const auto function=iop_read(iop_read(device+16,4)+4,4);iop_native_call(function,device,[this,name](std::uint32_t r){if(static_cast<std::int32_t>(r)>=0)iop_drivers.erase(name);iop.gpr[2]=r;});return true;}
         const auto name=iop_string(iop_read(a,4),256);if(iop_drivers.contains(name))return result(-1);
@@ -109,7 +163,9 @@ bool Console::iop_services_import(const std::string& lib,std::uint32_t ordinal){
     }
     if(lib=="sifman"){
         if(ordinal==5){if(!sif.command_buffer)throw std::runtime_error("SIF endpoint not initialized");return result(0);}
-        if(ordinal==7){
+        if(ordinal==7 || ordinal==32){
+            const auto callback=ordinal==32?c:0,argument=ordinal==32?iop_arg(3):0;
+            if(callback && ((callback&3) || callback>=iop_ram.size() || sif.dma_callbacks.size()>=32))throw std::runtime_error("Invalid/full IOP SIF DMA completion callback");
             if(!b || b>32)throw std::runtime_error("Invalid IOP SIF DMA descriptor count");
             struct Transfer{std::uint32_t src,dst,size,attr;};std::vector<Transfer> transfers;
             for(std::uint32_t k=0;k<b;++k){const auto at=a+16*k;Transfer t{iop_read(at,4)&0x1fffffff,translate(iop_read(at+4,4),iop_read(at+8,4),true),iop_read(at+8,4),iop_read(at+12,4)};
@@ -117,7 +173,10 @@ bool Console::iop_services_import(const std::string& lib,std::uint32_t ordinal){
             const auto interrupts=std::count_if(transfers.begin(),transfers.end(),[](const auto& t){return (t.attr&4)!=0;});
             if(sif.replies.size()+interrupts>32)throw std::runtime_error("SIF0 IRQ queue full");
             for(const auto& t:transfers){std::copy_n(iop_ram.data()+t.src,t.size,ram.data()+t.dst);if(t.attr&4)sif.replies.emplace_back();}
-            const auto id=++sif.transfer_id;sif.completed_id=id;sif_pump();return result(id);
+            const auto id=++sif.transfer_id;sif.completed_id=id;sif_pump();
+            // Reuse the existing completed transfer; execute its native callback at the next dispatchable IOP tick.
+            if(callback){const auto idle=!iop_work_pending();sif.dma_callbacks.push_back({callback,argument,iop.gpr[28]});if(idle)iop_next_tick=std::max(iop_next_tick,ticks+8);}
+            return result(id);
         }
         if(ordinal==8)return result(sif.dma_status(a));
         if(ordinal==29)return result(sif.command_buffer!=0);

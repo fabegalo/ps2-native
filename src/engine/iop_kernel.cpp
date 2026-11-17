@@ -7,7 +7,7 @@
 
 namespace ps2native::engine {
 bool Console::iop_work_pending() const {
-    if (iop_active || !sif.iop_commands.empty()) return true;
+    if (iop_active || !sif.iop_commands.empty() || (iop_intr_enabled && !sif.dma_callbacks.empty())) return true;
     if(iop_intr_enabled && std::any_of(iop_alarms.begin(),iop_alarms.end(),[](const auto& item){return item.second.pending;}))return true;
     if(iop_intr_enabled && (iop_vblank_pending || !iop_vblank_jobs.empty()))return true;
     if(pending_iop_irq()!=~0u)return true;
@@ -34,7 +34,7 @@ void Console::iop_schedule() {
         if (it!=iop_threads.end()) {
             it->second.context=iop;
             if (it->second.status==1) it->second.status=2;
-            if (it->second.delete_on_exit) iop_threads.erase(it);
+            if (it->second.delete_on_exit){if(iop_allocations.contains(it->second.stack))iop_release(it->second.stack);iop_threads.erase(it);}
         }
     }
     auto best=iop_threads.end();
@@ -75,14 +75,9 @@ bool Console::iop_thread_import(const std::string& library,std::uint32_t ordinal
             if (attr&~0x03000008u) return result(-401);
             if (entry&3) return result(-402);
             if (!priority || priority>=127) return result(-403);
-            if (size<0x130) return result(-404);
+            if (size<0x130 || size>0x1c0000) return result(-404);
             const auto rounded=(size+0xff)&~0xffu;
-            auto stack=0x180000u;
-            std::vector<std::pair<std::uint32_t,std::uint32_t>> occupied;
-            for (const auto& [tid,t] : iop_threads) if (t.stack>=0x180000 && t.stack<0x1d0000) occupied.emplace_back(t.stack,t.size);
-            std::sort(occupied.begin(),occupied.end());
-            for (const auto& [base,bytes] : occupied) { if (stack+rounded<=base) break;stack=std::max(stack,base+bytes); }
-            if (rounded>0x1d0000-stack) return result(-400);
+            const auto stack=iop_allocate(rounded,true);if(!stack)return result(-400);
             IopThread t;t.attr=attr;t.option=option;t.entry=entry;t.size=rounded;t.stack=stack;t.gp=iop.gpr[28];t.initial_priority=priority;
             std::fill_n(iop_ram.data()+stack,rounded-0x30,0xff);
             const auto created=iop_next_thread++;iop_threads.emplace(created,t);return result(created);
@@ -129,18 +124,21 @@ bool Console::iop_thread_import(const std::string& library,std::uint32_t ordinal
         switch(ordinal) {
         case 5:
             if (t.status!=16 || id==iop_current) return result(-414);
-            iop_threads.erase(it);return result(0);
-        case 6: case 7:
+            if(iop_allocations.contains(t.stack))iop_release(t.stack);iop_threads.erase(it);return result(0);
+        case 6: case 7: {
             if (t.status!=16) return result(-414);
-            t.context={};t.context.pc=t.entry;t.context.gpr[28]=t.gp;t.context.gpr[29]=t.stack+t.size-16;t.context.gpr[31]=0xffffffd0;
-            t.context.gpr[4]=b;t.context.gpr[5]=c;t.priority=t.initial_priority;t.wakeups=0;
-            if (ordinal==7) {
-                if (b>t.size-32) return result(-400);
-                const auto sp=(t.context.gpr[29]-b)&~15u;
-                for(std::uint32_t n=0;n<b;++n)iop_write(sp+n,iop_read(c+n,1),1);
-                t.context.gpr[29]=sp-16;t.context.gpr[5]=sp;
-            }
+            // PS2SDK StartThread/StartThreadArgs: 0xb8 reserved bytes, 0x98-byte register frame.
+            const auto argbytes=ordinal==7?b:0u;if(argbytes>t.size-0xb8)return result(-400);
+            const auto top=t.stack+t.size-((argbytes+3)&~3u),frame=top-0xb8;
+            std::vector<std::uint8_t> args;if(argbytes && c){args.reserve(argbytes);for(unsigned n=0;n<argbytes;++n)args.push_back(iop_read(c+n,1));}
+            if(!args.empty())std::copy(args.begin(),args.end(),iop_ram.begin()+top);
+            std::fill_n(iop_ram.begin()+frame,0xb8,0);
+            t.context={};t.context.pc=t.entry;t.context.gpr[28]=t.gp;t.context.gpr[29]=top-0x20;t.context.gpr[30]=top-0x20;t.context.gpr[31]=0xffffffd0;
+            t.context.gpr[4]=b;if(ordinal==7)t.context.gpr[5]=top;t.priority=t.initial_priority;t.wakeups=0;
+            iop_write(frame,0xfffffffe,4);for(unsigned n=1;n<32;++n)iop_write(frame+n*4,t.context.gpr[n],4);
+            iop_write(frame+0x88,0x404|(t.attr&8),4);iop_write(frame+0x8c,t.entry,4);iop_write(frame+0x90,1,4);
             iop_ready(id);return result(0);
+        }
         case 10: case 11:
             if (id==iop_current) return result(-406);
             if (t.status==16) return result(-413);

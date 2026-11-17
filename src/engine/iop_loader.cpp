@@ -97,12 +97,9 @@ std::uint32_t Console::load_iop(std::span<const std::uint8_t> file,std::string o
         }
     }
     // Reserve before publishing either image or imports; every entry thread has a distinct stack.
-    const auto stack_size=0x4000u;auto stack=0x180000u;
-    std::vector<std::pair<std::uint32_t,std::uint32_t>> occupied;
-    for(const auto& [id,t]:iop_threads)if(t.stack>=0x180000 && t.stack<0x1d0000)occupied.emplace_back(t.stack,t.size);
-    std::sort(occupied.begin(),occupied.end());
-    for(const auto& [at,bytes]:occupied){if(stack+stack_size<=at)break;stack=std::max(stack,at+bytes);}
-    if(stack+stack_size>0x1d0000)throw std::runtime_error("No IOP module entry stack available");
+    const auto stack_size=0x4000u;iop_allocations.emplace(base,reserved);
+    const auto stack=iop_allocate(stack_size,true);
+    if(!stack){iop_allocations.erase(base);throw std::runtime_error("No IOP module entry stack available");}
     const auto id=iop_next_thread++;
     IopThread thread;thread.status=2;thread.entry=base+word(info+4);thread.gp=base+word(info+8);
     thread.stack=stack;thread.size=stack_size;thread.initial_priority=thread.priority=8;thread.attr=0x02000000;thread.module=id;thread.order=++iop_order;
@@ -141,7 +138,7 @@ void Console::boot_cdvd(const std::filesystem::path& path,bool extended) {
     iop_rom0=path;
     if(cdvd->hardware && cdvd->hardware->romver!=bios.version.romver)throw std::runtime_error("CDVD console profile does not match ROM0 revision");
     std::fprintf(stderr,"[engine-firmware] ROM0 %s ROMVER=%s\n",bios.sha256.c_str(),bios.version.romver.c_str());
-    const char* names[]={extended?"XCDVDMAN":"CDVDMAN",extended?"XCDVDFSV":"CDVDFSV"};
+    const char* names[]={"FILEIO",extended?"XCDVDMAN":"CDVDMAN",extended?"XCDVDFSV":"CDVDFSV","LOADFILE"};
     for(const auto name:names){
         const auto* module=bios.find(name);if(!module)throw std::runtime_error(std::string("Original ROM0 module missing: ")+name);
         const auto image=std::span(bios.rom0).subspan(module->offset,module->size);
@@ -157,10 +154,20 @@ void Console::boot_cdvd(const std::filesystem::path& path,bool extended) {
         if(!iop_work_pending() || ticks>=deadline)throw std::runtime_error("Original CDVDFSV did not register CDVD Init RPC");advance_to(iop_next_tick);
     }
 }
-std::uint32_t Console::iop_allocate(std::uint32_t bytes) {
-    if(!bytes || bytes>0x170000)return 0;bytes=(bytes+15)&~15u;auto base=0x10000u;
-    for(const auto& [at,size]:iop_allocations){if(bytes<=at-base)break;base=at+size;}
-    if(base>=0x180000 || bytes>0x180000-base)return 0;
+std::uint32_t Console::iop_allocate(std::uint32_t bytes,bool from_top) {
+    constexpr auto first=0x10000u,limit=0x1d0000u;
+    if(!bytes || bytes>limit-first)return 0;bytes=(bytes+15)&~15u;auto base=first;
+    if(from_top){
+        auto end=limit;
+        for(auto it=iop_allocations.rbegin();it!=iop_allocations.rend();++it){
+            const auto at=it->first+it->second;if(at>end)throw std::runtime_error("Overlapping IOP reservations");
+            if(bytes<=end-at){base=end-bytes;break;}end=it->first;
+        }
+        if(base==first){if(bytes>end-first)return 0;base=end-bytes;}
+    } else {
+        for(const auto& [at,size]:iop_allocations){if(bytes<=at-base)break;base=at+size;}
+        if(base>=limit || bytes>limit-base)return 0;
+    }
     iop_allocations.emplace(base,bytes);std::fill_n(iop_ram.begin()+base,bytes,0);iop_heap_top=std::max(iop_heap_top,base+bytes);return base;
 }
 void Console::iop_release(std::uint32_t address) {
@@ -223,12 +230,24 @@ bool Console::iop_loader_import(const std::string& library,std::uint32_t ordinal
         }
         return result(0); // Matched ROM0 MODLOAD ordinal 15, not PS2SDK's unconditional success placeholder.
     }
-    if(library=="modload" && ordinal==7){
-        const auto path=iop_string(a,1024);const auto arguments=iop_arg(2),out=iop_arg(3),caller=iop_current;
-        if(!caller || b>4096)throw std::runtime_error("Invalid LoadStartModule caller/arguments");
+    if(library=="modload" && ordinal==10){
+        if(!iop_current || !iop_active)throw std::runtime_error("LoadModuleBuffer requires a native IOP caller");
+        const auto source=(a&0x1fffffff)&0x1fffff;
+        if((a&0x1fffffff)>=0x800000)return result(-201);
+        auto allocation=iop_allocations.upper_bound(source);if(allocation==iop_allocations.begin())return result(-201);--allocation;
+        if(source-allocation->first>=allocation->second)return result(-201);
+        const auto bytes=allocation->second-(source-allocation->first);
+        const auto id=load_iop(std::span(iop_ram).subspan(source,bytes),"iop-buffer");
+        iop_threads.at(iop_modules.at(id).thread).status=16;return result(id);
+    }
+    if(library=="modload" && (ordinal==7 || ordinal==8)){
+        const auto path=iop_string(ordinal==7?a:b,1024);const auto length=ordinal==7?b:iop_arg(2),arguments=iop_arg(ordinal==7?2:3),out=iop_arg(ordinal==7?3:4),caller=iop_current;
+        if(!caller || length>4096)throw std::runtime_error("Invalid module start caller/arguments");
         if(out)(void)iop_read(out,4);
         std::vector<std::string> words{path};
-        for(std::uint32_t k=0;k<b;){const auto text=iop_string(arguments+k,b-k);words.push_back(text);k+=static_cast<std::uint32_t>(text.size())+1;if(words.size()>64)throw std::runtime_error("Too many module arguments");}
+        for(std::uint32_t k=0;k<length;){const auto text=iop_string(arguments+k,length-k);words.push_back(text);k+=static_cast<std::uint32_t>(text.size())+1;if(words.size()>64)throw std::runtime_error("Too many module arguments");}
+        std::uint32_t id=a;
+        if(ordinal==7){
         std::vector<std::uint8_t> image;
         if(path.starts_with("cdrom0:") || path.starts_with("cdrom:")) {
             if(!cdvd->media)return result(-203);
@@ -238,7 +257,9 @@ bool Console::iop_loader_import(const std::string& library,std::uint32_t ordinal
             const auto bios=ps2native::load_bios_rom0(ps2native::read_file(iop_rom0));const auto* m=bios.find(path.substr(5));
             if(!m)return result(-203);image.assign(bios.rom0.begin()+m->offset,bios.rom0.begin()+m->offset+m->size);
         } else throw std::runtime_error("Unintegrated module device: "+path);
-        const auto id=load_iop(image,path);auto& t=iop_threads.at(iop_modules.at(id).thread);
+        id=load_iop(image,path);
+        } else if(!iop_modules.contains(id) || iop_modules.at(id).returned || iop_threads.at(iop_modules.at(id).thread).status!=16)return result(-206);
+        auto& t=iop_threads.at(iop_modules.at(id).thread);t.status=2;t.order=++iop_order;iop_reschedule=true;
         const auto argv=t.stack+t.size-0x2100;auto data=argv+0x110;
         for(unsigned k=0;k<words.size();++k){iop_write(argv+k*4,data,4);for(const auto ch:words[k])iop_write(data++,static_cast<std::uint8_t>(ch),1);iop_write(data++,0,1);}
         iop_write(argv+static_cast<std::uint32_t>(words.size())*4,0,4);
@@ -246,7 +267,17 @@ bool Console::iop_loader_import(const std::string& library,std::uint32_t ordinal
         iop_module_waiters[id].push_back({caller,out});iop_block(7,id);
         std::fprintf(stderr,"[engine-module] starting %s id=%u argc=%zu\n",path.c_str(),id,words.size());return true;
     }
-    if(library=="sysmem" && ordinal==4){if(a!=0 || iop_arg(2))throw std::runtime_error("IOP fixed/top allocation mode is not integrated");return result(iop_allocate(b));}
+    if(library=="sysmem" && ordinal==6)return result(static_cast<std::uint32_t>(iop_ram.size()));
+    if(library=="sysmem" && (ordinal==7 || ordinal==8)){
+        auto end=0x10000u,total=0u,largest=0u;
+        for(const auto& [at,size]:iop_allocations){
+            if(at<end || at>0x1d0000 || size>0x1d0000-at)throw std::runtime_error("Invalid IOP reservation");
+            const auto gap=at-end;total+=gap;largest=std::max(largest,gap);end=at+size;
+        }
+        const auto gap=0x1d0000-end;total+=gap;largest=std::max(largest,gap);
+        return result(ordinal==7?largest:total);
+    }
+    if(library=="sysmem" && ordinal==4){if(a>1 || iop_arg(2))throw std::runtime_error("IOP fixed-address allocation mode is not integrated");return result(iop_allocate(b,a==1));}
     if(library=="sysmem" && ordinal==5){iop_release(a);return result(0);}
     if(library!="loadcore")return false;
     if(ordinal==4 || ordinal==5){return result(0);} // Interpreter reads the coherent Console RAM directly.
@@ -260,8 +291,19 @@ bool Console::iop_loader_import(const std::string& library,std::uint32_t ordinal
         if(lib.exports.empty())throw std::runtime_error("Empty IOP export table");
         iop_libraries.emplace(name,std::move(lib));return result(0);
     }
+    if(ordinal==27){
+        if(!a)return result(-214);
+        if((a&3) || a>iop_ram.size()-20 || iop_read(a,4)!=0x41c00000)return result(-213);
+        const auto mode=iop_read(a+10,2);iop_write(a+10,(mode&~6u)|(b&6),2);return result(0);
+    }
     if(ordinal==7){for(auto it=iop_libraries.begin();it!=iop_libraries.end();++it)if(it->second.address==a){iop_libraries.erase(it);return result(0);}return result(-1);}
-    if(ordinal==12){std::string name;for(unsigned k=0;k<8;++k){const auto ch=iop_read(a+4+k,1);if(!ch)break;name+=static_cast<char>(ch);}const auto it=iop_libraries.find(name);return result(it==iop_libraries.end()?0:it->second.address);}
+    if(ordinal==11){
+        std::string name;for(unsigned k=0;k<8;++k){const auto ch=iop_read(a+12+k,1);if(!ch)break;name+=static_cast<char>(ch);}
+        const auto wanted=iop_read(a+8,2);const auto it=iop_libraries.find(name);
+        return result(it==iop_libraries.end() || (wanted&0xff00)!=(it->second.version&0xff00) ? 0 : it->second.address+20);
+    }
+    if(ordinal==12)return result(0); // This HLE boot has not registered a LOADCORE boot-mode record.
+
     return false;
 }
 }

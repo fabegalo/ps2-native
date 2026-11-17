@@ -63,12 +63,15 @@ DiscImage::DiscImage(const std::filesystem::path& path):file_(path) {
     sectors_=both32(pvd,80);
     if(!sectors_ || std::uint64_t{sectors_}*sector_bytes_>file_.size())
         throw std::runtime_error("ISO 9660 volume exceeds disc image");
+    volume_sectors_=sectors_;
+    if(file_.size()%sector_bytes_ || file_.size()/sector_bytes_>0xffffffffu)throw std::runtime_error("Invalid physical sector count");
+    sectors_=static_cast<std::uint32_t>(file_.size()/sector_bytes_);
     root_=record(std::span(pvd).subspan(156,pvd[156]));
     if(!root_.directory)throw std::runtime_error("ISO 9660 root is not a directory");
     volume_id_=trim(std::string_view(reinterpret_cast<const char*>(pvd.data()+40),32));
 }
 void DiscImage::read_sector(std::uint32_t lba,std::span<std::uint8_t,2048> out) {
-    if(lba>=sectors_)throw std::runtime_error("disc LBA outside ISO 9660 volume");
+    if(lba>=sectors_)throw std::runtime_error("disc LBA outside media");
     if(sector_bytes_==2352) {
         std::array<std::uint8_t,2352> raw{};
         if(file_.read_at(std::uint64_t{lba}*2352u,raw)!=raw.size() || raw[0]!=0 || raw[11]!=0 ||
@@ -87,7 +90,7 @@ DiscEntry DiscImage::record(std::span<const std::uint8_t> b) {
     if(b[1] || b[26] || b[27] || (b[25]&0x80u))
         throw std::runtime_error("ISO 9660 extended attributes/interleaved/multi-extent file unsupported");
     const auto lba=both32(b,2), size=both32(b,10);
-    if(lba>=sectors_ || std::uint64_t{size}>std::uint64_t{sectors_-lba}*2048u)
+    if(lba>=volume_sectors_ || std::uint64_t{size}>std::uint64_t{volume_sectors_-lba}*2048u)
         throw std::runtime_error("ISO 9660 extent outside volume");
     return {std::string(reinterpret_cast<const char*>(b.data()+33),b[32]),lba,size,(b[25]&2u)!=0u};
 }
@@ -144,6 +147,14 @@ std::vector<std::uint8_t> DiscImage::read(std::string_view path) {
         std::copy_n(bytes.begin(),std::min<std::size_t>(2048u,result.size()-at),result.begin()+at);
     }
     return result;
+}
+// Pinned PCSX2 CDVDisoReader::FindLayer1Start: separate PVD at layer-0 volume size.
+std::optional<std::uint32_t> DiscImage::dvd_layer1_start(){
+    if(raw_sectors())throw std::runtime_error("DVD layout requires cooked sectors");
+    if(volume_sectors_==sectors_)return std::nullopt;
+    std::array<std::uint8_t,2048> second{};read_sector(volume_sectors_,second);
+    if(second[0]!=1 || std::memcmp(second.data()+1,"CD001",5) || second[6]!=1 || !both32(second,80))throw std::runtime_error("DVD second-volume geometry is not established");
+    return volume_sectors_;
 }
 std::string DiscImage::boot_path() {
     const auto bytes=read("SYSTEM.CNF;1");

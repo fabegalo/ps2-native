@@ -1,5 +1,6 @@
 #include "ps2native/engine/console.hpp"
 #include <cstdio>
+#include <tuple>
 #include <functional>
 #include "ps2native/io.hpp"
 #include <stdexcept>
@@ -15,6 +16,16 @@ static void rejects(const std::function<void()>& call) {
 int main(int argc,char** argv) {
     try {
         Console c;c.initialize_sif();
+        c.iop_write(0x1f8010b4,0x11223344,4);c.iop_write(0x1f8010b6,0x5566,2);
+        check(c.iop_read(0x1f8010b4,4)==0x55663344 && c.iop_read(0x1f8010b5,1)==0x33 && c.iop_read(0x1f8010b6,2)==0x5566,"Partial DMA register accesses preserve their other lanes");
+        c.cdvd->dma.at(0x1f8010f4)=0x18000000;c.iop_write(0x1f8010f4,0x1234,2);
+        check((c.cdvd->dma.at(0x1f8010f4)&0x7f000000)==0x18000000,"Partial DICR control writes cannot acknowledge unwritten flags");
+        c.iop_write(0x1f8010f7,8,1);check((c.cdvd->dma.at(0x1f8010f4)&0x7f000000)==0x10000000,"DICR flag bytes retain write-one-to-clear semantics");c.cdvd->dma.at(0x1f8010f4)=0;
+        const auto low=c.iop_allocate(0x70000),high=c.iop_allocate(0x11adf8,true);
+        check(low==0x10000 && high>=low+0x70000 && high+0x11ae00==0x1d0000,"Top and bottom allocations share one non-overlapping RAM reservation map");
+        check(!c.iop_allocate(0x1c0001),"Oversized IOP allocation cannot wrap");
+        c.iop_release(high);check(c.iop_allocate(0x11adf8,true)==high,"Released top memory is reused without relocating live reservations");c.iop_release(high);c.iop_release(low);
+
         if(argc==2 && std::string_view(argv[1])=="--irq-bench"){
             for(unsigned irq=0;irq<46;++irq)c.iop_irqs[irq]={0x8000,0,0,true};
             c.iop_intr_enabled=true;c.iop_active=true;c.iop.pc=0x8000;
@@ -40,6 +51,14 @@ int main(int argc,char** argv) {
         c.iop_irqs.at(3).enabled=false;check(c.pending_iop_irq()==5,"Disabled DMA line still permits a pending base IRQ");
         c.iop_intr_enabled=false;check(c.pending_iop_irq()==~0u,"Global IOP interrupt masking still gates all banks and device lines");
         c.iop_active=true;check(c.iop_work_pending(),"A running IOP remains work even when interrupts are masked");
+        for(const auto [offset,value]:{std::pair{0u,0x02000000u},std::pair{4u,0u},std::pair{8u,0x7000u},std::pair{12u,0x400u},std::pair{16u,32u}})c.iop_write(0x9000+offset,value,4);
+        c.iop.gpr[4]=0x9000;c.iop.gpr[28]=0x12345678;c.iop_import("thbase",4);const auto created=c.iop.gpr[2];const auto& thread=c.iop_threads.at(created);const auto top=thread.stack+thread.size;
+        c.iop.gpr[4]=created;c.iop.gpr[5]=0x87654321;c.iop_import("thbase",6);
+        check(thread.context.gpr[29]==top-0x20 && thread.context.gpr[30]==top-0x20 && c.iop_read(top-0xb8,4)==0xfffffffe && c.iop_read(top-0xb8+0x10,4)==0x87654321 && c.iop_read(top-0x50,4)==0,"StartThread publishes its initial register frame and real SP in guest RAM");
+        check(c.iop_read(thread.stack,4)==0xffffffff && c.iop_read(top-0xb8+0x70,4)==0x12345678,"Only the reserved context changes; the stack watermark and GP remain intact");
+        for(unsigned n=0;n<5;++n)c.iop_write(0xa000+n,'a'+n,1);c.iop_threads.at(created).status=16;
+        c.iop.gpr[4]=created;c.iop.gpr[5]=5;c.iop.gpr[6]=0xa000;c.iop_import("thbase",7);
+        check(thread.context.gpr[4]==5 && thread.context.gpr[5]==top-8 && thread.context.gpr[29]==top-8-0x20 && c.iop_read(top-8,4)==0x64636261 && c.iop_read(top-4,1)=='e',"StartThreadArgs copies bytes above the separate initial context with original 4-byte alignment");
         c.reset_iop();c.initialize_sif();
 
         check(c.iop_read(0xbf808270,4)==0xf,"SIO2 idle port status comes from the device reset contract");
@@ -67,10 +86,45 @@ int main(int argc,char** argv) {
         check(c.iop.gpr[2]==0 && c.iop_read(0x9800,4)==Console::iop_alarm_min,"Alarm minimum wait follows threadman's 100 us clock conversion");
         c.iop.gpr[4]=0x7400;c.iop.gpr[5]=123;c.iop_import("thbase",37);
         check(c.iop.gpr[2]==0 && c.iop_alarms.empty(),"CancelAlarm removes the exact pending handler/argument pair");
+        c.iop_write(0x5700,0,4);c.iop.gpr[4]=1;c.iop.gpr[5]=32;c.iop.gpr[6]=8;c.iop_import("timrman",4);const auto hard_timer=c.iop.gpr[2];
+        c.iop.gpr[4]=hard_timer;c.iop.gpr[5]=1000;c.iop.gpr[6]=0x7400;c.iop.gpr[7]=123;c.iop_import("timrman",20);
+        check(c.iop.gpr[2]==0 && c.iop_timers[5].due==~0ull,"Installing a timer callback cannot start time or invoke guest code");
+        c.iop.gpr[4]=hard_timer;c.iop.gpr[5]=1;c.iop.gpr[6]=0;c.iop.gpr[7]=8;c.iop_import("timrman",22);c.iop_import("timrman",23);
+        const auto timer_due=c.iop_timers[5].due;check(c.iop.gpr[2]==0 && timer_due==c.ticks+64000,"Hard timer shares the exact EE/IOP 8:1 clock and configured prescale");
+        c.iop_intr_enabled=false;c.advance_to(timer_due);check(c.iop_read(0x5700,4)==0 && (c.iop_pending_irqs&(1u<<16)),"Masked timer IRQ waits without executing its native callback");
+        c.iop_intr_enabled=true;c.iop_next_tick=c.ticks+8;c.run_iop();
+        check(c.iop_read(0x5700,4)==2 && !c.iop_timers[5].mode && c.iop_timers[5].due==~0ull,"Native timer callback changes the compare period, then zero stops it");
+        c.iop.gpr[4]=hard_timer;c.iop_import("timrman",6);
         const std::uint32_t dma_irq[]={0x8c087a00,0,0x25080001,0xac087a00,0x03e00008,0x24020001};
         for(unsigned i=0;i<std::size(dma_irq);++i)c.iop_write(0x7600+i*4,dma_irq[i],4);
         for(const auto irq:{44u,45u}){c.iop.gpr[4]=irq;c.iop.gpr[5]=1;c.iop.gpr[6]=0x7600;c.iop.gpr[7]=0;c.iop_import("intrman",4);c.iop.gpr[4]=irq;c.iop_import("intrman",6);}
+        for(const auto bank:{0u,1u}){
+            const auto reg=bank?0x1f801570u:0x1f8010f0u,ordinal=14u+bank*2,previous=c.iop_read(reg,4);
+            c.iop.gpr[4]=0x12345678;c.iop_import("dmacman",ordinal);check(c.iop_read(reg,4)==0x12345678,"DMACMAN priority setter writes shared MMIO");
+            c.iop_import("dmacman",ordinal+1);check(c.iop.gpr[2]==c.iop_read(reg,4),"DMACMAN getter reads the same DMA bank");c.iop_write(reg,previous,4);
+        }
+        for(const auto channel:{3u,11u})for(const auto ordinal:{4u,6u,8u}){
+            const auto base=channel<7?0x1f801080u+channel*16:0x1f801500u+(channel-7)*16,reg=base+(ordinal-4)*2,previous=c.iop_read(reg,4);
+            c.iop.gpr[4]=channel;c.iop.gpr[5]=ordinal==8?0:0x1234;c.iop_import("dmacman",ordinal);
+            c.iop_import("dmacman",ordinal+1);check(c.iop.gpr[2]==(ordinal==8?0u:0x1234u) && c.iop_read(reg,4)==c.iop.gpr[2],"DMACMAN descriptor accessors retain the shared DMA register");c.iop_write(reg,previous,4);
+        }
+        const auto free_memory=[&](unsigned ordinal){c.iop_import("sysmem",ordinal);return c.iop.gpr[2];};
+        const auto free_before=free_memory(8),max_before=free_memory(7),temporary=c.iop_allocate(4096);
+        check(temporary && free_memory(8)==free_before-4096 && free_memory(7)<=max_before,"IOP memory queries account for real allocations and fragmentation");
+        c.iop_release(temporary);check(free_memory(8)==free_before && free_memory(7)==max_before,"IOP free memory queries restore released gaps");
         c.iop.gpr[29]=0x1eff00;
+        for(unsigned j=0;j<5;++j)c.iop_write(0x9300+j,"a.ba"[j],1);
+        const auto find_char=[&](unsigned ordinal,unsigned ch){c.iop.gpr[4]=0x80009300;c.iop.gpr[5]=ch;c.iop_import("sysclib",ordinal);return c.iop.gpr[2];};
+        check(find_char(21,'a')==0x80009300 && find_char(32,'a')==0x80009303,"IOP string search returns first/last guest pointer");
+        check(find_char(25,0)==0x80009304 && find_char(26,'x')==0,"IOP string search handles terminator and missing byte");
+        c.iop.gpr[4]='r';c.iop_import("sysclib",6);check(c.iop.gpr[2]=='R',"IOP toupper converts ASCII lowercase");
+        c.iop.gpr[4]=0xffffffff;c.iop_import("sysclib",6);check(c.iop.gpr[2]==0xffffffff,"IOP toupper preserves EOF");
+        c.iop.gpr[4]='R';c.iop_import("sysclib",7);check(c.iop.gpr[2]=='r',"IOP tolower converts ASCII uppercase");
+        for(const auto& [text,base,expected,consumed]:{std::tuple{"64",10u,64u,2u},std::tuple{"  -17z",10u,0xffffffefu,5u},std::tuple{"0xff!",0u,255u,4u},std::tuple{"2147483648",10u,0x7fffffffu,10u},std::tuple{"no digits",10u,0u,0u}}){
+            for(unsigned n=0;n<=std::strlen(text);++n)c.iop_write(0x9100+n,text[n],1);
+            c.iop.gpr[4]=0x9100;c.iop.gpr[5]=0x9200;c.iop.gpr[6]=base;c.iop_import("sysclib",36);
+            check(c.iop.gpr[2]==expected && c.iop_read(0x9200,4)==0x9100+consumed,"IOP strtol retains 32-bit range, radix and guest end pointer");
+        }
         const auto slice=[&](unsigned channel,unsigned address,unsigned direction){
             c.iop.gpr[4]=channel;c.iop.gpr[5]=address;c.iop.gpr[6]=4;c.iop.gpr[7]=1;c.iop_write(c.iop.gpr[29]+16,direction,4);c.iop_import("dmacman",28);
             check(c.iop.gpr[2]==1,"Slice DMA configuration uses the real DMACMAN fifth argument");c.iop.gpr[4]=channel;c.iop_import("dmacman",32);
@@ -87,6 +141,18 @@ int main(int argc,char** argv) {
         c.iop_active=true;c.iop.pc=0x6800;c.iop_instructions=10000000;c.iop_write(0x6800,0,4);
         c.step_iop();check(c.iop_instructions==10000001,"Long IOP sessions use the shared logical execution budget, not a fixed cumulative cap");
         c.execution_limit=80000000;rejects([&]{c.step_iop();});c.execution_limit=100000000;
+        c.reset_iop();c.initialize_sif();c.ticks=0;c.iop_instructions=0;c.iop={};c.iop_next_tick=0;
+        {
+            const std::uint32_t callback[]={0xac047b00,0xac1c7b04,0x24080001,0xac087b08,0x03e00008,0};
+            for(unsigned k=0;k<std::size(callback);++k)c.iop_write(0x7c00+k*4,callback[k],4);
+            c.iop_write(0x7b00,0,4);c.iop_write(0x7b08,0,4);c.iop_write(0x7d00,0x7e00,4);c.iop_write(0x7d04,0x80007f00,4);c.iop_write(0x7d08,4,4);c.iop_write(0x7d0c,0,4);c.iop_write(0x7e00,0x87654321,4);
+            c.iop_intr_enabled=false;c.iop.gpr[4]=0x7d00;c.iop.gpr[5]=1;c.iop.gpr[6]=0x7c00;c.iop.gpr[7]=0x1357;c.iop.gpr[28]=0x2468;c.iop_import("sifman",32);
+            check(ps2::ld32(0x7f00)==0x87654321 && c.iop_read(0x7b08,4)==0 && c.sif.dma_callbacks.size()==1,"Native DMA completion is queued after actual data transfer, without an inline callback");
+            const auto saved=c.iop;c.iop_active=false;c.advance_to(c.ticks+8);check(c.iop_read(0x7b08,4)==0,"Masked DMA completion cannot execute its IOP callback");
+            c.iop_intr_enabled=true;c.iop_next_tick=c.ticks+8;c.advance_to(c.ticks+64);
+            check(c.iop_read(0x7b00,4)==0x1357 && c.iop_read(0x7b04,4)==0x2468 && c.iop_read(0x7b08,4)==1 && c.sif.dma_callbacks.empty() && !c.iop_callback_active,"DMA completion executes original callback with its GP and argument exactly once");
+            check(c.iop.gpr[2]==saved.gpr[2],"DMA callback restores its interrupted caller result");
+        }
         c.reset_iop();c.initialize_sif();c.ticks=0;c.iop_instructions=0;c.iop={};c.iop_next_tick=0;
         c.sif.transfer_id=2;c.sif.completed_id=1;
         for(const auto id:{0u,1u,3u}){c.iop.gpr[4]=id;c.iop_import("sifman",8);check(static_cast<std::int32_t>(c.iop.gpr[2])==-1,"Unknown, zero and completed DMA identifiers cannot fabricate a busy transfer");}

@@ -3,6 +3,7 @@
 #include "ps2native/io.hpp"
 #include <array>
 #include <string>
+#include <optional>
 
 namespace ps2native {
 struct DiscEntry {
@@ -23,6 +24,7 @@ public:
     [[nodiscard]] ElfImage boot_elf();
     [[nodiscard]] const std::string& volume_id() const noexcept { return volume_id_; }
     [[nodiscard]] std::uint64_t image_size() const noexcept { return file_.size(); }
+    [[nodiscard]] std::optional<std::uint32_t> dvd_layer1_start();
     [[nodiscard]] std::uint32_t user_sector_count() const noexcept {return sectors_;}
     // True for raw 2352-byte CD sectors; false when the image already holds 2048-byte user sectors.
     [[nodiscard]] bool raw_sectors() const noexcept { return sector_bytes_ != 2048; }
@@ -32,7 +34,7 @@ private:
     [[nodiscard]] DiscEntry record(std::span<const std::uint8_t> bytes);
     InputFile file_;
     std::size_t sector_bytes_{2048}, data_offset_{};
-    std::uint32_t sectors_{};
+    std::uint32_t sectors_{},volume_sectors_{};
     DiscEntry root_;
     std::string volume_id_;
 };

@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <format>
 
 namespace ps2native::engine {
@@ -23,15 +24,16 @@ std::uint32_t Console::iop_read(std::uint32_t address,unsigned bytes) const {
     const std::uint32_t timer_bases[]={0x1f801100,0x1f801110,0x1f801120,0x1f801480,0x1f801490,0x1f8014a0};
     for(unsigned k=0;k<6;++k)if(p>=timer_bases[k] && p<timer_bases[k]+12){
         if((bytes!=2 && bytes!=4) || (p&3))throw std::runtime_error("Invalid IOP timer access");
-        const auto reg=p-timer_bases[k];return reg==0?iop_timer_counter(k):reg==4?iop_timers[k].mode:iop_timers[k].compare;
+        const auto reg=p-timer_bases[k];return reg==0?iop_timer_counter(k):reg==4?(iop_timers[k].mode&65535):iop_timers[k].compare;
     }
     if(p>=0x1f808200 && p<=0x1f808280)return const_cast<Console*>(this)->sio2_read(p,bytes);
-    if((p>=0x1f402000 && p<0x1f402020) || cdvd->dma.contains(p))return cdvd->read(p,bytes);
+    if((p>=0x1f402000 && p<0x1f402020) || cdvd->dma.contains(p&~3u))return cdvd->read(p,bytes);
     throw std::runtime_error(std::format("Unsupported IOP MMIO read {:08X}",address));
 }
 void Console::iop_write(std::uint32_t address,std::uint32_t value,unsigned bytes) {
     if (bytes!=1 && bytes!=2 && bytes!=4) throw std::runtime_error("Invalid IOP access width");
     const auto p=address&0x1fffffff;
+
     if(p>=0x1f900000 && p<0x1f910000){audio_write(p,value,bytes);return;}
     if (p<0x800000) {
         const auto offset=p&0x1fffff;
@@ -41,7 +43,7 @@ void Console::iop_write(std::uint32_t address,std::uint32_t value,unsigned bytes
     // Bus timing/base latches reused from ps2-native before b2959c8; unwritten values remain unknown.
     if(bytes==4 && !(p&3) && ((p>=0x1f801000 && p<=0x1f801020) || (p>=0x1f801400 && p<=0x1f801420) || p==0x1f801060 || p==0x1f801450 || p==0x1ffe0130)) {iop_bus_registers[p]=value;return;}
     if(p>=0x1f808200 && p<=0x1f808280){sio2_write(p,value,bytes);return;}
-    if((p>=0x1f402000 && p<0x1f402020) || cdvd->dma.contains(p)){cdvd->write(p,value,bytes);return;}
+    if((p>=0x1f402000 && p<0x1f402020) || cdvd->dma.contains(p&~3u)){cdvd->write(p,value,bytes);return;}
     throw std::runtime_error(std::format("Unsupported IOP MMIO write {:08X}",address));
 }
 std::string Console::iop_string(std::uint32_t address,std::size_t limit) const {
@@ -119,6 +121,9 @@ void Console::iop_import(const std::string& library,std::uint32_t ordinal,std::u
             if (physical>=0x800000 || length>iop_ram.size()-offset) throw std::runtime_error("IOP service span outside RAM");
             return std::span(iop_ram).subspan(offset,length);
         };
+        if(ordinal==6 || ordinal==7){
+            iop.gpr[2]=ordinal==6 && a>='a' && a<='z'?a-32:ordinal==7 && a>='A' && a<='Z'?a+32:a;return;
+        }
         if (ordinal==12 || ordinal==13) {
             const auto to=span(a,count),from=span(b,count);
             std::memmove(to.data(),from.data(),count); iop.gpr[2]=a; return;
@@ -131,6 +136,14 @@ void Console::iop_import(const std::string& library,std::uint32_t ordinal,std::u
             const auto text=iop_format(b,2);
             std::memcpy(span(a,text.size()+1).data(),text.c_str(),text.size()+1); iop.gpr[2]=static_cast<std::uint32_t>(text.size()); return;
         }
+        if(ordinal==36){
+            if(count && (count<2 || count>36))throw std::runtime_error("Invalid IOP strtol base");
+            if(b)(void)iop_read(b,4);
+            const auto text=iop_string(a,4096);char* end{};
+            const auto parsed=std::strtoll(text.c_str(),&end,static_cast<int>(count));
+            if(b)iop_write(b,a+static_cast<std::uint32_t>(end-text.c_str()),4);
+            iop.gpr[2]=static_cast<std::uint32_t>(std::clamp(parsed,-2147483648ll,2147483647ll));return;
+        }
         if (ordinal==35) {
             auto cursor=a ? a : iop_strtok_next;
             const auto delimiters=b ? iop_string(b,256) : std::string{};
@@ -142,6 +155,13 @@ void Console::iop_import(const std::string& library,std::uint32_t ordinal,std::u
             if (iop_read(cursor,1)) { iop_write(cursor,0,1); iop_strtok_next=cursor+1; }
             else iop_strtok_next=cursor;
             iop.gpr[2]=token; return;
+        }
+        if (ordinal==21 || ordinal==25 || ordinal==26 || ordinal==32) {
+            const auto text=iop_string(a,65536);
+            const auto ch=static_cast<char>(b);
+            const auto position=ch==0 ? text.size() :
+                (ordinal==26 || ordinal==32 ? text.rfind(ch) : text.find(ch));
+            iop.gpr[2]=position==std::string::npos ? 0 : a+static_cast<std::uint32_t>(position);return;
         }
         if (ordinal==27) { iop.gpr[2]=static_cast<std::uint32_t>(iop_string(a,65536).size()); return; }
     }
@@ -187,6 +207,15 @@ void Console::step_iop() {
         iop_vblank_active.reset();iop=iop_suspended;iop_active=iop_suspended_active;iop_callback_active=false;
         if(iop_reschedule)iop_schedule();return;
     }
+    if(iop.pc==0xffffff90 && iop_callback_active){
+        iop=iop_suspended;iop_active=iop_suspended_active;iop_callback_active=false;
+        if(iop_reschedule)iop_schedule();return;
+    }
+    if(!iop_callback_active && iop_intr_enabled && !sif.dma_callbacks.empty() && !iop.branchPending && !iop_import_slot){
+        const auto callback=sif.dma_callbacks.front();sif.dma_callbacks.pop_front();
+        iop_suspended=iop;iop_suspended_active=iop_active;iop={};iop_active=iop_callback_active=true;
+        iop.pc=callback.entry;iop.gpr[4]=callback.argument;iop.gpr[28]=callback.gp;iop.gpr[29]=0x1ddff0;iop.gpr[31]=0xffffff90;
+    }
     if (!iop_callback_active && !sif.iop_commands.empty() && (!iop_active || (!iop.branchPending && !iop_import_slot))) {
         auto command=std::move(sif.iop_commands.front()); sif.iop_commands.pop_front();
         iop_suspended=iop; iop_suspended_active=iop_active;
@@ -203,7 +232,13 @@ void Console::step_iop() {
         const auto& irq=iop_irqs.at(iop_irq_cause);iop_suspended=iop;iop_suspended_active=iop_active;iop_callback_active=true;iop_irq_active=true;iop_active=true;
         iop={};iop.pc=irq.function;iop.gpr[4]=irq.argument;iop.gpr[28]=irq.gp;iop.gpr[29]=0x1ddff0;iop.gpr[31]=0xffffffa4;
     }
-    if(iop.pc==0xffffffa4 && iop_irq_active){const auto keep=iop.gpr[2];iop=iop_suspended;iop_active=iop_suspended_active;iop_callback_active=iop_irq_active=false;if(!keep)iop_irqs.at(iop_irq_cause).enabled=false;if(iop_reschedule)iop_schedule();return;}
+    if(iop.pc==0xffffffa4 && iop_irq_active){const auto keep=iop.gpr[2];iop=iop_suspended;iop_active=iop_suspended_active;iop_callback_active=iop_irq_active=false;constexpr unsigned timer_irq[]={4,5,6,14,15,16};
+        for(unsigned k=0;k<6;++k)if(timer_irq[k]==iop_irq_cause && iop_timers[k].setup && iop_timers[k].handler){
+            auto& t=iop_timers[k];t.mode&=~0x800u;
+            if(!keep){t.count=iop_timer_counter(k);t.base=ticks;t.mode=0;t.due=~0ull;iop_irqs.erase(timer_irq[k]);}
+            else {t.compare=k<3?keep&65535:keep;refresh_iop_timer(k);}
+        }
+        if(!keep && iop_irqs.contains(iop_irq_cause))iop_irqs.at(iop_irq_cause).enabled=false;if(iop_reschedule)iop_schedule();return;}
     if(iop_alarm_step())return;
     if (!iop_active) return;
     if (!iop_instructions) iop_first_tick=ticks;
@@ -222,7 +257,14 @@ void Console::step_iop() {
         iop_import_slot=before+4;
     }
     (void)iop_core.executeInstruction(iop);
-    if (iop.exception) throw std::runtime_error(std::format("IOP exception {} EPC={:08X}",(iop.cop0[13]>>2)&31,iop.cop0[14]));
+    if(iop.exception){
+        const auto fault=iop.cop0[14];
+        if(std::getenv("PS2N_ENGINE_STATE_HASH")){
+            for(unsigned n=0;n<32;++n)std::fprintf(stderr,"[iop-fault-reg] r%u=%08X\n",n,iop.gpr[n]);
+            if(fault>=64 && (fault&0x1fffffff)<=iop_ram.size()-16)for(unsigned n=0;n<20;++n)std::fprintf(stderr,"[iop-fault-code] %08X %08X\n",fault-64+n*4,iop_read(fault-64+n*4,4));
+        }
+        throw std::runtime_error(std::format("IOP exception {} EPC={:08X} BadVAddr={:08X} v0={:08X} v1={:08X} ra={:08X} sp={:08X}",(iop.cop0[13]>>2)&31,fault,iop.cop0[8],iop.gpr[2],iop.gpr[3],iop.gpr[31],iop.gpr[29]));
+    }
     if (iop_import_slot && before==iop_import_slot) {
         const auto imported=iop_imports.at(iop_import_slot-4);
         const auto slot=iop_import_slot-4;iop_import_slot=0;
@@ -244,7 +286,7 @@ void Console::step_iop() {
 
 }
 void Console::run_iop() {
-    while(iop_work_pending() || iop_boot_active || cdvd->due!=~0ull || iop_sio2_dma_due[0]!=~0ull || iop_sio2_dma_due[1]!=~0ull || std::any_of(iop_alarms.begin(),iop_alarms.end(),[](const auto& item){return !item.second.pending;}) || (audio && (audio->dmaBusy(0) || audio->dmaBusy(1)))) advance_to(next_event_tick());
+    while(iop_work_pending() || std::any_of(iop_timers.begin(),iop_timers.end(),[](const auto& t){return t.due!=~0ull;}) || iop_boot_active || cdvd->due!=~0ull || iop_sio2_dma_due[0]!=~0ull || iop_sio2_dma_due[1]!=~0ull || std::any_of(iop_alarms.begin(),iop_alarms.end(),[](const auto& item){return !item.second.pending;}) || (audio && (audio->dmaBusy(0) || audio->dmaBusy(1)))) advance_to(next_event_tick());
     for (const auto& [id,t] : iop_threads)
         if (t.status!=16 && !iop_module_returned) throw std::runtime_error("IOP scheduler deadlock: waiting without an event");
 }

@@ -57,7 +57,7 @@ int main(int argc,char** argv) {
             console.load_iop(input);
         }
         if(!profile.empty()){console.cdvd->hardware=ps2native::find_console_hardware(profile);if(!console.cdvd->hardware)throw std::runtime_error("Unknown CDVD console profile");}
-        if(!disc.empty())console.cdvd->mount(disc,medium);
+        if(!disc.empty()){console.cdvd->mount(disc,medium);console.boot_path="cdrom0:"+console.cdvd->media->boot_path();}
         std::unique_ptr<EngineInput> input;if(input_window || !input_script.empty())input=std::make_unique<EngineInput>(console,input_window,input_script);
         try {if(!rom0.empty())console.boot_cdvd(rom0,extended); console.run(); }
 
@@ -85,6 +85,12 @@ int main(int argc,char** argv) {
                 std::fprintf(stderr,"[engine-ee-thread] id=%u state=%u priority=%u pc=%08X wait=%u\n",id,static_cast<unsigned>(t.state),t.priority,id==console.current?console.ee.pc:t.context.pc,t.wait);
             for(const auto& [id,t]:console.iop_threads)if(t.status!=16)
                 std::fprintf(stderr,"[engine-iop-thread] id=%u status=%u priority=%u pc=%08X wait=%u object=%u\n",id,t.status,t.priority,id==console.iop_current?console.iop.pc:t.context.pc,t.wait,t.wait_id);
+            if(std::getenv("PS2N_ENGINE_STATE_HASH"))for(unsigned n=0;n<32;++n){
+                const auto address=console.ee.r[n].w[0]&0x1fffffff;
+                std::fprintf(stderr,"[engine-ee-reg] r%u=%016llX",n,static_cast<unsigned long long>(console.ee.r[n].d[0]));
+                if(!(address&3) && address<=console.ram.size()-16){for(unsigned j=0;j<4;++j)std::fprintf(stderr," %08X",ps2::load<std::uint32_t>(console.ram.data()+address+j*4));}
+                std::fputc('\n',stderr);
+            }
             std::fprintf(stderr,"[engine-registers] ee_ra=%08X a0=%08X a1=%08X v0=%08X pmode=%016llX rpc_active=%zu\n",console.ee.r[31].w[0],console.ee.r[4].w[0],console.ee.r[5].w[0],console.ee.r[2].w[0],static_cast<unsigned long long>(console.gs_private[0]),console.rpc_calls.size());
             std::fprintf(stderr,"[engine-irq-state] status=%08X intc=%08X mask=%08X dmac=%08X\n",console.ee.cop0[12],console.intc_status,console.intc_mask,console.dmac_status);
             for(const auto& [id,h]:console.handlers)std::fprintf(stderr,"[engine-irq-handler] id=%u cause=%u function=%08X\n",id,h.cause,h.function);
